@@ -136,6 +136,19 @@ impl DaemonHandle {
         self.inner.addr
     }
 
+    /// Bound host as a string (Tailscale 100.x or the loopback 127.0.0.1
+    /// used by tests). Exported to Swift via UniFFI.
+    #[must_use]
+    pub fn host(&self) -> String {
+        self.inner.addr.ip().to_string()
+    }
+
+    /// Bound TCP port after auto-retry. Exported to Swift via UniFFI.
+    #[must_use]
+    pub fn port(&self) -> u16 {
+        self.inner.addr.port()
+    }
+
     /// Forget a previously trusted device.
     #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     pub async fn forget_device(&self, id: DeviceId) -> Result<(), MinosError> {

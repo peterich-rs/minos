@@ -152,3 +152,23 @@ async fn pair_with_wrong_token_rejected() {
     drop(client);
     handle.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn host_and_port_round_trip_through_config() {
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("MINOS_DATA_DIR", temp.path());
+    std::env::set_var("MINOS_LOG_DIR", temp.path().join("logs"));
+
+    let cfg = minos_daemon::DaemonConfig {
+        mac_name: "Host Test".into(),
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+    };
+    let handle = minos_daemon::DaemonHandle::start(cfg).await.unwrap();
+
+    assert_eq!(handle.host(), "127.0.0.1");
+    assert!(handle.port() > 0, "OS must pick a real port");
+    assert_eq!(handle.addr().ip().to_string(), handle.host());
+    assert_eq!(handle.addr().port(), handle.port());
+
+    handle.stop().await.unwrap();
+}
