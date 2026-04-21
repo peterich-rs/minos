@@ -1,12 +1,16 @@
 //! Request and response payload types.
 
-use minos_domain::{AgentDescriptor, DeviceId};
+use minos_domain::{AgentDescriptor, DeviceId, PairingToken};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairRequest {
     pub device_id: DeviceId,
     pub name: String,
+    /// One-shot pairing token presented in the QR. Validated server-side
+    /// against the daemon's currently-active token before any state is
+    /// mutated; spec §6.4. Required by MVP.
+    pub token: PairingToken,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,6 +37,7 @@ mod tests {
         let req = PairRequest {
             device_id: DeviceId::new(),
             name: "iPhone of fan".into(),
+            token: PairingToken::generate(),
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: PairRequest = serde_json::from_str(&json).unwrap();

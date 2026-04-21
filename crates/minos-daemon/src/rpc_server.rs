@@ -27,9 +27,8 @@ pub struct RpcServerImpl {
     pub host: String,
     pub port: u16,
     /// Active pairing token shared with the `DaemonHandle` that issued the QR.
-    /// Reserved for token validation in a follow-up; stored here now so that
-    /// future hardening does not require changing this struct's shape.
-    #[allow(dead_code)]
+    /// `pair()` validates the request token against this and clears it on
+    /// successful consumption.
     pub active_token: Arc<Mutex<Option<ActiveToken>>>,
     /// Connection-state broadcaster shared with the `DaemonHandle`. After a
     /// successful `pair()`, this emits `Connected` so UI receivers learn
@@ -40,9 +39,24 @@ pub struct RpcServerImpl {
 #[async_trait]
 impl MinosRpcServer for RpcServerImpl {
     async fn pair(&self, req: PairRequest) -> jsonrpsee::core::RpcResult<PairResponse> {
-        // Token validation happens at the WS-upgrade layer (future task); by
-        // the time `pair` is called the token is already verified. Here we
-        // only gate on the state machine.
+        // Validate the one-shot pairing token before mutating any state.
+        // Spec §6.4: token IS validated server-side; the WS-upgrade layer
+        // is a future hardening, not a substitute for this check.
+        {
+            let token_guard = self.active_token.lock().unwrap();
+            let active = token_guard
+                .as_ref()
+                .ok_or_else(|| rpc_err(MinosError::PairingTokenInvalid))?;
+            if active.is_expired(Utc::now()) {
+                return Err(rpc_err(MinosError::PairingTokenInvalid));
+            }
+            if active.token != req.token {
+                return Err(rpc_err(MinosError::PairingTokenInvalid));
+            }
+        }
+        // Token consumed — invalidate so it cannot be replayed.
+        *self.active_token.lock().unwrap() = None;
+
         {
             let mut p = self.pairing.lock().unwrap();
             p.accept_peer().map_err(rpc_err)?;

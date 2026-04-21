@@ -52,6 +52,7 @@ impl MobileClient {
             PairRequest {
                 device_id: self.device_id,
                 name: self.self_name.clone(),
+                token: qr.token.clone(),
             },
         )
         .await

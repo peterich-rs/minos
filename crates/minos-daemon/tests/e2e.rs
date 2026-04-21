@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 
 use minos_daemon::{DaemonConfig, DaemonHandle};
-use minos_domain::{ConnectionState, DeviceId};
+use minos_domain::{ConnectionState, DeviceId, PairingToken};
 use minos_protocol::{MinosRpcClient, PairRequest};
 
 #[tokio::test]
@@ -35,12 +35,13 @@ async fn pair_then_list_clis_in_process() {
     assert_eq!(handle.current_state(), ConnectionState::Disconnected);
     let device_id = DeviceId::new();
 
-    // pair
+    // pair (with the token from the QR)
     let pair_resp = MinosRpcClient::pair(
         &client,
         PairRequest {
             device_id,
             name: "test-iphone".into(),
+            token: qr.token.clone(),
         },
     )
     .await
@@ -60,6 +61,43 @@ async fn pair_then_list_clis_in_process() {
 
     // forget_device clears trust + emits Disconnected.
     handle.forget_device(device_id).await.unwrap();
+    assert_eq!(handle.current_state(), ConnectionState::Disconnected);
+
+    drop(client);
+    handle.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn pair_with_wrong_token_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", dir.path());
+
+    let cfg = DaemonConfig {
+        mac_name: "test-mac".into(),
+        bind_addr: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+    };
+    let handle = DaemonHandle::start(cfg).await.unwrap();
+    let _qr = handle.pairing_qr().unwrap(); // generates token; we deliberately ignore it
+
+    let url = format!("ws://{}", handle.addr());
+    let client = jsonrpsee::ws_client::WsClientBuilder::default()
+        .build(&url)
+        .await
+        .unwrap();
+
+    // Try to pair with a fresh (wrong) token.
+    let result = MinosRpcClient::pair(
+        &client,
+        PairRequest {
+            device_id: DeviceId::new(),
+            name: "attacker".into(),
+            token: PairingToken::generate(),
+        },
+    )
+    .await;
+    assert!(result.is_err(), "wrong token should be rejected");
+
+    // State should still be Disconnected — pair() rejected before emitting Connected.
     assert_eq!(handle.current_state(), ConnectionState::Disconnected);
 
     drop(client);
