@@ -1,0 +1,28 @@
+[package]
+name = "minos-daemon"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Mac-side composition root: WS server + file store + RPC handlers + CLI detect."
+
+[dependencies]
+minos-domain = { path = "../minos-domain" }
+minos-protocol = { path = "../minos-protocol" }
+minos-pairing = { path = "../minos-pairing" }
+minos-cli-detect = { path = "../minos-cli-detect" }
+minos-transport = { path = "../minos-transport" }
+tokio = { workspace = true }
+futures = { workspace = true }
+jsonrpsee = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+mars-xlog = { workspace = true }
+chrono = { workspace = true }
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+pretty_assertions = { workspace = true }
