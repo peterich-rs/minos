@@ -17,3 +17,21 @@ pub use tailscale::discover_ip as discover_tailscale_ip;
 
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
+
+#[cfg(feature = "uniffi")]
+mod uniffi_bridges {
+    use minos_domain::DeviceId;
+    use uuid::Uuid;
+
+    uniffi::custom_type!(Uuid, String, {
+        remote,
+        lower: |uuid| uuid.to_string(),
+        try_lift: |text| Uuid::parse_str(&text).map_err(Into::into),
+    });
+
+    uniffi::custom_type!(DeviceId, Uuid, {
+        remote,
+        lower: |device_id| device_id.0,
+        try_lift: |uuid| Ok(DeviceId(uuid)),
+    });
+}

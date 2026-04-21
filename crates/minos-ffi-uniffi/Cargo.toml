@@ -10,8 +10,9 @@ description = "UniFFI bindings shim over minos-daemon::DaemonHandle (Swift consu
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-minos-daemon = { path = "../minos-daemon" }
-minos-domain = { path = "../minos-domain" }
+minos-daemon = { path = "../minos-daemon", features = ["uniffi"] }
+minos-domain = { path = "../minos-domain", features = ["uniffi"] }
+minos-pairing = { path = "../minos-pairing", features = ["uniffi"] }
 uniffi = { workspace = true }
 
 [build-dependencies]

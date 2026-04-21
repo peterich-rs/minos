@@ -14,3 +14,42 @@ pub use token::*;
 // non-UniFFI build path (plan-03 Dart/frb consumers) pays nothing.
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
+
+#[cfg(feature = "uniffi")]
+mod uniffi_bridges {
+    use chrono::{DateTime, Utc};
+    use minos_domain::{DeviceId, PairingToken};
+    use std::time::SystemTime;
+    use uuid::Uuid;
+
+    // Type alias satisfies UniFFI 0.31's single-ident requirement on the
+    // first argument of `custom_type!`. Trait-transparent — the generated
+    // impls land on `DateTime<Utc>`.
+    type DateTimeUtc = DateTime<Utc>;
+
+    uniffi::custom_type!(Uuid, String, {
+        remote,
+        lower: |u| u.to_string(),
+        try_lift: |s| Uuid::parse_str(&s).map_err(Into::into),
+    });
+
+    uniffi::custom_type!(DateTimeUtc, SystemTime, {
+        remote,
+        lower: |dt| dt.into(),
+        try_lift: |st| Ok(st.into()),
+    });
+
+    // Hand-rolled remote custom_type! for cross-crate newtypes (custom_newtype!
+    // has no `remote` variant). `lower`/`try_lift` need pub field access on
+    // DeviceId.0 and PairingToken.0 — Step 3 covers PairingToken.
+    uniffi::custom_type!(DeviceId, Uuid, {
+        remote,
+        lower: |d| d.0,
+        try_lift: |u| Ok(DeviceId(u)),
+    });
+    uniffi::custom_type!(PairingToken, String, {
+        remote,
+        lower: |t| t.0,
+        try_lift: |s| Ok(PairingToken(s)),
+    });
+}

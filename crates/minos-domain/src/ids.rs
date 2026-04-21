@@ -34,7 +34,7 @@ impl std::fmt::Display for DeviceId {
 /// One-shot pairing token: 32 random bytes, presented as base64url.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct PairingToken(String);
+pub struct PairingToken(pub String);
 
 impl PairingToken {
     /// Generate a fresh token from the OS CSPRNG.
