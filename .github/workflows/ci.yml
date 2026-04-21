@@ -16,12 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install rust toolchain (rust-toolchain.toml)
-        # The toolchain file pins channel = "stable" plus components and targets.
-        # Apple targets (aarch64-apple-darwin, *-ios, *-ios-sim) are intentionally
-        # listed; on ubuntu they are simply not used by `cargo xtask check-all`.
-        # We rely on rustup auto-installing the toolchain on first cargo invocation.
-        run: rustc --version
+      - name: Install rust toolchain (linux-only override)
+        # The repo's rust-toolchain.toml lists Apple targets that aren't useful
+        # on the Ubuntu CI runner; install the linux-x86_64 toolchain explicitly
+        # to skip ~2 min of unused cross-target downloads.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 

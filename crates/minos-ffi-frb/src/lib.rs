@@ -7,7 +7,7 @@ fn _link_minos_mobile() {
     let _ = std::any::type_name::<minos_mobile::MobileClient>();
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn minos_ffi_frb_ping() -> i32 {
     42
 }

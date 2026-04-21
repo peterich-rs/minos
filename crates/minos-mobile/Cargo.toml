@@ -20,7 +20,7 @@ tracing-subscriber = { workspace = true }
 mars-xlog = { workspace = true }
 url = { workspace = true }
 chrono = { workspace = true }
-async-trait = "0.1"
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

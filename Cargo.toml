@@ -39,6 +39,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # rpc
 jsonrpsee = { version = "0.24", features = ["server", "client", "ws-client", "macros"] }
 tokio-tungstenite = "0.29"
+async-trait = "0.1"
 
 # logging
 tracing = "0.1"

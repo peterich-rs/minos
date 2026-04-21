@@ -10,7 +10,7 @@ description = "Local CLI agent detection (which + --version)."
 minos-domain = { path = "../minos-domain" }
 tokio = { workspace = true }
 tracing = { workspace = true }
-async-trait = "0.1"
+async-trait = { workspace = true }
 
 [dev-dependencies]
 mockall = { workspace = true }
