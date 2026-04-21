@@ -17,6 +17,11 @@ const NAME_PREFIX: &str = "daemon";
 
 #[must_use]
 pub fn log_dir() -> PathBuf {
+    // Tests opt out of HOME-based pathing by setting MINOS_LOG_DIR; keeps
+    // each test's log directory isolated without mutating process-global HOME.
+    if let Ok(d) = std::env::var("MINOS_LOG_DIR") {
+        return PathBuf::from(d);
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     if cfg!(target_os = "macos") {
         PathBuf::from(home).join("Library/Logs/Minos")
@@ -73,9 +78,11 @@ mod tests {
 
     #[test]
     fn init_creates_log_dir_and_emits_once() {
-        // Override HOME so test logs go to a tempdir, not the real ~/Library/Logs.
+        // Use MINOS_LOG_DIR override so test logs go to a tempdir without
+        // mutating process-global HOME (HOME mutation triggers warnings under
+        // the upcoming Rust unsafe-env story).
         let dir = tempdir().unwrap();
-        std::env::set_var("HOME", dir.path());
+        std::env::set_var("MINOS_LOG_DIR", dir.path());
         init().unwrap();
         // Idempotent
         init().unwrap();

@@ -10,10 +10,10 @@ use minos_mobile::{InMemoryPairingStore, MobileClient};
 
 #[tokio::test]
 async fn mobile_pairs_with_daemon_and_lists_clis() {
-    // Redirect HOME so the daemon's default file store doesn't pollute
-    // the developer's actual ~/Library/Application Support/minos/.
+    // Use MINOS_DATA_DIR override so the daemon's default file store writes
+    // into a per-test tempdir without mutating process-global HOME.
     let dir = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", dir.path());
+    std::env::set_var("MINOS_DATA_DIR", dir.path());
 
     let daemon = DaemonHandle::start(DaemonConfig {
         mac_name: "MacForTest".into(),

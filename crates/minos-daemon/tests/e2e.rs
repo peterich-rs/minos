@@ -10,10 +10,10 @@ use minos_protocol::{MinosRpcClient, PairRequest};
 
 #[tokio::test]
 async fn pair_then_list_clis_in_process() {
-    // Redirect HOME so the daemon's default file store doesn't pollute
-    // the developer's actual ~/Library/Application Support/minos/.
+    // Use MINOS_DATA_DIR override so the daemon's default file store writes
+    // into a per-test tempdir without mutating process-global HOME.
     let dir = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", dir.path());
+    std::env::set_var("MINOS_DATA_DIR", dir.path());
 
     // Bind to an ephemeral local port to avoid CI port collisions.
     let cfg = DaemonConfig {
@@ -70,7 +70,7 @@ async fn pair_then_list_clis_in_process() {
 #[tokio::test]
 async fn pair_with_wrong_token_rejected() {
     let dir = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", dir.path());
+    std::env::set_var("MINOS_DATA_DIR", dir.path());
 
     let cfg = DaemonConfig {
         mac_name: "test-mac".into(),

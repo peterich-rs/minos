@@ -22,8 +22,15 @@ impl FilePairingStore {
 
     /// Default Mac path: `~/Library/Application Support/minos/devices.json`.
     /// On non-Mac targets (e.g. CI Linux), falls back to `$HOME/.minos/devices.json`.
+    ///
+    /// Tests opt out of the HOME-based path by setting `MINOS_DATA_DIR`,
+    /// which keeps each test's storage isolated to its own tempdir without
+    /// mutating process-global HOME.
     #[must_use]
     pub fn default_path() -> PathBuf {
+        if let Ok(d) = std::env::var("MINOS_DATA_DIR") {
+            return PathBuf::from(d).join("devices.json");
+        }
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         if cfg!(target_os = "macos") {
             PathBuf::from(home).join("Library/Application Support/minos/devices.json")
