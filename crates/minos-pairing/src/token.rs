@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub const QR_TOKEN_TTL: Duration = Duration::minutes(5);
 pub const PROTOCOL_VERSION: u8 = 1;
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QrPayload {
     pub v: u8,

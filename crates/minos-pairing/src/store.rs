@@ -5,6 +5,7 @@ use minos_domain::{DeviceId, MinosError};
 use serde::{Deserialize, Serialize};
 
 /// One peer that has successfully paired and may reconnect on its own.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrustedDevice {
     pub device_id: DeviceId,

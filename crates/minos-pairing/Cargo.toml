@@ -6,12 +6,16 @@ license.workspace = true
 authors.workspace = true
 description = "Pairing state machine, trusted device records, and the PairingStore port."
 
+[features]
+uniffi = ["dep:uniffi", "minos-domain/uniffi"]
+
 [dependencies]
 minos-domain = { path = "../minos-domain" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 url = { workspace = true }
+uniffi = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
