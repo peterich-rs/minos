@@ -100,6 +100,53 @@ impl DaemonHandle {
         }))
     }
 
+    /// Production entry point for Swift. Discovers the Tailscale 100.x IP,
+    /// tries ports 7878..=7882 in order, returns the first successful bind.
+    ///
+    /// Errors:
+    /// - `BindFailed { addr: "tailscale", ... }` if no 100.x IP found.
+    /// - `BindFailed { addr: "<ip>:7878-7882", message: "all ports occupied" }`
+    ///   if every port fails to bind.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn start_autobind(mac_name: String) -> Result<Arc<Self>, MinosError> {
+        const PORTS: std::ops::RangeInclusive<u16> = 7878..=7882;
+
+        let host = crate::tailscale::discover_ip().await.ok_or_else(|| {
+            MinosError::BindFailed {
+                addr: "tailscale".into(),
+                message: "no 100.x IP returned by `tailscale ip --4`".into(),
+            }
+        })?;
+
+        let mut last_err: Option<MinosError> = None;
+        for port in PORTS {
+            let bind_addr: SocketAddr = format!("{host}:{port}")
+                .parse()
+                .map_err(|e: std::net::AddrParseError| MinosError::BindFailed {
+                    addr: format!("{host}:{port}"),
+                    message: e.to_string(),
+                })?;
+            let cfg = DaemonConfig {
+                mac_name: mac_name.clone(),
+                bind_addr,
+            };
+            match Self::start(cfg).await {
+                Ok(h) => return Ok(h),
+                Err(e @ MinosError::BindFailed { .. }) => {
+                    tracing::warn!(port, err = %e, "port busy, trying next");
+                    last_err = Some(e);
+                }
+                Err(other) => return Err(other),
+            }
+        }
+
+        Err(MinosError::BindFailed {
+            addr: format!("{host}:7878-7882"),
+            message: last_err
+                .map_or_else(|| "all ports occupied".into(), |e| e.to_string()),
+        })
+    }
+
     /// Generate (or refresh) the pairing QR.
     #[allow(clippy::missing_errors_doc)]
     pub fn pairing_qr(&self) -> Result<QrPayload, MinosError> {
