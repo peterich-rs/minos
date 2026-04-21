@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: rust (xtask check-all)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rust toolchain (rust-toolchain.toml)
+        # The toolchain file pins channel = "stable" plus components and targets.
+        # Apple targets (aarch64-apple-darwin, *-ios, *-ios-sim) are intentionally
+        # listed; on ubuntu they are simply not used by `cargo xtask check-all`.
+        # We rely on rustup auto-installing the toolchain on first cargo invocation.
+        run: rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deny
+        # `cargo xtask check-all` runs `cargo deny check` only if `cargo-deny` is
+        # in PATH; install it here so CI exercises the full check-set instead of
+        # silently skipping like a fresh local checkout would.
+        run: cargo install cargo-deny --locked
+
+      - name: cargo xtask check-all
+        # Single source of truth — same command developers run locally.
+        # Includes: cargo fmt --check, cargo clippy --workspace -- -D warnings,
+        # cargo test --workspace, cargo deny check.
+        run: cargo xtask check-all
