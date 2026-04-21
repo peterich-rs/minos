@@ -13,7 +13,9 @@ use std::time::Instant;
 use jsonrpsee::server::RpcModule;
 use minos_cli_detect::{CommandRunner, RealCommandRunner};
 use minos_domain::{ConnectionState, DeviceId, MinosError, PairingState};
-use minos_pairing::{generate_qr_payload, ActiveToken, Pairing, PairingStore, QrPayload};
+use minos_pairing::{
+    generate_qr_payload, ActiveToken, Pairing, PairingStore, QrPayload, TrustedDevice,
+};
 use minos_protocol::MinosRpcServer;
 use minos_transport::WsServer;
 use tokio::sync::watch;
@@ -194,6 +196,19 @@ impl DaemonHandle {
     #[must_use]
     pub fn port(&self) -> u16 {
         self.inner.addr.port()
+    }
+
+    /// Return the currently trusted device if one exists. MVP cap is one
+    /// (spec §6.4 single-pair), so the first entry in the store suffices.
+    /// Returns `Ok(None)` for an empty / missing `devices.json`.
+    #[allow(clippy::missing_errors_doc)]
+    pub fn current_trusted_device(&self) -> Result<Option<TrustedDevice>, MinosError> {
+        let mut devices = self.inner.store.load()?;
+        if devices.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(devices.remove(0)))
+        }
     }
 
     /// Forget a previously trusted device.

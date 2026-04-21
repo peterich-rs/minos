@@ -42,3 +42,54 @@ async fn autobind_returns_bind_failed_without_tailscale() {
         Err(other) => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn current_trusted_device_empty_then_populated() {
+    use chrono::Utc;
+    use minos_domain::DeviceId;
+    use minos_pairing::{PairingStore, TrustedDevice};
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    std::env::set_var("MINOS_DATA_DIR", temp.path());
+    std::env::set_var("MINOS_LOG_DIR", temp.path().join("logs"));
+
+    let cfg = minos_daemon::DaemonConfig {
+        mac_name: "TD Test".into(),
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+    };
+    let handle = minos_daemon::DaemonHandle::start(cfg).await.unwrap();
+
+    // Empty on first start
+    assert!(handle.current_trusted_device().unwrap().is_none());
+
+    // Populate via the file store directly (simulates a plan-03 pair flow)
+    let store: Arc<dyn PairingStore> = Arc::new(minos_daemon::FilePairingStore::new(
+        minos_daemon::FilePairingStore::default_path(),
+    ));
+    let dev = TrustedDevice {
+        device_id: DeviceId::new(),
+        name: "iPhone".into(),
+        host: "100.64.0.42".into(),
+        port: 7878,
+        paired_at: Utc::now(),
+    };
+    store.save(&[dev.clone()]).unwrap();
+
+    // Re-start with the now-populated store (freeing the old handle first
+    // because FilePairingStore default_path resolves from MINOS_DATA_DIR)
+    handle.stop().await.unwrap();
+    drop(handle);
+
+    let handle = minos_daemon::DaemonHandle::start(minos_daemon::DaemonConfig {
+        mac_name: "TD Test".into(),
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+    })
+    .await
+    .unwrap();
+
+    let td = handle.current_trusted_device().unwrap().unwrap();
+    assert_eq!(td.device_id, dev.device_id);
+    assert_eq!(td.name, dev.name);
+    handle.stop().await.unwrap();
+}
