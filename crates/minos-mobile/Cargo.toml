@@ -23,3 +23,5 @@ async-trait = "0.1"
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+minos-daemon = { path = "../minos-daemon" }
+tempfile = { workspace = true }
