@@ -218,4 +218,16 @@ impl DaemonHandle {
         let _ = self.inner.state_tx.send(ConnectionState::Disconnected);
         Ok(())
     }
+
+    /// Push-model subscription for Swift/UniFFI. Internally bridges
+    /// `events_stream()` (the Tokio `watch::Receiver`) to the given observer
+    /// callback. Returns a `Subscription` whose `cancel` terminates the
+    /// forwarding task.
+    #[must_use]
+    pub fn subscribe(
+        &self,
+        observer: Arc<dyn crate::subscription::ConnectionStateObserver>,
+    ) -> Arc<crate::subscription::Subscription> {
+        crate::subscription::spawn_observer(self.events_stream(), observer)
+    }
 }
