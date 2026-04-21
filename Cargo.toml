@@ -1,26 +1,12 @@
 [workspace]
 resolver = "2"
-members = [
-  "crates/minos-domain",
-  "crates/minos-protocol",
-  "crates/minos-pairing",
-  "crates/minos-cli-detect",
-  "crates/minos-transport",
-  "crates/minos-daemon",
-  "crates/minos-mobile",
-  "crates/minos-ffi-uniffi",
-  "crates/minos-ffi-frb",
-  "xtask",
-]
-default-members = [
-  "crates/minos-domain",
-  "crates/minos-protocol",
-  "crates/minos-pairing",
-  "crates/minos-cli-detect",
-  "crates/minos-transport",
-  "crates/minos-daemon",
-  "crates/minos-mobile",
-]
+# Glob members so cargo resolves the workspace incrementally as crates land
+# across plan 01 tasks. `xtask` is enumerated explicitly because it lives at the
+# root, not under `crates/`. The FFI shim crates (`minos-ffi-*`) are matched by
+# the glob; their build-smoke tests run with `cargo test --workspace`.
+members = ["crates/*", "xtask"]
+# default-members empty → `cargo test` (no flags) tests every glob match.
+default-members = []
 
 [workspace.package]
 edition = "2021"
