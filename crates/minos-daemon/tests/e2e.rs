@@ -68,6 +68,54 @@ async fn pair_then_list_clis_in_process() {
 }
 
 #[tokio::test]
+async fn events_stream_observes_pair_transition() {
+    // Same setup as pair_then_list_clis_in_process, but the assertion is
+    // through the events_stream() Receiver rather than current_state(): we
+    // call .changed().await and observe the Connected emission.
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_var("MINOS_DATA_DIR", dir.path());
+
+    let handle = DaemonHandle::start(DaemonConfig {
+        mac_name: "test-mac".into(),
+        bind_addr: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+    })
+    .await
+    .unwrap();
+
+    let mut events = handle.events_stream();
+    // Initial value is Disconnected (set during DaemonHandle::start).
+    assert_eq!(*events.borrow_and_update(), ConnectionState::Disconnected);
+
+    let qr = handle.pairing_qr().unwrap();
+    let url = format!("ws://{}", handle.addr());
+    let client = jsonrpsee::ws_client::WsClientBuilder::default()
+        .build(&url)
+        .await
+        .unwrap();
+
+    let _resp = MinosRpcClient::pair(
+        &client,
+        PairRequest {
+            device_id: DeviceId::new(),
+            name: "test-iphone".into(),
+            token: qr.token.clone(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // pair() emitted Connected; the receiver picks it up.
+    tokio::time::timeout(std::time::Duration::from_secs(2), events.changed())
+        .await
+        .expect("expected a Connected transition within 2s")
+        .expect("watch sender alive");
+    assert_eq!(*events.borrow(), ConnectionState::Connected);
+
+    drop(client);
+    handle.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn pair_with_wrong_token_rejected() {
     let dir = tempfile::tempdir().unwrap();
     std::env::set_var("MINOS_DATA_DIR", dir.path());
