@@ -246,6 +246,7 @@ git commit -m "chore: add repo metadata (README, MIT license, gitignore)"
 - Create: `.cargo/config.toml`
 - Create: `apps/macos/.gitkeep`
 - Create: `apps/mobile/.gitkeep`
+- Create: `crates/.gitkeep` (placeholder so the `crates/*` workspace glob has a parent directory; obsolete once Task 5 lands the first real crate)
 
 - [ ] **Step 1: Write `rust-toolchain.toml`**
 
@@ -263,30 +264,18 @@ targets = [
 
 - [ ] **Step 2: Write workspace `Cargo.toml`**
 
+**Important — glob members, not explicit list.** Cargo refuses to resolve the workspace if any explicit member directory is missing. Tasks 5+ create crates incrementally, so `members` uses a glob (`crates/*`) that picks up each new crate as soon as its directory exists. The `crates/` parent directory must exist (Step 4 below creates `crates/.gitkeep`) or the glob expansion fails.
+
 ```toml
 [workspace]
 resolver = "2"
-members = [
-  "crates/minos-domain",
-  "crates/minos-protocol",
-  "crates/minos-pairing",
-  "crates/minos-cli-detect",
-  "crates/minos-transport",
-  "crates/minos-daemon",
-  "crates/minos-mobile",
-  "crates/minos-ffi-uniffi",
-  "crates/minos-ffi-frb",
-  "xtask",
-]
-default-members = [
-  "crates/minos-domain",
-  "crates/minos-protocol",
-  "crates/minos-pairing",
-  "crates/minos-cli-detect",
-  "crates/minos-transport",
-  "crates/minos-daemon",
-  "crates/minos-mobile",
-]
+# Glob members so cargo resolves the workspace incrementally as crates land
+# across plan 01 tasks. `xtask` is enumerated explicitly because it lives at the
+# root, not under `crates/`. The FFI shim crates (`minos-ffi-*`) are matched by
+# the glob; their build-smoke tests run with `cargo test --workspace`.
+members = ["crates/*", "xtask"]
+# default-members empty → `cargo test` (no flags) tests every glob match.
+default-members = []
 
 [workspace.package]
 edition = "2021"
@@ -351,17 +340,17 @@ debug = true
 xtask = "run --release --package xtask --"
 ```
 
-- [ ] **Step 4: Create app placeholders**
+- [ ] **Step 4: Create app + crates placeholders**
 
 ```bash
-mkdir -p apps/macos apps/mobile
-touch apps/macos/.gitkeep apps/mobile/.gitkeep
+mkdir -p apps/macos apps/mobile crates
+touch apps/macos/.gitkeep apps/mobile/.gitkeep crates/.gitkeep
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add rust-toolchain.toml Cargo.toml .cargo/config.toml apps/
+git add rust-toolchain.toml Cargo.toml .cargo/config.toml apps/ crates/
 git commit -m "chore: add cargo workspace + rust toolchain pin"
 ```
 
