@@ -12,8 +12,19 @@ use tokio::sync::{oneshot, watch};
 
 /// Opaque subscription handle. Swift holds this and calls `cancel` to
 /// tear down the observer task at app shutdown or menu teardown.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct Subscription {
     cancel_tx: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+impl Subscription {
+    /// Cancel the observer task. Idempotent.
+    pub fn cancel(&self) {
+        if let Some(tx) = self.cancel_tx.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 impl Subscription {
@@ -23,18 +34,12 @@ impl Subscription {
             cancel_tx: Mutex::new(Some(cancel_tx)),
         }
     }
-
-    /// Cancel the observer task. Idempotent.
-    pub fn cancel(&self) {
-        if let Some(tx) = self.cancel_tx.lock().unwrap().take() {
-            let _ = tx.send(());
-        }
-    }
 }
 
 /// Foreign-implementable callback. Swift conforms to the generated
 /// `ConnectionStateObserver` protocol; Rust calls `on_state` each time
 /// `watch::Receiver::changed` fires.
+#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait ConnectionStateObserver: Send + Sync {
     fn on_state(&self, state: ConnectionState);
 }

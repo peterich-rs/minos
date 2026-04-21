@@ -6,6 +6,9 @@ license.workspace = true
 authors.workspace = true
 description = "Mac-side composition root: WS server + file store + RPC handlers + CLI detect."
 
+[features]
+uniffi = ["dep:uniffi", "minos-domain/uniffi", "minos-pairing/uniffi"]
+
 [dependencies]
 minos-domain = { path = "../minos-domain" }
 minos-protocol = { path = "../minos-protocol" }
@@ -21,6 +24,7 @@ tracing-subscriber = { workspace = true }
 mars-xlog = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+uniffi = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

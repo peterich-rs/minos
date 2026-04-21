@@ -39,69 +39,13 @@ struct DaemonInner {
     mac_name: String,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct DaemonHandle {
     inner: Arc<DaemonInner>,
 }
 
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl DaemonHandle {
-    /// Start the daemon on an explicit bind address. Tests use this path;
-    /// production code uses `start_autobind` (Task 8).
-    #[allow(clippy::missing_errors_doc)]
-    pub async fn start(cfg: DaemonConfig) -> Result<Arc<Self>, MinosError> {
-        let store: Arc<dyn PairingStore> =
-            Arc::new(FilePairingStore::new(FilePairingStore::default_path()));
-        let runner: Arc<dyn CommandRunner> = Arc::new(RealCommandRunner);
-
-        let initial_state = if store.load()?.is_empty() {
-            PairingState::Unpaired
-        } else {
-            PairingState::Paired
-        };
-        let pairing = Arc::new(Mutex::new(Pairing::new(initial_state)));
-
-        let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
-        let state_tx = Arc::new(state_tx);
-        let active_token: Arc<Mutex<Option<ActiveToken>>> = Arc::new(Mutex::new(None));
-
-        let impl_ = RpcServerImpl {
-            started_at: Instant::now(),
-            pairing: pairing.clone(),
-            store: store.clone(),
-            runner,
-            mac_name: cfg.mac_name.clone(),
-            host: cfg.bind_addr.ip().to_string(),
-            port: cfg.bind_addr.port(),
-            active_token: active_token.clone(),
-            conn_state_tx: state_tx.clone(),
-        };
-
-        let mut module = RpcModule::new(());
-        module
-            .merge(impl_.into_rpc())
-            .map_err(|e| MinosError::BindFailed {
-                addr: cfg.bind_addr.to_string(),
-                message: e.to_string(),
-            })?;
-
-        let server = WsServer::bind(cfg.bind_addr, module).await?;
-        let addr = server.addr();
-
-        let _ = state_tx.send(ConnectionState::Disconnected);
-
-        Ok(Arc::new(Self {
-            inner: Arc::new(DaemonInner {
-                server: Mutex::new(Some(server)),
-                state_rx,
-                state_tx,
-                pairing,
-                store,
-                active_token,
-                addr,
-                mac_name: cfg.mac_name,
-            }),
-        }))
-    }
-
     /// Production entry point for Swift. Discovers the Tailscale 100.x IP,
     /// tries ports 7878..=7882 in order, returns the first successful bind.
     ///
@@ -109,6 +53,7 @@ impl DaemonHandle {
     /// - `BindFailed { addr: "tailscale", ... }` if no 100.x IP found.
     /// - `BindFailed { addr: "<ip>:7878-7882", message: "all ports occupied" }`
     ///   if every port fails to bind.
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     #[allow(clippy::missing_errors_doc)]
     pub async fn start_autobind(mac_name: String) -> Result<Arc<Self>, MinosError> {
         const PORTS: std::ops::RangeInclusive<u16> = 7878..=7882;
@@ -173,18 +118,6 @@ impl DaemonHandle {
         *self.inner.state_rx.borrow()
     }
 
-    /// Subscribe to connection-state transitions (Rust-only — UniFFI callers
-    /// use the callback-interface `subscribe` added in Task 9).
-    #[must_use]
-    pub fn events_stream(&self) -> watch::Receiver<ConnectionState> {
-        self.inner.state_rx.clone()
-    }
-
-    #[must_use]
-    pub fn addr(&self) -> SocketAddr {
-        self.inner.addr
-    }
-
     /// Bound host as a string (Tailscale 100.x or the loopback 127.0.0.1
     /// used by tests). Exported to Swift via UniFFI.
     #[must_use]
@@ -244,5 +177,77 @@ impl DaemonHandle {
         observer: Arc<dyn crate::subscription::ConnectionStateObserver>,
     ) -> Arc<crate::subscription::Subscription> {
         crate::subscription::spawn_observer(self.events_stream(), observer)
+    }
+}
+
+impl DaemonHandle {
+    /// Start the daemon on an explicit bind address. Tests use this path;
+    /// production code uses `start_autobind` (Task 8).
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn start(cfg: DaemonConfig) -> Result<Arc<Self>, MinosError> {
+        let store: Arc<dyn PairingStore> =
+            Arc::new(FilePairingStore::new(FilePairingStore::default_path()));
+        let runner: Arc<dyn CommandRunner> = Arc::new(RealCommandRunner);
+
+        let initial_state = if store.load()?.is_empty() {
+            PairingState::Unpaired
+        } else {
+            PairingState::Paired
+        };
+        let pairing = Arc::new(Mutex::new(Pairing::new(initial_state)));
+
+        let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
+        let state_tx = Arc::new(state_tx);
+        let active_token: Arc<Mutex<Option<ActiveToken>>> = Arc::new(Mutex::new(None));
+
+        let impl_ = RpcServerImpl {
+            started_at: Instant::now(),
+            pairing: pairing.clone(),
+            store: store.clone(),
+            runner,
+            mac_name: cfg.mac_name.clone(),
+            host: cfg.bind_addr.ip().to_string(),
+            port: cfg.bind_addr.port(),
+            active_token: active_token.clone(),
+            conn_state_tx: state_tx.clone(),
+        };
+
+        let mut module = RpcModule::new(());
+        module
+            .merge(impl_.into_rpc())
+            .map_err(|e| MinosError::BindFailed {
+                addr: cfg.bind_addr.to_string(),
+                message: e.to_string(),
+            })?;
+
+        let server = WsServer::bind(cfg.bind_addr, module).await?;
+        let addr = server.addr();
+
+        let _ = state_tx.send(ConnectionState::Disconnected);
+
+        Ok(Arc::new(Self {
+            inner: Arc::new(DaemonInner {
+                server: Mutex::new(Some(server)),
+                state_rx,
+                state_tx,
+                pairing,
+                store,
+                active_token,
+                addr,
+                mac_name: cfg.mac_name,
+            }),
+        }))
+    }
+
+    /// Subscribe to connection-state transitions (Rust-only — UniFFI callers
+    /// use the callback-interface `subscribe` added in Task 9).
+    #[must_use]
+    pub fn events_stream(&self) -> watch::Receiver<ConnectionState> {
+        self.inner.state_rx.clone()
+    }
+
+    #[must_use]
+    pub fn addr(&self) -> SocketAddr {
+        self.inner.addr
     }
 }
