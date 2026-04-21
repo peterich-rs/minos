@@ -30,7 +30,11 @@ fn accept_peer(#[case] from: PairingState, #[case] should_succeed: bool) {
 
 #[test]
 fn forget_resets_to_unpaired_from_any_state() {
-    for from in [PairingState::Unpaired, PairingState::AwaitingPeer, PairingState::Paired] {
+    for from in [
+        PairingState::Unpaired,
+        PairingState::AwaitingPeer,
+        PairingState::Paired,
+    ] {
         let mut p = Pairing::new(from);
         p.forget();
         assert_eq!(p.state(), PairingState::Unpaired);
@@ -47,5 +51,8 @@ fn replace_paired_returns_to_awaiting() {
 #[test]
 fn replace_when_not_paired_errors() {
     let mut p = Pairing::new(PairingState::Unpaired);
-    assert!(matches!(p.replace(), Err(MinosError::PairingStateMismatch { .. })));
+    assert!(matches!(
+        p.replace(),
+        Err(MinosError::PairingStateMismatch { .. })
+    ));
 }

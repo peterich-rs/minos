@@ -15,9 +15,7 @@ use jsonrpsee::PendingSubscriptionSink;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_pairing::{Pairing, PairingStore, TrustedDevice};
-use minos_protocol::{
-    HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
-};
+use minos_protocol::{HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse};
 
 pub struct RpcServerImpl {
     pub started_at: Instant,
@@ -55,7 +53,10 @@ impl MinosRpcServer for RpcServerImpl {
             current.push(dev);
         }
         self.store.save(&current).map_err(rpc_err)?;
-        Ok(PairResponse { ok: true, mac_name: self.mac_name.clone() })
+        Ok(PairResponse {
+            ok: true,
+            mac_name: self.mac_name.clone(),
+        })
     }
 
     async fn health(&self) -> jsonrpsee::core::RpcResult<HealthResponse> {

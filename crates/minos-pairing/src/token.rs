@@ -25,7 +25,10 @@ pub struct ActiveToken {
 impl ActiveToken {
     #[must_use]
     pub fn fresh() -> Self {
-        Self { token: PairingToken::generate(), issued_at: Utc::now() }
+        Self {
+            token: PairingToken::generate(),
+            issued_at: Utc::now(),
+        }
     }
 
     #[must_use]
@@ -70,7 +73,10 @@ mod tests {
     #[test]
     fn token_expires_after_five_minutes() {
         let issued = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
-        let active = ActiveToken { token: PairingToken::generate(), issued_at: issued };
+        let active = ActiveToken {
+            token: PairingToken::generate(),
+            issued_at: issued,
+        };
         let four_min = issued + Duration::minutes(4);
         let six_min = issued + Duration::minutes(6);
         assert!(!active.is_expired(four_min));

@@ -1,11 +1,9 @@
 //! Minos build / codegen orchestration.
-//!
-//! Subcommands are filled in across phases of plan 01:
-//! - `check-all`: phase K
-//! - `gen-uniffi` / `gen-frb` / `build-macos` / `build-ios`: phase K stubs only;
-//!   real implementations land in plans 02 and 03.
 
-use anyhow::Result;
+use std::path::Path;
+use std::process::Command;
+
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -17,7 +15,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Run fmt + clippy + workspace tests + (later) UI lints.
+    /// fmt + clippy + workspace tests + UI lints (UI lints are no-ops until plans 02/03 land).
     CheckAll,
     /// Install developer-side codegen tools.
     Bootstrap,
@@ -34,8 +32,8 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::CheckAll => not_yet("check-all"),
-        Cmd::Bootstrap => not_yet("bootstrap"),
+        Cmd::CheckAll => check_all(),
+        Cmd::Bootstrap => bootstrap(),
         Cmd::GenUniffi => not_yet("gen-uniffi"),
         Cmd::GenFrb => not_yet("gen-frb"),
         Cmd::BuildMacos => not_yet("build-macos"),
@@ -43,6 +41,80 @@ fn main() -> Result<()> {
     }
 }
 
+fn check_all() -> Result<()> {
+    let workspace_root = workspace_root()?;
+    eprintln!("==> cargo fmt --check");
+    run("cargo", &["fmt", "--all", "--check"], &workspace_root)?;
+
+    eprintln!("==> cargo clippy");
+    run(
+        "cargo",
+        &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        &workspace_root,
+    )?;
+
+    eprintln!("==> cargo test");
+    run("cargo", &["test", "--workspace"], &workspace_root)?;
+
+    eprintln!("==> cargo deny check (licenses + advisories)");
+    if which("cargo-deny").is_some() {
+        run("cargo", &["deny", "check"], &workspace_root)?;
+    } else {
+        eprintln!("    (skipped: cargo-deny not installed; run `cargo xtask bootstrap`)");
+    }
+
+    eprintln!("OK: all checks pass.");
+    Ok(())
+}
+
+fn bootstrap() -> Result<()> {
+    let workspace_root = workspace_root()?;
+    eprintln!("==> installing cargo-deny + uniffi-bindgen");
+    run(
+        "cargo",
+        &["install", "cargo-deny", "--locked"],
+        &workspace_root,
+    )?;
+    run(
+        "cargo",
+        &["install", "uniffi-bindgen-cli", "--locked"],
+        &workspace_root,
+    )?;
+    // flutter_rust_bridge_codegen and dart deps come in plan 03.
+    Ok(())
+}
+
 fn not_yet(name: &str) -> Result<()> {
-    anyhow::bail!("xtask `{name}` not implemented yet (filled in later in plan 01)")
+    bail!("xtask `{name}` not implemented yet (filled in later)")
+}
+
+fn run(program: &str, args: &[&str], cwd: &Path) -> Result<()> {
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .with_context(|| format!("spawning `{program} {args:?}`"))?;
+    if !status.success() {
+        bail!("`{program} {args:?}` exited {status}");
+    }
+    Ok(())
+}
+
+fn workspace_root() -> Result<std::path::PathBuf> {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").context("CARGO_MANIFEST_DIR unset")?;
+    Ok(Path::new(&manifest).parent().unwrap().to_owned())
+}
+
+fn which(bin: &str) -> Option<String> {
+    let out = Command::new("which").arg(bin).output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }

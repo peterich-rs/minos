@@ -80,7 +80,10 @@ mod tests {
         // 32 bytes base64-encoded with no padding = 43 chars
         let t = PairingToken::generate();
         assert_eq!(t.as_str().len(), 43);
-        assert!(t.as_str().chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(t
+            .as_str()
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     proptest::proptest! {

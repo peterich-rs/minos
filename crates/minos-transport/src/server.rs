@@ -19,14 +19,20 @@ impl WsServer {
         let server = Server::builder()
             .build(addr)
             .await
-            .map_err(|e| MinosError::BindFailed { addr: addr.to_string(), message: e.to_string() })?;
+            .map_err(|e| MinosError::BindFailed {
+                addr: addr.to_string(),
+                message: e.to_string(),
+            })?;
         let bound = server.local_addr().map_err(|e| MinosError::BindFailed {
             addr: addr.to_string(),
             message: e.to_string(),
         })?;
         let handle = server.start(module);
         info!(?bound, "WsServer started");
-        Ok(Self { handle, addr: bound })
+        Ok(Self {
+            handle,
+            addr: bound,
+        })
     }
 
     #[must_use]
@@ -35,7 +41,9 @@ impl WsServer {
     }
 
     pub async fn stop(self) -> Result<(), MinosError> {
-        self.handle.stop().map_err(|e| MinosError::Disconnected { reason: e.to_string() })?;
+        self.handle.stop().map_err(|e| MinosError::Disconnected {
+            reason: e.to_string(),
+        })?;
         self.handle.stopped().await;
         Ok(())
     }
@@ -49,7 +57,9 @@ mod tests {
     #[tokio::test]
     async fn binds_to_ephemeral_port() {
         let module = RpcModule::new(());
-        let s = WsServer::bind("127.0.0.1:0".parse().unwrap(), module).await.unwrap();
+        let s = WsServer::bind("127.0.0.1:0".parse().unwrap(), module)
+            .await
+            .unwrap();
         assert_ne!(s.addr().port(), 0);
         s.stop().await.unwrap();
     }

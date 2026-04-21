@@ -37,12 +37,13 @@ impl MobileClient {
     /// Pair with a Mac whose QR was just scanned.
     #[allow(clippy::missing_errors_doc)]
     pub async fn pair_with(&self, qr: QrPayload) -> Result<PairResponse, MinosError> {
-        let url: Url = format!("ws://{}:{}", qr.host, qr.port)
-            .parse()
-            .map_err(|e: url::ParseError| MinosError::ConnectFailed {
-                url: format!("ws://{}:{}", qr.host, qr.port),
-                message: e.to_string(),
-            })?;
+        let url: Url =
+            format!("ws://{}:{}", qr.host, qr.port)
+                .parse()
+                .map_err(|e: url::ParseError| MinosError::ConnectFailed {
+                    url: format!("ws://{}:{}", qr.host, qr.port),
+                    message: e.to_string(),
+                })?;
 
         let _ = self.state_tx.send(ConnectionState::Pairing);
         let ws = WsClient::connect(&url).await?;
@@ -78,11 +79,15 @@ impl MobileClient {
     #[allow(clippy::missing_errors_doc)]
     pub async fn list_clis(&self) -> Result<Vec<minos_domain::AgentDescriptor>, MinosError> {
         let guard = self.ws.lock().await;
-        let ws = guard.as_ref().ok_or(MinosError::Disconnected { reason: "no client".into() })?;
-        MinosRpcClient::list_clis(&*ws.inner()).await.map_err(|e| MinosError::RpcCallFailed {
-            method: "list_clis".into(),
-            message: e.to_string(),
-        })
+        let ws = guard.as_ref().ok_or(MinosError::Disconnected {
+            reason: "no client".into(),
+        })?;
+        MinosRpcClient::list_clis(&*ws.inner())
+            .await
+            .map_err(|e| MinosError::RpcCallFailed {
+                method: "list_clis".into(),
+                message: e.to_string(),
+            })
     }
 
     #[must_use]

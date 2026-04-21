@@ -23,7 +23,10 @@ async fn mobile_pairs_with_daemon_and_lists_clis() {
 
     let qr = daemon.pairing_qr().unwrap();
 
-    let mobile = MobileClient::new(Arc::new(InMemoryPairingStore::new()), "iPhoneForTest".into());
+    let mobile = MobileClient::new(
+        Arc::new(InMemoryPairingStore::new()),
+        "iPhoneForTest".into(),
+    );
     let resp = mobile.pair_with(qr).await.unwrap();
     assert_eq!(resp.mac_name, "MacForTest");
     assert!(resp.ok);

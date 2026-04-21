@@ -9,7 +9,9 @@ pub enum ConnectionState {
     Pairing,
     Connected,
     /// Reconnect attempt in progress; `attempt` starts at 1 for the first retry.
-    Reconnecting { attempt: u32 },
+    Reconnecting {
+        attempt: u32,
+    },
 }
 
 #[cfg(test)]
@@ -18,7 +20,10 @@ mod tests {
 
     #[test]
     fn disconnected_serializes_as_string() {
-        assert_eq!(serde_json::to_string(&ConnectionState::Disconnected).unwrap(), "\"disconnected\"");
+        assert_eq!(
+            serde_json::to_string(&ConnectionState::Disconnected).unwrap(),
+            "\"disconnected\""
+        );
     }
 
     #[test]

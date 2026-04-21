@@ -15,7 +15,12 @@ pub struct CommandOutcome {
 #[async_trait::async_trait]
 pub trait CommandRunner: Send + Sync + 'static {
     async fn which(&self, bin: &str) -> Option<String>;
-    async fn run(&self, bin: &str, args: &[&str], timeout: Duration) -> Result<CommandOutcome, MinosError>;
+    async fn run(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<CommandOutcome, MinosError>;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -57,10 +62,12 @@ impl CommandRunner for RealCommandRunner {
             .stderr(Stdio::piped())
             .output();
 
-        let out = timeout(timeout_dur, fut).await.map_err(|_| MinosError::CliProbeTimeout {
-            bin: bin.to_owned(),
-            timeout_ms: u64::try_from(timeout_dur.as_millis()).unwrap_or(u64::MAX),
-        })?;
+        let out = timeout(timeout_dur, fut)
+            .await
+            .map_err(|_| MinosError::CliProbeTimeout {
+                bin: bin.to_owned(),
+                timeout_ms: u64::try_from(timeout_dur.as_millis()).unwrap_or(u64::MAX),
+            })?;
 
         let out = out.map_err(|e| MinosError::CliProbeFailed {
             bin: bin.to_owned(),

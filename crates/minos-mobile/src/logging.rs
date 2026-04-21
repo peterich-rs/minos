@@ -47,7 +47,11 @@ pub fn init(log_dir: &Path) -> Result<(), MinosError> {
 
 pub fn set_debug(enabled: bool) {
     if let Some(h) = HANDLE.get() {
-        h.set_level(if enabled { LogLevel::Debug } else { LogLevel::Info });
+        h.set_level(if enabled {
+            LogLevel::Debug
+        } else {
+            LogLevel::Info
+        });
     }
 }
 

@@ -16,8 +16,13 @@ impl WsClient {
         let inner = WsClientBuilder::default()
             .build(url.as_str())
             .await
-            .map_err(|e| MinosError::ConnectFailed { url: url.to_string(), message: e.to_string() })?;
-        Ok(Self { inner: Arc::new(inner) })
+            .map_err(|e| MinosError::ConnectFailed {
+                url: url.to_string(),
+                message: e.to_string(),
+            })?;
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
     }
 
     #[must_use]

@@ -21,16 +21,30 @@ pub async fn detect_all(runner: Arc<dyn CommandRunner>) -> Vec<AgentDescriptor> 
 async fn detect_one(runner: &dyn CommandRunner, name: AgentName) -> AgentDescriptor {
     let bin = name.bin_name();
     let Some(path) = runner.which(bin).await else {
-        return AgentDescriptor { name, path: None, version: None, status: AgentStatus::Missing };
+        return AgentDescriptor {
+            name,
+            path: None,
+            version: None,
+            status: AgentStatus::Missing,
+        };
     };
 
     match runner.run(bin, &["--version"], PROBE_TIMEOUT).await {
         Ok(outcome) if outcome.exit_code == 0 => {
             let version = parse_version(&outcome.stdout).or_else(|| parse_version(&outcome.stderr));
-            AgentDescriptor { name, path: Some(path), version, status: AgentStatus::Ok }
+            AgentDescriptor {
+                name,
+                path: Some(path),
+                version,
+                status: AgentStatus::Ok,
+            }
         }
         Ok(outcome) => {
-            warn!(?name, exit_code = outcome.exit_code, "non-zero exit from --version probe");
+            warn!(
+                ?name,
+                exit_code = outcome.exit_code,
+                "non-zero exit from --version probe"
+            );
             AgentDescriptor {
                 name,
                 path: Some(path),
@@ -44,7 +58,9 @@ async fn detect_one(runner: &dyn CommandRunner, name: AgentName) -> AgentDescrip
             name,
             path: Some(path),
             version: None,
-            status: AgentStatus::Error { reason: e.to_string() },
+            status: AgentStatus::Error {
+                reason: e.to_string(),
+            },
         },
     }
 }

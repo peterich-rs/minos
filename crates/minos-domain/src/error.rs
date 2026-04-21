@@ -59,22 +59,34 @@ impl MinosError {
     #[must_use]
     pub fn user_message(&self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Self::BindFailed { .. }, Lang::Zh) => "无法绑定本机端口；请检查 Tailscale 是否已启动并登录",
-            (Self::BindFailed { .. }, Lang::En) => "Cannot bind local port; please verify Tailscale is running and signed in",
-            (Self::ConnectFailed { .. }, Lang::Zh) => "无法连接 Mac；请确认两端均已加入同一 Tailscale 网络",
-            (Self::ConnectFailed { .. }, Lang::En) => "Cannot reach Mac; ensure both devices are on the same Tailscale network",
+            (Self::BindFailed { .. }, Lang::Zh) => {
+                "无法绑定本机端口；请检查 Tailscale 是否已启动并登录"
+            }
+            (Self::BindFailed { .. }, Lang::En) => {
+                "Cannot bind local port; please verify Tailscale is running and signed in"
+            }
+            (Self::ConnectFailed { .. }, Lang::Zh) => {
+                "无法连接 Mac；请确认两端均已加入同一 Tailscale 网络"
+            }
+            (Self::ConnectFailed { .. }, Lang::En) => {
+                "Cannot reach Mac; ensure both devices are on the same Tailscale network"
+            }
             (Self::Disconnected { .. }, Lang::Zh) => "连接已断开，正在重试",
             (Self::Disconnected { .. }, Lang::En) => "Disconnected; reconnecting",
             (Self::PairingTokenInvalid, Lang::Zh) => "二维码已过期，请重新扫描",
             (Self::PairingTokenInvalid, Lang::En) => "QR code expired, please rescan",
             (Self::PairingStateMismatch { .. }, Lang::Zh) => "已存在配对设备，请确认替换",
-            (Self::PairingStateMismatch { .. }, Lang::En) => "A paired device already exists; confirm to replace",
+            (Self::PairingStateMismatch { .. }, Lang::En) => {
+                "A paired device already exists; confirm to replace"
+            }
             (Self::DeviceNotTrusted { .. }, Lang::Zh) => "配对已失效，请重新扫码",
             (Self::DeviceNotTrusted { .. }, Lang::En) => "Pairing invalidated, please rescan",
             (Self::StoreIo { .. }, Lang::Zh) => "本地存储不可访问，请检查权限",
             (Self::StoreIo { .. }, Lang::En) => "Local storage inaccessible; check permissions",
             (Self::StoreCorrupt { .. }, Lang::Zh) => "本地配对状态损坏，已备份；请重新配对",
-            (Self::StoreCorrupt { .. }, Lang::En) => "Local pairing state corrupt; backed up. Please re-pair",
+            (Self::StoreCorrupt { .. }, Lang::En) => {
+                "Local pairing state corrupt; backed up. Please re-pair"
+            }
             (Self::CliProbeTimeout { .. }, Lang::Zh) => "CLI 探测超时",
             (Self::CliProbeTimeout { .. }, Lang::En) => "CLI probe timed out",
             (Self::CliProbeFailed { .. }, Lang::Zh) => "CLI 探测失败",
@@ -111,17 +123,44 @@ mod tests {
     fn every_variant_has_user_message_in_both_langs() {
         // Construct one of every variant; user_message must not panic for any.
         let variants = vec![
-            MinosError::BindFailed { addr: String::new(), message: String::new() },
-            MinosError::ConnectFailed { url: String::new(), message: String::new() },
-            MinosError::Disconnected { reason: String::new() },
+            MinosError::BindFailed {
+                addr: String::new(),
+                message: String::new(),
+            },
+            MinosError::ConnectFailed {
+                url: String::new(),
+                message: String::new(),
+            },
+            MinosError::Disconnected {
+                reason: String::new(),
+            },
             MinosError::PairingTokenInvalid,
-            MinosError::PairingStateMismatch { actual: PairingState::Paired },
-            MinosError::DeviceNotTrusted { device_id: String::new() },
-            MinosError::StoreIo { path: String::new(), message: String::new() },
-            MinosError::StoreCorrupt { path: String::new(), message: String::new() },
-            MinosError::CliProbeTimeout { bin: String::new(), timeout_ms: 0 },
-            MinosError::CliProbeFailed { bin: String::new(), message: String::new() },
-            MinosError::RpcCallFailed { method: String::new(), message: String::new() },
+            MinosError::PairingStateMismatch {
+                actual: PairingState::Paired,
+            },
+            MinosError::DeviceNotTrusted {
+                device_id: String::new(),
+            },
+            MinosError::StoreIo {
+                path: String::new(),
+                message: String::new(),
+            },
+            MinosError::StoreCorrupt {
+                path: String::new(),
+                message: String::new(),
+            },
+            MinosError::CliProbeTimeout {
+                bin: String::new(),
+                timeout_ms: 0,
+            },
+            MinosError::CliProbeFailed {
+                bin: String::new(),
+                message: String::new(),
+            },
+            MinosError::RpcCallFailed {
+                method: String::new(),
+                message: String::new(),
+            },
         ];
         for v in variants {
             assert!(!v.user_message(Lang::Zh).is_empty(), "missing zh for {v:?}");

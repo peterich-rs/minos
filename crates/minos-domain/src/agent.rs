@@ -68,7 +68,10 @@ mod tests {
 
     #[test]
     fn agent_status_error_carries_reason() {
-        let s = serde_json::to_string(&AgentStatus::Error { reason: "boom".into() }).unwrap();
+        let s = serde_json::to_string(&AgentStatus::Error {
+            reason: "boom".into(),
+        })
+        .unwrap();
         assert_eq!(s, r#"{"kind":"error","reason":"boom"}"#);
     }
 

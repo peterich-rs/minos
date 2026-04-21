@@ -38,8 +38,10 @@ pub fn init() -> Result<(), MinosError> {
     })?;
 
     let cfg = XlogConfig::new(dir.to_string_lossy().to_string(), NAME_PREFIX);
-    let logger = Xlog::init(cfg, LogLevel::Info)
-        .map_err(|e| MinosError::StoreIo { path: dir.display().to_string(), message: e.to_string() })?;
+    let logger = Xlog::init(cfg, LogLevel::Info).map_err(|e| MinosError::StoreIo {
+        path: dir.display().to_string(),
+        message: e.to_string(),
+    })?;
 
     let (layer, handle) =
         XlogLayer::with_config(logger, XlogLayerConfig::new(LogLevel::Info).enabled(true));
@@ -56,7 +58,11 @@ pub fn init() -> Result<(), MinosError> {
 /// Toggle level at runtime (for the menubar "diagnostics" switch in plan 02).
 pub fn set_debug(enabled: bool) {
     if let Some(h) = HANDLE.get() {
-        h.set_level(if enabled { LogLevel::Debug } else { LogLevel::Info });
+        h.set_level(if enabled {
+            LogLevel::Debug
+        } else {
+            LogLevel::Info
+        });
     }
 }
 

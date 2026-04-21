@@ -12,7 +12,11 @@ pub fn delay_for_attempt(attempt: u32) -> Duration {
     }
     let exp = u32::min(attempt - 1, 16); // avoid shift overflow
     let scaled = BASE.saturating_mul(1_u32 << exp);
-    if scaled > CAP { CAP } else { scaled }
+    if scaled > CAP {
+        CAP
+    } else {
+        scaled
+    }
 }
 
 #[cfg(test)]
@@ -31,6 +35,9 @@ mod tests {
     #[case(7, 30)]
     #[case(100, 30)]
     fn backoff_sequence(#[case] attempt: u32, #[case] expected_secs: u64) {
-        assert_eq!(delay_for_attempt(attempt), Duration::from_secs(expected_secs));
+        assert_eq!(
+            delay_for_attempt(attempt),
+            Duration::from_secs(expected_secs)
+        );
     }
 }

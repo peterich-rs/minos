@@ -41,7 +41,10 @@ mod tests {
 
     #[test]
     fn pair_response_round_trip() {
-        let resp = PairResponse { ok: true, mac_name: "MacBook".into() };
+        let resp = PairResponse {
+            ok: true,
+            mac_name: "MacBook".into(),
+        };
         let json = serde_json::to_string(&resp).unwrap();
         let back: PairResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
@@ -49,7 +52,10 @@ mod tests {
 
     #[test]
     fn health_response_round_trip() {
-        let resp = HealthResponse { version: "0.1.0".into(), uptime_secs: 42 };
+        let resp = HealthResponse {
+            version: "0.1.0".into(),
+            uptime_secs: 42,
+        };
         let json = serde_json::to_string(&resp).unwrap();
         let back: HealthResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
