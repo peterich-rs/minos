@@ -1,0 +1,6 @@
+{
+  "name": "codex",
+  "path": "/usr/local/bin/codex",
+  "version": "0.18.2",
+  "status": { "kind": "ok" }
+}
