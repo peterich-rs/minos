@@ -10,11 +10,11 @@ description = "Mac-side composition root: WS server + file store + RPC handlers 
 uniffi = ["dep:uniffi", "minos-domain/uniffi", "minos-pairing/uniffi"]
 
 [dependencies]
-minos-domain = { path = "../minos-domain" }
-minos-protocol = { path = "../minos-protocol" }
-minos-pairing = { path = "../minos-pairing" }
-minos-cli-detect = { path = "../minos-cli-detect" }
-minos-transport = { path = "../minos-transport" }
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
+minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
+minos-cli-detect = { path = "../minos-cli-detect", version = "0.1.0" }
+minos-transport = { path = "../minos-transport", version = "0.1.0" }
 tokio = { workspace = true }
 futures = { workspace = true }
 jsonrpsee = { workspace = true }

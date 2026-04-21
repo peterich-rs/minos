@@ -58,21 +58,22 @@ impl DaemonHandle {
     pub async fn start_autobind(mac_name: String) -> Result<Arc<Self>, MinosError> {
         const PORTS: std::ops::RangeInclusive<u16> = 7878..=7882;
 
-        let host = crate::tailscale::discover_ip().await.ok_or_else(|| {
-            MinosError::BindFailed {
+        let host = crate::tailscale::discover_ip()
+            .await
+            .ok_or_else(|| MinosError::BindFailed {
                 addr: "tailscale".into(),
                 message: "no 100.x IP returned by `tailscale ip --4`".into(),
-            }
-        })?;
+            })?;
 
         let mut last_err: Option<MinosError> = None;
         for port in PORTS {
-            let bind_addr: SocketAddr = format!("{host}:{port}")
-                .parse()
-                .map_err(|e: std::net::AddrParseError| MinosError::BindFailed {
-                    addr: format!("{host}:{port}"),
-                    message: e.to_string(),
-                })?;
+            let bind_addr: SocketAddr =
+                format!("{host}:{port}")
+                    .parse()
+                    .map_err(|e: std::net::AddrParseError| MinosError::BindFailed {
+                        addr: format!("{host}:{port}"),
+                        message: e.to_string(),
+                    })?;
             let cfg = DaemonConfig {
                 mac_name: mac_name.clone(),
                 bind_addr,
@@ -89,8 +90,7 @@ impl DaemonHandle {
 
         Err(MinosError::BindFailed {
             addr: format!("{host}:7878-7882"),
-            message: last_err
-                .map_or_else(|| "all ports occupied".into(), |e| e.to_string()),
+            message: last_err.map_or_else(|| "all ports occupied".into(), |e| e.to_string()),
         })
     }
 

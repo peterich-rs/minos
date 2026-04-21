@@ -42,7 +42,6 @@ pub async fn discover_tailscale_ip() -> Option<String> {
 
 pub use minos_daemon::{ConnectionStateObserver, DaemonHandle, Subscription};
 pub use minos_domain::{
-    AgentDescriptor, AgentName, AgentStatus, ConnectionState, DeviceId, PairingState,
-    PairingToken,
+    AgentDescriptor, AgentName, AgentStatus, ConnectionState, DeviceId, PairingState, PairingToken,
 };
 pub use minos_pairing::{QrPayload, TrustedDevice};

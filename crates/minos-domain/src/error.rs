@@ -46,13 +46,13 @@ impl ErrorKind {
     #[must_use]
     pub fn user_message(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Self::BindFailed, Lang::Zh) => {
-                "无法绑定本机端口；请检查 Tailscale 是否已启动并登录"
-            }
+            (Self::BindFailed, Lang::Zh) => "无法绑定本机端口；请检查 Tailscale 是否已启动并登录",
             (Self::BindFailed, Lang::En) => {
                 "Cannot bind local port; please verify Tailscale is running and signed in"
             }
-            (Self::ConnectFailed, Lang::Zh) => "无法连接 Mac；请确认两端均已加入同一 Tailscale 网络",
+            (Self::ConnectFailed, Lang::Zh) => {
+                "无法连接 Mac；请确认两端均已加入同一 Tailscale 网络"
+            }
             (Self::ConnectFailed, Lang::En) => {
                 "Cannot reach Mac; ensure both devices are on the same Tailscale network"
             }
@@ -176,19 +176,83 @@ mod tests {
     #[test]
     fn kind_exhaustively_matches_every_variant() {
         let cases: Vec<(MinosError, ErrorKind)> = vec![
-            (MinosError::BindFailed { addr: String::new(), message: String::new() }, ErrorKind::BindFailed),
-            (MinosError::ConnectFailed { url: String::new(), message: String::new() }, ErrorKind::ConnectFailed),
-            (MinosError::Disconnected { reason: String::new() }, ErrorKind::Disconnected),
-            (MinosError::PairingTokenInvalid, ErrorKind::PairingTokenInvalid),
-            (MinosError::PairingStateMismatch { actual: PairingState::Paired }, ErrorKind::PairingStateMismatch),
-            (MinosError::DeviceNotTrusted { device_id: String::new() }, ErrorKind::DeviceNotTrusted),
-            (MinosError::StoreIo { path: String::new(), message: String::new() }, ErrorKind::StoreIo),
-            (MinosError::StoreCorrupt { path: String::new(), message: String::new() }, ErrorKind::StoreCorrupt),
-            (MinosError::CliProbeTimeout { bin: String::new(), timeout_ms: 0 }, ErrorKind::CliProbeTimeout),
-            (MinosError::CliProbeFailed { bin: String::new(), message: String::new() }, ErrorKind::CliProbeFailed),
-            (MinosError::RpcCallFailed { method: String::new(), message: String::new() }, ErrorKind::RpcCallFailed),
+            (
+                MinosError::BindFailed {
+                    addr: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::BindFailed,
+            ),
+            (
+                MinosError::ConnectFailed {
+                    url: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::ConnectFailed,
+            ),
+            (
+                MinosError::Disconnected {
+                    reason: String::new(),
+                },
+                ErrorKind::Disconnected,
+            ),
+            (
+                MinosError::PairingTokenInvalid,
+                ErrorKind::PairingTokenInvalid,
+            ),
+            (
+                MinosError::PairingStateMismatch {
+                    actual: PairingState::Paired,
+                },
+                ErrorKind::PairingStateMismatch,
+            ),
+            (
+                MinosError::DeviceNotTrusted {
+                    device_id: String::new(),
+                },
+                ErrorKind::DeviceNotTrusted,
+            ),
+            (
+                MinosError::StoreIo {
+                    path: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::StoreIo,
+            ),
+            (
+                MinosError::StoreCorrupt {
+                    path: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::StoreCorrupt,
+            ),
+            (
+                MinosError::CliProbeTimeout {
+                    bin: String::new(),
+                    timeout_ms: 0,
+                },
+                ErrorKind::CliProbeTimeout,
+            ),
+            (
+                MinosError::CliProbeFailed {
+                    bin: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::CliProbeFailed,
+            ),
+            (
+                MinosError::RpcCallFailed {
+                    method: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::RpcCallFailed,
+            ),
         ];
-        assert_eq!(cases.len(), 11, "add a case when you add a MinosError variant");
+        assert_eq!(
+            cases.len(),
+            11,
+            "add a case when you add a MinosError variant"
+        );
         for (err, expected_kind) in cases {
             assert_eq!(err.kind(), expected_kind, "{err:?} → wrong kind");
         }

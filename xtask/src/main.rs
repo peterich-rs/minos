@@ -169,12 +169,13 @@ fn bootstrap() -> Result<()> {
 }
 
 fn build_macos() -> Result<()> {
+    const MACOS_DEPLOYMENT_TARGET: &str = "13.0";
+
     if !cfg!(target_os = "macos") {
         bail!("`build-macos` requires a macOS host");
     }
 
     let root = workspace_root()?;
-    const MACOS_DEPLOYMENT_TARGET: &str = "13.0";
     if which("lipo").is_none() {
         bail!("lipo not installed; `build-macos` requires Xcode command-line tools");
     }

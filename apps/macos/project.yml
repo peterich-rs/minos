@@ -10,6 +10,24 @@ settings:
     ENABLE_HARDENED_RUNTIME: NO
     CODE_SIGN_IDENTITY: "-"
     SWIFT_STRICT_CONCURRENCY: complete
+schemes:
+  Minos:
+    build:
+      targets:
+        Minos: all
+    management:
+      shared: true
+  MinosTests:
+    build:
+      targets:
+        Minos: all
+        MinosTests: all
+    test:
+      config: Debug
+      targets:
+        - MinosTests
+    management:
+      shared: true
 targets:
   Minos:
     type: application
@@ -40,4 +58,7 @@ targets:
       - target: Minos
     settings:
       base:
+        GENERATE_INFOPLIST_FILE: YES
+        HEADER_SEARCH_PATHS: $(SRCROOT)/Minos/Generated
+        OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/Minos/Generated/MinosCoreFFI.modulemap"
         PRODUCT_BUNDLE_IDENTIFIER: ai.minos.macos.tests

@@ -10,7 +10,7 @@ description = "Pairing state machine, trusted device records, and the PairingSto
 uniffi = ["dep:uniffi", "minos-domain/uniffi"]
 
 [dependencies]
-minos-domain = { path = "../minos-domain" }
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

@@ -7,8 +7,8 @@ authors.workspace = true
 description = "WebSocket transport (jsonrpsee server + client) and reconnect logic."
 
 [dependencies]
-minos-domain = { path = "../minos-domain" }
-minos-protocol = { path = "../minos-protocol" }
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
+minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 tokio = { workspace = true }
 futures = { workspace = true }
 jsonrpsee = { workspace = true }

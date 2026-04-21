@@ -117,8 +117,7 @@ mod tests {
     // that every test can reuse so `Xlog::init` is consistent across calls
     // (mars-xlog rejects re-init with a different dir for the same prefix).
     static TEST_LOCK: Mutex<()> = Mutex::new(());
-    static SHARED_LOG_DIR: LazyLock<TempDir> =
-        LazyLock::new(|| tempdir().expect("shared tempdir"));
+    static SHARED_LOG_DIR: LazyLock<TempDir> = LazyLock::new(|| tempdir().expect("shared tempdir"));
 
     fn use_shared_log_dir() {
         std::env::set_var("MINOS_LOG_DIR", SHARED_LOG_DIR.path());
@@ -126,7 +125,9 @@ mod tests {
 
     #[test]
     fn init_creates_log_dir_and_emits_once() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Use MINOS_LOG_DIR override so test logs go to a tempdir without
         // mutating process-global HOME (HOME mutation triggers warnings under
         // the upcoming Rust unsafe-env story).
@@ -140,7 +141,9 @@ mod tests {
 
     #[test]
     fn today_returns_existing_path_after_a_log() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use_shared_log_dir();
         init().unwrap();
 
@@ -155,7 +158,9 @@ mod tests {
 
     #[test]
     fn today_errors_before_any_log_written() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Point at a *fresh* tempdir that has no xlog file. We explicitly do
         // NOT use the shared log dir here — we want the path to not exist.
         let dir = tempdir().unwrap();

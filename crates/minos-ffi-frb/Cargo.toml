@@ -10,8 +10,8 @@ description = "flutter_rust_bridge bindings shim over minos-mobile::MobileClient
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-minos-mobile = { path = "../minos-mobile" }
-minos-domain = { path = "../minos-domain" }
+minos-mobile = { path = "../minos-mobile", version = "0.1.0" }
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
 
 [lints]
 workspace = true

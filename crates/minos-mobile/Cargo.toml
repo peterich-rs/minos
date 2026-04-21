@@ -7,10 +7,10 @@ authors.workspace = true
 description = "iOS-side composition root: WS client + RPC entry surface."
 
 [dependencies]
-minos-domain = { path = "../minos-domain" }
-minos-protocol = { path = "../minos-protocol" }
-minos-pairing = { path = "../minos-pairing" }
-minos-transport = { path = "../minos-transport" }
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
+minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
+minos-transport = { path = "../minos-transport", version = "0.1.0" }
 tokio = { workspace = true }
 futures = { workspace = true }
 jsonrpsee = { workspace = true }
@@ -24,7 +24,7 @@ async-trait = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
-minos-daemon = { path = "../minos-daemon" }
+minos-daemon = { path = "../minos-daemon", version = "0.1.0" }
 tempfile = { workspace = true }
 
 [lints]
