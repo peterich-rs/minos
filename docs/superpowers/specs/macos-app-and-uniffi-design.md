@@ -59,7 +59,9 @@ Reachable states in plan 02 on a fresh machine (empty `devices.json`):
 - `ConnectionState::Pairing` (after user clicks "Show QR")
 - Boot-error state (Tailscale not ready, port conflict, etc.)
 
-Unreachable in plan 02 without a real mobile client: `Connected`, `Reconnecting`. These states compile (the enum is visible) but the plan-02 UI does not render a dedicated view for them — the status header just displays them generically using `ConnectionState.displayLabel`. If a stale `devices.json` is present, Pair state may show "Paired · awaiting peer" statically; no Forget-device UI is shipped.
+Unreachable in plan 02 without a real mobile client: `Connected`, `Reconnecting`. These states compile (the enum is visible) but the plan-02 UI does not render a dedicated view for them — the status header just displays them generically using `ConnectionState.displayLabel`.
+
+**Paired state with stale `devices.json`:** A user who runs plan-03 test sessions and later launches the plan-02 build alone can legitimately land in `PairingState::Paired` with a trusted device but no reachable peer. Plan 02 ships a "**忘记已配对设备**" menu affordance (surfaced only when a trusted device exists) so the user never needs to manually delete files. The Forget flow reuses `DaemonHandle::forget_device` (present since plan 01) and is detailed in §6.6.
 
 ---
 
@@ -156,6 +158,7 @@ No cross-channel bridging. User diagnostics export is Finder-reveal of the raw `
 | 4 | `pub async fn discover_tailscale_ip(&self) -> Option<String>` — instance method | Promote to module-level: `pub async fn minos_daemon::discover_tailscale_ip() -> Option<String>` (free function, same body) | Caller needs it **before** `start`, so it cannot depend on `&self` |
 | 5 | (none) | **New**: `pub async fn DaemonHandle::start_autobind(mac_name: String) -> Result<Arc<Self>, MinosError>` — internally calls `discover_tailscale_ip()`, loops through ports 7878..=7882 calling `start(cfg)` until one succeeds; maps all-failed case to `MinosError::BindFailed { addr: "100.x.y.z:7878-7882", message: "all ports occupied" }` | Spec §7.4 failure #2 (port retry) belongs in Rust, not Swift |
 | 6 | `pub fn events_stream(&self) -> watch::Receiver<ConnectionState>` | Keep (Rust internal). **New**: `pub fn subscribe(&self, observer: Arc<dyn ConnectionStateObserver>) -> Arc<Subscription>` — spawns a tokio task that does `tokio::select!` between `rx.changed()` and a `oneshot::Receiver<()>` (cancellation); each `changed()` → `observer.on_state(*rx.borrow())` | UniFFI cannot directly surface Tokio `watch::Receiver` |
+| 7 | `DaemonHandle` has no public accessor for trusted-device records | **New**: `pub fn current_trusted_device(&self) -> Result<Option<TrustedDevice>, MinosError>` — reads from the `PairingStore`; returns `Ok(None)` when empty, `Ok(Some(td))` when one exists (MVP single-pair cap; returning an Option keeps the API honest when P2 eventually lifts to a list). Swift uses this to decide whether to surface the Forget menu item and which `device_id` to forget | Plan 02 UI needs to know whether a trusted device exists to render the Forget affordance |
 
 New Rust types in `minos-daemon`:
 
@@ -367,6 +370,10 @@ apps/macos/
 
 ### 5.7 MenuBar dropdown (final UI surface for plan 02)
 
+The MenuBar dropdown branches on `AppState.trustedDevice` (derived from `daemon.currentTrustedDevice()` at boot and after state transitions). Two layouts; boot-error state is a third, covered in §6.7.
+
+**Unpaired layout** (`trustedDevice == nil`, `bootError == nil`):
+
 ```
 ┌──────────────────────────────────────────────────┐
 │  [icon]  Minos                                   │
@@ -380,6 +387,24 @@ apps/macos/
 │  退出 Minos                                      │ NSApp.terminate
 └──────────────────────────────────────────────────┘
 ```
+
+**Paired layout** (`trustedDevice != nil`, `bootError == nil`):
+
+```
+┌──────────────────────────────────────────────────┐
+│  [icon]  Minos                                   │
+│                                                  │
+│  已配对 · 等待回连                                │ ← status header
+│  (dim gray sublabel: "{trustedDevice.name}")     │
+├──────────────────────────────────────────────────┤
+│  忘记已配对设备                                   │ confirm + forget_device
+│  在 Finder 中显示今日日志…                        │
+├──────────────────────────────────────────────────┤
+│  退出 Minos                                      │
+└──────────────────────────────────────────────────┘
+```
+
+"显示配对二维码…" is hidden in the Paired layout (re-pairing requires forget first, by design for plan 02 — no replace-confirmation flow, keeping scope narrow). After Forget completes, the menu reverts to the Unpaired layout and "显示配对二维码…" re-appears.
 
 `StatusIcon` maps `ConnectionState`:
 
@@ -481,9 +506,32 @@ User taps "退出 Minos"
      └─ NSApp.terminate(nil)
 ```
 
-### 6.6 Boot-failure recovery
+### 6.6 Forget paired device
 
-`appState.bootError != nil` triggers MenuBarView's error branch:
+```
+User taps "忘记已配对设备"
+ └─ AppState.forgetDevice()
+     ├─ NSAlert confirmation:
+     │     "忘记 {trustedDevice.name} 后需要重新扫码才能再次配对。继续吗？"
+     │     [取消] [忘记]
+     ├─ if canceled → return (no state change)
+     └─ if confirmed:
+         ├─ try await daemon.forgetDevice(id: trustedDevice.deviceId)
+         │    // Rust: store.save(empty); pairing.forget(); state_tx.send(Disconnected)
+         ├─ appState.trustedDevice = nil
+         └─ observer callback → appState.connectionState = .disconnected
+             └─ MenuBarView reverts to Unpaired layout (§5.7)
+
+Error path (StoreIo during save):
+ └─ appState.displayError = e
+    // trustedDevice unchanged; user can retry
+```
+
+No special state exists for "forgetting in progress" — `forget_device` is fast (single JSON file write + in-memory state mutation). UI does not block; the NSAlert dismisses and the menu re-renders within one state-propagation tick.
+
+### 6.7 Boot-failure recovery
+
+`appState.bootError != nil` triggers MenuBarView's error branch (takes priority over Unpaired / Paired layouts):
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -501,7 +549,7 @@ User taps "退出 Minos"
 └──────────────────────────────────────────────────┘
 ```
 
-"重试" calls `DaemonBootstrap.bootstrap(appState)` again; on success the error branch dismisses. "显示配对二维码…" is hidden in this state.
+"重试" calls `DaemonBootstrap.bootstrap(appState)` again; on success the error branch dismisses. "显示配对二维码…" / "忘记已配对设备" are both hidden in this state.
 
 ---
 
@@ -606,8 +654,8 @@ Three buckets, each with a deliberate display:
 
 | Trigger | Swift handler | Display |
 |---|---|---|
-| `bootstrap()` throws | `appState.bootError = e` | Full error branch in MenuBarView (§6.6) |
-| `showQr()` / `revealTodayLog()` / UI-invoked async throws | `appState.displayError = e` | Inline banner 3s, then auto-dismiss |
+| `bootstrap()` throws | `appState.bootError = e` | Full error branch in MenuBarView (§6.7) |
+| `showQr()` / `revealTodayLog()` / `forgetDevice()` / UI-invoked async throws | `appState.displayError = e` | Inline banner 3s, then auto-dismiss |
 | observer callback — not applicable; callbacks are infallible | — | — |
 
 ### 7.4 Errors plan 02 cannot trigger
@@ -646,10 +694,14 @@ Covered scenarios (no UI assertions, no XCUITest):
 | Scenario | Setup | Assertion |
 |---|---|---|
 | Observer callback updates `connectionState` | `MockDaemon` whose `subscribe` stores the observer; test drives `observer.on_state(.connected)` | `appState.connectionState == .connected` |
+| Boot observes trustedDevice on start | `MockDaemon.currentTrustedDevice` returns fixture `TrustedDevice`; bootstrap runs | `appState.trustedDevice != nil`, `appState.canShowQr == false`, `appState.canForgetDevice == true` |
 | `showQr()` success | `MockDaemon.pairingQr` returns a fixture `QrPayload` | `appState.currentQr != nil`, `appState.isQrSheetPresented == true` |
 | `showQr()` throws | `MockDaemon.pairingQr` throws `MinosError.storeIo(…)` | `appState.displayError != nil`, `appState.currentQr == nil` |
 | `regenerateQr()` | Same path as showQr | second `currentQr` differs from first |
-| `bootError` hides showQr affordance | `appState.bootError = .bindFailed(…)` | `appState.canShowQr == false` |
+| `forgetDevice()` success | `MockDaemon.currentTrustedDevice` returns fixture; `forgetDevice(id)` succeeds | `MockDaemon` records `forgetDevice` call with correct id; `appState.trustedDevice == nil`; subsequent `connectionState` update to `.disconnected` is reflected |
+| `forgetDevice()` throws | `MockDaemon.forgetDevice` throws `MinosError.storeIo(…)` | `appState.displayError != nil`; `appState.trustedDevice` unchanged |
+| `forgetDevice()` no-op when no trustedDevice | `appState.trustedDevice == nil` | `MockDaemon.forgetDevice` never called; no state mutation |
+| `bootError` hides all actions | `appState.bootError = .bindFailed(…)` | `appState.canShowQr == false`, `appState.canForgetDevice == false` |
 | `shutdown()` calls `daemon.stop()` and `subscription.cancel()` | `MockDaemon` records calls | Both call-counts == 1 |
 
 Swift unit-test target does **not** import or link the UniFFI static lib directly — `DaemonDriving` + `MockDaemon` make it self-contained. `MinosCore` is still linked because XcodeGen places both under the same target graph; tests simply never instantiate UniFFI types.
@@ -747,7 +799,6 @@ Swift 5.10 via the Xcode 15.4+ toolchain on macOS 14+. No SwiftPM dependencies; 
 |---|---|---|
 | iOS app + frb shim | Separate tech stack, symmetric plan | Plan 03 |
 | Real pair-end-to-end across Tailscale | Needs mobile client | Post-plan-03 |
-| Forget-device UI | No trusted device exists in plan 02 alone | Plan 03 |
 | CLI list view | No peer to trigger `list_clis` | Plan 03 or 04 |
 | Multi-device management view | Single-pair enforced in MVP | P2 |
 | Code signing, notarization, DMG | Not a dev-tree concern in MVP | P1.5 release |
@@ -770,7 +821,7 @@ None remaining. Six questions were posed and resolved during brainstorming:
 6. Build output + timing → universal static `.a` + explicit `xtask` pre-step (§5.4).
 
 Plus three follow-ups:
-- UI scope per phase: plan 02 UI is narrow (no CLIListView, no DevicesView, no Forget button) — §2.4.
+- UI scope per phase: plan 02 UI is narrow — only MenuBarView (two layouts: Unpaired / Paired) + QRSheet. No CLIListView, no multi-device DevicesView. Forget-device affordance **is** in plan 02 because the Paired state is reachable with stale fixtures and users must not resort to rm. — §2.4, §5.7, §6.6.
 - Diagnostics export: Finder-reveal the raw `.xlog` file via `today_log_path()` — §5.1 / §6.4.
 - `DaemonDriving` protocol shim for Swift test mocking — §4.2.
 
@@ -818,7 +869,7 @@ crates/minos-pairing/Cargo.toml                              add uniffi feature
 crates/minos-pairing/src/{store,token}.rs                    add cfg_attr derives (QrPayload/TrustedDevice Records; PairingToken via custom_newtype in shim)
 crates/minos-daemon/Cargo.toml                               add uniffi feature
 crates/minos-daemon/src/lib.rs                               export subscription module
-crates/minos-daemon/src/handle.rs                            Phase 0 refactor (Arc<Inner>, stop(&self), host/port, start_autobind)
+crates/minos-daemon/src/handle.rs                            Phase 0 refactor (Arc<Inner>, stop(&self), host/port, start_autobind, current_trusted_device)
 crates/minos-daemon/src/tailscale.rs                         hoist discover_ip to pub free fn
 crates/minos-daemon/src/logging.rs                           add today()
 crates/minos-ffi-uniffi/src/lib.rs                           remove ping, add custom_types, re-export free functions
