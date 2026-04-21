@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// MVP enumerates the three planned backends; expansion is a breaking change
 /// (intentional — every consumer must opt in to a new agent).
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentName {
@@ -33,6 +34,7 @@ impl AgentName {
 }
 
 /// Health state of a single CLI agent on the local machine.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum AgentStatus {
@@ -42,6 +44,7 @@ pub enum AgentStatus {
 }
 
 /// The complete description of one agent's local installation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentDescriptor {
     pub name: AgentName,

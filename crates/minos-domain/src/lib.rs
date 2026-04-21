@@ -9,6 +9,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
+
 pub mod agent;
 pub mod connection;
 pub mod error;
