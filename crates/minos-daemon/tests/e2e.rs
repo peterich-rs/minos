@@ -31,8 +31,8 @@ async fn pair_then_list_clis_in_process() {
         .await
         .unwrap();
 
-    // Pre-pair: state is Disconnected.
-    assert_eq!(handle.current_state(), ConnectionState::Disconnected);
+    // Post-QR, pre-pair: state is Pairing (pairing_qr emits Pairing per spec §6.2).
+    assert_eq!(handle.current_state(), ConnectionState::Pairing);
     let device_id = DeviceId::new();
 
     // pair (with the token from the QR)
@@ -145,8 +145,9 @@ async fn pair_with_wrong_token_rejected() {
     .await;
     assert!(result.is_err(), "wrong token should be rejected");
 
-    // State should still be Disconnected — pair() rejected before emitting Connected.
-    assert_eq!(handle.current_state(), ConnectionState::Disconnected);
+    // State should still be Pairing — pairing_qr emitted Pairing, pair() rejected
+    // before emitting Connected, so no further transition happened.
+    assert_eq!(handle.current_state(), ConnectionState::Pairing);
 
     drop(client);
     handle.stop().await.unwrap();

@@ -1,5 +1,10 @@
-//! Public façade exposed to Swift via UniFFI in plan 02. This crate only
-//! exposes the Rust shape; UniFFI annotations live in `minos-ffi-uniffi`.
+//! Public façade exposed to Swift via UniFFI in plan 02.
+//!
+//! Plan 02 Phase 0 refactor: all fields live inside `DaemonInner` owned by
+//! an `Arc`, so every `DaemonHandle` method takes `&self` — a requirement
+//! for UniFFI `#[uniffi::Object]` exports. `WsServer` uses interior
+//! mutability via `Mutex<Option<_>>` so `stop(&self)` can take it out
+//! without consuming the handle.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -21,8 +26,8 @@ pub struct DaemonConfig {
     pub bind_addr: SocketAddr,
 }
 
-pub struct DaemonHandle {
-    server: Option<WsServer>,
+struct DaemonInner {
+    server: Mutex<Option<WsServer>>,
     state_rx: watch::Receiver<ConnectionState>,
     state_tx: Arc<watch::Sender<ConnectionState>>,
     pairing: Arc<Mutex<Pairing>>,
@@ -32,11 +37,15 @@ pub struct DaemonHandle {
     mac_name: String,
 }
 
+pub struct DaemonHandle {
+    inner: Arc<DaemonInner>,
+}
+
 impl DaemonHandle {
-    /// Start the daemon. Binds to the supplied address and serves the RPC
-    /// module in a background task. Returns once the listener is bound.
+    /// Start the daemon on an explicit bind address. Tests use this path;
+    /// production code uses `start_autobind` (Task 8).
     #[allow(clippy::missing_errors_doc)]
-    pub async fn start(cfg: DaemonConfig) -> Result<Self, MinosError> {
+    pub async fn start(cfg: DaemonConfig) -> Result<Arc<Self>, MinosError> {
         let store: Arc<dyn PairingStore> =
             Arc::new(FilePairingStore::new(FilePairingStore::default_path()));
         let runner: Arc<dyn CommandRunner> = Arc::new(RealCommandRunner);
@@ -77,78 +86,76 @@ impl DaemonHandle {
 
         let _ = state_tx.send(ConnectionState::Disconnected);
 
-        Ok(Self {
-            server: Some(server),
-            state_rx,
-            state_tx,
-            pairing,
-            store,
-            active_token,
-            addr,
-            mac_name: cfg.mac_name,
-        })
+        Ok(Arc::new(Self {
+            inner: Arc::new(DaemonInner {
+                server: Mutex::new(Some(server)),
+                state_rx,
+                state_tx,
+                pairing,
+                store,
+                active_token,
+                addr,
+                mac_name: cfg.mac_name,
+            }),
+        }))
     }
 
     /// Generate (or refresh) the pairing QR.
     #[allow(clippy::missing_errors_doc)]
     pub fn pairing_qr(&self) -> Result<QrPayload, MinosError> {
-        let mut p = self.pairing.lock().unwrap();
+        let mut p = self.inner.pairing.lock().unwrap();
         if p.state() == PairingState::Paired {
-            // Caller wants to re-pair — UI must have shown a "replace" confirm.
             p.replace()?;
         } else if p.state() == PairingState::Unpaired {
             p.begin_awaiting()?;
         }
         let (payload, active) = generate_qr_payload(
-            self.addr.ip().to_string(),
-            self.addr.port(),
-            self.mac_name.clone(),
+            self.inner.addr.ip().to_string(),
+            self.inner.addr.port(),
+            self.inner.mac_name.clone(),
         );
-        *self.active_token.lock().unwrap() = Some(active);
+        *self.inner.active_token.lock().unwrap() = Some(active);
+        let _ = self.inner.state_tx.send(ConnectionState::Pairing);
         Ok(payload)
     }
 
     #[must_use]
     pub fn current_state(&self) -> ConnectionState {
-        *self.state_rx.borrow()
+        *self.inner.state_rx.borrow()
     }
 
-    /// Subscribe to connection-state transitions. Receivers see the most
-    /// recently sent value on first `borrow`, then each subsequent `changed`
-    /// awaits the next transition.
+    /// Subscribe to connection-state transitions (Rust-only — UniFFI callers
+    /// use the callback-interface `subscribe` added in Task 9).
     #[must_use]
     pub fn events_stream(&self) -> watch::Receiver<ConnectionState> {
-        self.state_rx.clone()
+        self.inner.state_rx.clone()
     }
 
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
-        self.addr
+        self.inner.addr
     }
 
-    /// Forget a previously trusted device. Removes it from the persisted
-    /// store, resets the in-memory pairing state machine, and emits a
-    /// `Disconnected` event. Idempotent: forgetting an unknown device is
-    /// not an error.
-    ///
-    /// `async` even though the body is currently sync — the spec'd surface
-    /// is `async`, and plan 02's mobile-side will need to awaiting an
-    /// active WS shutdown here.
+    /// Forget a previously trusted device.
     #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     pub async fn forget_device(&self, id: DeviceId) -> Result<(), MinosError> {
-        let mut current = self.store.load()?;
+        let mut current = self.inner.store.load()?;
         current.retain(|d| d.device_id != id);
-        self.store.save(&current)?;
-        self.pairing.lock().unwrap().forget();
-        let _ = self.state_tx.send(ConnectionState::Disconnected);
+        self.inner.store.save(&current)?;
+        self.inner.pairing.lock().unwrap().forget();
+        let _ = self.inner.state_tx.send(ConnectionState::Disconnected);
         Ok(())
     }
 
+    /// Stop the WS server and transition to `Disconnected`. Idempotent —
+    /// calling twice is a no-op after the first success.
     #[allow(clippy::missing_errors_doc)]
-    pub async fn stop(mut self) -> Result<(), MinosError> {
-        if let Some(s) = self.server.take() {
+    pub async fn stop(&self) -> Result<(), MinosError> {
+        let server = self.inner.server.lock().unwrap().take();
+        if let Some(s) = server {
             s.stop().await?;
         }
+        let _ = self.inner.state_tx.send(ConnectionState::Disconnected);
         Ok(())
     }
 }
