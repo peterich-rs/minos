@@ -15,7 +15,6 @@ use tokio::sync::watch;
 
 use crate::file_store::FilePairingStore;
 use crate::rpc_server::RpcServerImpl;
-use crate::tailscale;
 
 pub struct DaemonConfig {
     pub mac_name: String,
@@ -107,10 +106,6 @@ impl DaemonHandle {
         );
         *self.active_token.lock().unwrap() = Some(active);
         Ok(payload)
-    }
-
-    pub async fn discover_tailscale_ip(&self) -> Option<String> {
-        tailscale::discover_ip().await
     }
 
     #[must_use]

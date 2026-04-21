@@ -8,3 +8,7 @@ pub mod tailscale;
 
 pub use file_store::*;
 pub use handle::*;
+
+/// Module-level wrapper so callers don't need `tailscale::discover_ip` —
+/// spec §5.1 #4 calls for this name.
+pub use tailscale::discover_ip as discover_tailscale_ip;
