@@ -11,6 +11,8 @@ Cargo.lock.bak
 
 # UniFFI / frb generated artifacts (regenerated; not committed)
 apps/macos/Minos/Generated/
+apps/macos/Minos.xcodeproj/
+apps/macos/Brewfile.lock.json
 apps/mobile/lib/src/rust/
 apps/mobile/rust_builder/
 apps/mobile/.dart_tool/

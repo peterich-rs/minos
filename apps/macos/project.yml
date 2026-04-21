@@ -1,0 +1,43 @@
+name: Minos
+options:
+  bundleIdPrefix: ai.minos
+  deploymentTarget:
+    macOS: "13.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ENABLE_HARDENED_RUNTIME: NO
+    CODE_SIGN_IDENTITY: "-"
+    SWIFT_STRICT_CONCURRENCY: complete
+targets:
+  Minos:
+    type: application
+    platform: macOS
+    sources:
+      - Minos
+    resources:
+      - Minos/Resources/Assets.xcassets
+    info:
+      path: Minos/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: Minos
+        CFBundleShortVersionString: "0.1.0"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.minos.macos
+        HEADER_SEARCH_PATHS: $(SRCROOT)/Minos/Generated
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/../../target/xcframework
+        OTHER_LDFLAGS: "-lminos_ffi_uniffi"
+        OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/Minos/Generated/MinosCoreFFI.modulemap"
+  MinosTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - MinosTests
+    dependencies:
+      - target: Minos
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.minos.macos.tests
