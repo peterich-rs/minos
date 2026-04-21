@@ -1,0 +1,21 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# UniFFI / frb generated artifacts (regenerated; not committed)
+apps/macos/Minos/Generated/
+apps/mobile/lib/src/rust/
+apps/mobile/rust_builder/
+apps/mobile/.dart_tool/
+apps/mobile/build/
+
+# Logs
+*.log
+*.xlog
