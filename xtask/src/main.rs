@@ -44,5 +44,5 @@ fn main() -> Result<()> {
 }
 
 fn not_yet(name: &str) -> Result<()> {
-    anyhow::bail!("xtask `{}` not implemented yet (filled in later in plan 01)", name)
+    anyhow::bail!("xtask `{name}` not implemented yet (filled in later in plan 01)")
 }

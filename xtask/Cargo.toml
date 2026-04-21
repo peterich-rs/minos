@@ -9,3 +9,6 @@ publish = false
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+
+[lints]
+workspace = true

@@ -8,8 +8,6 @@
 //! - `error`       MinosError + user_message
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
 
 pub mod agent;
 pub mod connection;

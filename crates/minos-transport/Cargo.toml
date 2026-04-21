@@ -21,3 +21,6 @@ url = { workspace = true }
 tokio-test = { workspace = true }
 rstest = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

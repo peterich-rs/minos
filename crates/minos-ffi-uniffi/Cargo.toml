@@ -16,3 +16,6 @@ uniffi = { workspace = true }
 
 [build-dependencies]
 uniffi = { workspace = true }
+
+[lints]
+workspace = true

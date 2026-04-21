@@ -5,7 +5,6 @@
 //! - `rpc`:      jsonrpsee `#[rpc]` trait shared by daemon (server) and mobile (client)
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic)]
 
 pub mod events;
 pub mod messages;

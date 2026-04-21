@@ -12,3 +12,6 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 minos-mobile = { path = "../minos-mobile" }
 minos-domain = { path = "../minos-domain" }
+
+[lints]
+workspace = true

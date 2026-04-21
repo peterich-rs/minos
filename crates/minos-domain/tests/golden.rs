@@ -16,7 +16,7 @@ fn agent_descriptor_matches_golden() {
             status: AgentStatus::Ok,
         }
     );
-    let reserialized = serde_json::to_value(&parsed).unwrap();
+    let reserialized = serde_json::to_value(parsed).unwrap();
     let expected: serde_json::Value = serde_json::from_str(golden).unwrap();
     assert_eq!(reserialized, expected);
 }
@@ -26,7 +26,7 @@ fn connection_state_reconnecting_matches_golden() {
     let golden = include_str!("golden/connection_state.json");
     let parsed: ConnectionState = serde_json::from_str(golden).unwrap();
     assert_eq!(parsed, ConnectionState::Reconnecting { attempt: 7 });
-    let reserialized = serde_json::to_value(&parsed).unwrap();
+    let reserialized = serde_json::to_value(parsed).unwrap();
     let expected: serde_json::Value = serde_json::from_str(golden).unwrap();
     assert_eq!(reserialized, expected);
 }

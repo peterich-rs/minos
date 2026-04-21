@@ -26,3 +26,6 @@ async-trait = "0.1"
 tokio-test = { workspace = true }
 minos-daemon = { path = "../minos-daemon" }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

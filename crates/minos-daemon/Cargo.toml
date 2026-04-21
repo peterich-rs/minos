@@ -26,3 +26,6 @@ async-trait = "0.1"
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true
