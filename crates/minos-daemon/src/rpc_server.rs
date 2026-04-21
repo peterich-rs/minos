@@ -13,9 +13,10 @@ use jsonrpsee::core::SubscriptionResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use jsonrpsee::PendingSubscriptionSink;
 use minos_cli_detect::{detect_all, CommandRunner};
-use minos_domain::MinosError;
-use minos_pairing::{Pairing, PairingStore, TrustedDevice};
+use minos_domain::{ConnectionState, MinosError};
+use minos_pairing::{ActiveToken, Pairing, PairingStore, TrustedDevice};
 use minos_protocol::{HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse};
+use tokio::sync::watch;
 
 pub struct RpcServerImpl {
     pub started_at: Instant,
@@ -25,6 +26,15 @@ pub struct RpcServerImpl {
     pub mac_name: String,
     pub host: String,
     pub port: u16,
+    /// Active pairing token shared with the `DaemonHandle` that issued the QR.
+    /// Reserved for token validation in a follow-up; stored here now so that
+    /// future hardening does not require changing this struct's shape.
+    #[allow(dead_code)]
+    pub active_token: Arc<Mutex<Option<ActiveToken>>>,
+    /// Connection-state broadcaster shared with the `DaemonHandle`. After a
+    /// successful `pair()`, this emits `Connected` so UI receivers learn
+    /// about the new peer without a separate transport-layer event.
+    pub conn_state_tx: Arc<watch::Sender<ConnectionState>>,
 }
 
 #[async_trait]
@@ -53,6 +63,11 @@ impl MinosRpcServer for RpcServerImpl {
             current.push(dev);
         }
         self.store.save(&current).map_err(rpc_err)?;
+
+        // Surface the new peer to events_stream subscribers. jsonrpsee does
+        // not give us a connection-lifecycle hook; emit on successful pair.
+        let _ = self.conn_state_tx.send(ConnectionState::Connected);
+
         Ok(PairResponse {
             ok: true,
             mac_name: self.mac_name.clone(),

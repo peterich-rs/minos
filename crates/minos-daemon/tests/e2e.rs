@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 
 use minos_daemon::{DaemonConfig, DaemonHandle};
-use minos_domain::DeviceId;
+use minos_domain::{ConnectionState, DeviceId};
 use minos_protocol::{MinosRpcClient, PairRequest};
 
 #[tokio::test]
@@ -31,11 +31,15 @@ async fn pair_then_list_clis_in_process() {
         .await
         .unwrap();
 
+    // Pre-pair: state is Disconnected.
+    assert_eq!(handle.current_state(), ConnectionState::Disconnected);
+    let device_id = DeviceId::new();
+
     // pair
     let pair_resp = MinosRpcClient::pair(
         &client,
         PairRequest {
-            device_id: DeviceId::new(),
+            device_id,
             name: "test-iphone".into(),
         },
     )
@@ -44,12 +48,19 @@ async fn pair_then_list_clis_in_process() {
     assert!(pair_resp.ok);
     assert_eq!(pair_resp.mac_name, "test-mac");
 
+    // After pair: events_stream observed Connected (sent by RpcServerImpl::pair).
+    assert_eq!(handle.current_state(), ConnectionState::Connected);
+
     // list_clis — three rows (codex/claude/gemini) regardless of host machine
     let clis = MinosRpcClient::list_clis(&client).await.unwrap();
     assert_eq!(clis.len(), 3);
 
     // Token still in QR (sanity: serialization works through real WS)
     assert_eq!(qr.port, handle.addr().port());
+
+    // forget_device clears trust + emits Disconnected.
+    handle.forget_device(device_id).await.unwrap();
+    assert_eq!(handle.current_state(), ConnectionState::Disconnected);
 
     drop(client);
     handle.stop().await.unwrap();

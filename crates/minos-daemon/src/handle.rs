@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use jsonrpsee::server::RpcModule;
 use minos_cli_detect::{CommandRunner, RealCommandRunner};
-use minos_domain::{ConnectionState, MinosError, PairingState};
+use minos_domain::{ConnectionState, DeviceId, MinosError, PairingState};
 use minos_pairing::{generate_qr_payload, ActiveToken, Pairing, PairingStore, QrPayload};
 use minos_protocol::MinosRpcServer;
 use minos_transport::WsServer;
@@ -25,10 +25,8 @@ pub struct DaemonConfig {
 pub struct DaemonHandle {
     server: Option<WsServer>,
     state_rx: watch::Receiver<ConnectionState>,
-    #[allow(dead_code)]
-    state_tx: watch::Sender<ConnectionState>,
+    state_tx: Arc<watch::Sender<ConnectionState>>,
     pairing: Arc<Mutex<Pairing>>,
-    #[allow(dead_code)]
     store: Arc<dyn PairingStore>,
     active_token: Arc<Mutex<Option<ActiveToken>>>,
     addr: SocketAddr,
@@ -52,6 +50,8 @@ impl DaemonHandle {
         let pairing = Arc::new(Mutex::new(Pairing::new(initial_state)));
 
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
+        let state_tx = Arc::new(state_tx);
+        let active_token: Arc<Mutex<Option<ActiveToken>>> = Arc::new(Mutex::new(None));
 
         let impl_ = RpcServerImpl {
             started_at: Instant::now(),
@@ -61,6 +61,8 @@ impl DaemonHandle {
             mac_name: cfg.mac_name.clone(),
             host: cfg.bind_addr.ip().to_string(),
             port: cfg.bind_addr.port(),
+            active_token: active_token.clone(),
+            conn_state_tx: state_tx.clone(),
         };
 
         let mut module = RpcModule::new(());
@@ -82,7 +84,7 @@ impl DaemonHandle {
             state_tx,
             pairing,
             store,
-            active_token: Arc::new(Mutex::new(None)),
+            active_token,
             addr,
             mac_name: cfg.mac_name,
         })
@@ -116,9 +118,35 @@ impl DaemonHandle {
         *self.state_rx.borrow()
     }
 
+    /// Subscribe to connection-state transitions. Receivers see the most
+    /// recently sent value on first `borrow`, then each subsequent `changed`
+    /// awaits the next transition.
+    #[must_use]
+    pub fn events_stream(&self) -> watch::Receiver<ConnectionState> {
+        self.state_rx.clone()
+    }
+
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Forget a previously trusted device. Removes it from the persisted
+    /// store, resets the in-memory pairing state machine, and emits a
+    /// `Disconnected` event. Idempotent: forgetting an unknown device is
+    /// not an error.
+    ///
+    /// `async` even though the body is currently sync — the spec'd surface
+    /// is `async`, and plan 02's mobile-side will need to awaiting an
+    /// active WS shutdown here.
+    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
+    pub async fn forget_device(&self, id: DeviceId) -> Result<(), MinosError> {
+        let mut current = self.store.load()?;
+        current.retain(|d| d.device_id != id);
+        self.store.save(&current)?;
+        self.pairing.lock().unwrap().forget();
+        let _ = self.state_tx.send(ConnectionState::Disconnected);
+        Ok(())
     }
 
     #[allow(clippy::missing_errors_doc)]
