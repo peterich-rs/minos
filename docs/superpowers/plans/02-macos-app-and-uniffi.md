@@ -420,10 +420,13 @@ git commit -m "feat(minos-domain): add ErrorKind companion, route user_message t
 
 **Files:**
 - Modify: `crates/minos-domain/Cargo.toml`
+- Modify: `crates/minos-domain/src/lib.rs` (add `uniffi::setup_scaffolding!()` under the feature gate — see note below)
 - Modify: `crates/minos-domain/src/agent.rs`
 - Modify: `crates/minos-domain/src/connection.rs`
 - Modify: `crates/minos-domain/src/error.rs`
 - Modify: `crates/minos-domain/src/pairing_state.rs`
+
+**UniFFI 0.31 per-crate scaffolding requirement:** UniFFI 0.31's derive macros (`uniffi::Enum` / `uniffi::Record` / `uniffi::Error`) expand to `impl ... for crate::UniFfiTag`. The `UniFfiTag` type is defined only by `uniffi::setup_scaffolding!()`. Consequently, **every** crate that carries UniFFI derives must invoke `setup_scaffolding!()` (feature-gated) in its `lib.rs`. This applies to Task 2 (`minos-domain`), Task 3 (`minos-pairing`), and Task 11 (`minos-daemon`) alike. Different crates' `UniFfiTag` types are distinct and do not collide at link time — the shim crate (`minos-ffi-uniffi`, Task 12) will aggregate all downstream scaffolding successfully.
 
 - [ ] **Step 1: Add `uniffi` feature to `minos-domain/Cargo.toml`**
 
@@ -470,6 +473,35 @@ rstest = { workspace = true }
 
 [lints]
 workspace = true
+```
+
+- [ ] **Step 1b: Add scaffolding guard to `minos-domain/src/lib.rs`**
+
+Under `#![forbid(unsafe_code)]` (preserving it), add a feature-gated `setup_scaffolding!()` invocation that only compiles when the `uniffi` feature is active:
+
+```rust
+//! Minos domain types — pure values, no I/O, no async.
+
+#![forbid(unsafe_code)]
+
+pub mod agent;
+pub mod connection;
+pub mod error;
+pub mod ids;
+pub mod pairing_state;
+
+pub use agent::*;
+pub use connection::*;
+pub use error::*;
+pub use ids::*;
+pub use pairing_state::*;
+
+// UniFFI 0.31 per-crate scaffolding: every crate that carries `uniffi::*`
+// derives must define `UniFfiTag` locally via `setup_scaffolding!()`; the
+// derive expansions reference `crate::UniFfiTag`. Feature-gated so the
+// non-UniFFI build path (plan-03 Dart/frb consumers) pays nothing.
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
 ```
 
 - [ ] **Step 2: Add `cfg_attr` derives on `AgentName`, `AgentStatus`, `AgentDescriptor`**
@@ -721,6 +753,7 @@ git commit -m "feat(minos-domain): optional uniffi feature + cfg_attr derives on
 
 **Files:**
 - Modify: `crates/minos-pairing/Cargo.toml`
+- Modify: `crates/minos-pairing/src/lib.rs` (add feature-gated `uniffi::setup_scaffolding!()` — same pattern as Task 2 Step 1b)
 - Modify: `crates/minos-pairing/src/store.rs`
 - Modify: `crates/minos-pairing/src/token.rs`
 
@@ -1798,6 +1831,7 @@ git commit -m "feat(minos-daemon): current_trusted_device accessor for Forget-UI
 
 **Files:**
 - Modify: `crates/minos-daemon/Cargo.toml`
+- Modify: `crates/minos-daemon/src/lib.rs` (add feature-gated `uniffi::setup_scaffolding!()` alongside existing `pub mod` declarations — same pattern as Task 2 Step 1b)
 - Modify: `crates/minos-daemon/src/handle.rs`
 - Modify: `crates/minos-daemon/src/subscription.rs`
 
