@@ -37,3 +37,37 @@ jobs:
         # Includes: cargo fmt --check, cargo clippy --workspace -- -D warnings,
         # cargo test --workspace, cargo deny check.
         run: cargo xtask check-all
+
+  macos:
+    name: macos (build-macos + xtask check-all)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        # `cargo xtask build-macos` produces a universal static library, so
+        # the CI runner needs both macOS Rust targets available.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bootstrap macOS build tools
+        # Reuse the same bootstrap path as local development so CI exercises
+        # the checked-in Brewfile plus cargo-installed CLI tooling.
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: cargo xtask bootstrap
+
+      - name: cargo xtask build-macos
+        # `check-all` drives xcodebuild, which links against the universal
+        # static library in target/xcframework/. A clean runner must build it first.
+        run: cargo xtask build-macos
+
+      - name: cargo xtask check-all
+        # Single source of truth for the macOS lane after the universal lib is
+        # in place: Rust checks plus UniFFI/XcodeGen generation, xcodebuild,
+        # Swift unit tests, and swiftlint.
+        run: cargo xtask check-all

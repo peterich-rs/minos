@@ -4,16 +4,35 @@ Native macOS status-bar app + Flutter mobile client + shared Rust core for remot
 
 ## Status
 
-MVP under construction. See `docs/superpowers/specs/minos-architecture-and-mvp-design.md` for the design and `docs/superpowers/plans/` for implementation plans.
+Plan 02 is ready in-repo: the macOS MenuBarExtra app, UniFFI bridge, XcodeGen project spec, Swift logic tests, and macOS CI lane are all wired. The Flutter/mobile side remains later work. See `docs/superpowers/specs/minos-architecture-and-mvp-design.md` for the overall product design and `docs/superpowers/plans/` for execution plans.
 
 ## Quick start (development)
 
 ```bash
-# Bootstrap dev tools (uniffi-bindgen, frb codegen, cargo-deny, etc.)
+# Bootstrap dev tools.
+# On macOS this also installs xcodegen and swiftlint from apps/macos/Brewfile.
 cargo xtask bootstrap
 
-# Run all checks (fmt + clippy + tests + lints)
+# Run all checks.
+# On macOS this includes UniFFI/XcodeGen generation, xcodebuild, MinosTests,
+# and swiftlint in addition to the Rust workspace checks.
 cargo xtask check-all
+```
+
+## macOS app
+
+The macOS app lives in `apps/macos/` and uses XcodeGen plus UniFFI-generated Swift bindings.
+
+```bash
+# Build the universal Rust static library used by Xcode.
+cargo xtask build-macos
+
+# Regenerate Swift bindings and the Xcode project.
+cargo xtask gen-uniffi
+cargo xtask gen-xcode
+
+# Open the generated project in Xcode.
+open apps/macos/Minos.xcodeproj
 ```
 
 ## Repository layout
@@ -21,7 +40,7 @@ cargo xtask check-all
 ```
 crates/    Rust workspace (9 crates: domain, protocol, pairing, cli-detect,
            transport, daemon, mobile, ffi-uniffi, ffi-frb)
-apps/      macOS (Swift/UniFFI) and mobile (Flutter/frb) — populated in plans 02/03
+apps/      macOS (SwiftUI/UniFFI, XcodeGen-managed) and mobile (Flutter/frb)
 xtask/     Build / codegen orchestration in Rust
 docs/      Specs (`docs/superpowers/specs/`) and ADRs (`docs/adr/`)
 ```
