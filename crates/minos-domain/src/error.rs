@@ -9,7 +9,7 @@
 
 use crate::PairingState;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     Zh,
     En,
@@ -171,35 +171,23 @@ mod tests {
     }
 
     #[test]
-    fn kind_matches_variant() {
-        assert_eq!(MinosError::PairingTokenInvalid.kind(), ErrorKind::PairingTokenInvalid);
-        assert_eq!(
-            MinosError::BindFailed {
-                addr: "x".into(),
-                message: "y".into()
-            }
-            .kind(),
-            ErrorKind::BindFailed
-        );
-    }
-
-    #[test]
-    fn every_minos_error_variant_maps_to_an_error_kind() {
-        let variants = vec![
-            MinosError::BindFailed { addr: String::new(), message: String::new() },
-            MinosError::ConnectFailed { url: String::new(), message: String::new() },
-            MinosError::Disconnected { reason: String::new() },
-            MinosError::PairingTokenInvalid,
-            MinosError::PairingStateMismatch { actual: PairingState::Paired },
-            MinosError::DeviceNotTrusted { device_id: String::new() },
-            MinosError::StoreIo { path: String::new(), message: String::new() },
-            MinosError::StoreCorrupt { path: String::new(), message: String::new() },
-            MinosError::CliProbeTimeout { bin: String::new(), timeout_ms: 0 },
-            MinosError::CliProbeFailed { bin: String::new(), message: String::new() },
-            MinosError::RpcCallFailed { method: String::new(), message: String::new() },
+    fn kind_exhaustively_matches_every_variant() {
+        let cases: Vec<(MinosError, ErrorKind)> = vec![
+            (MinosError::BindFailed { addr: String::new(), message: String::new() }, ErrorKind::BindFailed),
+            (MinosError::ConnectFailed { url: String::new(), message: String::new() }, ErrorKind::ConnectFailed),
+            (MinosError::Disconnected { reason: String::new() }, ErrorKind::Disconnected),
+            (MinosError::PairingTokenInvalid, ErrorKind::PairingTokenInvalid),
+            (MinosError::PairingStateMismatch { actual: PairingState::Paired }, ErrorKind::PairingStateMismatch),
+            (MinosError::DeviceNotTrusted { device_id: String::new() }, ErrorKind::DeviceNotTrusted),
+            (MinosError::StoreIo { path: String::new(), message: String::new() }, ErrorKind::StoreIo),
+            (MinosError::StoreCorrupt { path: String::new(), message: String::new() }, ErrorKind::StoreCorrupt),
+            (MinosError::CliProbeTimeout { bin: String::new(), timeout_ms: 0 }, ErrorKind::CliProbeTimeout),
+            (MinosError::CliProbeFailed { bin: String::new(), message: String::new() }, ErrorKind::CliProbeFailed),
+            (MinosError::RpcCallFailed { method: String::new(), message: String::new() }, ErrorKind::RpcCallFailed),
         ];
-        for v in variants {
-            let _k = v.kind();
+        assert_eq!(cases.len(), 11, "add a case when you add a MinosError variant");
+        for (err, expected_kind) in cases {
+            assert_eq!(err.kind(), expected_kind, "{err:?} → wrong kind");
         }
     }
 

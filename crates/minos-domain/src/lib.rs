@@ -5,7 +5,7 @@
 //! - `agent`       AgentName / AgentStatus / AgentDescriptor
 //! - `connection`  ConnectionState
 //! - `pairing_state`  PairingState (used inside MinosError)
-//! - `error`       MinosError + user_message
+//! - `error`       Lang, ErrorKind, MinosError + user_message
 
 #![forbid(unsafe_code)]
 
