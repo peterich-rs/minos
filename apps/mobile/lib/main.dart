@@ -11,9 +11,7 @@ class MinosBootShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return const MaterialApp(
       title: 'Minos',
-      home: Scaffold(
-        body: Center(child: Text('Minos')),
-      ),
+      home: Scaffold(body: Center(child: Text('Minos'))),
     );
   }
 }
