@@ -1,6 +1,9 @@
 name: Minos
 options:
   bundleIdPrefix: ai.minos
+  # Homebrew's latest XcodeGen emits a newer pbxproj format by default; pin the
+  # project format so older CI Xcodes can still open the generated project.
+  projectFormat: xcode15_3
   deploymentTarget:
     macOS: "14.0"
 settings:

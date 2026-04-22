@@ -41,22 +41,18 @@ jobs:
   macos:
     name: macos (build-macos + xtask check-all)
     runs-on: macos-15
+    env:
+      # Pin the macOS lane to the same Xcode major/minor used in local
+      # development instead of inheriting the runner default (`Xcode.app`).
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select latest Xcode
-        # XcodeGen generates .xcodeproj in whatever file format the host
-        # Xcode supports (objectVersion 77 on Xcode 26, 70 on Xcode 16, 63
-        # on Xcode 15). Xcode is forward-incompatible: a pbxproj from a
-        # newer Xcode fails to open in an older one with "future project
-        # file format" errors. Pin the runner to the newest Xcode that's
-        # installed so CI matches dev-machine generation.
+      - name: Verify pinned Xcode
+        # Fail early with a clear error if the runner image ever drops this
+        # exact Xcode installation.
         run: |
-          LATEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
-          if [[ -n "$LATEST" ]]; then
-            echo "Selecting $LATEST"
-            sudo xcode-select -s "${LATEST}/Contents/Developer"
-          fi
+          test -d "$DEVELOPER_DIR"
           xcodebuild -version
 
       - name: Install rust toolchain
