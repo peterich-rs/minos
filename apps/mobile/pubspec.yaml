@@ -57,6 +57,16 @@ dependencies:
   permission_handler: ^12.0.1
   path_provider: ^2.1.5
 
+  # Dart-side mars-xlog writer (lives alongside Rust's mars-xlog output in
+  # the same Documents/Minos/Logs/ directory, distinguished by namePrefix
+  # per spec §9.4). Not on pub.dev; sourced from the peterich-rs/xlog-rs
+  # monorepo subdirectory.
+  xlog:
+    git:
+      url: https://github.com/peterich-rs/xlog-rs
+      path: packages/xlog
+      ref: main
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
