@@ -65,33 +65,7 @@ impl DaemonHandle {
                 message: "no 100.x IP returned by `tailscale ip --4`".into(),
             })?;
 
-        let mut last_err: Option<MinosError> = None;
-        for port in PORTS {
-            let bind_addr: SocketAddr =
-                format!("{host}:{port}")
-                    .parse()
-                    .map_err(|e: std::net::AddrParseError| MinosError::BindFailed {
-                        addr: format!("{host}:{port}"),
-                        message: e.to_string(),
-                    })?;
-            let cfg = DaemonConfig {
-                mac_name: mac_name.clone(),
-                bind_addr,
-            };
-            match Self::start(cfg).await {
-                Ok(h) => return Ok(h),
-                Err(e @ MinosError::BindFailed { .. }) => {
-                    tracing::warn!(port, err = %e, "port busy, trying next");
-                    last_err = Some(e);
-                }
-                Err(other) => return Err(other),
-            }
-        }
-
-        Err(MinosError::BindFailed {
-            addr: format!("{host}:7878-7882"),
-            message: last_err.map_or_else(|| "all ports occupied".into(), |e| e.to_string()),
-        })
+        Self::start_on_port_range(host, mac_name, PORTS).await
     }
 
     /// Generate (or refresh) the pairing QR.
@@ -151,6 +125,9 @@ impl DaemonHandle {
         current.retain(|d| d.device_id != id);
         self.inner.store.save(&current)?;
         self.inner.pairing.lock().unwrap().forget();
+        // Drop any outstanding pairing answer that was issued against the now-forgotten
+        // device, so the RPC server stops accepting it on subsequent pair_answer calls.
+        *self.inner.active_token.lock().unwrap() = None;
         let _ = self.inner.state_tx.send(ConnectionState::Disconnected);
         Ok(())
     }
@@ -181,6 +158,49 @@ impl DaemonHandle {
 }
 
 impl DaemonHandle {
+    /// Iterate `ports` in order on `host`, returning the first successful
+    /// bind. Port-busy errors are swallowed and retried; any non-bind error
+    /// short-circuits. When every port fails, returns
+    /// `BindFailed { addr: "<host>:<first>-<last>", message: "all ports occupied" }`.
+    ///
+    /// Internal helper extracted from `start_autobind` so tests can exercise
+    /// the port-retry loop without going through Tailscale discovery.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn start_on_port_range(
+        host: String,
+        mac_name: String,
+        ports: std::ops::RangeInclusive<u16>,
+    ) -> Result<Arc<Self>, MinosError> {
+        let (first, last) = (*ports.start(), *ports.end());
+        let mut last_err: Option<MinosError> = None;
+        for port in ports {
+            let bind_addr: SocketAddr =
+                format!("{host}:{port}")
+                    .parse()
+                    .map_err(|e: std::net::AddrParseError| MinosError::BindFailed {
+                        addr: format!("{host}:{port}"),
+                        message: e.to_string(),
+                    })?;
+            let cfg = DaemonConfig {
+                mac_name: mac_name.clone(),
+                bind_addr,
+            };
+            match Self::start(cfg).await {
+                Ok(h) => return Ok(h),
+                Err(e @ MinosError::BindFailed { .. }) => {
+                    tracing::warn!(port, err = %e, "port busy, trying next");
+                    last_err = Some(e);
+                }
+                Err(other) => return Err(other),
+            }
+        }
+
+        Err(MinosError::BindFailed {
+            addr: format!("{host}:{first}-{last}"),
+            message: last_err.map_or_else(|| "all ports occupied".into(), |e| e.to_string()),
+        })
+    }
+
     /// Start the daemon on an explicit bind address. Tests use this path;
     /// production code uses `start_autobind` (Task 8).
     #[allow(clippy::missing_errors_doc)]
