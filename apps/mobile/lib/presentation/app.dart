@@ -1,0 +1,51 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
+
+import 'package:minos/application/minos_providers.dart';
+import 'package:minos/presentation/pages/home_page.dart';
+import 'package:minos/presentation/pages/pairing_page.dart';
+import 'package:minos/src/rust/api/minos.dart' as core;
+
+/// Root of the Minos app. Provides the Shad theme and routes between
+/// [PairingPage] and [HomePage] based on the latest [ConnectionState].
+class MinosApp extends StatelessWidget {
+  const MinosApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ShadApp(
+      title: 'Minos',
+      themeMode: ThemeMode.system,
+      theme: ShadThemeData(
+        brightness: Brightness.light,
+        colorScheme: const ShadZincColorScheme.light(),
+      ),
+      darkTheme: ShadThemeData(
+        brightness: Brightness.dark,
+        colorScheme: const ShadZincColorScheme.dark(),
+      ),
+      // Passing a builder activates the toaster/sonner wrapping that
+      // [ShadToaster.of] requires.
+      builder: (context, child) => child ?? const SizedBox.shrink(),
+      home: const _Router(),
+    );
+  }
+}
+
+class _Router extends ConsumerWidget {
+  const _Router();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(connectionStateProvider);
+    return state.when(
+      data: (s) => switch (s) {
+        core.ConnectionState_Connected() => const HomePage(),
+        _ => const PairingPage(),
+      },
+      loading: () => const PairingPage(),
+      error: (_, _) => const PairingPage(),
+    );
+  }
+}

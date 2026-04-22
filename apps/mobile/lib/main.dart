@@ -1,23 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'src/rust/frb_generated.dart';
+import 'package:minos/application/minos_providers.dart';
+import 'package:minos/infrastructure/app_paths.dart';
+import 'package:minos/infrastructure/minos_core.dart';
+import 'package:minos/presentation/app.dart';
 
 void main() async {
-  // Required so `RustLib.init()` can use the isolate infrastructure before
-  // `runApp` kicks off the first frame.
   WidgetsFlutterBinding.ensureInitialized();
-  await RustLib.init();
-  runApp(const MinosBootShell());
-}
-
-class MinosBootShell extends StatelessWidget {
-  const MinosBootShell({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const MaterialApp(
-      title: 'Minos',
-      home: Scaffold(body: Center(child: Text('Minos'))),
-    );
-  }
+  final logDir = await logDirectory();
+  final core = await MinosCore.init(selfName: 'iPhone', logDir: logDir);
+  runApp(
+    ProviderScope(
+      overrides: [minosCoreProvider.overrideWithValue(core)],
+      child: const MinosApp(),
+    ),
+  );
 }

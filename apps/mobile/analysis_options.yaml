@@ -1,4 +1,8 @@
 include: package:flutter_lints/flutter.yaml
 
-# Phase D will add `riverpod_lint` + `custom_lint` plugins; Phase B keeps
-# the analyzer config minimal so the scaffold compiles cleanly.
+# riverpod_lint 3.1.x ships as a native `analysis_server_plugin`, so it is
+# configured here rather than via the legacy `custom_lint` analyzer plugin.
+# `dart analyze` / `flutter analyze` picks this up automatically after
+# `flutter pub get`.
+plugins:
+  riverpod_lint: ^3.1.0
