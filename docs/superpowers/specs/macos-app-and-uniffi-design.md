@@ -721,11 +721,11 @@ If any step fails, `check-all` exits nonzero.
 
 ### 8.5 CI additions
 
-`.github/workflows/ci.yml` adds a second job on `macos-14`:
+`.github/workflows/ci.yml` adds a second job on `macos-15`:
 
 ```yaml
 swift:
-  runs-on: macos-14
+  runs-on: macos-15
   steps:
     - uses: actions/checkout@v4
     - run: brew bundle --file=apps/macos/Brewfile
@@ -860,7 +860,7 @@ docs/adr/0007-xcodegen-for-macos-project.md                  one-page justificat
 
 ```
 .gitignore                                                   add apps/macos/Minos.xcodeproj and Brewfile.lock.json
-.github/workflows/ci.yml                                     add swift job on macos-14
+.github/workflows/ci.yml                                     add swift job on macos-15
 Cargo.toml                                                   (none unless uniffi bump needed)
 crates/minos-domain/Cargo.toml                               add uniffi feature
 crates/minos-domain/src/{agent,connection,ids,pairing_state}.rs  add cfg_attr derives

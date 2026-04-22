@@ -446,7 +446,7 @@ No snapshot-testing library in MVP (high maintenance cost vs payoff at this scal
 |---|---|---|
 | `rust` | `ubuntu-latest` (cross-platform builds happen in release pipeline, not CI) | `cargo fmt --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace`; `cargo deny check` (license / advisory scan) |
 | `dart` | `ubuntu-latest` | `flutter pub get`; `dart format --set-exit-if-changed`; `dart analyze --fatal-infos`; `flutter test`; `dart run custom_lint` |
-| `swift` | `macos-14` | `swiftlint --strict` (lint only; Xcode build is slow on CI and signing is unavailable in MVP — kept local) |
+| `swift` | `macos-15` | `swiftlint --strict` (lint only; Xcode build is slow on CI and signing is unavailable in MVP — kept local) |
 
 Out of MVP CI: Xcode device/simulator builds; Flutter iOS/Android builds; UniFFI/frb cross-platform artifact builds; release packaging. All deferred to the P1.5 release pipeline spec.
 

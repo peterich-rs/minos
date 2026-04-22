@@ -40,9 +40,24 @@ jobs:
 
   macos:
     name: macos (build-macos + xtask check-all)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        # XcodeGen generates .xcodeproj in whatever file format the host
+        # Xcode supports (objectVersion 77 on Xcode 26, 70 on Xcode 16, 63
+        # on Xcode 15). Xcode is forward-incompatible: a pbxproj from a
+        # newer Xcode fails to open in an older one with "future project
+        # file format" errors. Pin the runner to the newest Xcode that's
+        # installed so CI matches dev-machine generation.
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [[ -n "$LATEST" ]]; then
+            echo "Selecting $LATEST"
+            sudo xcode-select -s "${LATEST}/Contents/Developer"
+          fi
+          xcodebuild -version
 
       - name: Install rust toolchain
         # `cargo xtask build-macos` produces a universal static library, so

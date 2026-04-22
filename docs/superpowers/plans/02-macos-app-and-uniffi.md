@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans`. Execute **one phase per subagent, one validation gate per phase, and one commit per phase**. This document is intentionally phase-oriented; do not fall back to task-by-task micro-commits.
 
-**Goal:** Fully wire the UniFFI shim over `minos-daemon::DaemonHandle` and ship a SwiftUI `MenuBarExtra` macOS 14+ app (`ai.minos.macos`) that surfaces boot state, pairing-QR display, Forget-paired-device affordance, and today-log Finder reveal — backed by logic-only Swift unit tests and a CI job on `macos-14`. The plan ends when `cargo xtask check-all` passes end-to-end (Rust + Swift legs) and `xcodebuild -scheme Minos build` produces `Minos.app` with no warnings.
+**Goal:** Fully wire the UniFFI shim over `minos-daemon::DaemonHandle` and ship a SwiftUI `MenuBarExtra` macOS 14+ app (`ai.minos.macos`) that surfaces boot state, pairing-QR display, Forget-paired-device affordance, and today-log Finder reveal — backed by logic-only Swift unit tests and a CI job on `macos-15`. The plan ends when `cargo xtask check-all` passes end-to-end (Rust + Swift legs) and `xcodebuild -scheme Minos build` produces `Minos.app` with no warnings.
 
 **Architecture:** Plan 02 still follows the design spec's layered split and dependency order: Rust domain/pairing/daemon groundwork first, then the UniFFI shim, then build/codegen tooling, then the Swift app, then Swift logic tests, then CI/docs rollout.
 
@@ -12,7 +12,7 @@
 - Swift 5.10 + SwiftUI (macOS 14+) + AppKit + CoreImage + Observation
 - XcodeGen 2.x + SwiftLint (brew)
 - XCTest
-- GitHub Actions `macos-14`
+- GitHub Actions `macos-15`
 
 **Reference spec:** Implements `docs/superpowers/specs/macos-app-and-uniffi-design.md`.
 
@@ -263,7 +263,7 @@ git commit -m "test(macos): add AppState logic suite and green local verificatio
 
 ## Phase J · CI + docs rollout
 
-**Goal:** Add the `macos-14` CI lane and finish the plan-02 documentation surface.
+**Goal:** Add the `macos-15` CI lane and finish the plan-02 documentation surface.
 
 **Scope:**
 - Add the macOS job to `.github/workflows/ci.yml`.
@@ -329,7 +329,7 @@ If any manual sanity check fails, open a follow-up task and do **not** mark plan
 | XcodeGen project | `apps/macos/project.yml` | `cargo xtask gen-xcode` |
 | macOS app | `apps/macos/Minos/MinosApp.swift` | `xcodebuild -scheme Minos build` + manual sanity |
 | Swift logic tests | `apps/macos/MinosTests/` | `xcodebuild -scheme MinosTests test` |
-| CI lane | `.github/workflows/ci.yml` | GitHub Actions `macos-14` |
+| CI lane | `.github/workflows/ci.yml` | GitHub Actions `macos-15` |
 | ADR 0007 | `docs/adr/0007-xcodegen-for-macos-project.md` | review |
 | README update | `README.md` | review |
 
