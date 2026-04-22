@@ -193,7 +193,7 @@ final class PairingControllerProvider
   PairingController create() => PairingController();
 }
 
-String _$pairingControllerHash() => r'5fbc23bc21a1f29bd0cda2f0237405e8bbdc6850';
+String _$pairingControllerHash() => r'6d6f02e5fa04dd84d2ada7c33d34701fead75590';
 
 /// Owns the pairing submission lifecycle. Exposes the latest [PairResponse]
 /// (or error) so the router can transition to [HomePage] on success.

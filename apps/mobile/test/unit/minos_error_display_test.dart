@@ -1,3 +1,6 @@
+@Tags(['ffi'])
+library;
+
 import 'dart:io';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
@@ -15,10 +18,24 @@ import 'package:minos/src/rust/frb_generated.dart';
 String _hostDylibPath() {
   // `flutter test` runs with the package as cwd (apps/mobile).
   final workspaceRoot = Directory.current.parent.parent.path;
+  // cargo emits the cdylib under a platform-specific suffix — match it so
+  // this test can run on both the macOS CI lane (.dylib) and local Linux
+  // dev boxes (.so). Windows is not on the support matrix but is cheap
+  // to cover.
+  final String suffix;
+  if (Platform.isMacOS) {
+    suffix = 'dylib';
+  } else if (Platform.isWindows) {
+    suffix = 'dll';
+  } else {
+    suffix = 'so';
+  }
   // Prefer a release build if both exist; fall back to debug.
-  final release = File('$workspaceRoot/target/release/libminos_ffi_frb.dylib');
+  final release = File(
+    '$workspaceRoot/target/release/libminos_ffi_frb.$suffix',
+  );
   if (release.existsSync()) return release.path;
-  return '$workspaceRoot/target/debug/libminos_ffi_frb.dylib';
+  return '$workspaceRoot/target/debug/libminos_ffi_frb.$suffix';
 }
 
 void main() {

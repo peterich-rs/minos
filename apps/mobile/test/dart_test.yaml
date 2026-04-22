@@ -1,0 +1,11 @@
+tags:
+  ffi:
+    # Tests tagged `ffi` load the host cdylib produced by
+    # `cargo build -p minos-ffi-frb` (libminos_ffi_frb.dylib on macOS,
+    # libminos_ffi_frb.so on Linux) via flutter_rust_bridge's
+    # ExternalLibrary.open. CI's Ubuntu `dart` lane skips them via
+    # `flutter test --exclude-tags ffi` and the macOS lane runs them
+    # through `cargo xtask check-all`'s Flutter leg. See ADR 0008.
+    description: >-
+      Tests that require the host libminos_ffi_frb cdylib to be built
+      before `flutter test` is invoked.

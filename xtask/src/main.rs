@@ -16,17 +16,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// fmt + clippy + workspace tests + UI lints (UI lints are no-ops until plans 02/03 land).
+    /// fmt + clippy + workspace tests + Swift + Flutter legs + frb codegen drift guard.
     CheckAll,
-    /// Install developer-side codegen tools.
+    /// Install developer-side codegen tools (cargo-deny, uniffi, frb codegen,
+    /// iOS rustup targets, and Flutter deps for apps/mobile).
     Bootstrap,
     /// Generate Swift bindings via uniffi-bindgen-swift.
     GenUniffi,
-    /// Generate Dart bindings via flutter_rust_bridge_codegen. (Implemented in plan 03.)
+    /// Generate Dart bindings via flutter_rust_bridge_codegen.
     GenFrb,
     /// Build the universal macOS static library for the Swift app.
     BuildMacos,
-    /// Build iOS staticlib from minos-ffi-frb. (Implemented in plan 03.)
+    /// Build iOS release staticlibs from minos-ffi-frb (arm64 device + arm64 sim).
     BuildIos,
     /// Generate apps/macos/Minos.xcodeproj from apps/macos/project.yml.
     GenXcode,
@@ -38,9 +39,9 @@ fn main() -> Result<()> {
         Cmd::CheckAll => check_all(),
         Cmd::Bootstrap => bootstrap(),
         Cmd::GenUniffi => gen_uniffi(),
-        Cmd::GenFrb => not_yet("gen-frb"),
+        Cmd::GenFrb => gen_frb(),
         Cmd::BuildMacos => build_macos(),
-        Cmd::BuildIos => not_yet("build-ios"),
+        Cmd::BuildIos => build_ios(),
         Cmd::GenXcode => gen_xcode(),
     }
 }
@@ -130,7 +131,90 @@ fn check_all() -> Result<()> {
         eprintln!("==> swift leg: skipped (non-macOS host)");
     }
 
+    // Flutter leg. Runs only when the mobile package exists and `fvm` (the
+    // pinned Flutter launcher) is available. Ubuntu CI's `linux` lane doesn't
+    // install Flutter — skipping keeps that lane green while still exercising
+    // the full suite on the macOS lane / local dev where fvm is present.
+    flutter_leg(&workspace_root)?;
+
+    // frb codegen drift guard. Regenerates the Dart/Rust bridge sources and
+    // fails if anything under `apps/mobile/lib/src/rust` or
+    // `crates/minos-ffi-frb/src/frb_generated.rs` drifted from the committed
+    // copies. Only makes sense on hosts that already have frb set up — we
+    // gate on the codegen binary itself rather than a target_os check so
+    // contributors on any platform who ran `cargo xtask bootstrap` get the
+    // check.
+    if workspace_root.join("apps/mobile/pubspec.yaml").exists()
+        && which("flutter_rust_bridge_codegen").is_some()
+    {
+        eprintln!("==> frb codegen drift (gen-frb + git diff --exit-code)");
+        gen_frb()?;
+        run(
+            "git",
+            &[
+                "diff",
+                "--exit-code",
+                "--",
+                "apps/mobile/lib/src/rust",
+                "crates/minos-ffi-frb/src/frb_generated.rs",
+            ],
+            &workspace_root,
+        )?;
+    } else {
+        eprintln!(
+            "==> frb codegen drift: skipped (flutter_rust_bridge_codegen not found or apps/mobile missing)"
+        );
+    }
+
     eprintln!("OK: all checks pass.");
+    Ok(())
+}
+
+/// Run the Flutter checks (`pub get`, `dart format --set-exit-if-changed`,
+/// `flutter analyze`, `flutter test`) from `apps/mobile`. Skips the whole leg
+/// (with a clear log line) when Flutter is not set up on the host — e.g. on
+/// the Ubuntu `linux` CI lane, which doesn't bootstrap Flutter.
+///
+/// `flutter test` transitively loads `libminos_ffi_frb.{dylib,so}` via the
+/// frb runtime, so we must `cargo build -p minos-ffi-frb` before invoking
+/// it. That build is cheap (already cached for the preceding `cargo test`
+/// leg) and gives the Dart host tests a predictable artifact path.
+fn flutter_leg(workspace_root: &Path) -> Result<()> {
+    let mobile_root = workspace_root.join("apps/mobile");
+    if !mobile_root.join("pubspec.yaml").exists() {
+        eprintln!("==> flutter leg: skipped (apps/mobile/pubspec.yaml missing)");
+        return Ok(());
+    }
+    if which("fvm").is_none() {
+        eprintln!(
+            "==> flutter leg: skipped (fvm not found; install via https://fvm.app to enable)"
+        );
+        return Ok(());
+    }
+
+    eprintln!("==> cargo build -p minos-ffi-frb (host dylib for flutter test)");
+    run("cargo", &["build", "-p", "minos-ffi-frb"], workspace_root)?;
+
+    eprintln!("==> fvm flutter pub get (apps/mobile)");
+    run("fvm", &["flutter", "pub", "get"], &mobile_root)?;
+
+    eprintln!("==> fvm dart format --set-exit-if-changed (apps/mobile)");
+    run(
+        "fvm",
+        &["dart", "format", "--set-exit-if-changed", "."],
+        &mobile_root,
+    )?;
+
+    eprintln!("==> fvm flutter analyze --fatal-infos (apps/mobile)");
+    run(
+        "fvm",
+        &["flutter", "analyze", "--fatal-infos"],
+        &mobile_root,
+    )?;
+
+    eprintln!("==> fvm flutter test (apps/mobile)");
+    run("fvm", &["flutter", "test"], &mobile_root)?;
+
     Ok(())
 }
 
@@ -167,7 +251,79 @@ fn bootstrap() -> Result<()> {
         }
     }
 
-    // flutter_rust_bridge_codegen and dart deps come in plan 03.
+    eprintln!("==> installing flutter_rust_bridge_codegen (v2)");
+    // `cargo install` is idempotent for matching versions — if the binary is
+    // already present at a compatible version, cargo prints `already
+    // installed` and exits 0. `--locked` keeps the transitive graph pinned
+    // for reproducibility.
+    run(
+        "cargo",
+        &[
+            "install",
+            "flutter_rust_bridge_codegen",
+            "--version",
+            "^2.11",
+            "--locked",
+        ],
+        &workspace_root,
+    )?;
+
+    // iOS rustup targets are required for `cargo xtask build-ios` and the
+    // Phase F real-device path. On non-macOS hosts `rustup target add` still
+    // succeeds (rustup just records the target as available for future
+    // cross-compiles), but the targets are never actually used there. We
+    // attempt the add unconditionally to keep one happy path.
+    if cfg!(target_os = "macos") {
+        eprintln!("==> rustup target add (aarch64-apple-ios, aarch64-apple-ios-sim)");
+        run(
+            "rustup",
+            &[
+                "target",
+                "add",
+                "aarch64-apple-ios",
+                "aarch64-apple-ios-sim",
+            ],
+            &workspace_root,
+        )?;
+    }
+
+    // Prime the Flutter + Dart side so a fresh clone's first
+    // `cargo xtask check-all` does not fail for missing `pub get` or
+    // `build_runner`-generated files. Gate on the pubspec existing so this
+    // crate still bootstraps cleanly before plan 03's `apps/mobile` scaffold
+    // lands.
+    let mobile_root = workspace_root.join("apps/mobile");
+    if mobile_root.join("pubspec.yaml").exists() {
+        if which("fvm").is_none() {
+            bail!(
+                "fvm not installed; required to manage the pinned Flutter version for \
+                 apps/mobile. Install via https://fvm.app (macOS: `brew tap leoafarias/fvm \
+                 && brew install fvm`)."
+            );
+        }
+
+        eprintln!("==> fvm flutter pub get (apps/mobile)");
+        run("fvm", &["flutter", "pub", "get"], &mobile_root)?;
+
+        eprintln!("==> fvm dart run build_runner build --delete-conflicting-outputs");
+        run(
+            "fvm",
+            &[
+                "dart",
+                "run",
+                "build_runner",
+                "build",
+                "--delete-conflicting-outputs",
+            ],
+            &mobile_root,
+        )?;
+    } else {
+        eprintln!(
+            "    (skipped Flutter bootstrap: {} missing)",
+            mobile_root.join("pubspec.yaml").display()
+        );
+    }
+
     Ok(())
 }
 
@@ -463,8 +619,110 @@ fn gen_xcode() -> Result<()> {
     Ok(())
 }
 
-fn not_yet(name: &str) -> Result<()> {
-    bail!("xtask `{name}` not implemented yet (filled in later)")
+fn gen_frb() -> Result<()> {
+    let root = workspace_root()?;
+    if which("flutter_rust_bridge_codegen").is_none() {
+        bail!(
+            "flutter_rust_bridge_codegen not found on PATH. Run `cargo xtask bootstrap` \
+             to install it (cargo install flutter_rust_bridge_codegen --version ^2.11 \
+             --locked)."
+        );
+    }
+
+    let config = root.join("flutter_rust_bridge.yaml");
+    if !config.exists() {
+        bail!(
+            "{} missing; frb codegen needs the repo-root config",
+            config.display()
+        );
+    }
+
+    // frb's codegen invokes `fvm flutter --version` internally to discover the
+    // Dart toolchain, and `fvm` only resolves the pinned version when it's
+    // run from a directory containing `.fvmrc` (apps/mobile). We therefore
+    // invoke the codegen from `apps/mobile` and point it at the repo-root
+    // YAML explicitly — the paths inside the YAML (`rust_root`,
+    // `dart_output`, `rust_output`) are interpreted relative to the config
+    // file, not CWD, so this works transparently.
+    let mobile_root = root.join("apps/mobile");
+    if !mobile_root.join("pubspec.yaml").exists() {
+        bail!(
+            "{} missing; gen-frb needs apps/mobile for fvm to resolve Flutter",
+            mobile_root.join("pubspec.yaml").display()
+        );
+    }
+
+    eprintln!(
+        "==> flutter_rust_bridge_codegen generate --config-file {config_display}",
+        config_display = config.display()
+    );
+    run(
+        "flutter_rust_bridge_codegen",
+        &["generate", "--config-file", config.to_str().unwrap()],
+        &mobile_root,
+    )
+}
+
+fn build_ios() -> Result<()> {
+    if !cfg!(target_os = "macos") {
+        bail!("`build-ios` requires a macOS host");
+    }
+
+    let root = workspace_root()?;
+
+    // Both iOS targets must be registered with rustup before cargo can
+    // cross-compile. `rustup target list --installed` is a cheap, stable
+    // query; if the needed targets are missing we bail and point the user
+    // at `bootstrap` (the single place that mutates rustup state) instead
+    // of mutating here.
+    let installed = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .current_dir(&root)
+        .output()
+        .context("running `rustup target list --installed`")?;
+    if !installed.status.success() {
+        bail!(
+            "`rustup target list --installed` exited {}",
+            installed.status
+        );
+    }
+    let installed = String::from_utf8_lossy(&installed.stdout);
+    for target in ["aarch64-apple-ios", "aarch64-apple-ios-sim"] {
+        if !installed.lines().any(|line| line.trim() == target) {
+            bail!(
+                "rustup target `{target}` not installed; run `cargo xtask bootstrap` \
+                 (or manually: `rustup target add {target}`)"
+            );
+        }
+    }
+
+    for target in ["aarch64-apple-ios", "aarch64-apple-ios-sim"] {
+        eprintln!("==> cargo build -p minos-ffi-frb --release --target {target}");
+        run(
+            "cargo",
+            &[
+                "build",
+                "-p",
+                "minos-ffi-frb",
+                "--release",
+                "--target",
+                target,
+            ],
+            &root,
+        )?;
+
+        let out = root
+            .join("target")
+            .join(target)
+            .join("release")
+            .join("libminos_ffi_frb.a");
+        if !out.exists() {
+            bail!("expected staticlib at {}", out.display());
+        }
+        eprintln!("    produced {}", out.display());
+    }
+
+    Ok(())
 }
 
 fn ensure_macos_scaffold_dirs(root: &Path) -> Result<()> {

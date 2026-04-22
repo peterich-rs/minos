@@ -40,7 +40,9 @@ jobs:
       - name: cargo xtask check-all
         # Single source of truth — same command developers run locally.
         # Includes: cargo fmt --check, cargo clippy --workspace -- -D warnings,
-        # cargo test --workspace, cargo deny check.
+        # cargo test --workspace, cargo deny check. The Flutter leg and
+        # frb-drift guard inside check-all both self-skip when fvm /
+        # flutter_rust_bridge_codegen are absent, so this lane stays Rust-only.
         run: cargo xtask check-all
 
       - name: cargo build -p minos-daemon --bin minos-daemon
@@ -50,6 +52,87 @@ jobs:
         # whenever the `cargo run -p minos-daemon -- doctor` path regresses
         # Linux-side.
         run: cargo build -p minos-daemon --bin minos-daemon
+
+      - name: cargo check -p minos-ffi-frb (linux host)
+        # The frb adapter is iOS/Android-oriented, but its host build must
+        # also stay green so the repo compiles cleanly on contributors'
+        # Linux boxes and so `flutter test` on the macOS lane has a host
+        # dylib to load.
+        run: cargo check -p minos-ffi-frb
+
+  dart:
+    name: dart (apps/mobile analyze + codegen drift)
+    # Ubuntu lane owns the cheap Dart checks: format, analyze, Riverpod
+    # build_runner idempotence, and frb codegen drift. The FFI-coupled
+    # unit test (which requires libminos_ffi_frb.{dylib,so}) is tagged
+    # `ffi` and runs only on the macOS lane as part of cargo xtask
+    # check-all's Flutter leg. See ADR 0008.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (for frb-drift regeneration)
+        # Needed to compile flutter_rust_bridge_codegen and to run
+        # `cargo check -p minos-ffi-frb` during the drift regeneration.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        # CI uses plain `flutter` (not fvm) to avoid the extra tool hop. The
+        # pinned version here must match apps/mobile/.fvmrc so local and CI
+        # runs exercise the same toolchain.
+        env:
+          FLUTTER_VERSION: 3.41.6
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.41.6
+          channel: stable
+          cache: true
+
+      - name: Install flutter_rust_bridge_codegen
+        # Matches the `cargo install` pin in `cargo xtask bootstrap` so a
+        # fresh CI container and a fresh local checkout resolve to the
+        # same codegen binary.
+        run: cargo install flutter_rust_bridge_codegen --version "^2.11" --locked
+
+      - name: flutter pub get
+        working-directory: apps/mobile
+        run: flutter pub get
+
+      - name: dart run build_runner build --delete-conflicting-outputs
+        # Primes Riverpod / freezed generated sources. Checked-in `*.g.dart`
+        # / `*.freezed.dart` shipped with Phase D should already be in place;
+        # this is idempotent and guards against source drift.
+        working-directory: apps/mobile
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: dart format --set-exit-if-changed .
+        working-directory: apps/mobile
+        run: dart format --set-exit-if-changed .
+
+      - name: dart analyze --fatal-infos
+        working-directory: apps/mobile
+        run: dart analyze --fatal-infos
+
+      - name: flutter test (exclude ffi-coupled tests)
+        # `minos_error_display_test.dart` is tagged `ffi` because it loads
+        # the host cdylib produced by `cargo build -p minos-ffi-frb`. We
+        # skip tagged tests here and route them through the macOS lane
+        # (where cargo + Flutter coexist). Logic-only tests
+        # (pairing_controller_test, etc.) still run on this lane.
+        working-directory: apps/mobile
+        run: flutter test --exclude-tags ffi
+
+      - name: frb codegen drift
+        # Regenerate the bridge and fail if anything changed. Catches
+        # forgotten `cargo xtask gen-frb` runs before they reach main.
+        run: |
+          flutter_rust_bridge_codegen generate --config-file flutter_rust_bridge.yaml
+          git diff --exit-code -- apps/mobile/lib/src/rust crates/minos-ffi-frb/src/frb_generated.rs
+        working-directory: apps/mobile
 
   macos:
     name: macos (xtask check-all)
@@ -69,24 +152,49 @@ jobs:
           xcodebuild -version
 
       - name: Install rust toolchain
-        # `cargo xtask build-macos` produces a universal static library, so
-        # the CI runner needs both macOS Rust targets available.
+        # `cargo xtask build-macos` produces a universal static library,
+        # so the runner needs both macOS Rust targets. The iOS targets are
+        # also needed by `cargo xtask build-ios` (not run in CI today, but
+        # included here so `cargo xtask bootstrap` on the runner stays a
+        # no-op on rustup state).
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install Flutter 3.41.6
+        # The Flutter leg inside `cargo xtask check-all` drives `fvm flutter`.
+        # `fvm` needs a backing SDK; installing Flutter 3.41.6 via the action
+        # both preps the binary and matches apps/mobile/.fvmrc.
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.41.6
+          channel: stable
+          cache: true
+
+      - name: Install fvm
+        # `cargo xtask check-all`'s Flutter leg invokes `fvm flutter ...` so
+        # the pinned Flutter version is resolved consistently with local dev.
+        # The install is a one-shot pub-global activation; the action-installed
+        # Flutter above provides the backing SDK `fvm` proxies to.
+        run: |
+          dart pub global activate fvm
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+
       - name: Bootstrap macOS build tools
         # Reuse the same bootstrap path as local development so CI exercises
-        # the checked-in Brewfile plus cargo-installed CLI tooling.
+        # the checked-in Brewfile plus cargo-installed CLI tooling, frb
+        # codegen install, iOS rustup targets, and `fvm flutter pub get` +
+        # build_runner for apps/mobile.
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: cargo xtask bootstrap
 
       - name: cargo xtask check-all
-        # Single source of truth for the macOS lane: Rust checks plus UniFFI,
-        # universal staticlib generation, XcodeGen, xcodebuild, Swift unit
-        # tests, and swiftlint.
+        # Single source of truth for the macOS lane: Rust checks, UniFFI
+        # codegen, universal staticlib, XcodeGen, xcodebuild, Swift unit
+        # tests, swiftlint, Flutter (pub get + dart format + analyze +
+        # test), and frb codegen drift.
         run: cargo xtask check-all
