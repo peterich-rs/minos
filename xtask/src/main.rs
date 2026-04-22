@@ -307,11 +307,23 @@ fn gen_uniffi() -> Result<()> {
 }
 
 fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
+    // All `.replace()` calls here rewrite `uniffi-bindgen-swift`'s exact output
+    // text. If upstream tweaks whitespace, naming, or pragma layout, a replacement
+    // silently becomes a no-op and the resulting Swift sources fail to compile
+    // with confusing errors. Each load-bearing replacement is therefore gated by
+    // `replace_required`, which bails with a clear drift message when the needle
+    // cannot be found. Cross-crate imports are the only optional replacements —
+    // a file may not need them if it doesn't reference sibling-crate types.
+
     const MODULE_IMPORT: &str = "#if canImport(MinosCoreFFI)\nimport MinosCoreFFI\n#endif";
     const MODULEMAP_DECL: &str = "framework module MinosCore {";
     const MODULEMAP_DECL_NORMALIZED: &str = "module MinosCoreFFI {";
     const MODULEMAP_DECL_ALREADY_NORMALIZED: &str = "framework module MinosCoreFFI {";
     const DUPLICATE_DAEMON_NEWTYPE_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias DeviceId = Uuid\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeDeviceId: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceId {\n        return try FfiConverterTypeUuid.read(from: &buf)\n    }\n\n    public static func write(_ value: DeviceId, into buf: inout [UInt8]) {\n        return FfiConverterTypeUuid.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> DeviceId {\n        return try FfiConverterTypeUuid_lift(value)\n    }\n\n    public static func lower(_ value: DeviceId) -> RustBuffer {\n        return FfiConverterTypeUuid_lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lift(_ value: RustBuffer) throws -> DeviceId {\n    return try FfiConverterTypeDeviceId.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lower(_ value: DeviceId) -> RustBuffer {\n    return FfiConverterTypeDeviceId.lower(value)\n}\n\n\n\n/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias Uuid = String\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeUuid: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Uuid {\n        return try FfiConverterString.read(from: &buf)\n    }\n\n    public static func write(_ value: Uuid, into buf: inout [UInt8]) {\n        return FfiConverterString.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> Uuid {\n        return try FfiConverterString.lift(value)\n    }\n\n    public static func lower(_ value: Uuid) -> RustBuffer {\n        return FfiConverterString.lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lift(_ value: RustBuffer) throws -> Uuid {\n    return try FfiConverterTypeUuid.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lower(_ value: Uuid) -> RustBuffer {\n    return FfiConverterTypeUuid.lower(value)\n}\n";
+    const VTABLE_DECL_OLD: &str =
+        "    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceConnectionStateObserver> = {";
+    const VTABLE_DECL_NEW: &str =
+        "    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceConnectionStateObserver> = {";
 
     let modulemap_path = out_dir.join("MinosCoreFFI.modulemap");
     if modulemap_path.exists() {
@@ -320,6 +332,17 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
         let updated = original
             .replace(MODULEMAP_DECL, MODULEMAP_DECL_NORMALIZED)
             .replace(MODULEMAP_DECL_ALREADY_NORMALIZED, MODULEMAP_DECL_NORMALIZED);
+        if !updated.contains(MODULEMAP_DECL_NORMALIZED) {
+            bail!(
+                "codegen drift: {} contains no recognizable module declaration \
+                 (expected one of '{}', '{}', or '{}'). upstream uniffi-bindgen-swift \
+                 output may have changed — update normalize_generated_uniffi_imports.",
+                modulemap_path.display(),
+                MODULEMAP_DECL,
+                MODULEMAP_DECL_ALREADY_NORMALIZED,
+                MODULEMAP_DECL_NORMALIZED,
+            );
+        }
         if updated != original {
             fs::write(&modulemap_path, updated)
                 .with_context(|| format!("writing {}", modulemap_path.display()))?;
@@ -339,7 +362,7 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
         let original =
             fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
 
-        let updated = original
+        let mut updated = original
             .replace(
                 "#if canImport(minos_daemonFFI)\nimport minos_daemonFFI\n#endif",
                 MODULE_IMPORT,
@@ -353,16 +376,37 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
                 MODULE_IMPORT,
             );
 
-        let updated = if file_name == "minos_daemon.swift" {
-            updated
-                .replace(DUPLICATE_DAEMON_NEWTYPE_BLOCK, "")
-                .replace(
-                    "    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceConnectionStateObserver> = {",
-                    "    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceConnectionStateObserver> = {",
-                )
-        } else {
-            updated
-        };
+        // Every per-crate file self-imports at least its own FFI submodule, so after
+        // the three replacements above at least one `import MinosCoreFFI` block
+        // must be present. If none is, the `#if canImport(..._FFI)` pragma layout
+        // upstream has changed and we need to refresh the needles.
+        if !updated.contains(MODULE_IMPORT) {
+            bail!(
+                "codegen drift: {} contains no recognizable `import minos_*FFI` block \
+                 to rewrite, nor an existing `import MinosCoreFFI` marker. upstream \
+                 uniffi-bindgen-swift output may have changed — update \
+                 normalize_generated_uniffi_imports.",
+                path.display()
+            );
+        }
+
+        if file_name == "minos_daemon.swift" {
+            updated = replace_required(
+                updated,
+                DUPLICATE_DAEMON_NEWTYPE_BLOCK,
+                "",
+                "minos_daemon.swift: DeviceId/Uuid duplicate typealias block (emitted \
+                 alongside minos_domain.swift; kept only in the domain file to avoid \
+                 duplicate symbols)",
+            )?;
+            updated = replace_required(
+                updated,
+                VTABLE_DECL_OLD,
+                VTABLE_DECL_NEW,
+                "minos_daemon.swift: ConnectionStateObserver vtable needs \
+                 `nonisolated(unsafe)` for SWIFT_STRICT_CONCURRENCY=complete",
+            )?;
+        }
 
         if updated != original {
             fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))?;
@@ -370,6 +414,21 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Replace `needle` with `replacement` in `buf` and bail if `needle` is not
+/// present. Used for load-bearing fixups to `uniffi-bindgen-swift` output where
+/// a silent no-op would produce Swift that fails to compile further down the
+/// pipeline with a confusing error.
+fn replace_required(buf: String, needle: &str, replacement: &str, context: &str) -> Result<String> {
+    if !buf.contains(needle) {
+        bail!(
+            "codegen drift: expected needle not found — {context}. upstream \
+             uniffi-bindgen-swift output may have changed. Head of missing needle: {}",
+            needle.lines().next().unwrap_or("<empty>")
+        );
+    }
+    Ok(buf.replace(needle, replacement))
 }
 
 fn gen_xcode() -> Result<()> {
@@ -496,4 +555,31 @@ fn which(bin: &str) -> Option<String> {
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replace_required_performs_replacement_when_needle_present() {
+        let result =
+            replace_required("hello world".into(), "world", "there", "test context").unwrap();
+        assert_eq!(result, "hello there");
+    }
+
+    #[test]
+    fn replace_required_bails_with_drift_message_when_needle_missing() {
+        let err = replace_required("hello world".into(), "MISSING", "x", "vtable decl")
+            .expect_err("expected drift error when needle is absent");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("codegen drift"),
+            "error should tag itself as codegen drift: {msg}"
+        );
+        assert!(
+            msg.contains("vtable decl"),
+            "error should include caller-supplied context: {msg}"
+        );
+    }
 }
