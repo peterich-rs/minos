@@ -17,7 +17,7 @@ enum DaemonBootstrap {
         logger.info("Bootstrapping daemon for \(macName, privacy: .public)")
 
         var startedDaemon: (any DaemonDriving)?
-        var activeSubscription: Subscription?
+        var activeSubscription: (any SubscriptionHandle)?
 
         do {
             let daemon = try await startDaemon(macName)
@@ -28,7 +28,7 @@ enum DaemonBootstrap {
                     appState.applyConnectionState(state)
                 }
             }
-            let subscription = daemon.subscribe(observer: adapter)
+            let subscription = daemon.subscribeObserver(adapter)
             activeSubscription = subscription
 
             let state = daemon.currentState()

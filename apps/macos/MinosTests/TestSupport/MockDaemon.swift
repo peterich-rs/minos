@@ -2,18 +2,10 @@ import Foundation
 
 @testable import Minos
 
-final class MockSubscription: Subscription, @unchecked Sendable {
+final class MockSubscription: SubscriptionHandle, @unchecked Sendable {
     private(set) var cancelCallCount = 0
 
-    required init(unsafeFromHandle handle: UInt64) {
-        super.init(unsafeFromHandle: handle)
-    }
-
-    init() {
-        super.init(noHandle: .init())
-    }
-
-    override func cancel() {
+    func cancel() {
         cancelCallCount += 1
     }
 }
@@ -91,7 +83,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         }
     }
 
-    func subscribe(observer: ConnectionStateObserver) -> Subscription {
+    func subscribeObserver(_ observer: ConnectionStateObserver) -> any SubscriptionHandle {
         subscribeCallCount += 1
         observers.append(observer)
         return subscription

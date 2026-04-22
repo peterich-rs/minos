@@ -4,7 +4,7 @@ import OSLog
 
 final class AppState: ObservableObject, @unchecked Sendable {
     @Published var daemon: (any DaemonDriving)?
-    @Published var subscription: Subscription?
+    @Published var subscription: (any SubscriptionHandle)?
     @Published var connectionState: ConnectionState?
     @Published var currentQr: QrPayload?
     @Published var currentQrGeneratedAt: Date?
@@ -64,7 +64,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @MainActor
     func finishBoot(
         daemon: any DaemonDriving,
-        subscription: Subscription,
+        subscription: any SubscriptionHandle,
         connectionState: ConnectionState,
         trustedDevice: TrustedDevice?
     ) {
