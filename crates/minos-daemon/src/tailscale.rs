@@ -162,11 +162,11 @@ fn parse_tailscale_ipv4(stdout: &str) -> Option<String> {
     stdout
         .split_whitespace()
         .filter_map(|token| token.parse::<Ipv4Addr>().ok())
-        .find(is_tailscale_cgnat_ipv4)
+        .find(|&ip| is_tailscale_cgnat_ipv4(ip))
         .map(|ip| ip.to_string())
 }
 
-fn is_tailscale_cgnat_ipv4(ip: &Ipv4Addr) -> bool {
+fn is_tailscale_cgnat_ipv4(ip: Ipv4Addr) -> bool {
     let [first, second, ..] = ip.octets();
     first == 100 && (64..=127).contains(&second)
 }
@@ -306,6 +306,10 @@ mod tests {
         assert_eq!(ip.as_deref(), Some("100.72.1.9"));
     }
 
+    // Serializing env var mutation across tests requires holding `ENV_LOCK`
+    // for the whole `discover_ip().await`; `discover_ip` is runtime-agnostic
+    // and never yields, so the std Mutex can't cross-schedule-deadlock here.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn uses_override_binary_inside_tokio_runtime() {
         let _guard = ENV_LOCK
