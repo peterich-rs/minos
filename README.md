@@ -4,7 +4,14 @@ Native macOS status-bar app + Flutter mobile client + shared Rust core for remot
 
 ## Status
 
-Plan 02 is ready in-repo: the macOS MenuBarExtra app, UniFFI bridge, XcodeGen project spec, Swift logic tests, and macOS CI lane are all wired. The Flutter/mobile side remains later work. See `docs/superpowers/specs/minos-architecture-and-mvp-design.md` for the overall product design and `docs/superpowers/plans/` for execution plans.
+Plans 01–03 are ready in-repo.
+
+- **Plan 02** — macOS MenuBarExtra app, UniFFI bridge, XcodeGen project spec, Swift logic tests, macOS CI lane.
+- **Plan 03** — Flutter iOS app under `apps/mobile/` with `flutter_rust_bridge` v2 bindings over `minos-mobile::MobileClient`, Riverpod-codegen state layer, `shadcn_ui` UI, `mobile_scanner` QR capture, Dart-side `mars-xlog` via `peterich-rs/xlog-rs`, and the pair-over-Tailscale pipeline. Tier A scope: iOS scans macOS QR → `pair` JSON-RPC → WebSocket connected. `cargo xtask check-all` covers Rust + Swift + Flutter legs with an frb codegen drift guard. Real-device smoke (MVP spec §8.4 items 1–5) is the last gate and is driven manually — see `docs/superpowers/plans/03-flutter-app-and-frb-pairing.md` §Phase F.
+
+Tier B (list_clis in Dart, auto-reconnect, Keychain-backed pairing store, "Forget this Mac") lives in a future `ios-mvp-completion-design.md` spec.
+
+See `docs/superpowers/specs/minos-architecture-and-mvp-design.md` for the overall product design, `docs/superpowers/specs/flutter-app-and-frb-pairing-design.md` for the iOS Tier A design, and `docs/superpowers/plans/` for execution plans.
 
 ## Quick start (development)
 
@@ -54,6 +61,27 @@ cargo run -p minos-daemon -- --platform-paths doctor
 
 On this repository's current MVP path, production pairing still assumes a
 Tailscale `100.x.y.z` address between the Mac and the phone.
+
+## Mobile app (iOS)
+
+The Flutter app lives in `apps/mobile/`. Flutter is pinned to `3.41.6` via `apps/mobile/.fvmrc` and managed through [fvm](https://fvm.app).
+
+```bash
+# First-time: bootstrap prepares flutter_rust_bridge_codegen, iOS rustup targets,
+# runs `fvm flutter pub get`, and primes Riverpod codegen.
+cargo xtask bootstrap
+
+# Regenerate the Dart ↔ Rust frb bindings after changing minos-ffi-frb.
+cargo xtask gen-frb
+
+# Build iOS staticlibs (device + simulator).
+cargo xtask build-ios
+
+# Open the iOS project in Xcode (requires an Apple Developer team for real-device signing).
+open apps/mobile/ios/Runner.xcodeproj
+```
+
+During development without a real device, start `cargo run -p minos-daemon -- start --print-qr` on the Mac, copy the printed QR JSON, and paste it in the iOS Simulator via the `kDebugMode`-only FAB on the pairing page.
 
 ## Repository layout
 
