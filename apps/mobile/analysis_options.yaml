@@ -1,0 +1,4 @@
+include: package:flutter_lints/flutter.yaml
+
+# Phase D will add `riverpod_lint` + `custom_lint` plugins; Phase B keeps
+# the analyzer config minimal so the scaffold compiles cleanly.
