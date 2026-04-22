@@ -10,8 +10,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust:
-    name: rust (xtask check-all)
+  linux:
+    name: linux (xtask check-all + daemon CLI build)
+    # The macOS lane is a content superset of this job; we keep the Linux lane
+    # for two reasons: (1) portability insurance — the daemon crate has
+    # macOS-ish shortcuts (Homebrew paths, `#[cfg(unix)]`) that could silently
+    # regress into macOS-only code, and (2) fast feedback — Ubuntu returns
+    # red a few minutes before the macOS runner can.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,8 +43,16 @@ jobs:
         # cargo test --workspace, cargo deny check.
         run: cargo xtask check-all
 
+      - name: cargo build -p minos-daemon --bin minos-daemon
+        # Explicit Linux build of the daemon CLI binary. `check-all` already
+        # compiles it as part of `cargo test --workspace`, but a dedicated
+        # step makes the intent obvious — and pins a clearer failure mode
+        # whenever the `cargo run -p minos-daemon -- doctor` path regresses
+        # Linux-side.
+        run: cargo build -p minos-daemon --bin minos-daemon
+
   macos:
-    name: macos (build-macos + xtask check-all)
+    name: macos (xtask check-all)
     runs-on: macos-15
     env:
       # Pin the macOS lane to the same Xcode major/minor used in local
