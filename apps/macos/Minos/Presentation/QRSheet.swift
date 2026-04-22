@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct QRSheet: View {
-    @ObservedObject var appState: AppState
+    let appState: AppState
 
     var body: some View {
         VStack(spacing: 18) {

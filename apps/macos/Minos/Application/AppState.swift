@@ -1,24 +1,29 @@
 import AppKit
-import Combine
+import Observation
 import OSLog
 
-final class AppState: ObservableObject, @unchecked Sendable {
-    @Published var daemon: (any DaemonDriving)?
-    @Published var subscription: (any SubscriptionHandle)?
-    @Published var connectionState: ConnectionState?
-    @Published var currentQr: QrPayload?
-    @Published var currentQrGeneratedAt: Date?
-    @Published var trustedDevice: TrustedDevice?
-    @Published var bootError: MinosError?
-    @Published var displayError: MinosError?
-    @Published var isQrSheetPresented = false
+@Observable
+final class AppState: @unchecked Sendable {
+    var daemon: (any DaemonDriving)?
+    var subscription: (any SubscriptionHandle)?
+    var connectionState: ConnectionState?
+    var currentQr: QrPayload?
+    var currentQrGeneratedAt: Date?
+    var trustedDevice: TrustedDevice?
+    var bootError: MinosError?
+    var displayError: MinosError?
+    var isQrSheetPresented = false
 
+    @ObservationIgnored
     private let logger = Logger(subsystem: "ai.minos.macos", category: "appState")
 
+    @ObservationIgnored
     private var displayErrorTask: Task<Void, Never>?
 
+    @ObservationIgnored
     private let forgetConfirmation: @MainActor @Sendable (TrustedDevice) -> Bool
 
+    @ObservationIgnored
     private let terminator: @MainActor @Sendable () -> Void
 
     init(

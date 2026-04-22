@@ -45,7 +45,7 @@ End-to-end encryption; cloud relay; push notifications; multi-Mac/multi-iPhone p
 | Project codename | `minos` | Crate prefix; Bundle ID prefix `ai.minos.*` |
 | License | MIT | Single LICENSE file |
 | Repository | `github.com/peterich-rs/minos` (public) | |
-| macOS minimum | macOS 13 (Ventura) | Unlocks SwiftUI `MenuBarExtra` |
+| macOS minimum | macOS 14 (Sonoma) | Unlocks SwiftUI `MenuBarExtra` + `@Observable` (Observation framework) |
 | iOS minimum | iOS 16 | |
 | Rust toolchain | `stable` (no MSRV pinning) | End-product app, no downstream consumers |
 | Async runtime | `tokio` (full features) | |
@@ -166,7 +166,7 @@ UniFFI and frb cannot share a single cdylib (panic-handling and runtime initiali
 | Domain | `Domain/` | Thin typealias / extension over UniFFI-generated types (`AgentName.displayLabel` and similar); no business logic |
 | Infrastructure | `Infrastructure/` | `DaemonBootstrap`: at app launch calls `DaemonHandle::start()`, binds to local port (default `7878`, auto-increments up to 5 times if occupied), generates QR and hands it to UI |
 
-UI framework: SwiftUI `MenuBarExtra` (macOS 13+), no Dock icon (`LSUIElement = true`).
+UI framework: SwiftUI `MenuBarExtra` (macOS 14+), no Dock icon (`LSUIElement = true`).
 
 ### 5.4 Flutter app layers (`apps/mobile/lib/`)
 

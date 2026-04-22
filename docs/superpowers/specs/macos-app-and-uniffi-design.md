@@ -27,7 +27,7 @@ This document is the design contract plan 02 implements. It only covers the macO
 
 1. `minos-ffi-uniffi` fully wired — `DaemonHandle` + domain types + `MinosError` + async + event stream visible to Swift through UniFFI 0.31 proc-macro mode.
 2. `cargo xtask gen-uniffi` produces Swift sources into `apps/macos/Minos/Generated/`; `cargo xtask build-macos` produces a universal static library at `target/xcframework/libminos_ffi_uniffi.a` (arm64 + x86_64 via `lipo`).
-3. `apps/macos/Minos.app` — SwiftUI `MenuBarExtra` app, no Dock icon (`LSUIElement = true`), macOS 13+, bundle ID `ai.minos.macos`.
+3. `apps/macos/Minos.app` — SwiftUI `MenuBarExtra` app, no Dock icon (`LSUIElement = true`), macOS 14+, bundle ID `ai.minos.macos`.
 4. Four-layer folder structure under `apps/macos/Minos/` (Presentation / Application / Domain / Infrastructure) matching parent spec §5.3.
 5. Logic-only Swift unit tests in `apps/macos/MinosTests/` (XCTest), depending on a local `DaemonDriving` protocol to keep tests decoupled from UniFFI's generated concrete type.
 6. `cargo xtask check-all` green end-to-end — Rust fmt / clippy / test plus `xcodegen generate` → `xcodebuild build` → `swiftlint --strict`.
@@ -288,11 +288,11 @@ name: Minos
 options:
   bundleIdPrefix: ai.minos
   deploymentTarget:
-    macOS: "13.0"
+    macOS: "14.0"
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
     ENABLE_HARDENED_RUNTIME: NO
     CODE_SIGN_IDENTITY: "-"
     SWIFT_STRICT_CONCURRENCY: complete

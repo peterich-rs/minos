@@ -2,11 +2,11 @@ import SwiftUI
 
 @main
 struct MinosApp: App {
-    @StateObject private var appState: AppState
+    @State private var appState: AppState
 
     init() {
         let initialState = AppState()
-        _appState = StateObject(wrappedValue: initialState)
+        _appState = State(initialValue: initialState)
 
         Task {
             await DaemonBootstrap.bootstrap(initialState)

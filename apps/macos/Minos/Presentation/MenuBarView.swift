@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MenuBarView: View {
-    @ObservedObject var appState: AppState
+    @Bindable var appState: AppState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
