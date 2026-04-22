@@ -35,6 +35,26 @@ cargo xtask gen-xcode
 open apps/macos/Minos.xcodeproj
 ```
 
+## Rust daemon CLI
+
+For faster Rust-side validation, `minos-daemon` now has a direct CLI entrypoint.
+By default, the CLI keeps its runtime files under `~/.minos/` so ad hoc testing
+doesn't mix with the macOS app's platform-native paths.
+
+```bash
+# Show resolved paths and the current Tailscale discovery result.
+cargo run -p minos-daemon -- doctor
+
+# Start the daemon without Tailscale, using an ephemeral loopback port.
+cargo run -p minos-daemon -- start --bind 127.0.0.1:0 --print-qr
+
+# Inspect what the library would use on macOS without the CLI overrides.
+cargo run -p minos-daemon -- --platform-paths doctor
+```
+
+On this repository's current MVP path, production pairing still assumes a
+Tailscale `100.x.y.z` address between the Mac and the phone.
+
 ## Repository layout
 
 ```

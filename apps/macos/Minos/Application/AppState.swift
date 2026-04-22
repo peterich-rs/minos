@@ -117,9 +117,9 @@ final class AppState: @unchecked Sendable {
     }
 
     @MainActor
-    func revealTodayLog() {
+    func revealTodayLog() async {
         do {
-            try DiagnosticsReveal.revealTodayLog()
+            try await DiagnosticsReveal.revealTodayLog()
         } catch let error as MinosError {
             presentTransientError(error)
         } catch {

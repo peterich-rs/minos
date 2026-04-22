@@ -14,7 +14,7 @@ struct StatusIcon: View {
 
     private var symbolName: String {
         if hasBootError {
-            return "bolt.circle.trianglebadge.exclamationmark"
+            return "exclamationmark.triangle.fill"
         }
         return connectionState?.statusSymbolName ?? "bolt.circle"
     }

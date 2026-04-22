@@ -78,6 +78,9 @@ fn check_all() -> Result<()> {
         eprintln!("==> cargo xtask gen-uniffi");
         gen_uniffi()?;
 
+        eprintln!("==> cargo xtask build-macos");
+        build_macos()?;
+
         eprintln!("==> cargo xtask gen-xcode");
         gen_xcode()?;
 

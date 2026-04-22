@@ -72,13 +72,8 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: cargo xtask bootstrap
 
-      - name: cargo xtask build-macos
-        # `check-all` drives xcodebuild, which links against the universal
-        # static library in target/xcframework/. A clean runner must build it first.
-        run: cargo xtask build-macos
-
       - name: cargo xtask check-all
-        # Single source of truth for the macOS lane after the universal lib is
-        # in place: Rust checks plus UniFFI/XcodeGen generation, xcodebuild,
-        # Swift unit tests, and swiftlint.
+        # Single source of truth for the macOS lane: Rust checks plus UniFFI,
+        # universal staticlib generation, XcodeGen, xcodebuild, Swift unit
+        # tests, and swiftlint.
         run: cargo xtask check-all

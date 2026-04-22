@@ -13,10 +13,10 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 minos-daemon = { path = "../minos-daemon", version = "0.1.0", features = ["uniffi"] }
 minos-domain = { path = "../minos-domain", version = "0.1.0", features = ["uniffi"] }
 minos-pairing = { path = "../minos-pairing", version = "0.1.0", features = ["uniffi"] }
-uniffi = { workspace = true }
+uniffi = { workspace = true, features = ["tokio"] }
 
 [build-dependencies]
-uniffi = { workspace = true }
+uniffi = { workspace = true, features = ["tokio"] }
 
 [lints]
 workspace = true

@@ -42,7 +42,9 @@ struct MenuBarView: View {
             }
 
             actionButton("在 Finder 中显示今日日志…") {
-                appState.revealTodayLog()
+                Task {
+                    await appState.revealTodayLog()
+                }
             }
 
             Divider()
@@ -68,7 +70,9 @@ struct MenuBarView: View {
             }
 
             actionButton("在 Finder 中显示今日日志…") {
-                appState.revealTodayLog()
+                Task {
+                    await appState.revealTodayLog()
+                }
             }
 
             Divider()
@@ -88,7 +92,9 @@ struct MenuBarView: View {
             Divider()
 
             actionButton("在 Finder 中显示今日日志…") {
-                appState.revealTodayLog()
+                Task {
+                    await appState.revealTodayLog()
+                }
             }
 
             Divider()
@@ -131,7 +137,9 @@ struct MenuBarView: View {
             Divider()
 
             actionButton("在 Finder 中显示今日日志…") {
-                appState.revealTodayLog()
+                Task {
+                    await appState.revealTodayLog()
+                }
             }
 
             actionButton("退出 Minos") {

@@ -18,6 +18,7 @@ use minos_pairing::{
 };
 use minos_protocol::MinosRpcServer;
 use minos_transport::WsServer;
+use tokio::runtime::Handle;
 use tokio::sync::watch;
 
 use crate::file_store::FilePairingStore;
@@ -37,6 +38,11 @@ struct DaemonInner {
     active_token: Arc<Mutex<Option<ActiveToken>>>,
     addr: SocketAddr,
     mac_name: String,
+    // Captured inside `start` (which runs under a Tokio runtime — either the
+    // CLI's `#[tokio::main]` or UniFFI's tokio runtime) so sync FFI methods
+    // like `subscribe` can spawn onto it from threads that lack a current
+    // runtime, as happens when Swift calls into the FFI surface directly.
+    rt_handle: Handle,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -44,10 +50,11 @@ pub struct DaemonHandle {
     inner: Arc<DaemonInner>,
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl DaemonHandle {
-    /// Production entry point for Swift. Discovers the Tailscale 100.x IP,
-    /// tries ports 7878..=7882 in order, returns the first successful bind.
+    /// Production entry point for Swift. Discovers the device's current
+    /// Tailscale CGNAT IPv4, tries ports 7878..=7882 in order, and returns
+    /// the first successful bind.
     ///
     /// Errors:
     /// - `BindFailed { addr: "tailscale", ... }` if no 100.x IP found.
@@ -58,11 +65,11 @@ impl DaemonHandle {
     pub async fn start_autobind(mac_name: String) -> Result<Arc<Self>, MinosError> {
         const PORTS: std::ops::RangeInclusive<u16> = 7878..=7882;
 
-        let host = crate::tailscale::discover_ip()
+        let host = crate::tailscale::discover_ip_with_reason()
             .await
-            .ok_or_else(|| MinosError::BindFailed {
+            .map_err(|message| MinosError::BindFailed {
                 addr: "tailscale".into(),
-                message: "no 100.x IP returned by `tailscale ip --4`".into(),
+                message,
             })?;
 
         Self::start_on_port_range(host, mac_name, PORTS).await
@@ -153,6 +160,11 @@ impl DaemonHandle {
         &self,
         observer: Arc<dyn crate::subscription::ConnectionStateObserver>,
     ) -> Arc<crate::subscription::Subscription> {
+        // Swift invokes this on a plain thread with no current runtime;
+        // entering the handle captured at `start` time gives `tokio::spawn`
+        // inside `spawn_observer` a valid reactor. The spawned task keeps
+        // running on that runtime after the guard drops.
+        let _guard = self.inner.rt_handle.enter();
         crate::subscription::spawn_observer(self.events_stream(), observer)
     }
 }
@@ -255,6 +267,7 @@ impl DaemonHandle {
                 active_token,
                 addr,
                 mac_name: cfg.mac_name,
+                rt_handle: Handle::current(),
             }),
         }))
     }

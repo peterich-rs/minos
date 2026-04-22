@@ -25,7 +25,8 @@ mars-xlog = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
-uniffi = { workspace = true, optional = true }
+uniffi = { workspace = true, optional = true, features = ["tokio"] }
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
