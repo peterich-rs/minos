@@ -65,6 +65,12 @@ class PairingController extends _$PairingController {
       state = AsyncValue.data(response);
     } on MinosError catch (e, st) {
       state = AsyncValue.error(e, st);
+    } catch (e, st) {
+      // Non-MinosError (e.g. frb PanicException, raw StateError on missing
+      // RustLib.init). Keep the UI out of the stuck-loading state; the
+      // `is MinosError` guard in pairing_page's ref.listen filters toasts
+      // so the user is not shown opaque Rust text.
+      state = AsyncValue.error(e, st);
     }
   }
 }

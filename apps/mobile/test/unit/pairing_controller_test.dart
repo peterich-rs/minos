@@ -11,8 +11,9 @@ class _FakeMinosCore extends Mock implements MinosCoreProtocol {}
 void main() {
   setUpAll(() {
     // mocktail requires a fallback for any reference-type arguments used in
-    // matchers like `any()`. We only match strings, so a string fallback is
-    // enough, but register PairResponse too for symmetry.
+    // matchers like `any()`. We only match strings, so a single string
+    // fallback is sufficient. Revisit if PairResponse ever appears on the
+    // `any(...)` side of a matcher.
     registerFallbackValue('');
   });
 
