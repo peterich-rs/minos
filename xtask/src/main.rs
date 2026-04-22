@@ -137,36 +137,59 @@ fn check_all() -> Result<()> {
     // the full suite on the macOS lane / local dev where fvm is present.
     flutter_leg(&workspace_root)?;
 
-    // frb codegen drift guard. Regenerates the Dart/Rust bridge sources and
-    // fails if anything under `apps/mobile/lib/src/rust` or
-    // `crates/minos-ffi-frb/src/frb_generated.rs` drifted from the committed
-    // copies. Only makes sense on hosts that already have frb set up — we
-    // gate on the codegen binary itself rather than a target_os check so
-    // contributors on any platform who ran `cargo xtask bootstrap` get the
-    // check.
-    if workspace_root.join("apps/mobile/pubspec.yaml").exists()
-        && which("flutter_rust_bridge_codegen").is_some()
+    frb_drift_guard(&workspace_root)?;
+
+    eprintln!("OK: all checks pass.");
+    Ok(())
+}
+
+/// Regenerate the Dart/Rust bridge and fail on any drift — tracked diffs OR
+/// untracked new files. Gates on `flutter_rust_bridge_codegen` being on PATH
+/// so contributors who haven't run `cargo xtask bootstrap` (and hosts without
+/// Flutter, e.g. the Ubuntu `linux` CI lane) skip silently rather than fail.
+fn frb_drift_guard(workspace_root: &Path) -> Result<()> {
+    if !workspace_root.join("apps/mobile/pubspec.yaml").exists()
+        || which("flutter_rust_bridge_codegen").is_none()
     {
-        eprintln!("==> frb codegen drift (gen-frb + git diff --exit-code)");
-        gen_frb()?;
-        run(
-            "git",
-            &[
-                "diff",
-                "--exit-code",
-                "--",
-                "apps/mobile/lib/src/rust",
-                "crates/minos-ffi-frb/src/frb_generated.rs",
-            ],
-            &workspace_root,
-        )?;
-    } else {
         eprintln!(
             "==> frb codegen drift: skipped (flutter_rust_bridge_codegen not found or apps/mobile missing)"
         );
+        return Ok(());
     }
 
-    eprintln!("OK: all checks pass.");
+    eprintln!("==> frb codegen drift (gen-frb + git diff + untracked check)");
+    gen_frb()?;
+    run(
+        "git",
+        &[
+            "diff",
+            "--exit-code",
+            "--",
+            "apps/mobile/lib/src/rust",
+            "crates/minos-ffi-frb/src/frb_generated.rs",
+        ],
+        workspace_root,
+    )?;
+    // `git diff` only surfaces modifications to tracked files; a new frb API
+    // that emits a fresh .dart file would be invisible without this. Close
+    // the loophole by also failing on any untracked file under either
+    // generated-artifact root.
+    let untracked = Command::new("git")
+        .args([
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "apps/mobile/lib/src/rust",
+            "crates/minos-ffi-frb/src/frb_generated.rs",
+        ])
+        .current_dir(workspace_root)
+        .output()
+        .context("git ls-files --others for drift guard")?;
+    if !untracked.stdout.is_empty() {
+        let listing = String::from_utf8_lossy(&untracked.stdout);
+        bail!("frb codegen produced untracked files. Commit these and re-run:\n{listing}");
+    }
     Ok(())
 }
 
@@ -186,9 +209,20 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
         return Ok(());
     }
     if which("fvm").is_none() {
-        eprintln!(
-            "==> flutter leg: skipped (fvm not found; install via https://fvm.app to enable)"
-        );
+        // Distinguish three situations to avoid silently green-lighting a
+        // misconfigured workstation.  If Flutter or Dart is on PATH but fvm
+        // is not, the developer has Flutter installed but hasn't adopted the
+        // project's version pin — fail loudly so they install fvm rather
+        // than run a mismatched SDK.  Otherwise (no Flutter at all, e.g.
+        // the Ubuntu CI `linux` lane), it is fine to skip.
+        if which("flutter").is_some() || which("dart").is_some() {
+            bail!(
+                "flutter leg: fvm not found but Flutter/Dart are on PATH. \
+                 This project pins Flutter via apps/mobile/.fvmrc; install \
+                 fvm (https://fvm.app) so `fvm flutter` resolves to 3.41.6."
+            );
+        }
+        eprintln!("==> flutter leg: skipped (no Flutter toolchain detected on this host)");
         return Ok(());
     }
 
