@@ -9,14 +9,24 @@ Cargo.lock.bak
 *.iml
 .DS_Store
 
-# UniFFI / frb generated artifacts (regenerated; not committed)
+# UniFFI / frb generated artifacts.
+#
+# `apps/mobile/lib/src/rust/**` and `crates/minos-ffi-frb/src/frb_generated.rs`
+# ARE checked in (per spec §10.3 and plan 03 Phase C): CI's Dart leg runs
+# without a Rust toolchain, so the generated bindings must be present in
+# source control. Regenerate with `flutter_rust_bridge_codegen generate`.
+#
+# `apps/mobile/rust_builder/` ships the vendored cargokit plugin shim that
+# compiles the Rust static lib at `flutter build ios` time — also committed.
+# Only its build-time artifacts are ignored below.
 apps/macos/Minos/Generated/
 apps/macos/Minos.xcodeproj/
 apps/macos/Brewfile.lock.json
-apps/mobile/lib/src/rust/
-apps/mobile/rust_builder/
 apps/mobile/.dart_tool/
 apps/mobile/build/
+apps/mobile/rust_builder/cargokit/build_tool/.dart_tool/
+apps/mobile/rust_builder/**/.package_hash
+apps/mobile/rust_builder/**/*.dill
 
 # Logs
 *.log

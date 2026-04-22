@@ -35,6 +35,22 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # frb v2 runtime. Pinned to the exact codegen version so the generated
+  # wire protocol and the runtime decoder stay in lockstep.
+  flutter_rust_bridge: 2.11.1
+
+  # Runtime annotations used by the generated Dart API (sealed classes for
+  # MinosError / ConnectionState, etc.). `freezed` itself is a build-only
+  # dep (below); only the annotation package is needed at runtime.
+  freezed_annotation: ^3.1.0
+  meta: ^1.11.0
+
+  # Points at apps/mobile/rust_builder — the cargokit-based plugin that
+  # compiles crates/minos-ffi-frb into a static library and links it into
+  # the iOS/Android binaries. Required for `flutter build ios` to see Rust.
+  rust_lib_minos:
+    path: rust_builder
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -45,6 +61,11 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # freezed / build_runner produce the `*.freezed.dart` part files the
+  # generated API references. These are only needed at codegen time.
+  build_runner: ^2.4.0
+  freezed: ^3.2.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

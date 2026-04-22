@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
 
-void main() {
+import 'src/rust/frb_generated.dart';
+
+void main() async {
+  // Required so `RustLib.init()` can use the isolate infrastructure before
+  // `runApp` kicks off the first frame.
+  WidgetsFlutterBinding.ensureInitialized();
+  await RustLib.init();
   runApp(const MinosBootShell());
 }
 

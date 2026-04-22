@@ -1,0 +1,4 @@
+rust_input: crate::api
+rust_root: crates/minos-ffi-frb
+dart_output: apps/mobile/lib/src/rust
+rust_output: crates/minos-ffi-frb/src/frb_generated.rs
