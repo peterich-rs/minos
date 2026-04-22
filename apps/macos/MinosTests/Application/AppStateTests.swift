@@ -17,7 +17,7 @@ final class AppStateTests: XCTestCase {
         appState.trustedDevice = MockDaemon.makeTrustedDevice(name: "Existing Device")
         appState.bootError = .StoreIo(path: "/tmp/state.json", message: "missing")
         appState.displayError = .RpcCallFailed(method: "pairing.qr", message: "boom")
-        appState.isQrSheetPresented = true
+        appState.isShowingQr = true
 
         appState.beginBoot()
 
@@ -30,7 +30,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.trustedDevice)
         XCTAssertNil(appState.bootError)
         XCTAssertNil(appState.displayError)
-        XCTAssertFalse(appState.isQrSheetPresented)
+        XCTAssertFalse(appState.isShowingQr)
         XCTAssertFalse(appState.canShowQr)
         XCTAssertFalse(appState.canForgetDevice)
         XCTAssertNil(appState.endpointDisplay)
@@ -59,7 +59,7 @@ final class AppStateTests: XCTestCase {
     }
 
     @MainActor
-    func testShowQrStoresPayloadAndPresentsSheet() async throws {
+    func testShowQrStoresPayloadAndMarksShowingQr() async throws {
         let expectedQr = MockDaemon.makeQrPayload(host: "100.64.0.55", port: 7880, name: "Office Mac")
         let daemon = MockDaemon(pairingQrResult: .success(expectedQr))
         let appState = AppState()
@@ -75,7 +75,7 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(daemon.pairingQrCallCount, 1)
         XCTAssertEqual(appState.currentQr, expectedQr)
-        XCTAssertTrue(appState.isQrSheetPresented)
+        XCTAssertTrue(appState.isShowingQr)
         XCTAssertNil(appState.displayError)
 
         let generatedAt = try XCTUnwrap(appState.currentQrGeneratedAt)
@@ -97,7 +97,7 @@ final class AppStateTests: XCTestCase {
         )
         appState.currentQr = MockDaemon.makeQrPayload()
         appState.currentQrGeneratedAt = Date(timeIntervalSince1970: 456)
-        appState.isQrSheetPresented = true
+        appState.isShowingQr = true
 
         XCTAssertFalse(appState.canShowQr)
         XCTAssertTrue(appState.canForgetDevice)
@@ -109,7 +109,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.trustedDevice)
         XCTAssertNil(appState.currentQr)
         XCTAssertNil(appState.currentQrGeneratedAt)
-        XCTAssertFalse(appState.isQrSheetPresented)
+        XCTAssertFalse(appState.isShowingQr)
     }
 
     @MainActor
@@ -143,7 +143,7 @@ final class AppStateTests: XCTestCase {
         appState.currentQr = MockDaemon.makeQrPayload()
         appState.currentQrGeneratedAt = Date(timeIntervalSince1970: 789)
         appState.trustedDevice = MockDaemon.makeTrustedDevice()
-        appState.isQrSheetPresented = true
+        appState.isShowingQr = true
 
         let error = MinosError.BindFailed(addr: "tailscale", message: "no 100.x IP")
         appState.failBoot(with: error)
@@ -155,7 +155,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.trustedDevice)
         XCTAssertNil(appState.currentQr)
         XCTAssertNil(appState.currentQrGeneratedAt)
-        XCTAssertFalse(appState.isQrSheetPresented)
+        XCTAssertFalse(appState.isShowingQr)
         XCTAssertEqual(appState.bootError, error)
     }
 
@@ -174,7 +174,7 @@ final class AppStateTests: XCTestCase {
         )
         appState.currentQr = MockDaemon.makeQrPayload()
         appState.currentQrGeneratedAt = Date(timeIntervalSince1970: 999)
-        appState.isQrSheetPresented = true
+        appState.isShowingQr = true
 
         await appState.shutdown()
 
@@ -185,6 +185,6 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.subscription)
         XCTAssertNil(appState.currentQr)
         XCTAssertNil(appState.currentQrGeneratedAt)
-        XCTAssertFalse(appState.isQrSheetPresented)
+        XCTAssertFalse(appState.isShowingQr)
     }
 }

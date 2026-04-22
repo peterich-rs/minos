@@ -15,15 +15,14 @@ struct MenuBarView: View {
                 bootingContent
             } else if appState.trustedDevice != nil {
                 pairedContent
+            } else if appState.isShowingQr {
+                PairingQRView(appState: appState)
             } else {
                 unpairedContent
             }
         }
         .padding(14)
-        .frame(width: 320)
-        .sheet(isPresented: $appState.isQrSheetPresented) {
-            QRSheet(appState: appState)
-        }
+        .frame(width: 360)
     }
 
     private var unpairedContent: some View {

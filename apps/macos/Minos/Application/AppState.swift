@@ -12,7 +12,7 @@ final class AppState: @unchecked Sendable {
     var trustedDevice: TrustedDevice?
     var bootError: MinosError?
     var displayError: MinosError?
-    var isQrSheetPresented = false
+    var isShowingQr = false
 
     @ObservationIgnored
     private let logger = Logger(subsystem: "ai.minos.macos", category: "appState")
@@ -58,7 +58,7 @@ final class AppState: @unchecked Sendable {
         bootError = nil
         currentQr = nil
         currentQrGeneratedAt = nil
-        isQrSheetPresented = false
+        isShowingQr = false
         trustedDevice = nil
         connectionState = nil
         subscription?.cancel()
@@ -92,7 +92,7 @@ final class AppState: @unchecked Sendable {
         trustedDevice = nil
         currentQr = nil
         currentQrGeneratedAt = nil
-        isQrSheetPresented = false
+        isShowingQr = false
         bootError = error
     }
 
@@ -103,17 +103,17 @@ final class AppState: @unchecked Sendable {
 
     @MainActor
     func showQr() async {
-        await loadQr(presentingSheet: true)
+        await loadQr(showing: true)
     }
 
     @MainActor
     func regenerateQr() async {
-        await loadQr(presentingSheet: true)
+        await loadQr(showing: true)
     }
 
     @MainActor
-    func dismissQrSheet() {
-        isQrSheetPresented = false
+    func dismissQr() {
+        isShowingQr = false
     }
 
     @MainActor
@@ -141,7 +141,7 @@ final class AppState: @unchecked Sendable {
             self.trustedDevice = nil
             currentQr = nil
             currentQrGeneratedAt = nil
-            isQrSheetPresented = false
+            isShowingQr = false
         } catch let error as MinosError {
             presentTransientError(error)
         } catch {
@@ -160,7 +160,7 @@ final class AppState: @unchecked Sendable {
         subscription = nil
         currentQr = nil
         currentQrGeneratedAt = nil
-        isQrSheetPresented = false
+        isShowingQr = false
 
         do {
             try await currentDaemon?.stop()
@@ -177,7 +177,7 @@ final class AppState: @unchecked Sendable {
     private static let qrLifetimeSeconds: TimeInterval = 300
 
     @MainActor
-    private func loadQr(presentingSheet: Bool) async {
+    private func loadQr(showing: Bool) async {
         guard canShowQr, let daemon else {
             return
         }
@@ -186,7 +186,7 @@ final class AppState: @unchecked Sendable {
             let pairingPayload = try daemon.pairingQr()
             currentQr = pairingPayload
             currentQrGeneratedAt = Date()
-            isQrSheetPresented = presentingSheet
+            isShowingQr = showing
             displayErrorTask?.cancel()
             displayError = nil
         } catch let error as MinosError {

@@ -1,18 +1,36 @@
 import SwiftUI
 
-struct QRSheet: View {
+struct PairingQRView: View {
     let appState: AppState
 
     var body: some View {
-        VStack(spacing: 18) {
-            if let pairingPayload = appState.currentQr {
-                qrContent(pairingPayload)
-            } else {
-                unavailableContent
+        VStack(alignment: .leading, spacing: 12) {
+            backButton
+
+            Divider()
+
+            VStack(spacing: 18) {
+                if let pairingPayload = appState.currentQr {
+                    qrContent(pairingPayload)
+                } else {
+                    unavailableContent
+                }
             }
+            .frame(maxWidth: .infinity)
         }
-        .padding(24)
-        .frame(width: 360)
+    }
+
+    private var backButton: some View {
+        Button {
+            appState.dismissQr()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left")
+                Text("返回")
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -33,9 +51,6 @@ struct QRSheet: View {
         VStack(spacing: 12) {
             Text("二维码不可用")
                 .font(.headline)
-            Button("关闭") {
-                appState.dismissQrSheet()
-            }
         }
     }
 
@@ -49,18 +64,12 @@ struct QRSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 10) {
-                Button("重新生成") {
-                    Task {
-                        await appState.regenerateQr()
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-
-                Button("关闭") {
-                    appState.dismissQrSheet()
+            Button("重新生成") {
+                Task {
+                    await appState.regenerateQr()
                 }
             }
+            .keyboardShortcut(.defaultAction)
         }
     }
 
