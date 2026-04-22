@@ -104,7 +104,7 @@ The hexagonal border from spec §4.3 is preserved:
 
 - **`minos-mobile` does not depend on `flutter_rust_bridge`.** It stays a pure composition root.
 - **`minos-ffi-frb` is the adapter.** It is the only crate with frb-specific annotations (`#[frb(opaque)]`, `#[frb(mirror)]`, `StreamSink<T>`).
-- **Dart does not consume frb types directly.** A `MinosCore` facade (and its `MinosCoreProtocol` abstract class) interposes, so Riverpod providers and widget tests depend on the local protocol — not on generated frb classes. This mirrors plan 02's `SubscriptionHandle` / `DaemonDriving` pattern on the Swift side.
+- **Dart does not consume frb types directly.** A `MinosCore` facade (and its `MinosCoreProtocol` abstract class) interposes, so Riverpod providers and unit tests depend on the local protocol — not on generated frb classes. This mirrors plan 02's `SubscriptionHandle` / `DaemonDriving` pattern on the Swift side.
 
 ### 4.3 FFI data shapes (precise list)
 
@@ -289,12 +289,11 @@ apps/mobile/
 │           ├── qr_scanner_view.dart
 │           └── debug_paste_qr_sheet.dart   # kDebugMode-gated
 └── test/
-    ├── unit/
-    │   ├── pairing_controller_test.dart
-    │   └── minos_error_display_test.dart
-    └── widget/
-        ├── pairing_page_test.dart
-        └── home_page_test.dart
+    └── unit/
+        ├── pairing_controller_test.dart
+        └── minos_error_display_test.dart
+        # test/widget/ and test/integration/ deliberately absent in Tier A
+        # per the logic-only unit-test convention (see §9.2)
 ```
 
 ### 6.3 Riverpod providers (all codegen via `@riverpod`)
@@ -480,15 +479,19 @@ Error mode #2 inherits a literal that was written for persisted-state corruption
 
 ### 9.2 Dart matrix
 
+Per the project-wide testing convention (unit tests cover logic only; UI / widget / functional tests are integration and deferred), Tier A ships **unit tests only** — logic layers that can be validated without widget trees or real I/O.
+
 | Type | File | Scope |
 |---|---|---|
-| Unit | `test/unit/pairing_controller_test.dart` | Mock `MinosCoreProtocol` via mocktail; verify `submit` drives `loading → data` on success, `loading → error<MinosError>` on `pairWithJson` throwing |
-| Unit | `test/unit/minos_error_display_test.dart` | Every `MinosError` variant → correct `ErrorKind`; `userMessage(Lang.zh/.en)` returns non-empty |
-| Widget | `test/widget/pairing_page_test.dart` | `PermissionDeniedPage` renders when `cameraPermissionProvider` is `permanentlyDenied`; scanner renders when `granted`; `kDebugMode` paste-sheet accessible |
-| Widget | `test/widget/home_page_test.dart` | Renders "已连接" + `mac_name` from injected `MinosCoreProtocol` stub |
-| Integration | — | **Not written** in Tier A (spec §8.3 defers `integration_test` to P1.5) |
+| Unit | `test/unit/pairing_controller_test.dart` | Mock `MinosCoreProtocol` via mocktail; verify `submit` drives `loading → data(PairResponse)` on success, `loading → error(MinosError)` on `pairWithJson` throwing; verify idempotent re-submit from error state |
+| Unit | `test/unit/minos_error_display_test.dart` | Every `MinosError` variant → correct `ErrorKind` mapping; `userMessage(Lang.zh)` and `userMessage(Lang.en)` return non-empty strings |
 
-Widget tests wrap in `ShadApp` so shadcn components compile; they override `minosCoreProvider` via `ProviderScope.overrides`.
+**Deferred to integration-test phase** (explicitly not in Tier A plan):
+- `pairing_page_test.dart` (widget test exercising permission branches + scanner mount + `kDebugMode` paste sheet)
+- `home_page_test.dart` (widget test verifying `已连接 {macName}` rendering)
+- `integration_test/` end-to-end scenarios (already deferred per MVP spec §8.3 to P1.5)
+
+The real-device smoke gate (§9.3) is the only functional-level verification Tier A provides; it is manual, not automated.
 
 ### 9.3 Real-device smoke gate
 
