@@ -55,6 +55,7 @@ class BuildPod {
         .where((element) => element.type == AritifactType.dylib)
         .toList();
 
+    // MINOS-PATCH: libName (not packageName) for artifact lookup; see MINOS-PATCHES.md.
     final libName = environment.crateInfo.libName;
 
     // If there is static lib, use it and link it with pod

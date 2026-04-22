@@ -101,9 +101,11 @@ class PrecompileBinaries {
     final rustup = Rustup();
 
     for (final target in targets) {
+      // MINOS-PATCH: libName for artifact filename; keep packageName above for
+      // the GitHub release tag (human-facing). See MINOS-PATCHES.md.
       final artifactNames = getArtifactNames(
         target: target,
-        libraryName: crateInfo.packageName,
+        libraryName: crateInfo.libName,
         remote: true,
       );
 

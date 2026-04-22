@@ -71,12 +71,14 @@ class ArtifactProvider {
       final targetDir = await builder.build();
       // For local build accept both static and dynamic libraries.
       final artifactNames = <String>{
+        // MINOS-PATCH: libName for local artifact lookup; see MINOS-PATCHES.md.
         ...getArtifactNames(
           target: target,
           libraryName: environment.crateInfo.libName,
           aritifactType: AritifactType.dylib,
           remote: false,
         ),
+        // MINOS-PATCH: libName for local artifact lookup; see MINOS-PATCHES.md.
         ...getArtifactNames(
           target: target,
           libraryName: environment.crateInfo.libName,
@@ -120,9 +122,11 @@ class ArtifactProvider {
     final res = <Target, List<Artifact>>{};
 
     for (final target in targets) {
+      // MINOS-PATCH: libName for precompiled-binary lookup; path not active
+      // today (precompile feature off) but kept consistent. See MINOS-PATCHES.md.
       final requiredArtifacts = getArtifactNames(
         target: target,
-        libraryName: environment.crateInfo.packageName,
+        libraryName: environment.crateInfo.libName,
         remote: true,
       );
       final artifactsForTarget = <Artifact>[];

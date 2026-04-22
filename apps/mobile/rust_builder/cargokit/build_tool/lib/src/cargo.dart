@@ -27,10 +27,11 @@ class CrateInfo {
 
   final String packageName;
 
-  /// Cargo rewrites `-` to `_` when deriving the default `[lib] name`, so the
-  /// artifact on disk is `libminos_ffi_frb.a` even though the package is
-  /// `minos-ffi-frb`. Use this when constructing artifact filenames; keep
-  /// [packageName] for `cargo build -p` (which accepts only the raw form).
+  // MINOS-PATCH: cargo rewrites `-` to `_` when deriving the default `[lib]
+  // name`, so the artifact on disk is `libminos_ffi_frb.a` even though the
+  // package is `minos-ffi-frb`. Use `libName` when constructing artifact
+  // filenames; keep [packageName] for `cargo build -p` (which accepts only
+  // the raw form) and for human-facing text. See MINOS-PATCHES.md.
   String get libName => packageName.replaceAll('-', '_');
 
   static CrateInfo parseManifest(String manifest, {final String? fileName}) {

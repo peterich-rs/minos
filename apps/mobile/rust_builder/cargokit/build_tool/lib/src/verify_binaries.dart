@@ -36,9 +36,11 @@ class VerifyBinaries {
         stdout.write(message.padRight(40));
         stdout.flush();
 
+        // MINOS-PATCH: libName for precompiled-binary verify; path not active
+        // today but kept consistent with artifacts_provider. See MINOS-PATCHES.md.
         final artifacts = getArtifactNames(
           target: target,
-          libraryName: crateInfo.packageName,
+          libraryName: crateInfo.libName,
           remote: true,
         );
 
