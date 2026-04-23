@@ -40,8 +40,11 @@ pub async fn discover_tailscale_ip() -> Option<String> {
     minos_daemon::discover_tailscale_ip().await
 }
 
-pub use minos_daemon::{ConnectionStateObserver, DaemonHandle, Subscription};
+pub use minos_daemon::{
+    AgentState, AgentStateObserver, ConnectionStateObserver, DaemonHandle, Subscription,
+};
 pub use minos_domain::{
     AgentDescriptor, AgentName, AgentStatus, ConnectionState, DeviceId, PairingState, PairingToken,
 };
 pub use minos_pairing::{QrPayload, TrustedDevice};
+pub use minos_protocol::{SendUserMessageRequest, StartAgentRequest, StartAgentResponse};

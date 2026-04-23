@@ -6,11 +6,15 @@ license.workspace = true
 authors.workspace = true
 description = "Minos JSON-RPC contract: messages, events, and the MinosRpc service trait."
 
+[features]
+uniffi = ["dep:uniffi", "minos-domain/uniffi"]
+
 [dependencies]
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jsonrpsee = { workspace = true }
+uniffi = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

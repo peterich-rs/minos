@@ -1825,6 +1825,7 @@ dependencies = [
  "minos-daemon",
  "minos-domain",
  "minos-pairing",
+ "minos-protocol",
  "uniffi",
 ]
 
@@ -1876,6 +1877,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "uniffi",
 ]
 
 [[package]]

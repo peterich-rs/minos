@@ -13,3 +13,9 @@ pub mod rpc;
 pub use events::*;
 pub use messages::*;
 pub use rpc::*;
+
+// UniFFI 0.31 per-crate scaffolding: every crate that carries `uniffi::*`
+// derives must define `UniFfiTag` locally via `setup_scaffolding!()`; the
+// derive expansions reference `crate::UniFfiTag`.
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();

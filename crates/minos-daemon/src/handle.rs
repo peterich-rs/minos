@@ -178,6 +178,7 @@ impl DaemonHandle {
     }
 }
 
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl DaemonHandle {
     #[allow(clippy::missing_errors_doc)]
     pub async fn start_agent(
@@ -210,14 +211,16 @@ impl DaemonHandle {
     pub fn current_agent_state(&self) -> crate::AgentState {
         self.inner.agent.current_state()
     }
+}
 
-    /// Iterate `ports` in order on `host`, returning the first successful
-    /// bind. Port-busy errors are swallowed and retried; any non-bind error
-    /// short-circuits. When every port fails, returns
-    /// `BindFailed { addr: "<host>:<first>-<last>", message: "all ports occupied" }`.
-    ///
-    /// Internal helper extracted from `start_autobind` so tests can exercise
-    /// the port-retry loop without going through Tailscale discovery.
+/// Iterate `ports` in order on `host`, returning the first successful
+/// bind. Port-busy errors are swallowed and retried; any non-bind error
+/// short-circuits. When every port fails, returns
+/// `BindFailed { addr: "<host>:<first>-<last>", message: "all ports occupied" }`.
+///
+/// Internal helper extracted from `start_autobind` so tests can exercise
+/// the port-retry loop without going through Tailscale discovery.
+impl DaemonHandle {
     #[allow(clippy::missing_errors_doc)]
     pub async fn start_on_port_range(
         host: String,

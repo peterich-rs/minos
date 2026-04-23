@@ -502,7 +502,62 @@ fn gen_uniffi() -> Result<()> {
         }
     }
 
+    verify_generated_uniffi_surface(&out_dir)?;
+
     eprintln!("OK: {}", out_dir.display());
+    Ok(())
+}
+
+fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "public enum AgentState",
+        "generated Swift enum for daemon-owned AgentState",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "public protocol AgentStateObserver",
+        "generated Swift callback protocol for agent-state updates",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "open func startAgent(req: StartAgentRequest)",
+        "generated DaemonHandle.startAgent binding",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "open func subscribeAgentState(observer: AgentStateObserver)",
+        "generated DaemonHandle.subscribeAgentState binding",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct StartAgentRequest",
+        "generated Swift record for StartAgentRequest",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct StartAgentResponse",
+        "generated Swift record for StartAgentResponse",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct SendUserMessageRequest",
+        "generated Swift record for SendUserMessageRequest",
+    )?;
+
+    Ok(())
+}
+
+fn require_generated_text(path: &Path, needle: &str, context: &str) -> Result<()> {
+    let buf = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    if !buf.contains(needle) {
+        bail!(
+            "codegen drift: {} missing {} (expected substring: {:?})",
+            path.display(),
+            context,
+            needle,
+        );
+    }
     Ok(())
 }
 
@@ -563,6 +618,7 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     for file_name in [
         "minos_daemon.swift",
         "minos_domain.swift",
+        "minos_protocol.swift",
         "minos_pairing.swift",
     ] {
         let path = out_dir.join(file_name);
@@ -584,6 +640,10 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
             )
             .replace(
                 "#if canImport(minos_pairingFFI)\nimport minos_pairingFFI\n#endif",
+                MODULE_IMPORT,
+            )
+            .replace(
+                "#if canImport(minos_protocolFFI)\nimport minos_protocolFFI\n#endif",
                 MODULE_IMPORT,
             );
 

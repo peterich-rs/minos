@@ -28,6 +28,7 @@ pub struct HealthResponse {
 pub type ListClisResponse = Vec<AgentDescriptor>;
 
 /// Parameters for the `start_agent` RPC. See spec §5.2.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentRequest {
     pub agent: AgentName,
@@ -35,6 +36,7 @@ pub struct StartAgentRequest {
 
 /// Result of a successful `start_agent` RPC — carries the codex `thread_id`
 /// as `session_id` and the resolved workspace path. See spec §5.2.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentResponse {
     pub session_id: String,
@@ -43,6 +45,7 @@ pub struct StartAgentResponse {
 
 /// Parameters for the `send_user_message` RPC. `session_id` must match the
 /// active session's id; see spec §5.2 and §5.4.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SendUserMessageRequest {
     pub session_id: String,
