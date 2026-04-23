@@ -1748,6 +1748,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "uniffi",
  "url",
  "uuid",
 ]
@@ -1822,6 +1823,7 @@ dependencies = [
 name = "minos-ffi-uniffi"
 version = "0.1.0"
 dependencies = [
+ "minos-agent-runtime",
  "minos-daemon",
  "minos-domain",
  "minos-pairing",

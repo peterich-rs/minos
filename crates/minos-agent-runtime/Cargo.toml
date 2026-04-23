@@ -12,6 +12,7 @@ description = "Agent runtime: spawns/supervises CLI agents (codex today), speaks
 # and by `minos-daemon::tests::agent_e2e`. Production binaries never enable
 # this feature, so the fake does not leak into released artifacts.
 test-support = []
+uniffi = ["dep:uniffi", "minos-domain/uniffi"]
 
 [dependencies]
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
@@ -24,6 +25,7 @@ tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
 futures-util = { workspace = true }
+uniffi = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Self-reference enables the `test-support` feature for this crate's own

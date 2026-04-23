@@ -10,6 +10,7 @@ description = "Mac-side composition root: WS server + file store + RPC handlers 
 test-support = ["minos-agent-runtime/test-support"]
 uniffi = [
 	"dep:uniffi",
+	"minos-agent-runtime/uniffi",
 	"minos-domain/uniffi",
 	"minos-protocol/uniffi",
 	"minos-pairing/uniffi",

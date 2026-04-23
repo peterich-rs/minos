@@ -1,56 +1,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
 
-use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState as RuntimeAgentState};
-use minos_domain::{AgentEvent, AgentName, MinosError};
+use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState};
+use minos_domain::{AgentEvent, MinosError};
 use minos_protocol::{SendUserMessageRequest, StartAgentRequest, StartAgentResponse};
 use tokio::sync::{broadcast, watch};
 
 use crate::subscription::{AgentStateObserver, Subscription};
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum AgentState {
-    #[default]
-    Idle,
-    Starting {
-        agent: AgentName,
-    },
-    Running {
-        agent: AgentName,
-        thread_id: String,
-        started_at: SystemTime,
-    },
-    Stopping,
-    Crashed {
-        reason: String,
-    },
-}
-
-impl From<RuntimeAgentState> for AgentState {
-    fn from(state: RuntimeAgentState) -> Self {
-        match state {
-            RuntimeAgentState::Idle => Self::Idle,
-            RuntimeAgentState::Starting { agent } => Self::Starting { agent },
-            RuntimeAgentState::Running {
-                agent,
-                thread_id,
-                started_at,
-            } => Self::Running {
-                agent,
-                thread_id,
-                started_at,
-            },
-            RuntimeAgentState::Stopping => Self::Stopping,
-            RuntimeAgentState::Crashed { reason } => Self::Crashed { reason },
-        }
-    }
-}
-
 pub struct AgentGlue {
     runtime: Arc<AgentRuntime>,
-    state_rx: watch::Receiver<RuntimeAgentState>,
+    state_rx: watch::Receiver<AgentState>,
 }
 
 impl AgentGlue {
@@ -93,11 +53,11 @@ impl AgentGlue {
 
     #[must_use]
     pub fn current_state(&self) -> AgentState {
-        self.state_rx.borrow().clone().into()
+        self.state_rx.borrow().clone()
     }
 
     #[must_use]
-    pub fn state_stream(&self) -> watch::Receiver<RuntimeAgentState> {
+    pub fn state_stream(&self) -> watch::Receiver<AgentState> {
         self.state_rx.clone()
     }
 

@@ -20,6 +20,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
+
 pub mod approvals;
 pub(crate) mod codex_client;
 pub(crate) mod process;

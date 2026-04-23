@@ -489,7 +489,7 @@ fn gen_uniffi() -> Result<()> {
     )?;
 
     normalize_generated_uniffi_imports(&out_dir)?;
-    prune_unexpected_uniffi_outputs(&out_dir)?;
+    prune_unexpected_uniffi_outputs(&out_dir);
 
     for generated in [
         "MinosCore.swift",
@@ -510,9 +510,9 @@ fn gen_uniffi() -> Result<()> {
 
 fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
     require_generated_text(
-        &out_dir.join("minos_daemon.swift"),
+        &out_dir.join("minos_agent_runtime.swift"),
         "public enum AgentState",
-        "generated Swift enum for daemon-owned AgentState",
+        "generated Swift enum for runtime-owned AgentState",
     )?;
     require_generated_text(
         &out_dir.join("minos_daemon.swift"),
@@ -561,15 +561,8 @@ fn require_generated_text(path: &Path, needle: &str, context: &str) -> Result<()
     Ok(())
 }
 
-fn prune_unexpected_uniffi_outputs(out_dir: &Path) -> Result<()> {
-    for generated in ["minos_agent_runtime.swift", "minos_agent_runtimeFFI.h"] {
-        let path = out_dir.join(generated);
-        if path.exists() {
-            fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
-        }
-    }
-
-    Ok(())
+fn prune_unexpected_uniffi_outputs(out_dir: &Path) {
+    let _ = out_dir;
 }
 
 fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
@@ -616,6 +609,7 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     }
 
     for file_name in [
+        "minos_agent_runtime.swift",
         "minos_daemon.swift",
         "minos_domain.swift",
         "minos_protocol.swift",
@@ -630,6 +624,10 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
             fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
 
         let mut updated = original
+            .replace(
+                "#if canImport(minos_agent_runtimeFFI)\nimport minos_agent_runtimeFFI\n#endif",
+                MODULE_IMPORT,
+            )
             .replace(
                 "#if canImport(minos_daemonFFI)\nimport minos_daemonFFI\n#endif",
                 MODULE_IMPORT,
@@ -648,7 +646,7 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
             );
 
         // Every per-crate file self-imports at least its own FFI submodule, so after
-        // the three replacements above at least one `import MinosCoreFFI` block
+        // the replacements above at least one `import MinosCoreFFI` block
         // must be present. If none is, the `#if canImport(..._FFI)` pragma layout
         // upstream has changed and we need to refresh the needles.
         if !updated.contains(MODULE_IMPORT) {

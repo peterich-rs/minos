@@ -7,11 +7,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use minos_agent_runtime::AgentState as RuntimeAgentState;
+use minos_agent_runtime::AgentState;
 use minos_domain::ConnectionState;
 use tokio::sync::{oneshot, watch};
-
-use crate::AgentState;
 
 /// Opaque subscription handle. Swift holds this and calls `cancel` to
 /// tear down the observer task at app shutdown or menu teardown.
@@ -84,10 +82,10 @@ pub(crate) fn spawn_observer(
 }
 
 pub(crate) fn spawn_agent_observer(
-    mut rx: watch::Receiver<RuntimeAgentState>,
+    mut rx: watch::Receiver<AgentState>,
     observer: Arc<dyn AgentStateObserver>,
 ) -> Arc<Subscription> {
-    observer.on_state(rx.borrow().clone().into());
+    observer.on_state(rx.borrow().clone());
 
     let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
     tokio::spawn(async move {
@@ -99,7 +97,7 @@ pub(crate) fn spawn_agent_observer(
                     if r.is_err() {
                         break;
                     }
-                    observer.on_state(rx.borrow().clone().into());
+                    observer.on_state(rx.borrow().clone());
                 }
             }
         }
@@ -177,7 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_observer_receives_initial_and_subsequent_states() {
-        let (tx, rx) = watch::channel(RuntimeAgentState::Idle);
+        let (tx, rx) = watch::channel(AgentState::Idle);
         let hits = Arc::new(AtomicU32::new(0));
         let obs = Arc::new(CountingAgentObserver { hits: hits.clone() });
 
@@ -185,7 +183,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(hits.load(Ordering::SeqCst) >= 1, "initial snapshot missed");
 
-        tx.send(RuntimeAgentState::Starting {
+        tx.send(AgentState::Starting {
             agent: AgentName::Codex,
         })
         .unwrap();
@@ -196,7 +194,7 @@ mod tests {
         let hits_before_cancel_send = hits.load(Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(20)).await;
 
-        let _ = tx.send(RuntimeAgentState::Stopping);
+        let _ = tx.send(AgentState::Stopping);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(
             hits.load(Ordering::SeqCst),
@@ -207,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_cancel_is_idempotent() {
-        let (_tx, rx) = watch::channel(RuntimeAgentState::Idle);
+        let (_tx, rx) = watch::channel(AgentState::Idle);
         let hits = Arc::new(AtomicU32::new(0));
         let obs = Arc::new(CountingAgentObserver { hits });
         let sub = spawn_agent_observer(rx, obs);

@@ -9,9 +9,10 @@ pub mod rpc_server;
 pub mod subscription;
 pub mod tailscale;
 
-pub use agent::{AgentGlue, AgentState};
+pub use agent::AgentGlue;
 pub use file_store::*;
 pub use handle::*;
+pub use minos_agent_runtime::AgentState;
 pub use subscription::{AgentStateObserver, ConnectionStateObserver, Subscription};
 
 /// Module-level wrapper so callers don't need `tailscale::discover_ip` —

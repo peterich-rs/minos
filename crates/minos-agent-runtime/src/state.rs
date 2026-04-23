@@ -14,6 +14,7 @@ use std::time::SystemTime;
 ///
 /// MVP is single-session: exactly one variant is "live" at a time. Multi-session
 /// concurrency (§2.2 out-of-scope) is a breaking change deferred to a later spec.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum AgentState {
