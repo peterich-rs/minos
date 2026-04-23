@@ -19,10 +19,15 @@
 //!
 //! ## Graceful shutdown
 //!
-//! [`shutdown_signal`] awaits either `SIGINT` (Ctrl-C) or `SIGTERM`, then
-//! broadcasts `Event::ServerShutdown` to every live session and sleeps
-//! 500ms to give clients time to drain. The token GC task is aborted
-//! afterwards, and the SQLite pool closes in-place via `SqlitePool::close`.
+//! Two-phase teardown (see commit history for `fix(relay): shutdown
+//! ordering...`). Phase 1 is the `with_graceful_shutdown` future:
+//! [`wait_for_signal`] awaits either `SIGINT` (Ctrl-C) or `SIGTERM`, then
+//! we broadcast `Event::ServerShutdown` to every live session and sleep
+//! 500ms so clients can drain. Only after `axum::serve` returns — which
+//! signals both that the listener has stopped accepting new connections
+//! AND that in-flight handlers have finished — do we abort the token GC
+//! task and close the SQLite pool. Closing the pool earlier would race
+//! WS handlers still issuing queries and surface `PoolClosed` errors.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,12 +77,7 @@ async fn main() -> Result<()> {
 
     let registry = Arc::new(SessionRegistry::new());
     let pairing = Arc::new(PairingService::new(pool.clone()));
-    let state = RelayState {
-        registry: registry.clone(),
-        pairing: pairing.clone(),
-        store: pool.clone(),
-        version: env!("CARGO_PKG_VERSION"),
-    };
+    let state = RelayState::new(registry.clone(), pairing.clone(), pool.clone());
 
     let gc_task = spawn_token_gc(pool.clone());
 
@@ -88,14 +88,37 @@ async fn main() -> Result<()> {
     tracing::info!(addr = %local_addr, version = %state.version, "listening");
 
     let router = http::router(state);
-    let shutdown = shutdown_signal(registry.clone(), pool.clone(), gc_task);
 
+    // Phase 1 of teardown runs inside `with_graceful_shutdown`: await a
+    // signal, broadcast `ServerShutdown`, and sleep the drain window.
+    // Axum only stops the listener + waits for in-flight handlers AFTER
+    // this future resolves, so everything that must happen while handlers
+    // are still live (broadcast + drain) belongs here.
+    let registry_for_shutdown = registry.clone();
     axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
+        .with_graceful_shutdown(async move {
+            wait_for_signal().await;
+            tracing::info!("broadcasting ServerShutdown to all sessions");
+            registry_for_shutdown.broadcast(Envelope::Event {
+                version: 1,
+                event: EventKind::ServerShutdown,
+            });
+            tokio::time::sleep(SHUTDOWN_DRAIN).await;
+        })
         .await
         .context("axum::serve")?;
 
+    // Phase 2: listener has stopped and handlers have drained, so DB
+    // resources can go away without racing a query.
+    tracing::info!("listener stopped; tearing down GC + pool");
+    gc_task.abort();
+    pool.close().await;
+
     tracing::info!("server exited cleanly");
+    // Flush mars-xlog before returning so the teardown info! lines are
+    // guaranteed on disk even on fast SIGTERM. `flush_all(true)` is
+    // synchronous (see `crates/minos-daemon/src/logging.rs`).
+    Xlog::flush_all(true);
     Ok(())
 }
 
@@ -111,9 +134,14 @@ fn init_tracing(cfg: &Config) -> Result<()> {
         .with_context(|| format!("create log_dir {}", log_dir.display()))?;
 
     let xlog_cfg = XlogConfig::new(log_dir.to_string_lossy().to_string(), XLOG_NAME_PREFIX);
-    let logger = Xlog::init(xlog_cfg, LogLevel::Info).context("Xlog::init (mars-xlog)")?;
+    // Map the CLI-facing level string onto the mars-xlog enum so
+    // `--log-level debug` actually lowers the xlog gate (not just the
+    // stdout fmt layer). Full `env_logger`-style directives are supported
+    // by taking the first target-less level keyword we find.
+    let xlog_level = xlog_level_from_str(&cfg.log_level);
+    let logger = Xlog::init(xlog_cfg, xlog_level).context("Xlog::init (mars-xlog)")?;
     let (xlog_layer, _handle) =
-        XlogLayer::with_config(logger, XlogLayerConfig::new(LogLevel::Info).enabled(true));
+        XlogLayer::with_config(logger, XlogLayerConfig::new(xlog_level).enabled(true));
 
     // `RUST_LOG` (or --log-level) may carry full directives like
     // "minos_relay=debug,info"; fall back to "info" if parsing fails so a
@@ -163,18 +191,14 @@ fn spawn_token_gc(pool: SqlitePool) -> tokio::task::JoinHandle<()> {
     })
 }
 
-/// Await a shutdown signal, then fan out `Event::ServerShutdown` and
-/// tear down background tasks + the pool.
+/// Await a shutdown signal (`SIGINT` everywhere, `SIGTERM` on Unix) and
+/// return once one has arrived. Side effects are limited to a single
+/// `info!` naming which signal fired.
 ///
-/// - `Ctrl-C` (`SIGINT`) on every platform.
-/// - `SIGTERM` on Unix (POSIX service managers / `kill <pid>`).
-///
-/// The returned future is handed to `axum::serve(...).with_graceful_shutdown`.
-async fn shutdown_signal(
-    registry: Arc<SessionRegistry>,
-    pool: SqlitePool,
-    gc_task: tokio::task::JoinHandle<()>,
-) {
+/// Kept small so it can be the only thing the `with_graceful_shutdown`
+/// future does before broadcasting + draining; teardown that must run
+/// AFTER the listener stops (GC abort, pool close) lives in `main`.
+async fn wait_for_signal() {
     let ctrl_c = async {
         signal::ctrl_c().await.expect("install Ctrl+C handler");
     };
@@ -194,16 +218,40 @@ async fn shutdown_signal(
         () = ctrl_c => tracing::info!("SIGINT received; shutting down"),
         () = terminate => tracing::info!("SIGTERM received; shutting down"),
     }
+}
 
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::ServerShutdown,
-    };
-    registry.broadcast(frame);
-
-    tokio::time::sleep(SHUTDOWN_DRAIN).await;
-
-    gc_task.abort();
-    pool.close().await;
-    tracing::info!("drain window elapsed; pool closed");
+/// Parse `Config::log_level` into a [`mars_xlog::LogLevel`].
+///
+/// Accepts plain keywords (`trace`/`debug`/`info`/`warn`/`error`) and
+/// `env_logger`-style directives like `minos_relay=debug,info`: we take
+/// the first comma-segment, strip any `target=` prefix, and match the
+/// keyword case-insensitively. Unknown/unmappable input falls back to
+/// `Info` with a `debug!` trace so typos don't change the gate silently.
+///
+/// mars-xlog has no `Trace` variant; `trace` maps to its most verbose
+/// level, `Verbose`.
+fn xlog_level_from_str(s: &str) -> LogLevel {
+    let primary = s
+        .split(',')
+        .next()
+        .unwrap_or(s)
+        .split('=')
+        .next_back()
+        .unwrap_or("info")
+        .trim();
+    match primary.to_ascii_lowercase().as_str() {
+        "trace" => LogLevel::Verbose,
+        "debug" => LogLevel::Debug,
+        "info" => LogLevel::Info,
+        "warn" => LogLevel::Warn,
+        "error" => LogLevel::Error,
+        other => {
+            tracing::debug!(
+                input = s,
+                parsed = other,
+                "xlog level parse fell back to Info"
+            );
+            LogLevel::Info
+        }
+    }
 }
