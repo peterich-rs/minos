@@ -48,6 +48,8 @@ impl ErrorKind {
     ///   3. one arm in `MinosError::kind`
     ///   4. two arms (zh + en) here
     ///   5. one arm in Swift's `MinosError.kind` extension
+    ///   6. the frb mirror enums `_MinosError` and `_ErrorKind` in
+    ///      `crates/minos-ffi-frb/src/api/minos.rs` (re-run `cargo xtask gen-frb`)
     #[must_use]
     pub fn user_message(self, lang: Lang) -> &'static str {
         match (self, lang) {

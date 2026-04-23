@@ -169,6 +169,11 @@ pub enum _ErrorKind {
     CliProbeTimeout,
     CliProbeFailed,
     RpcCallFailed,
+    Unauthorized,
+    ConnectionStateMismatch,
+    EnvelopeVersionUnsupported,
+    PeerOffline,
+    RelayInternal,
 }
 
 #[allow(dead_code)]
@@ -192,6 +197,11 @@ pub enum _MinosError {
     CliProbeTimeout { bin: String, timeout_ms: u64 },
     CliProbeFailed { bin: String, message: String },
     RpcCallFailed { method: String, message: String },
+    Unauthorized { reason: String },
+    ConnectionStateMismatch { expected: String, actual: String },
+    EnvelopeVersionUnsupported { version: u8 },
+    PeerOffline { peer_device_id: String },
+    RelayInternal { message: String },
 }
 
 #[cfg(test)]

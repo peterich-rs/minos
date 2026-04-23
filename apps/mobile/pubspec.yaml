@@ -37,7 +37,7 @@ dependencies:
 
   # frb v2 runtime. Pinned to the exact codegen version so the generated
   # wire protocol and the runtime decoder stay in lockstep.
-  flutter_rust_bridge: 2.11.1
+  flutter_rust_bridge: 2.12.0
 
   # Runtime annotations used by the generated Dart API (sealed classes for
   # MinosError / ConnectionState, etc.). `freezed` itself is a build-only
