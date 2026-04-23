@@ -1,0 +1,10 @@
+{
+  "kind": "local_rpc_response",
+  "v": 1,
+  "id": 42,
+  "status": "ok",
+  "result": {
+    "token": "Sg3AfM5V0_3Vp1IvGxPzWwXhE-3HXfLQyIJzj6TZAmE",
+    "expires_at": "2026-04-23T12:00:00Z"
+  }
+}
