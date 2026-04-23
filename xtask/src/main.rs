@@ -196,6 +196,7 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
 
     let mut cfg = AgentRuntimeConfig::new(workspace_root);
     cfg.codex_bin = Some(codex_bin);
+    cfg.handshake_call_timeout = Duration::from_secs(30);
     let runtime = AgentRuntime::new(cfg);
 
     let outcome = runtime

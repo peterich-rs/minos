@@ -48,8 +48,8 @@ use crate::process::{reason_from_exit, CodexProcess};
 use crate::state::AgentState;
 use crate::translate::translate_notification;
 
-/// Timeout for the one-shot `initialize` + `thread/start` handshake.
-const HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Default timeout for the one-shot `initialize` + `thread/start` handshake.
+const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// MCP protocol version sent to `codex app-server` during startup.
 const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
@@ -85,6 +85,7 @@ pub struct AgentRuntimeConfig {
     pub codex_bin: Option<PathBuf>,
     pub ws_port_range: std::ops::RangeInclusive<u16>,
     pub event_buffer: usize,
+    pub handshake_call_timeout: Duration,
     /// Test-only seam: when `Some`, `start()` skips port-probing + codex
     /// spawn + workspace creation and connects directly to this URL.
     /// Production code must leave this as `None`.
@@ -103,6 +104,7 @@ impl AgentRuntimeConfig {
             codex_bin: None,
             ws_port_range: 7879..=7883,
             event_buffer: DEFAULT_EVENT_BUFFER,
+            handshake_call_timeout: DEFAULT_HANDSHAKE_CALL_TIMEOUT,
             #[cfg(feature = "test-support")]
             test_ws_url: None,
         }
@@ -259,59 +261,53 @@ impl AgentRuntime {
         &self,
         agent: AgentName,
         url: Url,
-        process: Option<CodexProcess>,
+        mut process: Option<CodexProcess>,
     ) -> Result<StartAgentOutcome, MinosError> {
         // Connect WS; retry budget sits inside CodexClient::connect.
         let client = match CodexClient::connect(&url).await {
             Ok(c) => c,
             Err(e) => {
-                // Best-effort: SIGTERM any spawned child.
-                if let Some(mut proc) = process {
-                    let _ = proc.stop_graceful().await;
-                }
+                stop_process_if_present(&mut process).await;
                 return Err(e);
             }
         };
         let client = Arc::new(client);
-
-        // Handshake: `initialize` → `notifications/initialized` →
-        // `thread/start` → carry out thread_id.
+        let handshake_call_timeout = self.inner.cfg.handshake_call_timeout;
+        // Handshake: `initialize` → `notifications/initialized` → `thread/start`.
         let init_res = tokio::time::timeout(
-            HANDSHAKE_CALL_TIMEOUT,
+            handshake_call_timeout,
             client.call("initialize", initialize_params()),
         )
         .await;
-        if let Err(e) = map_timeout(init_res, "initialize") {
-            if let Some(mut proc) = process {
-                let _ = proc.stop_graceful().await;
-            }
+        if let Err(e) = map_timeout(init_res, "initialize", handshake_call_timeout) {
+            stop_process_if_present(&mut process).await;
             return Err(e);
         }
 
         let initialized_res = tokio::time::timeout(
-            HANDSHAKE_CALL_TIMEOUT,
+            handshake_call_timeout,
             client.notify("notifications/initialized", serde_json::json!({})),
         )
         .await;
-        if let Err(e) = map_timeout_unit(initialized_res, "notifications/initialized") {
-            if let Some(mut proc) = process {
-                let _ = proc.stop_graceful().await;
-            }
+        if let Err(e) = map_timeout_unit(
+            initialized_res,
+            "notifications/initialized",
+            handshake_call_timeout,
+        ) {
+            stop_process_if_present(&mut process).await;
             return Err(e);
         }
 
         let cwd = self.cwd_for_session();
         let start_res = tokio::time::timeout(
-            HANDSHAKE_CALL_TIMEOUT,
+            handshake_call_timeout,
             client.call("thread/start", serde_json::json!({ "cwd": cwd })),
         )
         .await;
-        let start_result = match map_timeout(start_res, "thread/start") {
+        let start_result = match map_timeout(start_res, "thread/start", handshake_call_timeout) {
             Ok(v) => v,
             Err(e) => {
-                if let Some(mut proc) = process {
-                    let _ = proc.stop_graceful().await;
-                }
+                stop_process_if_present(&mut process).await;
                 return Err(e);
             }
         };
@@ -531,16 +527,23 @@ fn ensure_workspace_dir(root: &Path) -> Result<PathBuf, MinosError> {
     })
 }
 
+async fn stop_process_if_present(process: &mut Option<CodexProcess>) {
+    if let Some(proc) = process.as_mut() {
+        let _ = proc.stop_graceful().await;
+    }
+}
+
 fn map_timeout(
     res: Result<Result<Value, MinosError>, tokio::time::error::Elapsed>,
     method: &str,
+    timeout: Duration,
 ) -> Result<Value, MinosError> {
     match res {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(e),
         Err(_) => Err(MinosError::CodexProtocolError {
             method: method.into(),
-            message: format!("timeout after {}s", HANDSHAKE_CALL_TIMEOUT.as_secs()),
+            message: format!("timeout after {}s", timeout.as_secs()),
         }),
     }
 }
@@ -548,13 +551,14 @@ fn map_timeout(
 fn map_timeout_unit(
     res: Result<Result<(), MinosError>, tokio::time::error::Elapsed>,
     method: &str,
+    timeout: Duration,
 ) -> Result<(), MinosError> {
     match res {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(e),
         Err(_) => Err(MinosError::CodexProtocolError {
             method: method.into(),
-            message: format!("timeout after {}s", HANDSHAKE_CALL_TIMEOUT.as_secs()),
+            message: format!("timeout after {}s", timeout.as_secs()),
         }),
     }
 }
