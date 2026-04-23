@@ -247,7 +247,7 @@ pub enum Envelope {
         #[serde(rename = "v")] version: u8,
         id: u64,                              // echoes the request
         #[serde(flatten)]
-        outcome: LocalRpcOutcome,             // Ok { result } | Err { code, message }
+        outcome: LocalRpcOutcome,             // Ok { result: Value } | Err { error: RpcError }
     },
     /// Client → Relay. Relay forwards opaquely to paired peer.
     Forward {
@@ -292,6 +292,21 @@ pub enum EventKind {
     ServerShutdown,
 }
 ```
+
+> **Outcome wire shape.** `LocalRpcResponse` uses an internally-tagged
+> outcome with `status: "ok" | "err"`. The `Ok` body flattens a single
+> `result: Value` field; the `Err` body flattens a single `error` field
+> whose value is an `{ code: string, message: string }` object. Example
+> frames:
+>
+> ```json
+> {"kind":"local_rpc_response","v":1,"id":42,"status":"ok","result":{"token":"..."}}
+> {"kind":"local_rpc_response","v":1,"id":42,"status":"err","error":{"code":"pairing_token_invalid","message":"..."}}
+> ```
+>
+> The nested-`error` shape (vs flat `code`/`message`) is the committed
+> wire contract — it keeps `RpcError` reusable and avoids key-name
+> collisions if a future success payload also wants `code`/`message`.
 
 ### 6.1 Local RPCs (the only thing the backend itself handles)
 

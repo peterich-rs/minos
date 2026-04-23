@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// One WebSocket frame on the relay's `/devices` endpoint.
 ///
 /// Serialised as a tagged JSON object with `kind` as the discriminator.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Envelope {
     /// Client → Relay. The backend itself handles these and replies with
@@ -139,7 +139,7 @@ pub enum LocalRpcMethod {
 /// `Ok { result } | Err { code, message }`; we split `code`/`message`
 /// into [`RpcError`] so machine-readable error codes can be reused
 /// outside of envelope responses.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum LocalRpcOutcome {
     /// RPC returned successfully; `result` is method-specific JSON.
@@ -161,7 +161,7 @@ pub enum LocalRpcOutcome {
 /// On the wire, the `type` key carries the variant name in `snake_case`
 /// (spec §6). Payload fields sit alongside `type` thanks to the
 /// `#[serde(flatten)]` in [`Envelope::Event`].
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventKind {
     /// Emitted only to the Mac side after an iPhone successfully consumes
