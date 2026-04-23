@@ -239,6 +239,10 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
     // fails silently — the issuer's next reconnect will observe the pair
     // via the handshake path instead.
     if let Some(issuer_handle) = ctx.registry.get(issuer) {
+        // ORDER MATTERS: mirror paired_with BEFORE pushing Event::Paired so the
+        // issuer dispatcher cannot process a Forward with stale Unpaired state.
+        *issuer_handle.paired_with.write().await = Some(ctx.session.device_id);
+
         let frame = Envelope::Event {
             version: 1,
             event: EventKind::Paired {
@@ -255,9 +259,6 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
                 "failed to push Event::Paired to issuer outbox"
             );
         }
-        // Mirror the pair update on the issuer's handle so routes from
-        // this consumer side find the peer immediately.
-        *issuer_handle.paired_with.write().await = Some(ctx.session.device_id);
     }
 
     LocalRpcOutcome::Ok {
@@ -561,8 +562,16 @@ mod tests {
 
         // iOS session now reflects the pairing.
         assert_eq!(*ios_handle.paired_with.read().await, Some(mac));
-        // Mac session likewise (we mirrored it when pushing Paired).
-        assert_eq!(*mac_handle.paired_with.read().await, Some(ios));
+        // Mac session likewise. We assert this BEFORE draining the outbox
+        // below: the mirror must be in place before Event::Paired becomes
+        // observable, otherwise the issuer dispatcher could drain the event
+        // and process a subsequent Forward while its own paired_with is
+        // still None (spurious peer_offline error to the client).
+        assert_eq!(
+            *mac_handle.paired_with.read().await,
+            Some(ios),
+            "issuer paired_with must be mirrored before Event::Paired is observable"
+        );
 
         // Mac's outbox received Event::Paired carrying issuer secret.
         let frame = mac_rx.recv().await.expect("Mac must receive Event::Paired");
