@@ -16,12 +16,16 @@ use minos_domain::{ConnectionState, DeviceId, MinosError, PairingState};
 use minos_pairing::{
     generate_qr_payload, ActiveToken, Pairing, PairingStore, QrPayload, TrustedDevice,
 };
-use minos_protocol::MinosRpcServer;
+use minos_protocol::{
+    MinosRpcServer, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+};
 use minos_transport::WsServer;
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
+use crate::agent::AgentGlue;
 use crate::file_store::FilePairingStore;
+use crate::paths;
 use crate::rpc_server::RpcServerImpl;
 
 pub struct DaemonConfig {
@@ -30,6 +34,7 @@ pub struct DaemonConfig {
 }
 
 struct DaemonInner {
+    agent: Arc<AgentGlue>,
     server: Mutex<Option<WsServer>>,
     state_rx: watch::Receiver<ConnectionState>,
     state_tx: Arc<watch::Sender<ConnectionState>>,
@@ -143,6 +148,10 @@ impl DaemonHandle {
     /// calling twice is a no-op after the first success.
     #[allow(clippy::missing_errors_doc)]
     pub async fn stop(&self) -> Result<(), MinosError> {
+        match self.inner.agent.shutdown().await {
+            Ok(()) | Err(MinosError::AgentNotRunning) => {}
+            Err(err) => return Err(err),
+        }
         let server = self.inner.server.lock().unwrap().take();
         if let Some(s) = server {
             s.stop().await?;
@@ -170,6 +179,38 @@ impl DaemonHandle {
 }
 
 impl DaemonHandle {
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn start_agent(
+        &self,
+        req: StartAgentRequest,
+    ) -> Result<StartAgentResponse, MinosError> {
+        self.inner.agent.start_agent(req).await
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn send_user_message(&self, req: SendUserMessageRequest) -> Result<(), MinosError> {
+        self.inner.agent.send_user_message(req).await
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn stop_agent(&self) -> Result<(), MinosError> {
+        self.inner.agent.stop_agent().await
+    }
+
+    #[must_use]
+    pub fn subscribe_agent_state(
+        &self,
+        observer: Arc<dyn crate::subscription::AgentStateObserver>,
+    ) -> Arc<crate::subscription::Subscription> {
+        let _guard = self.inner.rt_handle.enter();
+        self.inner.agent.subscribe_state(observer)
+    }
+
+    #[must_use]
+    pub fn current_agent_state(&self) -> crate::AgentState {
+        self.inner.agent.current_state()
+    }
+
     /// Iterate `ports` in order on `host`, returning the first successful
     /// bind. Port-busy errors are swallowed and retried; any non-bind error
     /// short-circuits. When every port fails, returns
@@ -220,7 +261,30 @@ impl DaemonHandle {
         let store: Arc<dyn PairingStore> =
             Arc::new(FilePairingStore::new(FilePairingStore::default_path()));
         let runner: Arc<dyn CommandRunner> = Arc::new(RealCommandRunner);
+        let agent = Arc::new(AgentGlue::new(paths::minos_home()?.join("workspaces")));
 
+        Self::start_with_components(cfg, store, runner, agent).await
+    }
+
+    #[cfg(feature = "test-support")]
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn start_with_agent_glue(
+        cfg: DaemonConfig,
+        agent: Arc<AgentGlue>,
+    ) -> Result<Arc<Self>, MinosError> {
+        let store: Arc<dyn PairingStore> =
+            Arc::new(FilePairingStore::new(FilePairingStore::default_path()));
+        let runner: Arc<dyn CommandRunner> = Arc::new(RealCommandRunner);
+
+        Self::start_with_components(cfg, store, runner, agent).await
+    }
+
+    async fn start_with_components(
+        cfg: DaemonConfig,
+        store: Arc<dyn PairingStore>,
+        runner: Arc<dyn CommandRunner>,
+        agent: Arc<AgentGlue>,
+    ) -> Result<Arc<Self>, MinosError> {
         let initial_state = if store.load()?.is_empty() {
             PairingState::Unpaired
         } else {
@@ -242,6 +306,7 @@ impl DaemonHandle {
             port: cfg.bind_addr.port(),
             active_token: active_token.clone(),
             conn_state_tx: state_tx.clone(),
+            agent: agent.clone(),
         };
 
         let mut module = RpcModule::new(());
@@ -259,6 +324,7 @@ impl DaemonHandle {
 
         Ok(Arc::new(Self {
             inner: Arc::new(DaemonInner {
+                agent,
                 server: Mutex::new(Some(server)),
                 state_rx,
                 state_tx,

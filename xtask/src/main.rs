@@ -489,6 +489,7 @@ fn gen_uniffi() -> Result<()> {
     )?;
 
     normalize_generated_uniffi_imports(&out_dir)?;
+    prune_unexpected_uniffi_outputs(&out_dir)?;
 
     for generated in [
         "MinosCore.swift",
@@ -502,6 +503,17 @@ fn gen_uniffi() -> Result<()> {
     }
 
     eprintln!("OK: {}", out_dir.display());
+    Ok(())
+}
+
+fn prune_unexpected_uniffi_outputs(out_dir: &Path) -> Result<()> {
+    for generated in ["minos_agent_runtime.swift", "minos_agent_runtimeFFI.h"] {
+        let path = out_dir.join(generated);
+        if path.exists() {
+            fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        }
+    }
+
     Ok(())
 }
 

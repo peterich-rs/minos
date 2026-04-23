@@ -3,13 +3,14 @@
 //! [`minos_domain::AgentEvent`], and exposes an `AgentRuntime` handle the
 //! daemon wires up.
 //!
-//! ## Phase B scope
+//! ## Phase C scope
 //!
-//! Phase B ships the pure-logic modules only: `state`, `translate`,
-//! `approvals`, and the test-support `FakeCodexServer`. The full
-//! `AgentRuntime` + `CodexClient` + supervisor lands in Phase C. Until
-//! then the facade re-exports the state enum so Phase C tests can depend
-//! on this crate without API churn.
+//! Phase C lands the three I/O-touching modules — `process`, `codex_client`,
+//! `runtime` — plus the `tests/runtime_e2e.rs` integration harness. Together
+//! they compose the full state machine that spans
+//! `Idle → Starting → Running → Stopping → Idle` (plus the crash-detection
+//! branch into `Crashed`). See spec §5.1 for the sequencing and §6.1 / §6.3 /
+//! §6.4 for the flow diagrams.
 //!
 //! ## Dependency rule
 //!
@@ -20,6 +21,9 @@
 #![forbid(unsafe_code)]
 
 pub mod approvals;
+pub(crate) mod codex_client;
+pub(crate) mod process;
+pub mod runtime;
 pub mod state;
 pub mod translate;
 
@@ -27,5 +31,6 @@ pub mod translate;
 pub mod test_support;
 
 pub use approvals::build_auto_reject;
+pub use runtime::{AgentRuntime, AgentRuntimeConfig, StartAgentOutcome};
 pub use state::AgentState;
 pub use translate::translate_notification;

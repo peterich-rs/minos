@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use chrono::Utc;
 use jsonrpsee::core::async_trait;
+use jsonrpsee::core::server::SubscriptionMessage;
 use jsonrpsee::core::SubscriptionResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use jsonrpsee::PendingSubscriptionSink;
@@ -19,7 +20,9 @@ use minos_protocol::{
     HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
     SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
+
+use crate::agent::AgentGlue;
 
 pub struct RpcServerImpl {
     pub started_at: Instant,
@@ -37,6 +40,7 @@ pub struct RpcServerImpl {
     /// successful `pair()`, this emits `Connected` so UI receivers learn
     /// about the new peer without a separate transport-layer event.
     pub conn_state_tx: Arc<watch::Sender<ConnectionState>>,
+    pub agent: Arc<AgentGlue>,
 }
 
 #[async_trait]
@@ -104,46 +108,41 @@ impl MinosRpcServer for RpcServerImpl {
 
     async fn start_agent(
         &self,
-        _req: StartAgentRequest,
+        req: StartAgentRequest,
     ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
-        // Trait surface lands in Phase A; real implementation wires up in
-        // Phase D (see docs/superpowers/plans/04-codex-app-server-integration.md).
-        Err(ErrorObjectOwned::owned(
-            4002,
-            "start_agent not yet implemented (plan 04 Phase D)",
-            None::<()>,
-        ))
+        self.agent.start_agent(req).await.map_err(rpc_err)
     }
 
     async fn send_user_message(
         &self,
-        _req: SendUserMessageRequest,
+        req: SendUserMessageRequest,
     ) -> jsonrpsee::core::RpcResult<()> {
-        Err(ErrorObjectOwned::owned(
-            4003,
-            "send_user_message not yet implemented (plan 04 Phase D)",
-            None::<()>,
-        ))
+        self.agent.send_user_message(req).await.map_err(rpc_err)
     }
 
     async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()> {
-        Err(ErrorObjectOwned::owned(
-            4004,
-            "stop_agent not yet implemented (plan 04 Phase D)",
-            None::<()>,
-        ))
+        self.agent.stop_agent().await.map_err(rpc_err)
     }
 
     async fn subscribe_events(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        // MVP: not implemented; reject the subscription.
-        // jsonrpsee 0.24: `pending.reject()` closes the upgrade with an error.
-        pending
-            .reject(ErrorObjectOwned::owned(
-                4001,
-                "subscribe_events not yet implemented (P1)",
-                None::<()>,
-            ))
-            .await;
+        let mut rx = self.agent.event_stream();
+        let sink = pending.accept().await?;
+
+        loop {
+            match rx.recv().await {
+                Ok(evt) => {
+                    let message = SubscriptionMessage::from_json(&evt)?;
+                    if sink.send(message).await.is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped = n, "subscribe_events subscriber lagged");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+
         Ok(())
     }
 }

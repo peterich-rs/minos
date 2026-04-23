@@ -33,6 +33,7 @@ futures-util = { workspace = true }
 # rule satisfied — a bare `path = "."` would be a wildcard.
 minos-agent-runtime = { path = ".", version = "0.1.0", features = ["test-support"] }
 tokio = { workspace = true, features = ["full", "test-util", "macros"] }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

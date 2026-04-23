@@ -6,9 +6,21 @@
 //! request payload as [`AgentEvent::Raw`] so the future chat-ui can surface
 //! "codex tried to run X, auto-rejected". See spec §6.4 and ADR 0010.
 //!
-//! This module owns only the pure payload builder. The decision of *when*
-//! to invoke it — i.e. which `method` names count as approval prompts —
-//! lives in Phase C's `codex_client` module.
+//! This module owns both the pure payload builder and the static list of
+//! method names that count as approval prompts ([`APPROVAL_METHODS`]) —
+//! Phase C's runtime pump dispatches off that list.
+
+/// codex's known approval server-request methods. See spec §6.4.
+///
+/// Exported so `runtime.rs` can check incoming server-request methods
+/// against the approval set with a single source of truth.
+pub const APPROVAL_METHODS: &[&str] = &[
+    "ApplyPatchApproval",
+    "ExecCommandApproval",
+    "FileChangeRequestApproval",
+    "PermissionsRequestApproval",
+    "CommandExecutionRequestApproval",
+];
 
 /// Build the JSON-RPC auto-reject response payload for an approval server request.
 ///
@@ -37,17 +49,6 @@ pub fn build_auto_reject(request_id: serde_json::Value, method: &str) -> serde_j
 mod tests {
     use super::*;
     use serde_json::json;
-
-    /// codex's known approval server-request methods. Cross-referenced
-    /// against spec §6.4 — this is the working set at Phase B; Phase C
-    /// rediscovers it through codex's JSON schema and may refine.
-    const APPROVAL_METHODS: &[&str] = &[
-        "ApplyPatchApproval",
-        "ExecCommandApproval",
-        "FileChangeRequestApproval",
-        "PermissionsRequestApproval",
-        "CommandExecutionRequestApproval",
-    ];
 
     fn assert_shape(method: &str, id: serde_json::Value) {
         let response = build_auto_reject(id.clone(), method);
