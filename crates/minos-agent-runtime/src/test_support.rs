@@ -14,6 +14,8 @@
 //!
 //! - [`Step::ExpectRequest`] — reads one frame, asserts it's a JSON-RPC
 //!   request whose `method` matches, replies with a typed `result`.
+//! - [`Step::ExpectNotification`] — reads one client notification frame and
+//!   asserts its method/params shape.
 //! - [`Step::EmitNotification`] — writes a JSON-RPC notification frame.
 //! - [`Step::EmitServerRequest`] — writes a JSON-RPC request frame with a
 //!   fresh string id. The id is stored in the server's `server_request_ids`
@@ -48,6 +50,11 @@ pub enum Step {
     ExpectRequest {
         method: String,
         reply: serde_json::Value,
+    },
+    /// Read one client notification frame and assert its method/params.
+    ExpectNotification {
+        method: String,
+        params: serde_json::Value,
     },
     /// Send `{"jsonrpc":"2.0","method":<method>,"params":<params>}`.
     EmitNotification {
@@ -186,6 +193,36 @@ async fn run_script(
                     return;
                 }
             }
+            Step::ExpectNotification { method, params } => {
+                let frame = match rx.next().await {
+                    Some(Ok(Message::Text(t))) => t.to_string(),
+                    Some(Ok(Message::Binary(b))) => {
+                        String::from_utf8(b.to_vec()).unwrap_or_default()
+                    }
+                    Some(Ok(other)) => {
+                        panic!("FakeCodexServer: expected text/binary frame, got {other:?}");
+                    }
+                    Some(Err(e)) => panic!("FakeCodexServer: WS read error: {e}"),
+                    None => {
+                        panic!("FakeCodexServer: WS closed before ExpectNotification({method})")
+                    }
+                };
+                let parsed: serde_json::Value = serde_json::from_str(&frame)
+                    .unwrap_or_else(|e| panic!("FakeCodexServer: bad JSON from client: {e}"));
+                let got_method = parsed
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                assert_eq!(
+                    got_method, method,
+                    "FakeCodexServer: method mismatch on ExpectNotification"
+                );
+                assert!(
+                    parsed.get("id").is_none(),
+                    "FakeCodexServer: notifications must not carry an id"
+                );
+                assert_eq!(parsed.get("params").cloned().unwrap_or_default(), params);
+            }
             Step::EmitNotification { method, params } => {
                 let frame = serde_json::json!({
                     "jsonrpc": "2.0",
@@ -254,6 +291,25 @@ mod tests {
         assert_eq!(reply["jsonrpc"], "2.0");
         assert_eq!(reply["id"], 1);
         assert_eq!(reply["result"]["ok"], true);
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn expect_notification_round_trip() {
+        let script = vec![Step::ExpectNotification {
+            method: "notifications/initialized".into(),
+            params: serde_json::json!({}),
+        }];
+        let (server, port) = FakeCodexServer::bind(script).await;
+        let url = format!("ws://127.0.0.1:{port}");
+        let (ws, _resp) = connect_async(&url).await.unwrap();
+        let (mut tx, _rx) = ws.split();
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {},
+        });
+        tx.send(Message::text(req.to_string())).await.unwrap();
         server.stop().await;
     }
 

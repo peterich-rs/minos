@@ -3953,6 +3953,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "minos-agent-runtime",
+ "minos-domain",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

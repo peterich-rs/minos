@@ -19,6 +19,10 @@ async fn start_send_stream_stop_against_fake_codex_server() {
             method: "initialize".into(),
             reply: json!({"ok": true}),
         },
+        Step::ExpectNotification {
+            method: "notifications/initialized".into(),
+            params: json!({}),
+        },
         Step::ExpectRequest {
             method: "thread/start".into(),
             reply: json!({"thread_id": "thr-daemon"}),

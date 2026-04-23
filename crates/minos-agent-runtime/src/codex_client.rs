@@ -69,6 +69,12 @@ enum Outbound {
         params: Value,
         reply_to: oneshot::Sender<Result<Value, MinosError>>,
     },
+    /// A fire-and-forget JSON-RPC notification.
+    Notification {
+        method: String,
+        params: Value,
+        ack: oneshot::Sender<Result<(), MinosError>>,
+    },
     /// A response to a server request — fire-and-forget.
     Reply {
         id: Value,
@@ -168,6 +174,26 @@ impl CodexClient {
         })?
     }
 
+    /// Send a JSON-RPC notification and wait for pump-side write ack.
+    pub(crate) async fn notify(&self, method: &str, params: Value) -> Result<(), MinosError> {
+        let (ack, rx) = oneshot::channel();
+        self.outbound_tx
+            .send(Outbound::Notification {
+                method: method.to_string(),
+                params,
+                ack,
+            })
+            .await
+            .map_err(|_| MinosError::CodexProtocolError {
+                method: method.to_string(),
+                message: "codex client pump has shut down".into(),
+            })?;
+        rx.await.map_err(|_| MinosError::CodexProtocolError {
+            method: method.to_string(),
+            message: "codex client dropped the notification ack".into(),
+        })?
+    }
+
     /// Reply to a server request with a `result` value. Fire-and-forget from
     /// the caller's perspective — an error here means the WS went away.
     pub(crate) async fn reply(&self, id: Value, result: Value) -> Result<(), MinosError> {
@@ -222,7 +248,7 @@ async fn pump_loop<S>(
                             "method": method,
                             "params": params,
                         });
-                        let send_res = sink.send(Message::text(frame.to_string())).await;
+                        let send_res = send_frame(&mut sink, &method, frame).await;
                         if let Err(e) = send_res {
                             let _ = reply_to.send(Err(MinosError::CodexProtocolError {
                                 method,
@@ -232,17 +258,22 @@ async fn pump_loop<S>(
                             pending.insert(id, reply_to);
                         }
                     }
+                    Outbound::Notification { method, params, ack } => {
+                        let frame = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": method,
+                            "params": params,
+                        });
+                        let res = send_frame(&mut sink, &method, frame).await;
+                        let _ = ack.send(res);
+                    }
                     Outbound::Reply { id, result, ack } => {
                         let frame = serde_json::json!({
                             "jsonrpc": "2.0",
                             "id": id,
                             "result": result,
                         });
-                        let send_res = sink.send(Message::text(frame.to_string())).await;
-                        let _ = ack.send(send_res.map_err(|e| MinosError::CodexProtocolError {
-                            method: "<reply>".into(),
-                            message: format!("WS send failed: {e}"),
-                        }));
+                        let _ = ack.send(send_frame(&mut sink, "<reply>", frame).await);
                     }
                 }
             }
@@ -291,6 +322,22 @@ async fn pump_loop<S>(
             }
         }
     }
+}
+
+async fn send_frame<S>(
+    sink: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, Message>,
+    method: &str,
+    frame: Value,
+) -> Result<(), MinosError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    sink.send(Message::text(frame.to_string()))
+        .await
+        .map_err(|e| MinosError::CodexProtocolError {
+            method: method.to_string(),
+            message: format!("WS send failed: {e}"),
+        })
 }
 
 async fn handle_inbound_frame(
@@ -443,6 +490,33 @@ mod tests {
             }
             other => panic!("expected notification, got {other:?}"),
         }
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_sends_notification_frame_without_id() {
+        let (client_ws, server_ws) = duplex_pair().await;
+        let client = CodexClient::from_stream(client_ws);
+
+        let server_task = tokio::spawn(async move {
+            let (_tx, mut rx) = server_ws.split();
+            let frame = match rx.next().await {
+                Some(Ok(Message::Text(t))) => t,
+                other => panic!("expected text frame, got {other:?}"),
+            };
+            let parsed: Value = serde_json::from_str(frame.as_ref()).unwrap();
+            assert_eq!(parsed["method"], "notifications/initialized");
+            assert_eq!(parsed["params"], serde_json::json!({}));
+            assert!(
+                parsed.get("id").is_none(),
+                "notifications must not carry id"
+            );
+        });
+
+        client
+            .notify("notifications/initialized", serde_json::json!({}))
+            .await
+            .unwrap();
         server_task.await.unwrap();
     }
 

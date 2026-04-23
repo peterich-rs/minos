@@ -4,12 +4,17 @@ Native macOS status-bar app + Flutter mobile client + shared Rust core for remot
 
 ## Status
 
-Plans 01–03 are ready in-repo.
+Plans 01–04 are ready in-repo.
 
 - **Plan 02** — macOS MenuBarExtra app, UniFFI bridge, XcodeGen project spec, Swift logic tests, macOS CI lane.
 - **Plan 03** — Flutter iOS app under `apps/mobile/` with `flutter_rust_bridge` v2 bindings over `minos-mobile::MobileClient`, Riverpod-codegen state layer, `shadcn_ui` UI, `mobile_scanner` QR capture, Dart-side `mars-xlog` via `peterich-rs/xlog-rs`, and the pair-over-Tailscale pipeline. Tier A scope: iOS scans macOS QR → `pair` JSON-RPC → WebSocket connected. `cargo xtask check-all` covers Rust + Swift + Flutter legs with an frb codegen drift guard. Real-device smoke (MVP spec §8.4 items 1–5) is the last gate and is driven manually — see `docs/superpowers/plans/03-flutter-app-and-frb-pairing.md` §Phase F.
+- **Plan 04** — `codex app-server` loopback integration via `minos-agent-runtime`, daemon-side `subscribe_events` streaming plus `start_agent` / `send_user_message` / `stop_agent` RPCs, and a debug-build macOS menubar Agent segment for maintainer smoke testing.
 
 Tier B (list_clis in Dart, auto-reconnect, Keychain-backed pairing store, "Forget this Mac") lives in a future `ios-mvp-completion-design.md` spec.
+
+## Roadmap
+
+The next P1 surface is the streaming chat UI and the mobile-side consumer for the landed agent RPC/event stream. Until that exists, the macOS app exposes debug-build-only menubar controls to start Codex, send a test ping, and stop the session locally.
 
 See `docs/superpowers/specs/minos-architecture-and-mvp-design.md` for the overall product design, `docs/superpowers/specs/flutter-app-and-frb-pairing-design.md` for the iOS Tier A design, and `docs/superpowers/plans/` for execution plans.
 

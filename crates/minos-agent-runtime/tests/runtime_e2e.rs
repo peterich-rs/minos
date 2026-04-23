@@ -36,6 +36,10 @@ async fn happy_path_start_send_stream_stop() {
             method: "initialize".into(),
             reply: json!({"ok": true}),
         },
+        Step::ExpectNotification {
+            method: "notifications/initialized".into(),
+            params: json!({}),
+        },
         // thread/start handshake — result must carry thread_id
         Step::ExpectRequest {
             method: "thread/start".into(),
@@ -138,6 +142,10 @@ async fn approval_server_request_is_auto_rejected_and_broadcast() {
             method: "initialize".into(),
             reply: json!({"ok": true}),
         },
+        Step::ExpectNotification {
+            method: "notifications/initialized".into(),
+            params: json!({}),
+        },
         Step::ExpectRequest {
             method: "thread/start".into(),
             reply: json!({"thread_id": "thr-approval"}),
@@ -206,6 +214,10 @@ async fn unexpected_ws_drop_transitions_to_crashed() {
             method: "initialize".into(),
             reply: json!({"ok": true}),
         },
+        Step::ExpectNotification {
+            method: "notifications/initialized".into(),
+            params: json!({}),
+        },
         Step::ExpectRequest {
             method: "thread/start".into(),
             reply: json!({"thread_id": "thr-crash"}),
@@ -265,6 +277,10 @@ async fn stale_session_id_returns_mismatch_not_not_running() {
             method: "initialize".into(),
             reply: json!({"ok": true}),
         },
+        Step::ExpectNotification {
+            method: "notifications/initialized".into(),
+            params: json!({}),
+        },
         Step::ExpectRequest {
             method: "thread/start".into(),
             reply: json!({"thread_id": "thr-real"}),
@@ -301,6 +317,10 @@ async fn multiple_subscribers_receive_same_event() {
         Step::ExpectRequest {
             method: "initialize".into(),
             reply: json!({"ok": true}),
+        },
+        Step::ExpectNotification {
+            method: "notifications/initialized".into(),
+            params: json!({}),
         },
         Step::ExpectRequest {
             method: "thread/start".into(),
@@ -347,6 +367,10 @@ async fn second_start_while_running_errors() {
         Step::ExpectRequest {
             method: "initialize".into(),
             reply: json!({"ok": true}),
+        },
+        Step::ExpectNotification {
+            method: "notifications/initialized".into(),
+            params: json!({}),
         },
         Step::ExpectRequest {
             method: "thread/start".into(),

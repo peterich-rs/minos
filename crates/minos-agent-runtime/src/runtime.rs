@@ -51,6 +51,9 @@ use crate::translate::translate_notification;
 /// Timeout for the one-shot `initialize` + `thread/start` handshake.
 const HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// MCP protocol version sent to `codex app-server` during startup.
+const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
+
 /// Fire-and-observe window for `turn/start`. The send itself awaits the
 /// response (so we can surface a protocol error synchronously), but we don't
 /// wait for `turn/completed` — that flows via the event stream.
@@ -271,13 +274,26 @@ impl AgentRuntime {
         };
         let client = Arc::new(client);
 
-        // Handshake: `initialize` → wait response → `thread/start` → carry out thread_id.
+        // Handshake: `initialize` → `notifications/initialized` →
+        // `thread/start` → carry out thread_id.
         let init_res = tokio::time::timeout(
             HANDSHAKE_CALL_TIMEOUT,
-            client.call("initialize", serde_json::json!({})),
+            client.call("initialize", initialize_params()),
         )
         .await;
         if let Err(e) = map_timeout(init_res, "initialize") {
+            if let Some(mut proc) = process {
+                let _ = proc.stop_graceful().await;
+            }
+            return Err(e);
+        }
+
+        let initialized_res = tokio::time::timeout(
+            HANDSHAKE_CALL_TIMEOUT,
+            client.notify("notifications/initialized", serde_json::json!({})),
+        )
+        .await;
+        if let Err(e) = map_timeout_unit(initialized_res, "notifications/initialized") {
             if let Some(mut proc) = process {
                 let _ = proc.stop_graceful().await;
             }
@@ -299,12 +315,10 @@ impl AgentRuntime {
                 return Err(e);
             }
         };
-        let thread_id = start_result
-            .get("thread_id")
-            .and_then(Value::as_str)
+        let thread_id = thread_id_from_response(&start_result)
             .ok_or_else(|| MinosError::CodexProtocolError {
                 method: "thread/start".into(),
-                message: "response missing thread_id".into(),
+                message: "response missing thread_id/threadId".into(),
             })?
             .to_string();
 
@@ -397,8 +411,8 @@ impl AgentRuntime {
         };
 
         let params = serde_json::json!({
-            "thread_id": session_id,
-            "items": [{ "type": "text", "text": text }],
+            "threadId": session_id,
+            "input": [{ "type": "text", "text": text }],
         });
         let res = tokio::time::timeout(TURN_START_TIMEOUT, client.call("turn/start", params)).await;
         match res {
@@ -445,18 +459,12 @@ impl AgentRuntime {
         let polite_client = Arc::clone(&active.client);
         let _ = tokio::time::timeout(
             STOP_POLITE_TIMEOUT,
-            polite_client.call(
-                "turn/interrupt",
-                serde_json::json!({ "thread_id": thread_id }),
-            ),
+            polite_client.call("turn/interrupt", thread_id_request_params(&thread_id)),
         )
         .await;
         let _ = tokio::time::timeout(
             STOP_POLITE_TIMEOUT,
-            polite_client.call(
-                "thread/archive",
-                serde_json::json!({ "thread_id": thread_id }),
-            ),
+            polite_client.call("thread/archive", thread_id_request_params(&thread_id)),
         )
         .await;
 
@@ -535,6 +543,50 @@ fn map_timeout(
             message: format!("timeout after {}s", HANDSHAKE_CALL_TIMEOUT.as_secs()),
         }),
     }
+}
+
+fn map_timeout_unit(
+    res: Result<Result<(), MinosError>, tokio::time::error::Elapsed>,
+    method: &str,
+) -> Result<(), MinosError> {
+    match res {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(MinosError::CodexProtocolError {
+            method: method.into(),
+            message: format!("timeout after {}s", HANDSHAKE_CALL_TIMEOUT.as_secs()),
+        }),
+    }
+}
+
+fn initialize_params() -> Value {
+    serde_json::json!({
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {
+            "name": env!("CARGO_PKG_NAME"),
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+    })
+}
+
+fn thread_id_from_response(value: &Value) -> Option<&str> {
+    value
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("threadId").and_then(Value::as_str))
+        .or_else(|| {
+            value
+                .get("thread")
+                .and_then(|thread| thread.get("id"))
+                .and_then(Value::as_str)
+        })
+}
+
+fn thread_id_request_params(thread_id: &str) -> Value {
+    serde_json::json!({
+        "threadId": thread_id,
+    })
 }
 
 /// Spawn the supervisor task. It owns `process` (which owns the child); it
@@ -718,6 +770,21 @@ mod tests {
         let cfg = AgentRuntimeConfig::new(PathBuf::from("/tmp/ws"));
         assert_eq!(cfg.ws_port_range, 7879..=7883);
         assert_eq!(cfg.event_buffer, DEFAULT_EVENT_BUFFER);
+    }
+
+    #[test]
+    fn initialize_params_include_mcp_client_info() {
+        let params = initialize_params();
+        assert_eq!(params["protocolVersion"], MCP_PROTOCOL_VERSION);
+        assert_eq!(params["clientInfo"]["name"], env!("CARGO_PKG_NAME"));
+        assert_eq!(params["clientInfo"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(params["capabilities"].is_object());
+    }
+
+    #[test]
+    fn thread_id_from_response_accepts_nested_thread_object() {
+        let value = serde_json::json!({"thread": {"id": "thr-real"}});
+        assert_eq!(thread_id_from_response(&value), Some("thr-real"));
     }
 
     #[test]
