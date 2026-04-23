@@ -51,6 +51,7 @@ mars-xlog = { version = "0.1.0-preview.2", features = ["tracing"] }
 argon2 = "0.5"
 clap = { version = "4", features = ["derive", "env"] }
 dashmap = "6"
+sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 subtle = "2"
 

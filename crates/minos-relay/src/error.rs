@@ -41,4 +41,31 @@ pub enum RelayError {
     /// upstream sqlx error stringified.
     #[error("store query `{operation}` failed: {message}")]
     StoreQuery { operation: String, message: String },
+
+    /// An argon2 hash / verify operation failed.
+    ///
+    /// Raised by `pairing::secret::{hash_secret, verify_secret}` for malformed
+    /// PHC strings or internal argon2 errors. Named for easy future
+    /// `From<RelayError> for MinosError` mapping (mirrors
+    /// `MinosError::RelayInternal`).
+    #[error("pairing hash failed: {message}")]
+    PairingHash { message: String },
+
+    /// A pairing token was unknown, expired, or already consumed.
+    ///
+    /// The three cases are intentionally collapsed: distinguishing them at
+    /// the API surface would leak token-existence information to an
+    /// attacker who can probe. Mirrors `MinosError::PairingTokenInvalid`.
+    #[error("pairing token invalid or expired")]
+    PairingTokenInvalid,
+
+    /// Pairing refused because one side was already paired.
+    ///
+    /// Spec §10.2 R4: MVP policy is "refuse and let the UI confirm replace
+    /// via explicit `forget_peer` + retry". `actual` captures the observed
+    /// state (currently always `"paired"`) so future callers can rely on
+    /// the stringly-typed shape without caring about the domain enum.
+    /// Mirrors `MinosError::PairingStateMismatch`.
+    #[error("pairing state mismatch: {actual}")]
+    PairingStateMismatch { actual: String },
 }

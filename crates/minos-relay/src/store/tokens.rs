@@ -136,24 +136,11 @@ pub async fn gc_expired(pool: &SqlitePool, now: i64) -> Result<u64, RelayError> 
 mod tests {
     use super::*;
     use crate::store::devices::insert_device;
+    use crate::store::test_support::{memory_pool, T0};
     use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-    const T0: i64 = 1_700_000_000_000;
     const HOUR_MS: i64 = 60 * 60 * 1_000;
-
-    async fn setup() -> SqlitePool {
-        let opts: SqliteConnectOptions = "sqlite::memory:".parse().unwrap();
-        let opts = opts.create_if_missing(true).foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        pool
-    }
 
     async fn issuer_device(pool: &SqlitePool) -> DeviceId {
         let id = DeviceId::new();
@@ -165,7 +152,7 @@ mod tests {
 
     #[tokio::test]
     async fn issue_then_consume_happy_path_returns_issuer() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let issuer = issuer_device(&pool).await;
         issue_token(&pool, "hash-A", issuer, T0 + HOUR_MS, T0)
             .await
@@ -182,7 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn consume_expired_token_returns_none() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let issuer = issuer_device(&pool).await;
         issue_token(&pool, "hash-A", issuer, T0 + HOUR_MS, T0)
             .await
@@ -201,7 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn double_consume_returns_none_on_second_call() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let issuer = issuer_device(&pool).await;
         issue_token(&pool, "hash-A", issuer, T0 + HOUR_MS, T0)
             .await
@@ -215,7 +202,7 @@ mod tests {
 
     #[tokio::test]
     async fn consume_unknown_token_returns_none() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let _issuer = issuer_device(&pool).await;
         let consumed = consume_token(&pool, "not-in-db", T0).await.unwrap();
         assert_eq!(consumed, None);
@@ -223,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn gc_expired_removes_only_unconsumed_expired_rows() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let issuer = issuer_device(&pool).await;
 
         // A: expired + unconsumed → should be GC'd.
@@ -253,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn gc_expired_with_no_candidates_returns_zero() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let issuer = issuer_device(&pool).await;
         issue_token(&pool, "hash-A", issuer, T0 + HOUR_MS, T0)
             .await
@@ -267,7 +254,7 @@ mod tests {
         // Argon2 salts make this impossible in practice, but the PK
         // constraint still applies — make sure we translate rather than
         // panic.
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let issuer = issuer_device(&pool).await;
         issue_token(&pool, "hash-A", issuer, T0 + HOUR_MS, T0)
             .await

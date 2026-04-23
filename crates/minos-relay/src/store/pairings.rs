@@ -130,23 +130,9 @@ pub async fn delete_pair(pool: &SqlitePool, a: DeviceId, b: DeviceId) -> Result<
 mod tests {
     use super::*;
     use crate::store::devices::insert_device;
+    use crate::store::test_support::{memory_pool, T0};
     use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-
-    const T0: i64 = 1_700_000_000_000;
-
-    async fn setup() -> SqlitePool {
-        let opts: SqliteConnectOptions = "sqlite::memory:".parse().unwrap();
-        let opts = opts.create_if_missing(true).foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        pool
-    }
 
     /// Insert two devices + return their ids, already ordered so `(low, high)`
     /// matches SQLite's string ordering. Handy for tests that want a fresh
@@ -165,7 +151,7 @@ mod tests {
 
     #[tokio::test]
     async fn insert_pairing_canonicalizes_rows_regardless_of_arg_order() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let (a, b) = two_devices(&pool).await;
 
         // Insert in (a, b) order. If a > b stringwise, the row should still
@@ -181,7 +167,7 @@ mod tests {
 
     #[tokio::test]
     async fn insert_pairing_in_reverse_arg_order_produces_identical_row() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let (a, b) = two_devices(&pool).await;
 
         insert_pairing(&pool, b, a, T0).await.unwrap(); // flipped
@@ -196,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_pair_returns_peer_from_either_side() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let (a, b) = two_devices(&pool).await;
         insert_pairing(&pool, a, b, T0).await.unwrap();
 
@@ -206,14 +192,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_pair_on_unpaired_device_returns_none() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let (a, _b) = two_devices(&pool).await;
         assert_eq!(get_pair(&pool, a).await.unwrap(), None);
     }
 
     #[tokio::test]
     async fn delete_pair_removes_row_and_followup_get_is_none() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let (a, b) = two_devices(&pool).await;
         insert_pairing(&pool, a, b, T0).await.unwrap();
         assert_eq!(get_pair(&pool, a).await.unwrap(), Some(b));
@@ -225,7 +211,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_pair_on_nonexistent_pair_is_silent_ok() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let (a, b) = two_devices(&pool).await;
         // Never inserted — must not error.
         delete_pair(&pool, a, b).await.unwrap();

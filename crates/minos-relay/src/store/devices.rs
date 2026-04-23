@@ -185,29 +185,12 @@ pub async fn get_secret_hash(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::test_support::{memory_pool, T0};
     use pretty_assertions::assert_eq;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-
-    /// Fixed unix-epoch ms used as `now` in tests.
-    const T0: i64 = 1_700_000_000_000;
-
-    async fn setup() -> SqlitePool {
-        let opts: SqliteConnectOptions = "sqlite::memory:".parse().unwrap();
-        let opts = opts.create_if_missing(true).foreign_keys(true);
-        // `sqlite::memory:` is per-connection — each connection gets a
-        // fresh DB. Cap at 1 so tests see a consistent store.
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        pool
-    }
 
     #[tokio::test]
     async fn insert_then_get_round_trips_all_columns() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let id = DeviceId::new();
         insert_device(&pool, id, "alice's mac", DeviceRole::MacHost, T0)
             .await
@@ -224,14 +207,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_device_missing_returns_none() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let missing = DeviceId::new();
         assert_eq!(get_device(&pool, missing).await.unwrap(), None);
     }
 
     #[tokio::test]
     async fn upsert_secret_hash_sets_hash_visible_to_get() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let id = DeviceId::new();
         insert_device(&pool, id, "ipad", DeviceRole::IosClient, T0)
             .await
@@ -254,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn upsert_secret_hash_on_missing_device_errors() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let missing = DeviceId::new();
         let err = upsert_secret_hash(&pool, missing, "hash")
             .await
@@ -269,14 +252,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_secret_hash_on_missing_device_returns_none() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let missing = DeviceId::new();
         assert_eq!(get_secret_hash(&pool, missing).await.unwrap(), None);
     }
 
     #[tokio::test]
     async fn get_secret_hash_on_device_without_hash_returns_none() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let id = DeviceId::new();
         insert_device(&pool, id, "web", DeviceRole::BrowserAdmin, T0)
             .await
@@ -286,7 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn insert_device_stores_role_as_kebab_case() {
-        let pool = setup().await;
+        let pool = memory_pool().await;
         let id = DeviceId::new();
         insert_device(&pool, id, "admin", DeviceRole::BrowserAdmin, T0)
             .await

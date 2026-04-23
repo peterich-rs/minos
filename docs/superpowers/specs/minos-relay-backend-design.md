@@ -317,7 +317,7 @@ pub enum EventKind {
 | `pair` | `ios-client` | Unpaired | `{"token": "...", "device_name": "..."}` | `{"peer_device_id": "...", "peer_name": "...", "your_device_secret": "..."}` | `PairingTokenInvalid`, `PairingStateMismatch` |
 | `forget_peer` | any | Paired | `{}` | `{"ok": true}` | `Unauthorized` if unpaired |
 
-Token TTL: **5 minutes**. Expired → garbage-collected by a background task every 60s. Consumed tokens are marked, never reused.
+Token TTL: **5 minutes**. Expired → garbage-collected by a background task every 60s. Consumed tokens are marked, never reused. Token hashing uses SHA-256 (not argon2id): the 32-byte plaintext has ≥256 bits of entropy and the short TTL bounds attacker exposure, so a deterministic hash suffices and (unlike argon2's salted PHC output) supports direct primary-key lookup.
 
 ### 6.2 Id semantics
 
@@ -522,7 +522,7 @@ CREATE INDEX idx_pairings_b ON pairings(device_b);
 
 -- 0003_pairing_tokens.sql
 CREATE TABLE pairing_tokens (
-    token_hash        TEXT PRIMARY KEY,            -- argon2 hash of bearer
+    token_hash        TEXT PRIMARY KEY,            -- SHA-256 hex digest of the plaintext token bearer (32B random → 64 hex chars). Deterministic for PK lookup; safe because tokens are one-shot and TTL ≤ 5 min.
     issuer_device_id  TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
     created_at        INTEGER NOT NULL,
     expires_at        INTEGER NOT NULL,

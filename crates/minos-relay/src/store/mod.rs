@@ -51,3 +51,31 @@ pub async fn connect(db_url: &str) -> Result<SqlitePool, RelayError> {
 
     Ok(pool)
 }
+
+/// Shared test helpers used by the store submodule tests AND by
+/// `crate::pairing`'s integration tests. Extracted to collapse ~35 lines of
+/// duplication that accrued across `devices::tests`, `pairings::tests`, and
+/// `tokens::tests` during step 5.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+
+    /// Fixed unix-epoch ms used as `now` in tests.
+    pub const T0: i64 = 1_700_000_000_000;
+
+    /// Open a fresh in-memory SQLite pool with migrations applied.
+    ///
+    /// `sqlite::memory:` is per-connection — each connection gets its own DB.
+    /// The pool is capped at 1 so all queries see a consistent store.
+    pub async fn memory_pool() -> SqlitePool {
+        let opts: SqliteConnectOptions = "sqlite::memory:".parse().unwrap();
+        let opts = opts.create_if_missing(true).foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+}

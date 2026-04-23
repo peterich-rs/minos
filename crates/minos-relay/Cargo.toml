@@ -21,6 +21,7 @@ sqlx = { workspace = true }
 
 # auth
 argon2 = { workspace = true }
+sha2 = { workspace = true }
 subtle = { workspace = true }
 
 # concurrent state
