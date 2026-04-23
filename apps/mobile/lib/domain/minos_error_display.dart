@@ -17,6 +17,12 @@ extension MinosErrorDisplay on MinosError {
     MinosError_CliProbeTimeout() => ErrorKind.cliProbeTimeout,
     MinosError_CliProbeFailed() => ErrorKind.cliProbeFailed,
     MinosError_RpcCallFailed() => ErrorKind.rpcCallFailed,
+    MinosError_Unauthorized() => ErrorKind.unauthorized,
+    MinosError_ConnectionStateMismatch() => ErrorKind.connectionStateMismatch,
+    MinosError_EnvelopeVersionUnsupported() =>
+      ErrorKind.envelopeVersionUnsupported,
+    MinosError_PeerOffline() => ErrorKind.peerOffline,
+    MinosError_RelayInternal() => ErrorKind.relayInternal,
   };
 
   /// Localized user-facing message for this error, looked up via the Rust
