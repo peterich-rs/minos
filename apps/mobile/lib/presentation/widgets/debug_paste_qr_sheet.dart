@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
@@ -37,11 +37,7 @@ class _DebugPasteQrSheetState extends ConsumerState<DebugPasteQrSheet> {
         children: [
           const Text('粘贴 QR JSON(仅调试)'),
           const SizedBox(height: 8),
-          TextField(
-            controller: _controller,
-            maxLines: 6,
-            decoration: const InputDecoration(border: OutlineInputBorder()),
-          ),
+          ShadInput(controller: _controller, maxLines: 6),
           const SizedBox(height: 12),
           ShadButton(
             onPressed: () {
