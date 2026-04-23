@@ -8,6 +8,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
+// These functions are ignored because they are not marked as `pub`: `frb_runtime`, `spawn_state_forwarder`
+
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
 /// per launch.
@@ -42,6 +44,8 @@ abstract class MobileClient implements RustOpaqueInterface {
   Stream<ConnectionState> subscribeState();
 }
 
+enum AgentName { codex, claude, gemini }
+
 @freezed
 sealed class ConnectionState with _$ConnectionState {
   const ConnectionState._();
@@ -65,6 +69,13 @@ enum ErrorKind {
   cliProbeTimeout,
   cliProbeFailed,
   rpcCallFailed,
+  codexSpawnFailed,
+  codexConnectFailed,
+  codexProtocolError,
+  agentAlreadyRunning,
+  agentNotRunning,
+  agentNotSupported,
+  agentSessionIdMismatch,
 }
 
 enum Lang { zh, en }
@@ -110,6 +121,23 @@ sealed class MinosError with _$MinosError implements FrbException {
     required String method,
     required String message,
   }) = MinosError_RpcCallFailed;
+  const factory MinosError.codexSpawnFailed({required String message}) =
+      MinosError_CodexSpawnFailed;
+  const factory MinosError.codexConnectFailed({
+    required String url,
+    required String message,
+  }) = MinosError_CodexConnectFailed;
+  const factory MinosError.codexProtocolError({
+    required String method,
+    required String message,
+  }) = MinosError_CodexProtocolError;
+  const factory MinosError.agentAlreadyRunning() =
+      MinosError_AgentAlreadyRunning;
+  const factory MinosError.agentNotRunning() = MinosError_AgentNotRunning;
+  const factory MinosError.agentNotSupported({required AgentName agent}) =
+      MinosError_AgentNotSupported;
+  const factory MinosError.agentSessionIdMismatch() =
+      MinosError_AgentSessionIdMismatch;
 }
 
 class PairResponse {

@@ -364,6 +364,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AgentName dco_decode_agent_name(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return AgentName.values[raw as int];
+  }
+
+  @protected
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
@@ -459,6 +465,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           method: dco_decode_String(raw[1]),
           message: dco_decode_String(raw[2]),
         );
+      case 11:
+        return MinosError_CodexSpawnFailed(message: dco_decode_String(raw[1]));
+      case 12:
+        return MinosError_CodexConnectFailed(
+          url: dco_decode_String(raw[1]),
+          message: dco_decode_String(raw[2]),
+        );
+      case 13:
+        return MinosError_CodexProtocolError(
+          method: dco_decode_String(raw[1]),
+          message: dco_decode_String(raw[2]),
+        );
+      case 14:
+        return MinosError_AgentAlreadyRunning();
+      case 15:
+        return MinosError_AgentNotRunning();
+      case 16:
+        return MinosError_AgentNotSupported(
+          agent: dco_decode_agent_name(raw[1]),
+        );
+      case 17:
+        return MinosError_AgentSessionIdMismatch();
       default:
         throw Exception("unreachable");
     }
@@ -571,6 +599,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AgentName sse_decode_agent_name(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return AgentName.values[inner];
+  }
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
@@ -674,6 +709,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           method: var_method,
           message: var_message,
         );
+      case 11:
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_CodexSpawnFailed(message: var_message);
+      case 12:
+        var var_url = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_CodexConnectFailed(
+          url: var_url,
+          message: var_message,
+        );
+      case 13:
+        var var_method = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_CodexProtocolError(
+          method: var_method,
+          message: var_message,
+        );
+      case 14:
+        return MinosError_AgentAlreadyRunning();
+      case 15:
+        return MinosError_AgentNotRunning();
+      case 16:
+        var var_agent = sse_decode_agent_name(deserializer);
+        return MinosError_AgentNotSupported(agent: var_agent);
+      case 17:
+        return MinosError_AgentSessionIdMismatch();
       default:
         throw UnimplementedError('');
     }
@@ -795,6 +856,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_agent_name(AgentName self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self ? 1 : 0);
@@ -896,6 +963,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(10, serializer);
         sse_encode_String(method, serializer);
         sse_encode_String(message, serializer);
+      case MinosError_CodexSpawnFailed(message: final message):
+        sse_encode_i_32(11, serializer);
+        sse_encode_String(message, serializer);
+      case MinosError_CodexConnectFailed(
+        url: final url,
+        message: final message,
+      ):
+        sse_encode_i_32(12, serializer);
+        sse_encode_String(url, serializer);
+        sse_encode_String(message, serializer);
+      case MinosError_CodexProtocolError(
+        method: final method,
+        message: final message,
+      ):
+        sse_encode_i_32(13, serializer);
+        sse_encode_String(method, serializer);
+        sse_encode_String(message, serializer);
+      case MinosError_AgentAlreadyRunning():
+        sse_encode_i_32(14, serializer);
+      case MinosError_AgentNotRunning():
+        sse_encode_i_32(15, serializer);
+      case MinosError_AgentNotSupported(agent: final agent):
+        sse_encode_i_32(16, serializer);
+        sse_encode_agent_name(agent, serializer);
+      case MinosError_AgentSessionIdMismatch():
+        sse_encode_i_32(17, serializer);
     }
   }
 

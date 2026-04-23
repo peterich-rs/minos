@@ -25,6 +25,20 @@ extension MinosError {
             return .cliProbeFailed
         case .RpcCallFailed:
             return .rpcCallFailed
+        case .CodexSpawnFailed:
+            return .codexSpawnFailed
+        case .CodexConnectFailed:
+            return .codexConnectFailed
+        case .CodexProtocolError:
+            return .codexProtocolError
+        case .AgentAlreadyRunning:
+            return .agentAlreadyRunning
+        case .AgentNotRunning:
+            return .agentNotRunning
+        case .AgentNotSupported:
+            return .agentNotSupported
+        case .AgentSessionIdMismatch:
+            return .agentSessionIdMismatch
         }
     }
 

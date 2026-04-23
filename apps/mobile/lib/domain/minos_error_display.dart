@@ -17,6 +17,13 @@ extension MinosErrorDisplay on MinosError {
     MinosError_CliProbeTimeout() => ErrorKind.cliProbeTimeout,
     MinosError_CliProbeFailed() => ErrorKind.cliProbeFailed,
     MinosError_RpcCallFailed() => ErrorKind.rpcCallFailed,
+    MinosError_CodexSpawnFailed() => ErrorKind.codexSpawnFailed,
+    MinosError_CodexConnectFailed() => ErrorKind.codexConnectFailed,
+    MinosError_CodexProtocolError() => ErrorKind.codexProtocolError,
+    MinosError_AgentAlreadyRunning() => ErrorKind.agentAlreadyRunning,
+    MinosError_AgentNotRunning() => ErrorKind.agentNotRunning,
+    MinosError_AgentNotSupported() => ErrorKind.agentNotSupported,
+    MinosError_AgentSessionIdMismatch() => ErrorKind.agentSessionIdMismatch,
   };
 
   /// Localized user-facing message for this error, looked up via the Rust

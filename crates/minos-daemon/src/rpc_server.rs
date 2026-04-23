@@ -15,7 +15,10 @@ use jsonrpsee::PendingSubscriptionSink;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::{ConnectionState, MinosError};
 use minos_pairing::{ActiveToken, Pairing, PairingStore, TrustedDevice};
-use minos_protocol::{HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse};
+use minos_protocol::{
+    HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+};
 use tokio::sync::watch;
 
 pub struct RpcServerImpl {
@@ -97,6 +100,38 @@ impl MinosRpcServer for RpcServerImpl {
 
     async fn list_clis(&self) -> jsonrpsee::core::RpcResult<ListClisResponse> {
         Ok(detect_all(self.runner.clone()).await)
+    }
+
+    async fn start_agent(
+        &self,
+        _req: StartAgentRequest,
+    ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
+        // Trait surface lands in Phase A; real implementation wires up in
+        // Phase D (see docs/superpowers/plans/04-codex-app-server-integration.md).
+        Err(ErrorObjectOwned::owned(
+            4002,
+            "start_agent not yet implemented (plan 04 Phase D)",
+            None::<()>,
+        ))
+    }
+
+    async fn send_user_message(
+        &self,
+        _req: SendUserMessageRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        Err(ErrorObjectOwned::owned(
+            4003,
+            "send_user_message not yet implemented (plan 04 Phase D)",
+            None::<()>,
+        ))
+    }
+
+    async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()> {
+        Err(ErrorObjectOwned::owned(
+            4004,
+            "stop_agent not yet implemented (plan 04 Phase D)",
+            None::<()>,
+        ))
     }
 
     async fn subscribe_events(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {

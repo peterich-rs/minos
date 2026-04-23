@@ -10,11 +10,31 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
-    TokenChunk { text: String },
-    ToolCall { name: String, args_json: String },
-    ToolResult { name: String, output: String },
-    Reasoning { text: String },
-    Done { exit_code: i32 },
+    TokenChunk {
+        text: String,
+    },
+    ToolCall {
+        name: String,
+        args_json: String,
+    },
+    ToolResult {
+        name: String,
+        output: String,
+    },
+    Reasoning {
+        text: String,
+    },
+    Done {
+        exit_code: i32,
+    },
+    /// Forward-compat escape hatch. `kind` is the codex method name
+    /// (e.g. `"item/plan/delta"`), `payload_json` is the raw `params` object
+    /// as a JSON-encoded string. Consumers may render nothing for unknown
+    /// `kind`. See spec §5.2 and ADR 0010.
+    Raw {
+        kind: String,
+        payload_json: String,
+    },
 }
 
 #[cfg(test)]
@@ -25,5 +45,18 @@ mod tests {
     fn token_chunk_serializes_with_type_tag() {
         let s = serde_json::to_string(&AgentEvent::TokenChunk { text: "hi".into() }).unwrap();
         assert_eq!(s, r#"{"type":"token_chunk","text":"hi"}"#);
+    }
+
+    #[test]
+    fn raw_serializes_with_type_tag() {
+        let s = serde_json::to_string(&AgentEvent::Raw {
+            kind: "item/plan/delta".into(),
+            payload_json: r#"{"step":"compile"}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(
+            s,
+            r#"{"type":"raw","kind":"item/plan/delta","payload_json":"{\"step\":\"compile\"}"}"#
+        );
     }
 }
