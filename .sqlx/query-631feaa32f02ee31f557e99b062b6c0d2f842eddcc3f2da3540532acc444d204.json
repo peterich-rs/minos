@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE devices SET secret_hash = ? WHERE device_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "631feaa32f02ee31f557e99b062b6c0d2f842eddcc3f2da3540532acc444d204"
+}

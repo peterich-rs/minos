@@ -1,9 +1,22 @@
-//! SQLite connection pool and schema migrations.
+//! SQLite connection pool, schema migrations, and typed CRUD helpers.
+//!
+//! Submodules:
+//! - [`devices`] — device rows + per-device secret hashes.
+//! - [`pairings`] — undirected device ↔ device pairings (canonical `a < b`).
+//! - [`tokens`] — one-shot pairing tokens with atomic consume + GC.
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
 use crate::error::RelayError;
+
+pub mod devices;
+pub mod pairings;
+pub mod tokens;
+
+pub use devices::{get_device, get_secret_hash, insert_device, upsert_secret_hash, DeviceRow};
+pub use pairings::{delete_pair, get_pair, insert_pairing};
+pub use tokens::{consume_token, gc_expired, issue_token, ConsumedToken};
 
 /// Open the SQLite pool at `db_url` and run all embedded migrations.
 ///

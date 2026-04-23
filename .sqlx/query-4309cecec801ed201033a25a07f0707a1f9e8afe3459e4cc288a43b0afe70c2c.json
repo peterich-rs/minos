@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE pairing_tokens\n        SET consumed_at = ?\n        WHERE token_hash = ?\n          AND consumed_at IS NULL\n          AND expires_at > ?\n        RETURNING issuer_device_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "issuer_device_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4309cecec801ed201033a25a07f0707a1f9e8afe3459e4cc288a43b0afe70c2c"
+}

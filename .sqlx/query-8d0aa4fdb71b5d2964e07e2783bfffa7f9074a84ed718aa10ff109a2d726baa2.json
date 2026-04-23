@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT token_hash FROM pairing_tokens ORDER BY token_hash",
+  "describe": {
+    "columns": [
+      {
+        "name": "token_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8d0aa4fdb71b5d2964e07e2783bfffa7f9074a84ed718aa10ff109a2d726baa2"
+}
