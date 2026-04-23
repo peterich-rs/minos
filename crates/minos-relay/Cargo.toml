@@ -58,6 +58,10 @@ tempfile = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 tokio-tungstenite = { workspace = true }
+# HTTP integration-test helpers: simple GET helper for /health builds a
+# raw TCP request; `url` parses the ws:// / http:// endpoints handed
+# back from `TcpListener::bind("127.0.0.1:0")`.
+url = { workspace = true }
 
 [lints]
 workspace = true
