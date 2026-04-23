@@ -118,11 +118,24 @@ impl FakeCodexServer {
         )
     }
 
-    /// Abort the accept task.
+    /// Shut down the accept task, surfacing any panic it produced.
+    ///
+    /// If the script task already finished on its own (naturally or via
+    /// panic), we await the join handle to surface any panic — silently
+    /// discarding it here would let script-drift bugs (e.g. method mismatch
+    /// on `ExpectRequest`) pass as green tests. If the task is still running
+    /// (a test intentionally stopped before draining all steps), we abort
+    /// silently — that's a valid early-shutdown path.
     pub async fn stop(self) {
-        self.accept_task.abort();
-        // Swallow the abort error — we explicitly asked for it.
-        let _ = self.accept_task.await;
+        if self.accept_task.is_finished() {
+            match self.accept_task.await {
+                Ok(()) => {}
+                Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+                Err(e) => panic!("FakeCodexServer task unexpectedly cancelled: {e}"),
+            }
+        } else {
+            self.accept_task.abort();
+        }
     }
 
     /// Snapshot the ids assigned to each [`Step::EmitServerRequest`] so the
@@ -286,6 +299,37 @@ mod tests {
         let id = parsed["id"].as_str().unwrap().to_string();
         let recorded = server.server_request_ids().await;
         assert_eq!(recorded, vec![id]);
+        server.stop().await;
+    }
+
+    /// Regression: `stop()` must surface a panic from a finished accept task
+    /// rather than silently discard it. If the script expects `method: "foo"`
+    /// but the client sends `method: "bar"`, `run_script`'s assert_eq! panics;
+    /// `stop()` must re-raise that panic so the test fails loudly.
+    #[tokio::test]
+    #[should_panic(expected = "method mismatch on ExpectRequest")]
+    async fn stop_propagates_script_drift_panic() {
+        let script = vec![Step::ExpectRequest {
+            method: "foo".into(),
+            reply: serde_json::json!({}),
+        }];
+        let (server, port) = FakeCodexServer::bind(script).await;
+        let url = format!("ws://127.0.0.1:{port}");
+        let (ws, _resp) = connect_async(&url).await.unwrap();
+        let (mut tx, mut rx) = ws.split();
+        // Send the wrong method; this trips the assert_eq! inside run_script.
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "bar",
+            "params": {},
+        });
+        tx.send(Message::text(req.to_string())).await.unwrap();
+        // Drain until the server-side panic closes the stream, so the accept
+        // task has definitely terminated by the time we call stop(). Without
+        // this, stop()'s is_finished() check could race and abort the task
+        // before it records its panic.
+        while rx.next().await.is_some() {}
         server.stop().await;
     }
 }

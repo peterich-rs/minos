@@ -13,25 +13,17 @@
 /// Build the JSON-RPC auto-reject response payload for an approval server request.
 ///
 /// The caller supplies the original request `id` (any JSON value — codex uses
-/// both numeric and string ids) and `method`. `method` is currently only used
-/// to keep the call-site self-documenting; the emitted response is the same
-/// shape regardless of which approval kind prompted it. The shape is pinned:
+/// both numeric and string ids) and `method`. `method` is retained on the
+/// signature so future variants of this helper can emit per-method rejection
+/// reasons without a breaking API change. Phase B emits the same body
+/// regardless of `method`. The shape is pinned:
 ///
 /// ```json
 /// {"jsonrpc":"2.0","id":<request_id>,"result":{"decision":"rejected"}}
 /// ```
 #[must_use]
+#[allow(unused_variables)]
 pub fn build_auto_reject(request_id: serde_json::Value, method: &str) -> serde_json::Value {
-    // `method` is retained in the public signature so future extensions can
-    // distinguish rejection reasons per-approval-kind without a breaking
-    // change. For Phase B we simply tag the body with the method name as a
-    // debug aid; the field is inside a reserved `_minos` sub-object so it
-    // cannot collide with a codex-defined result field.
-    //
-    // Keep `_` prefix on the binding so clippy's unused-arg lint stays quiet;
-    // the field is exposed via the payload, not as a function parameter
-    // anyone reads here.
-    let _ = method; // referenced below via the literal string.
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": request_id,

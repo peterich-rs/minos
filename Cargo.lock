@@ -1741,7 +1741,6 @@ dependencies = [
  "futures-util",
  "minos-agent-runtime",
  "minos-domain",
- "pretty_assertions",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
