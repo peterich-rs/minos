@@ -5,6 +5,8 @@
 //!   in step 10; see spec §10.1)
 //! - `store`  SQLite pool + embedded migrations
 //! - `pairing`  broker-side pairing service (token issue/consume, forget)
+//! - `session`  in-memory registry of live WebSocket sessions with bounded
+//!   per-peer outboxes (step 7; consumed by the WS dispatcher in step 8)
 //!
 //! The binary entry point lives in `src/main.rs`; steps 5–10 will flesh it out
 //! as the relay gains auth, REST endpoints, and the WebSocket hub.
@@ -13,4 +15,5 @@
 
 pub mod error;
 pub mod pairing;
+pub mod session;
 pub mod store;

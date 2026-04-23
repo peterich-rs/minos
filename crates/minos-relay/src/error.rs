@@ -68,4 +68,18 @@ pub enum RelayError {
     /// Mirrors `MinosError::PairingStateMismatch`.
     #[error("pairing state mismatch: {actual}")]
     PairingStateMismatch { actual: String },
+
+    /// The routing target is not currently connected.
+    ///
+    /// Emitted by `session::SessionRegistry::route` when the destination
+    /// `DeviceId` has no live `SessionHandle` in the registry, or when the
+    /// destination's outbox receiver has been dropped (session ended mid-
+    /// route). Mirrors `MinosError::PeerOffline`; the step-10 boundary maps
+    /// this variant straight across.
+    ///
+    /// `peer_device_id` is stringly-typed because the error is also used
+    /// in log records and API responses where the `DeviceId` newtype is
+    /// inconvenient.
+    #[error("peer offline: {peer_device_id}")]
+    PeerOffline { peer_device_id: String },
 }
