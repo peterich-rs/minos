@@ -65,7 +65,7 @@ dependencies:
     git:
       url: https://github.com/peterich-rs/xlog-rs
       path: packages/xlog
-      ref: main
+      ref: 3f7f578501d142ad86a785a9f71a4e3f5077a6c1
 
 dev_dependencies:
   flutter_test:

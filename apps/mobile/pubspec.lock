@@ -1133,8 +1133,8 @@ packages:
     dependency: "direct main"
     description:
       path: "packages/xlog"
-      ref: main
-      resolved-ref: "958ae97c0143e404a33888e6254c7993cb07fa8a"
+      ref: "3f7f578501d142ad86a785a9f71a4e3f5077a6c1"
+      resolved-ref: "3f7f578501d142ad86a785a9f71a4e3f5077a6c1"
       url: "https://github.com/peterich-rs/xlog-rs"
     source: git
     version: "0.1.0"
