@@ -36,7 +36,8 @@ base64 = "0.22"
 url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 
-# rpc
+# http / rpc
+axum = { version = "0.7", features = ["ws", "macros"] }
 jsonrpsee = { version = "0.24", features = ["server", "client", "ws-client", "macros"] }
 tokio-tungstenite = "0.29"
 async-trait = "0.1"
@@ -45,6 +46,13 @@ async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 mars-xlog = { version = "0.1.0-preview.2", features = ["tracing"] }
+
+# relay backend
+argon2 = "0.5"
+clap = { version = "4", features = ["derive", "env"] }
+dashmap = "6"
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
+subtle = "2"
 
 # ffi (consumed only by shim crates)
 uniffi = { version = "0.31", features = ["build"] }
