@@ -178,6 +178,34 @@ impl SessionRegistry {
         self.0.is_empty()
     }
 
+    /// Best-effort broadcast of `frame` to every currently-registered
+    /// session.
+    ///
+    /// Intended for shutdown-grade fan-out (`Event::ServerShutdown` in
+    /// `main.rs`'s graceful shutdown path). We use `try_send` and **drop
+    /// any frame that cannot fit** in a peer's outbox — the caller is
+    /// about to tear the process down, so a stalled peer must not block
+    /// the broadcast. On `Closed` (the writer task already exited) we
+    /// silently skip: the peer is effectively gone.
+    ///
+    /// Not a cache for per-peer routing — use [`SessionRegistry::route`]
+    /// for that. `broadcast` takes a full [`ServerFrame`] (aka
+    /// [`Envelope`]) because the frame is already constructed by the
+    /// caller, whereas `route` builds the `Forwarded` envelope from raw
+    /// payload JSON.
+    pub fn broadcast(&self, frame: ServerFrame) {
+        for handle in self.0.iter() {
+            if let Err(err) = handle.outbox.try_send(frame.clone()) {
+                tracing::debug!(
+                    target: "minos_relay::session",
+                    device_id = %handle.device_id,
+                    error = ?err,
+                    "broadcast try_send failed; dropping frame for this peer"
+                );
+            }
+        }
+    }
+
     /// Route `payload` from `from` to `to` as an [`Envelope::Forwarded`].
     ///
     /// Mechanical forward — does NOT verify `from` is paired with `to`.
@@ -500,6 +528,60 @@ mod tests {
         assert_eq!(inserts.load(Ordering::Relaxed), N);
         assert_eq!(removes.load(Ordering::Relaxed), N);
         assert!(reg.is_empty(), "all {N} sessions must be removed");
+    }
+
+    // ── broadcast: fan-out happy path + drops on full/closed outboxes ─
+
+    #[tokio::test]
+    async fn broadcast_delivers_frame_to_every_live_session() {
+        let reg = SessionRegistry::new();
+        let (h1, mut rx1) = make_handle(DeviceId::new());
+        let (h2, mut rx2) = make_handle(DeviceId::new());
+        let (h3, mut rx3) = make_handle(DeviceId::new());
+        reg.insert(h1);
+        reg.insert(h2);
+        reg.insert(h3);
+
+        let frame = Envelope::Event {
+            version: 1,
+            event: minos_protocol::EventKind::ServerShutdown,
+        };
+        reg.broadcast(frame.clone());
+
+        assert_eq!(rx1.recv().await.unwrap(), frame);
+        assert_eq!(rx2.recv().await.unwrap(), frame);
+        assert_eq!(rx3.recv().await.unwrap(), frame);
+    }
+
+    #[tokio::test]
+    async fn broadcast_drops_frame_when_outbox_full_and_skips_closed() {
+        // Two peers: one full-outbox, one closed-outbox. Broadcast must
+        // complete (no panic, no awaiting) and neither peer blocks the
+        // fan-out.
+        let reg = SessionRegistry::new();
+
+        // Peer A: tiny outbox, pre-filled to trigger Full on broadcast.
+        let (ha, _rxa) = make_tiny_handle(DeviceId::new(), 1);
+        ha.outbox
+            .try_send(Envelope::Event {
+                version: 1,
+                event: minos_protocol::EventKind::ServerShutdown,
+            })
+            .unwrap();
+        reg.insert(ha);
+
+        // Peer B: receiver dropped to simulate a writer task that already
+        // exited — try_send returns Closed.
+        let (hb, rxb) = make_handle(DeviceId::new());
+        drop(rxb);
+        reg.insert(hb);
+
+        // Must not panic or deadlock.
+        let frame = Envelope::Event {
+            version: 1,
+            event: minos_protocol::EventKind::ServerShutdown,
+        };
+        reg.broadcast(frame);
     }
 
     // ── Arc strong-count on session end (no leaks acceptance) ─────────

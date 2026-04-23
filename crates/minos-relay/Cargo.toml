@@ -35,6 +35,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # error handling
+anyhow = { workspace = true }
 thiserror = { workspace = true }
 
 # ids / random / time
