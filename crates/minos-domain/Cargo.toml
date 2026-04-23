@@ -22,9 +22,6 @@ uniffi = { workspace = true, optional = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
-# Round-trip goldens for protocol types live alongside domain goldens; dev-dep
-# cycle is safe because cargo only materialises dev-deps when compiling tests.
-minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 
 [lints]
 workspace = true

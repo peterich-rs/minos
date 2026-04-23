@@ -1,0 +1,39 @@
+[package]
+name = "minos-agent-runtime"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Agent runtime: spawns/supervises CLI agents (codex today), speaks their JSON-RPC, translates to AgentEvent."
+
+[features]
+# Enables `pub mod test_support` which exposes `FakeCodexServer` — a scripted
+# tokio-tungstenite WS accept loop used by this crate's own integration tests
+# and by `minos-daemon::tests::agent_e2e`. Production binaries never enable
+# this feature, so the fake does not leak into released artifacts.
+test-support = []
+
+[dependencies]
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
+tokio = { workspace = true, features = ["full"] }
+tokio-tungstenite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+url = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+# Self-reference enables the `test-support` feature for this crate's own
+# integration / doc / bench tests. Cargo allows a crate to appear in its own
+# `[dev-dependencies]` exactly so features can be toggled for tests.
+# `version = "0.1.0"` is required to keep cargo-deny's `wildcards = "deny"`
+# rule satisfied — a bare `path = "."` would be a wildcard.
+minos-agent-runtime = { path = ".", version = "0.1.0", features = ["test-support"] }
+tokio = { workspace = true, features = ["full", "test-util", "macros"] }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

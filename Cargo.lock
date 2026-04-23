@@ -1735,6 +1735,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "minos-agent-runtime"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "minos-agent-runtime",
+ "minos-domain",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "minos-cli-detect"
 version = "0.1.0"
 dependencies = [
@@ -1778,7 +1796,6 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "getrandom 0.3.4",
- "minos-protocol",
  "pretty_assertions",
  "proptest",
  "rstest",
