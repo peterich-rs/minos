@@ -6,3 +6,13 @@ include: package:flutter_lints/flutter.yaml
 # `flutter pub get`.
 plugins:
   riverpod_lint: ^3.1.0
+
+analyzer:
+  # `rust_builder/` is the vendored cargokit plugin shim (see ADR 0008 and
+  # `apps/mobile/rust_builder/cargokit/MINOS-PATCHES.md`); its Dart sources
+  # are upstream code we don't style-enforce. `build/` is ephemeral
+  # generator output. Keep both out of `dart analyze` as defense in depth —
+  # the sub-package pubspec already shields them in practice.
+  exclude:
+    - rust_builder/**
+    - build/**

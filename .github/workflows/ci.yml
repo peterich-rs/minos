@@ -109,9 +109,12 @@ jobs:
         working-directory: apps/mobile
         run: dart run build_runner build --delete-conflicting-outputs
 
-      - name: dart format --set-exit-if-changed .
+      - name: dart format --set-exit-if-changed lib test
+        # Scope to project sources. `dart format .` also walks
+        # `rust_builder/cargokit/**` (vendored upstream) and `build/**`
+        # (ephemeral), neither of which we want CI to enforce style on.
         working-directory: apps/mobile
-        run: dart format --set-exit-if-changed .
+        run: dart format --set-exit-if-changed lib test
 
       - name: dart analyze --fatal-infos
         working-directory: apps/mobile

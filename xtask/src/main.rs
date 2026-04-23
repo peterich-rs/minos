@@ -232,10 +232,16 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
     eprintln!("==> fvm flutter pub get (apps/mobile)");
     run("fvm", &["flutter", "pub", "get"], &mobile_root)?;
 
-    eprintln!("==> fvm dart format --set-exit-if-changed (apps/mobile)");
+    eprintln!("==> fvm dart format --set-exit-if-changed lib test (apps/mobile)");
+    // Scope explicitly to the project's own Dart sources.  `dart format .`
+    // would also walk `rust_builder/cargokit/**` (vendored upstream) and
+    // `build/**` (ephemeral generator output) — neither of which we want
+    // CI to enforce style on.  `analyzer.exclude` handles `dart analyze`'s
+    // side; this arg list handles `dart format`, which has no exclude
+    // flag and ignores `analysis_options.yaml`.
     run(
         "fvm",
-        &["dart", "format", "--set-exit-if-changed", "."],
+        &["dart", "format", "--set-exit-if-changed", "lib", "test"],
         &mobile_root,
     )?;
 
