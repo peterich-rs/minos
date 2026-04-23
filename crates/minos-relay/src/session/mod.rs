@@ -8,11 +8,11 @@
 //! - [`registry`] — [`SessionRegistry`], [`SessionHandle`], [`ServerFrame`]
 //!   and the `insert` / `remove` / `get` / `route` surface.
 //!
-//! Step 8's WebSocket dispatcher (`session/heartbeat.rs`, not yet created)
-//! will consume this module: each accepted socket constructs a
-//! [`SessionHandle`], inserts it on `OPEN`, removes it on `CLOSE`, and
-//! drives a writer task that pulls [`ServerFrame`]s out of the handle's
-//! outbox and serialises them to the wire.
+//! Step 8's WebSocket dispatcher (in [`crate::envelope`]) consumes this
+//! module: each accepted socket constructs a [`SessionHandle`], inserts
+//! it on `OPEN`, removes it on `CLOSE`, and drives a `tokio::select!`
+//! loop that pulls [`ServerFrame`]s out of the handle's outbox and
+//! serialises them to the wire.
 
 pub mod registry;
 

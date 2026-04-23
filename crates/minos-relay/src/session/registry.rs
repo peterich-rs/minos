@@ -45,9 +45,10 @@
 //! caller's perspective the peer is effectively offline.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use dashmap::DashMap;
-use minos_domain::DeviceId;
+use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::Envelope;
 use tokio::sync::{mpsc, RwLock};
 
@@ -72,12 +73,17 @@ pub type ServerFrame = Envelope;
 /// One live WebSocket session, indexed by its [`DeviceId`].
 ///
 /// Constructed by the WS accept handler (step 8); removed by the same
-/// handler on close. Cheaply clonable — clones share the outbox `Sender`
-/// and the `paired_with` lock.
+/// handler on close. Cheaply clonable — clones share the outbox `Sender`,
+/// the `paired_with` lock, and the `last_pong_at` lock.
 #[derive(Debug, Clone)]
 pub struct SessionHandle {
     /// Identity of the device owning this session. Also the registry key.
     pub device_id: DeviceId,
+    /// The role this device speaks in (known at handshake time via the
+    /// `X-Device-Role` header; step 9 will parse it). Drives role-gated
+    /// local RPC dispatch, e.g. `request_pairing_token` accepts only
+    /// [`DeviceRole::MacHost`].
+    pub role: DeviceRole,
     /// The peer this session is currently paired with, if any.
     ///
     /// Wrapped in `Arc<RwLock<_>>` so the registry holder and the WS
@@ -90,6 +96,34 @@ pub struct SessionHandle {
     /// Sender end only; the receiver lives inside the writer. `Clone` on
     /// `mpsc::Sender` is a cheap `Arc` bump.
     pub outbox: mpsc::Sender<ServerFrame>,
+    /// Timestamp of the most recent `Pong` frame we received from this
+    /// client. Updated by the dispatcher's read branch (step 8); consumed
+    /// by the heartbeat tick branch to decide when to close the socket as
+    /// dead. Wrapped in `Arc<RwLock<_>>` so the writer/reader tasks can
+    /// share it cheaply.
+    pub last_pong_at: Arc<RwLock<Instant>>,
+}
+
+impl SessionHandle {
+    /// Construct a fresh handle and its paired outbox receiver.
+    ///
+    /// The caller (step 8's WS accept handler) typically moves the
+    /// receiver into the per-socket writer task and passes a clone of the
+    /// handle into the reader task and the registry. `last_pong_at` is
+    /// seeded with `Instant::now()` so the first heartbeat tick treats a
+    /// brand-new session as "freshly alive".
+    #[must_use]
+    pub fn new(device_id: DeviceId, role: DeviceRole) -> (Self, mpsc::Receiver<ServerFrame>) {
+        let (tx, rx) = mpsc::channel(OUTBOX_CAPACITY);
+        let handle = Self {
+            device_id,
+            role,
+            paired_with: Arc::new(RwLock::new(None)),
+            outbox: tx,
+            last_pong_at: Arc::new(RwLock::new(Instant::now())),
+        };
+        (handle, rx)
+    }
 }
 
 /// Concurrent, lock-sharded map of `DeviceId → SessionHandle`.
@@ -227,15 +261,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_handle(id: DeviceId) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
-        let (tx, rx) = mpsc::channel(OUTBOX_CAPACITY);
-        (
-            SessionHandle {
-                device_id: id,
-                paired_with: Arc::new(RwLock::new(None)),
-                outbox: tx,
-            },
-            rx,
-        )
+        // Tests default to `MacHost` — role-gating is not exercised by the
+        // registry itself; the envelope dispatcher (step 8) tests cover it.
+        SessionHandle::new(id, DeviceRole::MacHost)
     }
 
     // Small outbox variant so we can fill it deterministically in tests.
@@ -244,8 +272,10 @@ mod tests {
         (
             SessionHandle {
                 device_id: id,
+                role: DeviceRole::MacHost,
                 paired_with: Arc::new(RwLock::new(None)),
                 outbox: tx,
+                last_pong_at: Arc::new(RwLock::new(Instant::now())),
             },
             rx,
         )
