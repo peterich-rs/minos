@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/src/rust/frb_generated.dart';
@@ -16,7 +19,16 @@ class MinosCore implements MinosCoreProtocol {
     required String selfName,
     required String logDir,
   }) async {
-    await RustLib.init();
+    // On iOS the Rust pod force-loads `libminos_ffi_frb.a` into Runner, so
+    // frb must resolve symbols from the current process instead of opening a
+    // non-existent `minos_ffi_frb.framework/minos_ffi_frb`.
+    final externalLibrary = Platform.isIOS
+        ? ExternalLibrary.process(
+            iKnowHowToUseIt: true,
+            debugInfo: ' (libminos_ffi_frb.a is linked into Runner)',
+          )
+        : null;
+    await RustLib.init(externalLibrary: externalLibrary);
     await initLogging(logDir: logDir);
     final client = MobileClient(selfName: selfName);
     return MinosCore._(client);
