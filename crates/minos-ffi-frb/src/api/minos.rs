@@ -12,8 +12,11 @@
 //! works on the Dart side without duplicating the localization table.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use flutter_rust_bridge::frb;
+use tokio::runtime::{Builder, Runtime};
+use tokio::sync::watch;
 
 // `StreamSink` is defined by the `frb_generated_boilerplate!` macro expanded
 // inside `crate::frb_generated`, not at the flutter_rust_bridge crate root.
@@ -36,6 +39,35 @@ pub use minos_protocol::PairResponse;
 /// internals) Rust-side.
 #[frb(opaque)]
 pub struct MobileClient(minos_mobile::MobileClient);
+
+fn frb_runtime() -> &'static Runtime {
+    static FRB_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    FRB_RUNTIME.get_or_init(|| {
+        Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("minos-frb")
+            .build()
+            .expect("failed to build minos-ffi-frb tokio runtime")
+    })
+}
+
+fn spawn_state_forwarder<F>(mut rx: watch::Receiver<ConnectionState>, mut emit: F)
+where
+    F: FnMut(ConnectionState) -> Result<(), ()> + Send + 'static,
+{
+    frb_runtime().spawn(async move {
+        // Emit the snapshot visible at subscribe time so late subscribers
+        // aren't stuck on whatever they last rendered.
+        if emit(*rx.borrow_and_update()).is_err() {
+            return;
+        }
+        while rx.changed().await.is_ok() {
+            if emit(*rx.borrow()).is_err() {
+                break;
+            }
+        }
+    });
+}
 
 impl MobileClient {
     /// Construct a client backed by the built-in in-memory pairing store.
@@ -67,18 +99,8 @@ impl MobileClient {
     /// immediately, then every subsequent change. The spawned task exits once
     /// the Dart side drops the stream (detected via `sink.add(...).is_err()`).
     pub fn subscribe_state(&self, sink: StreamSink<ConnectionState>) {
-        let mut rx = self.0.events_stream();
-        tokio::spawn(async move {
-            // Emit the snapshot visible at subscribe time so late subscribers
-            // aren't stuck on whatever they last rendered.
-            if sink.add(*rx.borrow_and_update()).is_err() {
-                return;
-            }
-            while rx.changed().await.is_ok() {
-                if sink.add(*rx.borrow()).is_err() {
-                    break;
-                }
-            }
+        spawn_state_forwarder(self.0.events_stream(), move |state| {
+            sink.add(state).map_err(|_| ())
         });
     }
 }
@@ -170,4 +192,36 @@ pub enum _MinosError {
     CliProbeTimeout { bin: String, timeout_ms: u64 },
     CliProbeFailed { bin: String, message: String },
     RpcCallFailed { method: String, message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn state_forwarder_spawns_without_current_runtime() {
+        let (tx, rx) = watch::channel(ConnectionState::Disconnected);
+
+        assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "test must start outside a tokio runtime"
+        );
+
+        let (state_tx, state_rx) = mpsc::channel();
+        spawn_state_forwarder(rx, move |state| state_tx.send(state).map_err(|_| ()));
+
+        assert_eq!(
+            state_rx.recv_timeout(Duration::from_millis(200)).unwrap(),
+            ConnectionState::Disconnected
+        );
+
+        tx.send(ConnectionState::Pairing).unwrap();
+        assert_eq!(
+            state_rx.recv_timeout(Duration::from_millis(200)).unwrap(),
+            ConnectionState::Pairing
+        );
+    }
 }

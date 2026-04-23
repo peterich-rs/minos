@@ -22,11 +22,11 @@ minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 # match the runtime exactly, else the generated boilerplate fails to compile.
 flutter_rust_bridge = "=2.11.1"
 
-# `subscribe_state` spawns a tokio task that forwards watch::Receiver updates
-# into the frb StreamSink. Full `tokio` (rt + macros) is already a transitive
-# dep via `minos-mobile`, so this is pulled primarily to make the dep explicit
-# at the adapter boundary.
-tokio = { version = "1", features = ["rt"] }
+# The frb adapter owns a small dedicated Tokio runtime for FFI-triggered
+# background work such as forwarding `watch::Receiver` updates into Dart
+# streams. Use the workspace-pinned feature set to keep it aligned with the
+# rest of the async stack.
+tokio = { workspace = true }
 
 [lints]
 workspace = true
