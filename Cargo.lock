@@ -2207,6 +2207,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "minos-ui-protocol"
+version = "0.1.0"
+dependencies = [
+ "minos-domain",
+ "pretty_assertions",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mio"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
