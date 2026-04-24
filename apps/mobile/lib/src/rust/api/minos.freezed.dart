@@ -389,7 +389,7 @@ extension MinosErrorPatterns on MinosError {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_RelayInternal value)?  relayInternal,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_RelayInternal value)?  relayInternal,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_CfAccessMisconfigured value)?  cfAccessMisconfigured,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -415,7 +415,12 @@ return codexProtocolError(_that);case MinosError_AgentAlreadyRunning() when agen
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning(_that);case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
-return agentSessionIdMismatch(_that);case _:
+return agentSessionIdMismatch(_that);case MinosError_CfAccessMisconfigured() when cfAccessMisconfigured != null:
+return cfAccessMisconfigured(_that);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
+return ingestSeqConflict(_that);case MinosError_ThreadNotFound() when threadNotFound != null:
+return threadNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
+return translationNotImplemented(_that);case MinosError_TranslationFailed() when translationFailed != null:
+return translationFailed(_that);case _:
   return orElse();
 
 }
@@ -433,7 +438,7 @@ return agentSessionIdMismatch(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_RelayInternal value)  relayInternal,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_RelayInternal value)  relayInternal,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_CfAccessMisconfigured value)  cfAccessMisconfigured,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_ThreadNotFound value)  threadNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
@@ -459,7 +464,12 @@ return codexProtocolError(_that);case MinosError_AgentAlreadyRunning():
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning():
 return agentNotRunning(_that);case MinosError_AgentNotSupported():
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch():
-return agentSessionIdMismatch(_that);}
+return agentSessionIdMismatch(_that);case MinosError_CfAccessMisconfigured():
+return cfAccessMisconfigured(_that);case MinosError_IngestSeqConflict():
+return ingestSeqConflict(_that);case MinosError_ThreadNotFound():
+return threadNotFound(_that);case MinosError_TranslationNotImplemented():
+return translationNotImplemented(_that);case MinosError_TranslationFailed():
+return translationFailed(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -473,7 +483,7 @@ return agentSessionIdMismatch(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_RelayInternal value)?  relayInternal,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_RelayInternal value)?  relayInternal,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_CfAccessMisconfigured value)?  cfAccessMisconfigured,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -499,7 +509,12 @@ return codexProtocolError(_that);case MinosError_AgentAlreadyRunning() when agen
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning(_that);case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
-return agentSessionIdMismatch(_that);case _:
+return agentSessionIdMismatch(_that);case MinosError_CfAccessMisconfigured() when cfAccessMisconfigured != null:
+return cfAccessMisconfigured(_that);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
+return ingestSeqConflict(_that);case MinosError_ThreadNotFound() when threadNotFound != null:
+return threadNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
+return translationNotImplemented(_that);case MinosError_TranslationFailed() when translationFailed != null:
+return translationFailed(_that);case _:
   return null;
 
 }
@@ -516,7 +531,7 @@ return agentSessionIdMismatch(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  relayInternal,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  relayInternal,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String reason)?  cfAccessMisconfigured,TResult Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult Function( String threadId)?  threadNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -541,7 +556,12 @@ return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlrea
 return agentAlreadyRunning();case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning();case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
-return agentSessionIdMismatch();case _:
+return agentSessionIdMismatch();case MinosError_CfAccessMisconfigured() when cfAccessMisconfigured != null:
+return cfAccessMisconfigured(_that.reason);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
+return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound() when threadNotFound != null:
+return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
+return translationNotImplemented(_that.agent);case MinosError_TranslationFailed() when translationFailed != null:
+return translationFailed(_that.agent,_that.message);case _:
   return orElse();
 
 }
@@ -559,7 +579,7 @@ return agentSessionIdMismatch();case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  relayInternal,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  relayInternal,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String reason)  cfAccessMisconfigured,required TResult Function( String threadId,  BigInt seq)  ingestSeqConflict,required TResult Function( String threadId)  threadNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed():
@@ -584,7 +604,12 @@ return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlrea
 return agentAlreadyRunning();case MinosError_AgentNotRunning():
 return agentNotRunning();case MinosError_AgentNotSupported():
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch():
-return agentSessionIdMismatch();}
+return agentSessionIdMismatch();case MinosError_CfAccessMisconfigured():
+return cfAccessMisconfigured(_that.reason);case MinosError_IngestSeqConflict():
+return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound():
+return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented():
+return translationNotImplemented(_that.agent);case MinosError_TranslationFailed():
+return translationFailed(_that.agent,_that.message);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -598,7 +623,7 @@ return agentSessionIdMismatch();}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  relayInternal,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  relayInternal,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String reason)?  cfAccessMisconfigured,TResult? Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String threadId)?  threadNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -623,7 +648,12 @@ return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlrea
 return agentAlreadyRunning();case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning();case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
-return agentSessionIdMismatch();case _:
+return agentSessionIdMismatch();case MinosError_CfAccessMisconfigured() when cfAccessMisconfigured != null:
+return cfAccessMisconfigured(_that.reason);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
+return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound() when threadNotFound != null:
+return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
+return translationNotImplemented(_that.agent);case MinosError_TranslationFailed() when translationFailed != null:
+return translationFailed(_that.agent,_that.message);case _:
   return null;
 
 }
@@ -2032,5 +2062,339 @@ String toString() {
 
 
 
+
+/// @nodoc
+
+
+class MinosError_CfAccessMisconfigured extends MinosError {
+  const MinosError_CfAccessMisconfigured({required this.reason}): super._();
+  
+
+ final  String reason;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_CfAccessMisconfiguredCopyWith<MinosError_CfAccessMisconfigured> get copyWith => _$MinosError_CfAccessMisconfiguredCopyWithImpl<MinosError_CfAccessMisconfigured>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_CfAccessMisconfigured&&(identical(other.reason, reason) || other.reason == reason));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,reason);
+
+@override
+String toString() {
+  return 'MinosError.cfAccessMisconfigured(reason: $reason)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_CfAccessMisconfiguredCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_CfAccessMisconfiguredCopyWith(MinosError_CfAccessMisconfigured value, $Res Function(MinosError_CfAccessMisconfigured) _then) = _$MinosError_CfAccessMisconfiguredCopyWithImpl;
+@useResult
+$Res call({
+ String reason
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_CfAccessMisconfiguredCopyWithImpl<$Res>
+    implements $MinosError_CfAccessMisconfiguredCopyWith<$Res> {
+  _$MinosError_CfAccessMisconfiguredCopyWithImpl(this._self, this._then);
+
+  final MinosError_CfAccessMisconfigured _self;
+  final $Res Function(MinosError_CfAccessMisconfigured) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
+  return _then(MinosError_CfAccessMisconfigured(
+reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_IngestSeqConflict extends MinosError {
+  const MinosError_IngestSeqConflict({required this.threadId, required this.seq}): super._();
+  
+
+ final  String threadId;
+ final  BigInt seq;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_IngestSeqConflictCopyWith<MinosError_IngestSeqConflict> get copyWith => _$MinosError_IngestSeqConflictCopyWithImpl<MinosError_IngestSeqConflict>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_IngestSeqConflict&&(identical(other.threadId, threadId) || other.threadId == threadId)&&(identical(other.seq, seq) || other.seq == seq));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,threadId,seq);
+
+@override
+String toString() {
+  return 'MinosError.ingestSeqConflict(threadId: $threadId, seq: $seq)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_IngestSeqConflictCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_IngestSeqConflictCopyWith(MinosError_IngestSeqConflict value, $Res Function(MinosError_IngestSeqConflict) _then) = _$MinosError_IngestSeqConflictCopyWithImpl;
+@useResult
+$Res call({
+ String threadId, BigInt seq
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_IngestSeqConflictCopyWithImpl<$Res>
+    implements $MinosError_IngestSeqConflictCopyWith<$Res> {
+  _$MinosError_IngestSeqConflictCopyWithImpl(this._self, this._then);
+
+  final MinosError_IngestSeqConflict _self;
+  final $Res Function(MinosError_IngestSeqConflict) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? threadId = null,Object? seq = null,}) {
+  return _then(MinosError_IngestSeqConflict(
+threadId: null == threadId ? _self.threadId : threadId // ignore: cast_nullable_to_non_nullable
+as String,seq: null == seq ? _self.seq : seq // ignore: cast_nullable_to_non_nullable
+as BigInt,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_ThreadNotFound extends MinosError {
+  const MinosError_ThreadNotFound({required this.threadId}): super._();
+  
+
+ final  String threadId;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_ThreadNotFoundCopyWith<MinosError_ThreadNotFound> get copyWith => _$MinosError_ThreadNotFoundCopyWithImpl<MinosError_ThreadNotFound>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_ThreadNotFound&&(identical(other.threadId, threadId) || other.threadId == threadId));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,threadId);
+
+@override
+String toString() {
+  return 'MinosError.threadNotFound(threadId: $threadId)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_ThreadNotFoundCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_ThreadNotFoundCopyWith(MinosError_ThreadNotFound value, $Res Function(MinosError_ThreadNotFound) _then) = _$MinosError_ThreadNotFoundCopyWithImpl;
+@useResult
+$Res call({
+ String threadId
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_ThreadNotFoundCopyWithImpl<$Res>
+    implements $MinosError_ThreadNotFoundCopyWith<$Res> {
+  _$MinosError_ThreadNotFoundCopyWithImpl(this._self, this._then);
+
+  final MinosError_ThreadNotFound _self;
+  final $Res Function(MinosError_ThreadNotFound) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? threadId = null,}) {
+  return _then(MinosError_ThreadNotFound(
+threadId: null == threadId ? _self.threadId : threadId // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_TranslationNotImplemented extends MinosError {
+  const MinosError_TranslationNotImplemented({required this.agent}): super._();
+  
+
+ final  AgentName agent;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_TranslationNotImplementedCopyWith<MinosError_TranslationNotImplemented> get copyWith => _$MinosError_TranslationNotImplementedCopyWithImpl<MinosError_TranslationNotImplemented>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_TranslationNotImplemented&&(identical(other.agent, agent) || other.agent == agent));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,agent);
+
+@override
+String toString() {
+  return 'MinosError.translationNotImplemented(agent: $agent)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_TranslationNotImplementedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_TranslationNotImplementedCopyWith(MinosError_TranslationNotImplemented value, $Res Function(MinosError_TranslationNotImplemented) _then) = _$MinosError_TranslationNotImplementedCopyWithImpl;
+@useResult
+$Res call({
+ AgentName agent
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_TranslationNotImplementedCopyWithImpl<$Res>
+    implements $MinosError_TranslationNotImplementedCopyWith<$Res> {
+  _$MinosError_TranslationNotImplementedCopyWithImpl(this._self, this._then);
+
+  final MinosError_TranslationNotImplemented _self;
+  final $Res Function(MinosError_TranslationNotImplemented) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? agent = null,}) {
+  return _then(MinosError_TranslationNotImplemented(
+agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
+as AgentName,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_TranslationFailed extends MinosError {
+  const MinosError_TranslationFailed({required this.agent, required this.message}): super._();
+  
+
+ final  AgentName agent;
+ final  String message;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_TranslationFailedCopyWith<MinosError_TranslationFailed> get copyWith => _$MinosError_TranslationFailedCopyWithImpl<MinosError_TranslationFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_TranslationFailed&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,agent,message);
+
+@override
+String toString() {
+  return 'MinosError.translationFailed(agent: $agent, message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_TranslationFailedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_TranslationFailedCopyWith(MinosError_TranslationFailed value, $Res Function(MinosError_TranslationFailed) _then) = _$MinosError_TranslationFailedCopyWithImpl;
+@useResult
+$Res call({
+ AgentName agent, String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_TranslationFailedCopyWithImpl<$Res>
+    implements $MinosError_TranslationFailedCopyWith<$Res> {
+  _$MinosError_TranslationFailedCopyWithImpl(this._self, this._then);
+
+  final MinosError_TranslationFailed _self;
+  final $Res Function(MinosError_TranslationFailed) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? agent = null,Object? message = null,}) {
+  return _then(MinosError_TranslationFailed(
+agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
+as AgentName,message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
 
 // dart format on

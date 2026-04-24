@@ -81,6 +81,11 @@ enum ErrorKind {
   agentNotRunning,
   agentNotSupported,
   agentSessionIdMismatch,
+  cfAccessMisconfigured,
+  ingestSeqConflict,
+  threadNotFound,
+  translationNotImplemented,
+  translationFailed,
 }
 
 enum Lang { zh, en }
@@ -155,6 +160,21 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_AgentNotSupported;
   const factory MinosError.agentSessionIdMismatch() =
       MinosError_AgentSessionIdMismatch;
+  const factory MinosError.cfAccessMisconfigured({required String reason}) =
+      MinosError_CfAccessMisconfigured;
+  const factory MinosError.ingestSeqConflict({
+    required String threadId,
+    required BigInt seq,
+  }) = MinosError_IngestSeqConflict;
+  const factory MinosError.threadNotFound({required String threadId}) =
+      MinosError_ThreadNotFound;
+  const factory MinosError.translationNotImplemented({
+    required AgentName agent,
+  }) = MinosError_TranslationNotImplemented;
+  const factory MinosError.translationFailed({
+    required AgentName agent,
+    required String message,
+  }) = MinosError_TranslationFailed;
 }
 
 class PairResponse {

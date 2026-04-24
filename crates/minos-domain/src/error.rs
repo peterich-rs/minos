@@ -45,6 +45,11 @@ pub enum ErrorKind {
     AgentNotRunning,
     AgentNotSupported,
     AgentSessionIdMismatch,
+    CfAccessMisconfigured,
+    IngestSeqConflict,
+    ThreadNotFound,
+    TranslationNotImplemented,
+    TranslationFailed,
 }
 
 impl ErrorKind {
@@ -124,6 +129,20 @@ impl ErrorKind {
             (Self::AgentSessionIdMismatch, Lang::En) => {
                 "Session is no longer active; please restart"
             }
+            (Self::CfAccessMisconfigured, Lang::Zh) => "后端未正确配置 Cloudflare Access 凭据",
+            (Self::CfAccessMisconfigured, Lang::En) => {
+                "Backend Cloudflare Access credentials are not configured"
+            }
+            (Self::IngestSeqConflict, Lang::Zh) => "事件序号冲突",
+            (Self::IngestSeqConflict, Lang::En) => "Event sequence conflict",
+            (Self::ThreadNotFound, Lang::Zh) => "找不到该线程",
+            (Self::ThreadNotFound, Lang::En) => "Thread not found",
+            (Self::TranslationNotImplemented, Lang::Zh) => "该 CLI 尚未接入协议翻译",
+            (Self::TranslationNotImplemented, Lang::En) => {
+                "Translator not implemented for this CLI"
+            }
+            (Self::TranslationFailed, Lang::Zh) => "事件翻译失败",
+            (Self::TranslationFailed, Lang::En) => "Event translation failed",
         }
     }
 }
@@ -206,6 +225,25 @@ pub enum MinosError {
 
     #[error("session id does not match the active session")]
     AgentSessionIdMismatch,
+
+    // ── backend ingest / translation / cf-access (spec §7.4 additions) ──
+    #[error("cf access misconfigured at backend: {reason}")]
+    CfAccessMisconfigured { reason: String },
+
+    #[error("ingest seq conflict for thread {thread_id}: seq {seq} already present")]
+    IngestSeqConflict { thread_id: String, seq: u64 },
+
+    #[error("thread not found: {thread_id}")]
+    ThreadNotFound { thread_id: String },
+
+    #[error("translation not implemented for agent {agent:?}")]
+    TranslationNotImplemented { agent: crate::AgentName },
+
+    #[error("translation failed for agent {agent:?}: {message}")]
+    TranslationFailed {
+        agent: crate::AgentName,
+        message: String,
+    },
 }
 
 impl MinosError {
@@ -236,6 +274,11 @@ impl MinosError {
             Self::AgentNotRunning => ErrorKind::AgentNotRunning,
             Self::AgentNotSupported { .. } => ErrorKind::AgentNotSupported,
             Self::AgentSessionIdMismatch => ErrorKind::AgentSessionIdMismatch,
+            Self::CfAccessMisconfigured { .. } => ErrorKind::CfAccessMisconfigured,
+            Self::IngestSeqConflict { .. } => ErrorKind::IngestSeqConflict,
+            Self::ThreadNotFound { .. } => ErrorKind::ThreadNotFound,
+            Self::TranslationNotImplemented { .. } => ErrorKind::TranslationNotImplemented,
+            Self::TranslationFailed { .. } => ErrorKind::TranslationFailed,
         }
     }
 
@@ -408,10 +451,42 @@ mod tests {
                 MinosError::AgentSessionIdMismatch,
                 ErrorKind::AgentSessionIdMismatch,
             ),
+            (
+                MinosError::CfAccessMisconfigured {
+                    reason: String::new(),
+                },
+                ErrorKind::CfAccessMisconfigured,
+            ),
+            (
+                MinosError::IngestSeqConflict {
+                    thread_id: String::new(),
+                    seq: 0,
+                },
+                ErrorKind::IngestSeqConflict,
+            ),
+            (
+                MinosError::ThreadNotFound {
+                    thread_id: String::new(),
+                },
+                ErrorKind::ThreadNotFound,
+            ),
+            (
+                MinosError::TranslationNotImplemented {
+                    agent: crate::AgentName::Codex,
+                },
+                ErrorKind::TranslationNotImplemented,
+            ),
+            (
+                MinosError::TranslationFailed {
+                    agent: crate::AgentName::Codex,
+                    message: String::new(),
+                },
+                ErrorKind::TranslationFailed,
+            ),
         ];
         assert_eq!(
             cases.len(),
-            23,
+            28,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -445,13 +520,18 @@ mod tests {
         ErrorKind::AgentNotRunning,
         ErrorKind::AgentNotSupported,
         ErrorKind::AgentSessionIdMismatch,
+        ErrorKind::CfAccessMisconfigured,
+        ErrorKind::IngestSeqConflict,
+        ErrorKind::ThreadNotFound,
+        ErrorKind::TranslationNotImplemented,
+        ErrorKind::TranslationFailed,
     ];
 
     #[test]
     fn every_error_kind_has_user_message_in_both_langs() {
         assert_eq!(
             ALL_KINDS.len(),
-            23,
+            28,
             "add a kind when you add an ErrorKind variant"
         );
         for k in ALL_KINDS {
@@ -479,6 +559,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_new_kind_has_messages_in_both_langs() {
+        for kind in [
+            ErrorKind::CfAccessMisconfigured,
+            ErrorKind::IngestSeqConflict,
+            ErrorKind::ThreadNotFound,
+            ErrorKind::TranslationNotImplemented,
+            ErrorKind::TranslationFailed,
+        ] {
+            assert!(
+                !kind.user_message(Lang::Zh).is_empty(),
+                "zh missing for {kind:?}"
+            );
+            assert!(
+                !kind.user_message(Lang::En).is_empty(),
+                "en missing for {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ingest_seq_conflict_display() {
+        let e = MinosError::IngestSeqConflict {
+            thread_id: "t".into(),
+            seq: 42,
+        };
+        assert_eq!(
+            format!("{e}"),
+            "ingest seq conflict for thread t: seq 42 already present"
+        );
+    }
+
+    #[test]
+    fn translation_not_implemented_carries_agent_in_display() {
+        let e = MinosError::TranslationNotImplemented {
+            agent: crate::AgentName::Claude,
+        };
+        assert!(format!("{e}").contains("Claude"));
+    }
+
+    #[test]
+    fn cf_access_misconfigured_display_contains_reason() {
+        let e = MinosError::CfAccessMisconfigured {
+            reason: "missing MINOS_BACKEND_CF_ACCESS_CLIENT_ID".into(),
+        };
+        assert!(format!("{e}").contains("missing MINOS_BACKEND_CF_ACCESS_CLIENT_ID"));
     }
 
     #[test]

@@ -189,6 +189,11 @@ pub enum _ErrorKind {
     AgentNotRunning,
     AgentNotSupported,
     AgentSessionIdMismatch,
+    CfAccessMisconfigured,
+    IngestSeqConflict,
+    ThreadNotFound,
+    TranslationNotImplemented,
+    TranslationFailed,
 }
 
 #[allow(dead_code)]
@@ -224,6 +229,11 @@ pub enum _MinosError {
     AgentNotRunning,
     AgentNotSupported { agent: AgentName },
     AgentSessionIdMismatch,
+    CfAccessMisconfigured { reason: String },
+    IngestSeqConflict { thread_id: String, seq: u64 },
+    ThreadNotFound { thread_id: String },
+    TranslationNotImplemented { agent: AgentName },
+    TranslationFailed { agent: AgentName, message: String },
 }
 
 #[cfg(test)]

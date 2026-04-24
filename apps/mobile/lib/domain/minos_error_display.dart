@@ -30,6 +30,12 @@ extension MinosErrorDisplay on MinosError {
     MinosError_AgentNotRunning() => ErrorKind.agentNotRunning,
     MinosError_AgentNotSupported() => ErrorKind.agentNotSupported,
     MinosError_AgentSessionIdMismatch() => ErrorKind.agentSessionIdMismatch,
+    MinosError_CfAccessMisconfigured() => ErrorKind.cfAccessMisconfigured,
+    MinosError_IngestSeqConflict() => ErrorKind.ingestSeqConflict,
+    MinosError_ThreadNotFound() => ErrorKind.threadNotFound,
+    MinosError_TranslationNotImplemented() =>
+      ErrorKind.translationNotImplemented,
+    MinosError_TranslationFailed() => ErrorKind.translationFailed,
   };
 
   /// Localized user-facing message for this error, looked up via the Rust

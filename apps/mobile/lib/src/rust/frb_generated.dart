@@ -503,6 +503,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         );
       case 22:
         return MinosError_AgentSessionIdMismatch();
+      case 23:
+        return MinosError_CfAccessMisconfigured(
+          reason: dco_decode_String(raw[1]),
+        );
+      case 24:
+        return MinosError_IngestSeqConflict(
+          threadId: dco_decode_String(raw[1]),
+          seq: dco_decode_u_64(raw[2]),
+        );
+      case 25:
+        return MinosError_ThreadNotFound(threadId: dco_decode_String(raw[1]));
+      case 26:
+        return MinosError_TranslationNotImplemented(
+          agent: dco_decode_agent_name(raw[1]),
+        );
+      case 27:
+        return MinosError_TranslationFailed(
+          agent: dco_decode_agent_name(raw[1]),
+          message: dco_decode_String(raw[2]),
+        );
       default:
         throw Exception("unreachable");
     }
@@ -770,6 +790,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return MinosError_AgentNotSupported(agent: var_agent);
       case 22:
         return MinosError_AgentSessionIdMismatch();
+      case 23:
+        var var_reason = sse_decode_String(deserializer);
+        return MinosError_CfAccessMisconfigured(reason: var_reason);
+      case 24:
+        var var_threadId = sse_decode_String(deserializer);
+        var var_seq = sse_decode_u_64(deserializer);
+        return MinosError_IngestSeqConflict(
+          threadId: var_threadId,
+          seq: var_seq,
+        );
+      case 25:
+        var var_threadId = sse_decode_String(deserializer);
+        return MinosError_ThreadNotFound(threadId: var_threadId);
+      case 26:
+        var var_agent = sse_decode_agent_name(deserializer);
+        return MinosError_TranslationNotImplemented(agent: var_agent);
+      case 27:
+        var var_agent = sse_decode_agent_name(deserializer);
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_TranslationFailed(
+          agent: var_agent,
+          message: var_message,
+        );
       default:
         throw UnimplementedError('');
     }
@@ -1043,6 +1086,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_agent_name(agent, serializer);
       case MinosError_AgentSessionIdMismatch():
         sse_encode_i_32(22, serializer);
+      case MinosError_CfAccessMisconfigured(reason: final reason):
+        sse_encode_i_32(23, serializer);
+        sse_encode_String(reason, serializer);
+      case MinosError_IngestSeqConflict(
+        threadId: final threadId,
+        seq: final seq,
+      ):
+        sse_encode_i_32(24, serializer);
+        sse_encode_String(threadId, serializer);
+        sse_encode_u_64(seq, serializer);
+      case MinosError_ThreadNotFound(threadId: final threadId):
+        sse_encode_i_32(25, serializer);
+        sse_encode_String(threadId, serializer);
+      case MinosError_TranslationNotImplemented(agent: final agent):
+        sse_encode_i_32(26, serializer);
+        sse_encode_agent_name(agent, serializer);
+      case MinosError_TranslationFailed(
+        agent: final agent,
+        message: final message,
+      ):
+        sse_encode_i_32(27, serializer);
+        sse_encode_agent_name(agent, serializer);
+        sse_encode_String(message, serializer);
     }
   }
 

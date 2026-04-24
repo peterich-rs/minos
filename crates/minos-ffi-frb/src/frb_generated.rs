@@ -394,6 +394,23 @@ const _: fn() = || {
             let _: crate::api::minos::AgentName = agent;
         }
         crate::api::minos::MinosError::AgentSessionIdMismatch => {}
+        crate::api::minos::MinosError::CfAccessMisconfigured { reason } => {
+            let _: String = reason;
+        }
+        crate::api::minos::MinosError::IngestSeqConflict { thread_id, seq } => {
+            let _: String = thread_id;
+            let _: u64 = seq;
+        }
+        crate::api::minos::MinosError::ThreadNotFound { thread_id } => {
+            let _: String = thread_id;
+        }
+        crate::api::minos::MinosError::TranslationNotImplemented { agent } => {
+            let _: crate::api::minos::AgentName = agent;
+        }
+        crate::api::minos::MinosError::TranslationFailed { agent, message } => {
+            let _: crate::api::minos::AgentName = agent;
+            let _: String = message;
+        }
     }
     {
         let PairResponse = None::<crate::api::minos::PairResponse>.unwrap();
@@ -531,6 +548,11 @@ impl SseDecode for crate::api::minos::ErrorKind {
             20 => crate::api::minos::ErrorKind::AgentNotRunning,
             21 => crate::api::minos::ErrorKind::AgentNotSupported,
             22 => crate::api::minos::ErrorKind::AgentSessionIdMismatch,
+            23 => crate::api::minos::ErrorKind::CfAccessMisconfigured,
+            24 => crate::api::minos::ErrorKind::IngestSeqConflict,
+            25 => crate::api::minos::ErrorKind::ThreadNotFound,
+            26 => crate::api::minos::ErrorKind::TranslationNotImplemented,
+            27 => crate::api::minos::ErrorKind::TranslationFailed,
             _ => unreachable!("Invalid variant for ErrorKind: {}", inner),
         };
     }
@@ -709,6 +731,38 @@ impl SseDecode for crate::api::minos::MinosError {
             }
             22 => {
                 return crate::api::minos::MinosError::AgentSessionIdMismatch;
+            }
+            23 => {
+                let mut var_reason = <String>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::CfAccessMisconfigured { reason: var_reason };
+            }
+            24 => {
+                let mut var_threadId = <String>::sse_decode(deserializer);
+                let mut var_seq = <u64>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::IngestSeqConflict {
+                    thread_id: var_threadId,
+                    seq: var_seq,
+                };
+            }
+            25 => {
+                let mut var_threadId = <String>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::ThreadNotFound {
+                    thread_id: var_threadId,
+                };
+            }
+            26 => {
+                let mut var_agent = <crate::api::minos::AgentName>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::TranslationNotImplemented {
+                    agent: var_agent,
+                };
+            }
+            27 => {
+                let mut var_agent = <crate::api::minos::AgentName>::sse_decode(deserializer);
+                let mut var_message = <String>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::TranslationFailed {
+                    agent: var_agent,
+                    message: var_message,
+                };
             }
             _ => {
                 unimplemented!("");
@@ -909,6 +963,11 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ErrorKind> 
             crate::api::minos::ErrorKind::AgentNotRunning => 20.into_dart(),
             crate::api::minos::ErrorKind::AgentNotSupported => 21.into_dart(),
             crate::api::minos::ErrorKind::AgentSessionIdMismatch => 22.into_dart(),
+            crate::api::minos::ErrorKind::CfAccessMisconfigured => 23.into_dart(),
+            crate::api::minos::ErrorKind::IngestSeqConflict => 24.into_dart(),
+            crate::api::minos::ErrorKind::ThreadNotFound => 25.into_dart(),
+            crate::api::minos::ErrorKind::TranslationNotImplemented => 26.into_dart(),
+            crate::api::minos::ErrorKind::TranslationFailed => 27.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -1040,6 +1099,27 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::MinosError>
                 [21.into_dart(), agent.into_into_dart().into_dart()].into_dart()
             }
             crate::api::minos::MinosError::AgentSessionIdMismatch => [22.into_dart()].into_dart(),
+            crate::api::minos::MinosError::CfAccessMisconfigured { reason } => {
+                [23.into_dart(), reason.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::minos::MinosError::IngestSeqConflict { thread_id, seq } => [
+                24.into_dart(),
+                thread_id.into_into_dart().into_dart(),
+                seq.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::MinosError::ThreadNotFound { thread_id } => {
+                [25.into_dart(), thread_id.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::minos::MinosError::TranslationNotImplemented { agent } => {
+                [26.into_dart(), agent.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::minos::MinosError::TranslationFailed { agent, message } => [
+                27.into_dart(),
+                agent.into_into_dart().into_dart(),
+                message.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
             _ => {
                 unimplemented!("");
             }
@@ -1218,6 +1298,11 @@ impl SseEncode for crate::api::minos::ErrorKind {
                 crate::api::minos::ErrorKind::AgentNotRunning => 20,
                 crate::api::minos::ErrorKind::AgentNotSupported => 21,
                 crate::api::minos::ErrorKind::AgentSessionIdMismatch => 22,
+                crate::api::minos::ErrorKind::CfAccessMisconfigured => 23,
+                crate::api::minos::ErrorKind::IngestSeqConflict => 24,
+                crate::api::minos::ErrorKind::ThreadNotFound => 25,
+                crate::api::minos::ErrorKind::TranslationNotImplemented => 26,
+                crate::api::minos::ErrorKind::TranslationFailed => 27,
                 _ => {
                     unimplemented!("");
                 }
@@ -1361,6 +1446,28 @@ impl SseEncode for crate::api::minos::MinosError {
             }
             crate::api::minos::MinosError::AgentSessionIdMismatch => {
                 <i32>::sse_encode(22, serializer);
+            }
+            crate::api::minos::MinosError::CfAccessMisconfigured { reason } => {
+                <i32>::sse_encode(23, serializer);
+                <String>::sse_encode(reason, serializer);
+            }
+            crate::api::minos::MinosError::IngestSeqConflict { thread_id, seq } => {
+                <i32>::sse_encode(24, serializer);
+                <String>::sse_encode(thread_id, serializer);
+                <u64>::sse_encode(seq, serializer);
+            }
+            crate::api::minos::MinosError::ThreadNotFound { thread_id } => {
+                <i32>::sse_encode(25, serializer);
+                <String>::sse_encode(thread_id, serializer);
+            }
+            crate::api::minos::MinosError::TranslationNotImplemented { agent } => {
+                <i32>::sse_encode(26, serializer);
+                <crate::api::minos::AgentName>::sse_encode(agent, serializer);
+            }
+            crate::api::minos::MinosError::TranslationFailed { agent, message } => {
+                <i32>::sse_encode(27, serializer);
+                <crate::api::minos::AgentName>::sse_encode(agent, serializer);
+                <String>::sse_encode(message, serializer);
             }
             _ => {
                 unimplemented!("");

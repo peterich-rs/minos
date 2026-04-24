@@ -49,6 +49,16 @@ extension MinosError {
             return .agentNotSupported
         case .AgentSessionIdMismatch:
             return .agentSessionIdMismatch
+        case .CfAccessMisconfigured:
+            return .cfAccessMisconfigured
+        case .IngestSeqConflict:
+            return .ingestSeqConflict
+        case .ThreadNotFound:
+            return .threadNotFound
+        case .TranslationNotImplemented:
+            return .translationNotImplemented
+        case .TranslationFailed:
+            return .translationFailed
         }
     }
 
