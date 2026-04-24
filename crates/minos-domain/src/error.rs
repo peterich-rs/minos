@@ -60,9 +60,11 @@ impl ErrorKind {
     #[must_use]
     pub fn user_message(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Self::BindFailed, Lang::Zh) => "无法绑定中继监听地址；请检查 MINOS_RELAY_LISTEN 配置",
+            (Self::BindFailed, Lang::Zh) => {
+                "无法绑定中继监听地址；请检查 MINOS_BACKEND_LISTEN 配置"
+            }
             (Self::BindFailed, Lang::En) => {
-                "Cannot bind relay listen address; check MINOS_RELAY_LISTEN"
+                "Cannot bind relay listen address; check MINOS_BACKEND_LISTEN"
             }
             (Self::ConnectFailed, Lang::Zh) => {
                 "无法连接中继服务；请检查网络与 Cloudflare Access 令牌"
@@ -485,7 +487,7 @@ mod tests {
         // show up as failing asserts rather than silent drift.
         assert_eq!(
             ErrorKind::BindFailed.user_message(Lang::En),
-            "Cannot bind relay listen address; check MINOS_RELAY_LISTEN"
+            "Cannot bind relay listen address; check MINOS_BACKEND_LISTEN"
         );
         assert_eq!(
             ErrorKind::ConnectFailed.user_message(Lang::En),
