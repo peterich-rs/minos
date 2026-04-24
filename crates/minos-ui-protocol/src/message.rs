@@ -62,6 +62,8 @@ pub enum UiEventMessage {
         message_id: Option<String>,
     },
     Raw {
+        // `kind` collides with the outer `tag = "kind"` discriminator;
+        // rename only the JSON wire key. Rust identifier stays `kind`.
         #[serde(rename = "raw_kind")]
         kind: String,
         payload_json: String,
@@ -118,6 +120,21 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains(r#""kind":"thread_opened""#));
         assert!(json.contains(r#""agent":"codex""#));
+        let back: UiEventMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn thread_opened_with_null_title_round_trip() {
+        let ev = UiEventMessage::ThreadOpened {
+            thread_id: "thr_2".into(),
+            agent: AgentName::Claude,
+            title: None,
+            opened_at_ms: 1_714_000_000_001,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: UiEventMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
     }
 
     #[test]
