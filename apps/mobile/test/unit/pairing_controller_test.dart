@@ -10,10 +10,6 @@ class _FakeMinosCore extends Mock implements MinosCoreProtocol {}
 
 void main() {
   setUpAll(() {
-    // mocktail requires a fallback for any reference-type arguments used in
-    // matchers like `any()`. We only match strings, so a single string
-    // fallback is sufficient. Revisit if PairResponse ever appears on the
-    // `any(...)` side of a matcher.
     registerFallbackValue('');
   });
 
@@ -25,28 +21,26 @@ void main() {
     return container;
   }
 
-  test('submit(validJson) transitions idle -> loading -> data', () async {
+  test('submit(validJson) transitions idle -> loading -> data(true)', () async {
     final fake = _FakeMinosCore();
-    const response = PairResponse(ok: true, macName: 'MacTest');
-    when(() => fake.pairWithJson(any())).thenAnswer((_) async => response);
+    when(() => fake.pairWithQrJson(any())).thenAnswer((_) async {});
 
     final container = buildContainer(fake);
-    final snapshots = <AsyncValue<PairResponse?>>[];
-    container.listen<AsyncValue<PairResponse?>>(
+    final snapshots = <AsyncValue<bool>>[];
+    container.listen<AsyncValue<bool>>(
       pairingControllerProvider,
       (_, next) => snapshots.add(next),
       fireImmediately: true,
     );
 
-    expect(snapshots.first, const AsyncData<PairResponse?>(null));
+    expect(snapshots.first, const AsyncData<bool>(false));
 
-    await container.read(pairingControllerProvider.notifier).submit('{...}');
+    await container.read(pairingControllerProvider.notifier).submit('{"v":2}');
 
-    // Expect: initial idle, then loading, then data.
     expect(snapshots.length, greaterThanOrEqualTo(3));
     expect(snapshots[1].isLoading, isTrue);
-    expect(snapshots.last, const AsyncData<PairResponse?>(response));
-    verify(() => fake.pairWithJson('{...}')).called(1);
+    expect(snapshots.last, const AsyncData<bool>(true));
+    verify(() => fake.pairWithQrJson('{"v":2}')).called(1);
   });
 
   test('submit(invalidJson) surfaces MinosError as AsyncError', () async {
@@ -55,11 +49,11 @@ void main() {
       path: 'qr_payload',
       message: 'bad utf8',
     );
-    when(() => fake.pairWithJson(any())).thenThrow(err);
+    when(() => fake.pairWithQrJson(any())).thenThrow(err);
 
     final container = buildContainer(fake);
-    final snapshots = <AsyncValue<PairResponse?>>[];
-    container.listen<AsyncValue<PairResponse?>>(
+    final snapshots = <AsyncValue<bool>>[];
+    container.listen<AsyncValue<bool>>(
       pairingControllerProvider,
       (_, next) => snapshots.add(next),
       fireImmediately: true,
@@ -68,43 +62,66 @@ void main() {
     await container.read(pairingControllerProvider.notifier).submit('garbage');
 
     final last = snapshots.last;
-    expect(last, isA<AsyncError<PairResponse?>>());
+    expect(last, isA<AsyncError<bool>>());
     expect(last.error, isA<MinosError_StoreCorrupt>());
     expect(last.error, equals(err));
   });
 
   test(
-    'second submit after an error clears the error and lands on data',
+    'second submit after an error clears the error and lands on data(true)',
     () async {
       final fake = _FakeMinosCore();
-      const goodResponse = PairResponse(ok: true, macName: 'MacTest');
       const err = MinosError.storeCorrupt(
         path: 'qr_payload',
         message: 'bad utf8',
       );
 
       var callIndex = 0;
-      when(() => fake.pairWithJson(any())).thenAnswer((invocation) async {
+      when(() => fake.pairWithQrJson(any())).thenAnswer((invocation) async {
         callIndex += 1;
         if (callIndex == 1) {
           throw err;
         }
-        return goodResponse;
       });
 
       final container = buildContainer(fake);
-      final snapshots = <AsyncValue<PairResponse?>>[];
-      container.listen<AsyncValue<PairResponse?>>(
+      final snapshots = <AsyncValue<bool>>[];
+      container.listen<AsyncValue<bool>>(
         pairingControllerProvider,
         (_, next) => snapshots.add(next),
         fireImmediately: true,
       );
 
       await container.read(pairingControllerProvider.notifier).submit('bad');
-      expect(snapshots.last, isA<AsyncError<PairResponse?>>());
+      expect(snapshots.last, isA<AsyncError<bool>>());
 
       await container.read(pairingControllerProvider.notifier).submit('good');
-      expect(snapshots.last, const AsyncData<PairResponse?>(goodResponse));
+      expect(snapshots.last, const AsyncData<bool>(true));
     },
   );
+
+  test('submit() rejects v1 payload via underlying MinosError', () async {
+    // The Rust side classifies a v1 payload as
+    // PairingQrVersionUnsupported; the controller should surface whatever
+    // the core throws. We emulate this with the concrete Dart-side variant.
+    final fake = _FakeMinosCore();
+    const err = MinosError.pairingQrVersionUnsupported(version: 1);
+    when(() => fake.pairWithQrJson(any())).thenThrow(err);
+
+    final container = buildContainer(fake);
+    final snapshots = <AsyncValue<bool>>[];
+    container.listen<AsyncValue<bool>>(
+      pairingControllerProvider,
+      (_, next) => snapshots.add(next),
+      fireImmediately: true,
+    );
+
+    await container
+        .read(pairingControllerProvider.notifier)
+        .submit('{"v":1,"old":"format"}');
+
+    final last = snapshots.last;
+    expect(last, isA<AsyncError<bool>>());
+    expect(last.error, isA<MinosError_PairingQrVersionUnsupported>());
+  });
 }
