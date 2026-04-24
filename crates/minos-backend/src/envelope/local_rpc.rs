@@ -1,4 +1,4 @@
-//! Local-RPC dispatch for the four backend-terminated methods.
+//! Local-RPC dispatch for the seven backend-terminated methods.
 //!
 //! The WebSocket dispatcher (`envelope::mod`) decodes an incoming
 //! [`Envelope::LocalRpc`] frame and hands the (id, method, params) triple
@@ -7,22 +7,30 @@
 //! [`LocalRpcMethod`] that returns a [`LocalRpcOutcome`] for the dispatcher
 //! to wrap back up into an [`Envelope::LocalRpcResponse`].
 //!
-//! # Method menu (spec §6.1)
+//! # Method menu (spec §6.1 / §6.2)
 //!
 //! | Method | Role gate | Pre-state | Notes |
 //! |---|---|---|---|
 //! | `Ping` | any | any | returns `{"ok": true}` verbatim |
-//! | `RequestPairingQr` | `agent-host` | any | mints token using configured TTL (C4 rewrites body to return `PairingQrPayload`) |
+//! | `RequestPairingQr` | `agent-host` | any | returns a full `PairingQrPayload` v2 |
 //! | `Pair` | `ios-client` | unpaired | consumes token, emits `Event::Paired` to issuer |
 //! | `ForgetPeer` | any | paired | emits `Event::Unpaired` to both sides |
+//! | `ListThreads` | any | paired | scopes to caller's pairing partner |
+//! | `ReadThread` | any | paired | fresh translator state per call (no bleed from live-ingest) |
+//! | `GetThreadLastSeq` | any | paired | MAX(seq) for the given thread_id, 0 if empty |
 //!
 //! # Error code strings
 //!
 //! Snake-case, stable across releases; clients match on these:
 //!
-//! - `"unauthorized"` — role gate violated (e.g. ios-client asking for a token).
-//! - `"pairing_token_invalid"` — unknown/expired/consumed token.
+//! - `"unauthorized"` — role-gate violated OR pre-state violated (e.g.
+//!   `list_threads` when the session is unpaired). Per spec §11.2 U2 the
+//!   mobile UI maps this to "toast + route back to PairingPage".
+//! - `"bad_request"` — params failed to deserialise against the method's
+//!   schema.
+//! - `"pairing_token_invalid"` — unknown/expired/consumed pairing token.
 //! - `"pairing_state_mismatch"` — already paired / not paired for the method.
+//! - `"thread_not_found"` — `ReadThread` called with an unknown thread id.
 //! - `"internal"` — any underlying [`RelayError::StoreQuery`] etc. Caller
 //!   should log and retry / escalate.
 //!
@@ -89,9 +97,12 @@ pub async fn handle(
     }
 }
 
-/// Mobile → Backend. Return a paginated list of thread summaries owned by
-/// the calling device (the mobile caller's pairing partner, resolved via
-/// `session.paired_with`). Capped at 500 rows per call.
+/// Backend → caller. Return a paginated list of thread summaries owned by
+/// the caller's paired peer (`session.paired_with`). Capped at 500 rows.
+///
+/// Pre-state: paired. Unpaired callers get `unauthorized` so the mobile UI
+/// can route back to `PairingPage` per spec §11.2 U2 — a silent empty list
+/// would look like "no threads yet" and mask the real failure.
 async fn handle_list_threads(
     ctx: &LocalRpcContext<'_>,
     params: &serde_json::Value,
@@ -101,11 +112,10 @@ async fn handle_list_threads(
         Err(e) => return err("bad_request", format!("invalid params: {e}")),
     };
 
-    // Scope the query to the caller's paired agent-host, if any. A mobile
-    // caller sees only their paired host's threads; an unpaired caller
-    // gets an empty list rather than all threads on the backend.
-    let owner_id = *ctx.session.paired_with.read().await;
-    let owner_s = owner_id.map(|id| id.to_string());
+    let Some(owner_id) = *ctx.session.paired_with.read().await else {
+        return err("unauthorized", "list_threads requires a paired session");
+    };
+    let owner_s = Some(owner_id.to_string());
 
     let threads = match crate::store::threads::list(
         ctx.store,
@@ -146,6 +156,9 @@ async fn handle_read_thread(
     ctx: &LocalRpcContext<'_>,
     params: &serde_json::Value,
 ) -> LocalRpcOutcome {
+    if ctx.session.paired_with.read().await.is_none() {
+        return err("unauthorized", "read_thread requires a paired session");
+    }
     let p: minos_protocol::ReadThreadParams = match serde_json::from_value(params.clone()) {
         Ok(v) => v,
         Err(e) => return err("bad_request", format!("invalid params: {e}")),
@@ -259,6 +272,12 @@ async fn handle_get_thread_last_seq(
     ctx: &LocalRpcContext<'_>,
     params: &serde_json::Value,
 ) -> LocalRpcOutcome {
+    if ctx.session.paired_with.read().await.is_none() {
+        return err(
+            "unauthorized",
+            "get_thread_last_seq requires a paired session",
+        );
+    }
     let p: minos_protocol::GetThreadLastSeqParams = match serde_json::from_value(params.clone()) {
         Ok(v) => v,
         Err(e) => return err("bad_request", format!("invalid params: {e}")),
@@ -476,7 +495,7 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
         match serde_json::from_value::<PairParams>(params.clone()) {
             Ok(p) => p,
             Err(e) => {
-                return err("invalid_params", format!("pair params: {e}"));
+                return err("bad_request", format!("pair params: {e}"));
             }
         };
 
