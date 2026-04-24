@@ -59,6 +59,8 @@ extension MinosError {
             return .translationNotImplemented
         case .TranslationFailed:
             return .translationFailed
+        case .PairingQrVersionUnsupported:
+            return .pairingQrVersionUnsupported
         }
     }
 

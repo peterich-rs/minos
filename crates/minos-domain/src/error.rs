@@ -50,6 +50,7 @@ pub enum ErrorKind {
     ThreadNotFound,
     TranslationNotImplemented,
     TranslationFailed,
+    PairingQrVersionUnsupported,
 }
 
 impl ErrorKind {
@@ -143,6 +144,10 @@ impl ErrorKind {
             }
             (Self::TranslationFailed, Lang::Zh) => "事件翻译失败",
             (Self::TranslationFailed, Lang::En) => "Event translation failed",
+            (Self::PairingQrVersionUnsupported, Lang::Zh) => "二维码版本过旧，请升级应用",
+            (Self::PairingQrVersionUnsupported, Lang::En) => {
+                "QR code version not supported; please update the app"
+            }
         }
     }
 }
@@ -244,6 +249,9 @@ pub enum MinosError {
         agent: crate::AgentName,
         message: String,
     },
+
+    #[error("pairing QR payload version unsupported: {version}")]
+    PairingQrVersionUnsupported { version: u8 },
 }
 
 impl MinosError {
@@ -279,6 +287,7 @@ impl MinosError {
             Self::ThreadNotFound { .. } => ErrorKind::ThreadNotFound,
             Self::TranslationNotImplemented { .. } => ErrorKind::TranslationNotImplemented,
             Self::TranslationFailed { .. } => ErrorKind::TranslationFailed,
+            Self::PairingQrVersionUnsupported { .. } => ErrorKind::PairingQrVersionUnsupported,
         }
     }
 
@@ -483,10 +492,14 @@ mod tests {
                 },
                 ErrorKind::TranslationFailed,
             ),
+            (
+                MinosError::PairingQrVersionUnsupported { version: 1 },
+                ErrorKind::PairingQrVersionUnsupported,
+            ),
         ];
         assert_eq!(
             cases.len(),
-            28,
+            29,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -525,13 +538,14 @@ mod tests {
         ErrorKind::ThreadNotFound,
         ErrorKind::TranslationNotImplemented,
         ErrorKind::TranslationFailed,
+        ErrorKind::PairingQrVersionUnsupported,
     ];
 
     #[test]
     fn every_error_kind_has_user_message_in_both_langs() {
         assert_eq!(
             ALL_KINDS.len(),
-            28,
+            29,
             "add a kind when you add an ErrorKind variant"
         );
         for k in ALL_KINDS {
@@ -569,6 +583,7 @@ mod tests {
             ErrorKind::ThreadNotFound,
             ErrorKind::TranslationNotImplemented,
             ErrorKind::TranslationFailed,
+            ErrorKind::PairingQrVersionUnsupported,
         ] {
             assert!(
                 !kind.user_message(Lang::Zh).is_empty(),

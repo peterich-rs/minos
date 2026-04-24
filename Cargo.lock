@@ -2125,7 +2125,9 @@ dependencies = [
  "minos-domain",
  "minos-mobile",
  "minos-protocol",
+ "minos-ui-protocol",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2146,18 +2148,20 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "dashmap 6.1.0",
  "futures",
- "jsonrpsee",
+ "futures-util",
  "mars-xlog",
- "minos-daemon",
  "minos-domain",
  "minos-pairing",
  "minos-protocol",
- "minos-transport",
+ "minos-ui-protocol",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-test",
+ "tokio-tungstenite 0.29.0",
  "tracing",
  "tracing-subscriber",
  "url",
