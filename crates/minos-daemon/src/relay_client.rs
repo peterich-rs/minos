@@ -59,6 +59,7 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
+use crate::rpc_server::{invoke_forwarded, wrap_response_envelope, RpcServerImpl};
 
 /// Timeout applied to every pending `LocalRpc` response. Matches the
 /// dispatch-loop jitter we saw in the Phase D e2e runs (well under 5s) with
@@ -117,6 +118,7 @@ impl RelayClient {
         secret: Option<DeviceSecret>,
         mac_name: String,
         backend_url: String,
+        rpc_server: Option<Arc<RpcServerImpl>>,
     ) -> (
         Arc<Self>,
         watch::Receiver<RelayLinkState>,
@@ -147,8 +149,10 @@ impl RelayClient {
             backend_url: backend_url.clone(),
             link_tx,
             peer_tx,
+            out_tx: out_tx.clone(),
             out_rx,
             pending: pending.clone(),
+            rpc_server,
         };
 
         let task = tokio::spawn(run_dispatch(dispatch_ctx, shutdown_rx));
@@ -287,8 +291,16 @@ struct DispatchCtx {
     backend_url: String,
     link_tx: watch::Sender<RelayLinkState>,
     peer_tx: watch::Sender<PeerState>,
+    /// Producer side of the outbound queue. Held alongside `out_rx` so
+    /// inbound dispatch (e.g. forwarded RPC responses) can push frames
+    /// without going through the public [`RelayClient`] handle.
+    out_tx: mpsc::Sender<Envelope>,
     out_rx: mpsc::Receiver<Envelope>,
     pending: Arc<Mutex<Pending>>,
+    /// Local jsonrpsee surface invoked when the relay delivers an
+    /// `Envelope::Forwarded`. `None` in tests that don't exercise the
+    /// peer-RPC path; production wires the daemon's `RpcServerImpl` here.
+    rpc_server: Option<Arc<RpcServerImpl>>,
 }
 
 /// Outcome of a single connect-attempt cycle. Drives the outer
@@ -514,15 +526,28 @@ async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
             }
         }
         Envelope::Event { event, .. } => route_event(event, ctx),
-        Envelope::Forwarded { .. } => {
-            // Phase F wires this into the jsonrpsee dispatch. For now we
-            // just acknowledge at trace level so logs aren't noisy in
-            // production, but the e2e tests can still verify flow with
-            // RUST_LOG tuned up.
-            tracing::trace!(
-                target: "minos_daemon::relay_client",
-                "received Forwarded — dropping (Phase F)"
-            );
+        Envelope::Forwarded { from, payload, .. } => {
+            let Some(rpc_server) = ctx.rpc_server.clone() else {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    %from,
+                    "received Forwarded with no rpc_server wired — dropping (test fixture?)"
+                );
+                return;
+            };
+            let response = invoke_forwarded(payload, &rpc_server).await;
+            let envelope = wrap_response_envelope(response);
+            // The relay re-wraps our Forward back to the originating peer
+            // as Forwarded; correlation is the peers' responsibility (the
+            // jsonrpc id is preserved end-to-end inside the payload).
+            if let Err(e) = ctx.out_tx.send(envelope).await {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    error = %e,
+                    %from,
+                    "failed to enqueue forwarded RPC response"
+                );
+            }
         }
         Envelope::LocalRpc { .. } | Envelope::Forward { .. } => {
             // These are client → relay frames; the relay never emits them

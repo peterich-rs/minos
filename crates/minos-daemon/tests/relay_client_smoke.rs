@@ -118,6 +118,7 @@ async fn connect_becomes_connected() -> anyhow::Result<()> {
         None,
         "Fan's Mac".to_string(),
         backend_url,
+        None,
     );
 
     // Initial state is `Disconnected`; wait for `Connected` within the
@@ -156,6 +157,7 @@ async fn ping_local_rpc_returns_ok_true() -> anyhow::Result<()> {
         None,
         "Fan's Mac".to_string(),
         backend_url,
+        None,
     );
 
     // Wait until the link is up so the Ping isn't racing the handshake.
@@ -196,6 +198,7 @@ async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> 
         None,
         mac_name.clone(),
         backend_url.clone(),
+        None,
     );
 
     timeout(STEP_TIMEOUT, async {

@@ -77,6 +77,17 @@ impl DaemonHandle {
     ) -> Result<Arc<Self>, MinosError> {
         let local_state_path = LocalState::default_path();
 
+        let agent = Arc::new(AgentGlue::new(paths::minos_home()?.join("workspaces")));
+
+        // The relay-client dispatches forwarded peer JSON-RPC into this
+        // server impl. Pre-relay it lived behind a jsonrpsee WS server;
+        // now there is exactly one shared instance threaded through.
+        let rpc_server = Arc::new(crate::rpc_server::RpcServerImpl {
+            started_at: std::time::Instant::now(),
+            runner: Arc::new(minos_cli_detect::RealCommandRunner),
+            agent: agent.clone(),
+        });
+
         let (relay, link_rx, peer_rx) = RelayClient::spawn(
             config,
             self_device_id,
@@ -84,9 +95,8 @@ impl DaemonHandle {
             secret,
             mac_name.clone(),
             BACKEND_URL.to_owned(),
+            Some(rpc_server),
         );
-
-        let agent = Arc::new(AgentGlue::new(paths::minos_home()?.join("workspaces")));
 
         Ok(Arc::new(Self {
             inner: Arc::new(DaemonInner {
