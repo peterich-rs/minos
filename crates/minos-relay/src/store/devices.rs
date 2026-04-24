@@ -145,7 +145,7 @@ where
 {
     let id_str = id.to_string();
 
-    let result = sqlx::query(r#"UPDATE devices SET secret_hash = NULL WHERE device_id = ?"#)
+    let result = sqlx::query("UPDATE devices SET secret_hash = NULL WHERE device_id = ?")
         .bind(&id_str)
         .execute(executor)
         .await

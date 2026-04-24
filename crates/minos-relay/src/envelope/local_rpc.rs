@@ -223,6 +223,7 @@ struct PairParams {
 ///    its `paired_with` slot.
 /// 4. return the consumer's `{peer_device_id, peer_name, your_device_secret}`
 ///    payload per spec §7.1 step 11.
+#[allow(clippy::too_many_lines)] // Pair flow is a single spec-ordered sequence; splitting hides the rollback branches.
 async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> LocalRpcOutcome {
     if ctx.session.role != DeviceRole::IosClient {
         return err(
@@ -283,29 +284,26 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
 
     let issuer = outcome.issuer_device_id;
 
-    let issuer_handle = match ctx.registry.get(issuer) {
-        Some(handle) => handle,
-        None => {
-            tracing::warn!(
+    let Some(issuer_handle) = ctx.registry.get(issuer) else {
+        tracing::warn!(
+            target: "minos_relay::envelope",
+            issuer = %issuer,
+            consumer = %ctx.session.device_id,
+            "pair committed but issuer is offline; compensating committed pair"
+        );
+        if let Err(compensate_err) = compensate_pair_delivery_failure(ctx, None).await {
+            tracing::error!(
                 target: "minos_relay::envelope",
+                error = %compensate_err,
                 issuer = %issuer,
                 consumer = %ctx.session.device_id,
-                "pair committed but issuer is offline; compensating committed pair"
-            );
-            if let Err(compensate_err) = compensate_pair_delivery_failure(ctx, None).await {
-                tracing::error!(
-                    target: "minos_relay::envelope",
-                    error = %compensate_err,
-                    issuer = %issuer,
-                    consumer = %ctx.session.device_id,
-                    "failed to compensate pair after issuer delivery failure"
-                );
-            }
-            return err(
-                "internal",
-                "failed to deliver pairing secret to issuer; pairing rolled back",
+                "failed to compensate pair after issuer delivery failure"
             );
         }
+        return err(
+            "internal",
+            "failed to deliver pairing secret to issuer; pairing rolled back",
+        );
     };
 
     if let Err(outcome) = deliver_pair_to_current_issuer(

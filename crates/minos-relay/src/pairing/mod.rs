@@ -629,11 +629,7 @@ mod tests {
         let second = second.await.unwrap();
 
         let (winner, loser_result) = match (&first, &second) {
-            (Ok((winner, outcome)), Err(err)) => {
-                assert_eq!(outcome.issuer_device_id, issuer);
-                (*winner, err)
-            }
-            (Err(err), Ok((winner, outcome))) => {
+            (Ok((winner, outcome)), Err(err)) | (Err(err), Ok((winner, outcome))) => {
                 assert_eq!(outcome.issuer_device_id, issuer);
                 (*winner, err)
             }
@@ -674,13 +670,13 @@ mod tests {
         let consumer = DeviceId::new();
 
         sqlx::query(
-            r#"
+            "
             CREATE TRIGGER fail_pairing_insert
             BEFORE INSERT ON pairings
             BEGIN
                 SELECT RAISE(ABORT, 'pairing insert failed');
             END;
-            "#,
+            ",
         )
         .execute(&pool)
         .await
@@ -708,7 +704,7 @@ mod tests {
         assert_eq!(devices::get_device(&pool, consumer).await.unwrap(), None);
 
         let consumed_at = sqlx::query_scalar::<_, Option<i64>>(
-            r#"SELECT consumed_at FROM pairing_tokens WHERE token_hash = ?"#,
+            "SELECT consumed_at FROM pairing_tokens WHERE token_hash = ?",
         )
         .bind(sha256_hex(token.as_str()))
         .fetch_optional(&pool)
@@ -717,7 +713,7 @@ mod tests {
         .flatten();
         assert_eq!(consumed_at, None);
 
-        sqlx::query(r#"DROP TRIGGER fail_pairing_insert"#)
+        sqlx::query("DROP TRIGGER fail_pairing_insert")
             .execute(&pool)
             .await
             .unwrap();

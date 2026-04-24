@@ -84,13 +84,13 @@ where
     E: Executor<'e, Database = Sqlite>,
 {
     let issuer_device_id = sqlx::query_scalar::<_, String>(
-        r#"
+        "
         SELECT issuer_device_id
         FROM pairing_tokens
         WHERE token_hash = ?
           AND consumed_at IS NULL
           AND expires_at > ?
-        "#,
+        ",
     )
     .bind(token_hash_candidate)
     .bind(now)

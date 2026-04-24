@@ -77,7 +77,12 @@ async fn main() -> Result<()> {
 
     let registry = Arc::new(SessionRegistry::new());
     let pairing = Arc::new(PairingService::new(pool.clone()));
-    let state = RelayState::new(registry.clone(), pairing.clone(), pool.clone(), cfg.token_ttl());
+    let state = RelayState::new(
+        registry.clone(),
+        pairing.clone(),
+        pool.clone(),
+        cfg.token_ttl(),
+    );
 
     let gc_task = spawn_token_gc(pool.clone());
 

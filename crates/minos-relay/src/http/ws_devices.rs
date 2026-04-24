@@ -460,8 +460,7 @@ fn initial_presence_event(paired_with: Option<DeviceId>, registry: &SessionRegis
         Some(peer)
             if registry
                 .get(peer)
-                .filter(|handle| !handle.outbox.is_closed())
-                .is_some() =>
+                .is_some_and(|handle| !handle.outbox.is_closed()) =>
         {
             EventKind::PeerOnline {
                 peer_device_id: peer,

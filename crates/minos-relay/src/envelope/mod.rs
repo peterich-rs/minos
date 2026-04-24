@@ -133,6 +133,7 @@ pub async fn run_session(
 
 /// Inner loop kept separate so `run_session` can guarantee cleanup on
 /// every exit arm (including `?` short-circuits).
+#[allow(clippy::too_many_lines)] // Central select! loop; splitting obscures the control flow.
 async fn run_session_inner(
     ws: &mut WebSocket,
     session: &SessionHandle,

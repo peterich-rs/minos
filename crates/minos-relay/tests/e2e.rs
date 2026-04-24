@@ -212,7 +212,7 @@ async fn expect_close_frame(ws: &mut WsClient) -> anyhow::Result<()> {
                     "expected relay to close the socket, got {other:?}"
                 ));
             }
-            Some(Err(WsError::ConnectionClosed)) | Some(Err(WsError::AlreadyClosed)) => {
+            Some(Err(WsError::ConnectionClosed | WsError::AlreadyClosed)) => {
                 return Ok(());
             }
             Some(Err(e)) => return Err(anyhow::anyhow!("ws error while waiting for close: {e}")),
