@@ -223,12 +223,24 @@ final class AppState: @unchecked Sendable {
     /// Push from the peer observer. Mirror the trustedDevice cache so
     /// pairing-aware UI doesn't have to wait for `current_trusted_device`
     /// to round-trip the daemon.
+    ///
+    /// `PeerState::Paired` is ephemeral — it carries `(id, name, online)`
+    /// but no `pairedAt`, because the relay re-emits Paired/PeerOnline on
+    /// every reconnect. `PeerRecord` is the persisted shape and owns the
+    /// real `pairedAt` that was captured at first-pair time. So we only
+    /// synthesize a new `PeerRecord` when the deviceId has genuinely
+    /// changed (first pair, or pair-after-forget). For the steady-state
+    /// reconnect case where we already hold a record for this peer, we
+    /// leave `trustedDevice` untouched rather than stamp a fresh `Date()`
+    /// over the original timestamp.
     @MainActor
     func applyPeer(_ state: PeerState) {
         peer = state
         switch state {
         case let .paired(id, name, _):
-            trustedDevice = PeerRecord(deviceId: id, name: name, pairedAt: Date())
+            if trustedDevice?.deviceId != id {
+                trustedDevice = PeerRecord(deviceId: id, name: name, pairedAt: Date())
+            }
         case .unpaired:
             trustedDevice = nil
             currentQr = nil
