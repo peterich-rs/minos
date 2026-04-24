@@ -9,6 +9,7 @@ pub mod keychain_store;
 pub mod local_state;
 pub mod logging;
 pub mod paths;
+pub mod relay_client;
 pub mod relay_pairing;
 pub mod rpc_server;
 pub mod subscription;
@@ -22,6 +23,7 @@ pub use handle::*;
 pub use keychain_store::KeychainTrustedDeviceStore;
 pub use local_state::LocalState;
 pub use minos_agent_runtime::AgentState;
+pub use relay_client::RelayClient;
 pub use relay_pairing::{PeerRecord, RelayQrPayload};
 pub use subscription::{AgentStateObserver, ConnectionStateObserver, Subscription};
 
