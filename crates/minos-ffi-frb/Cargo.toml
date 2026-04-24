@@ -15,6 +15,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 minos-mobile = { path = "../minos-mobile", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
+tracing = { workspace = true }
 
 # Pinned to =2.11.1 to keep the runtime lockstep with the
 # `flutter_rust_bridge_codegen 2.11.1` tool installed for this workspace; the

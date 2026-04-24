@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use flutter_rust_bridge::frb;
+use minos_mobile::UiEventFrame as MobileUiEventFrame;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::watch;
 
@@ -28,15 +29,18 @@ use crate::frb_generated::StreamSink;
 // generated wire code in `frb_generated.rs`. Mirror declarations below still
 // provide the shape metadata the codegen needs.
 pub use minos_domain::{AgentName, ConnectionState, ErrorKind, Lang, MinosError, PairingState};
-pub use minos_protocol::PairResponse;
+pub use minos_protocol::{
+    ListThreadsParams, ListThreadsResponse, ReadThreadParams, ReadThreadResponse, ThreadSummary,
+};
+pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
 // ───────────────────────────── opaque client ─────────────────────────────
 
 /// Opaque Dart handle around `minos_mobile::MobileClient`.
 ///
 /// The inner type is not exposed to Dart — all interactions go through the
-/// `impl` below. This keeps `Arc<dyn PairingStore>` (and any other non-FFI-safe
-/// internals) Rust-side.
+/// `impl` below. This keeps `Arc<dyn MobilePairingStore>` (and any other
+/// non-FFI-safe internals) Rust-side.
 #[frb(opaque)]
 pub struct MobileClient(minos_mobile::MobileClient);
 
@@ -69,6 +73,27 @@ where
     });
 }
 
+/// Dart-visible shape of `minos_mobile::UiEventFrame`. Held as a separate
+/// type (rather than mirrored) so the `ui` field lands as the mirrored
+/// `UiEventMessage` variant on the Dart side.
+pub struct UiEventFrame {
+    pub thread_id: String,
+    pub seq: u64,
+    pub ui: UiEventMessage,
+    pub ts_ms: i64,
+}
+
+impl From<MobileUiEventFrame> for UiEventFrame {
+    fn from(f: MobileUiEventFrame) -> Self {
+        Self {
+            thread_id: f.thread_id,
+            seq: f.seq,
+            ui: f.ui,
+            ts_ms: f.ts_ms,
+        }
+    }
+}
+
 impl MobileClient {
     /// Construct a client backed by the built-in in-memory pairing store.
     /// Synchronous — no I/O happens until a pairing method is called.
@@ -80,11 +105,32 @@ impl MobileClient {
         ))
     }
 
-    /// Pair using the raw JSON payload extracted from the scanned QR code.
-    /// Delegates to `MobileClient::pair_with_json`; see that method for the
-    /// full error surface.
-    pub async fn pair_with_json(&self, qr_json: String) -> Result<PairResponse, MinosError> {
-        self.0.pair_with_json(qr_json).await
+    /// Pair using the raw JSON payload extracted from the scanned QR v2
+    /// code. Delegates to `MobileClient::pair_with_qr_json`.
+    pub async fn pair_with_qr_json(&self, qr_json: String) -> Result<(), MinosError> {
+        self.0.pair_with_qr_json(qr_json).await
+    }
+
+    /// Forget the paired backend; clears secure storage and tears down the
+    /// WS. Idempotent.
+    pub async fn forget_peer(&self) -> Result<(), MinosError> {
+        self.0.forget_peer().await
+    }
+
+    /// Request a page of thread summaries.
+    pub async fn list_threads(
+        &self,
+        req: ListThreadsParams,
+    ) -> Result<ListThreadsResponse, MinosError> {
+        self.0.list_threads(req).await
+    }
+
+    /// Read a window of translated UI events for one thread.
+    pub async fn read_thread(
+        &self,
+        req: ReadThreadParams,
+    ) -> Result<ReadThreadResponse, MinosError> {
+        self.0.read_thread(req).await
     }
 
     /// Current connection state, read from the watch-channel cache. Cheap and
@@ -101,6 +147,28 @@ impl MobileClient {
     pub fn subscribe_state(&self, sink: StreamSink<ConnectionState>) {
         spawn_state_forwarder(self.0.events_stream(), move |state| {
             sink.add(state).map_err(|_| ())
+        });
+    }
+
+    /// Subscribe to live `UiEventFrame`s fanned out from the backend.
+    /// Every frb stream sink gets its own broadcast receiver; lagging
+    /// subscribers lose old frames rather than blocking the producer.
+    pub fn subscribe_ui_events(&self, sink: StreamSink<UiEventFrame>) {
+        let mut rx = self.0.ui_events_stream();
+        frb_runtime().spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(frame) => {
+                        if sink.add(UiEventFrame::from(frame)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "ui_events_stream lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
         });
     }
 }
@@ -194,13 +262,7 @@ pub enum _ErrorKind {
     ThreadNotFound,
     TranslationNotImplemented,
     TranslationFailed,
-}
-
-#[allow(dead_code)]
-#[frb(mirror(PairResponse))]
-pub struct _PairResponse {
-    pub ok: bool,
-    pub mac_name: String,
+    PairingQrVersionUnsupported,
 }
 
 #[allow(dead_code)]
@@ -234,6 +296,128 @@ pub enum _MinosError {
     ThreadNotFound { thread_id: String },
     TranslationNotImplemented { agent: AgentName },
     TranslationFailed { agent: AgentName, message: String },
+    PairingQrVersionUnsupported { version: u8 },
+}
+
+// ─────────────────────────── mirrored protocol types ──────────────────────────
+
+#[allow(dead_code)]
+#[frb(mirror(ListThreadsParams))]
+pub struct _ListThreadsParams {
+    pub limit: u32,
+    pub before_ts_ms: Option<i64>,
+    pub agent: Option<AgentName>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListThreadsResponse))]
+pub struct _ListThreadsResponse {
+    pub threads: Vec<ThreadSummary>,
+    pub next_before_ts_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ReadThreadParams))]
+pub struct _ReadThreadParams {
+    pub thread_id: String,
+    pub from_seq: Option<u64>,
+    pub limit: u32,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ReadThreadResponse))]
+pub struct _ReadThreadResponse {
+    pub ui_events: Vec<UiEventMessage>,
+    pub next_seq: Option<u64>,
+    pub thread_end_reason: Option<ThreadEndReason>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ThreadSummary))]
+pub struct _ThreadSummary {
+    pub thread_id: String,
+    pub agent: AgentName,
+    pub title: Option<String>,
+    pub first_ts_ms: i64,
+    pub last_ts_ms: i64,
+    pub message_count: u32,
+    pub ended_at_ms: Option<i64>,
+    pub end_reason: Option<ThreadEndReason>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(MessageRole))]
+pub enum _MessageRole {
+    User,
+    Assistant,
+    System,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ThreadEndReason))]
+pub enum _ThreadEndReason {
+    UserStopped,
+    AgentDone,
+    Crashed { message: String },
+    Timeout,
+    HostDisconnected,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(UiEventMessage))]
+pub enum _UiEventMessage {
+    ThreadOpened {
+        thread_id: String,
+        agent: AgentName,
+        title: Option<String>,
+        opened_at_ms: i64,
+    },
+    ThreadTitleUpdated {
+        thread_id: String,
+        title: String,
+    },
+    ThreadClosed {
+        thread_id: String,
+        reason: ThreadEndReason,
+        closed_at_ms: i64,
+    },
+    MessageStarted {
+        message_id: String,
+        role: MessageRole,
+        started_at_ms: i64,
+    },
+    MessageCompleted {
+        message_id: String,
+        finished_at_ms: i64,
+    },
+    TextDelta {
+        message_id: String,
+        text: String,
+    },
+    ReasoningDelta {
+        message_id: String,
+        text: String,
+    },
+    ToolCallPlaced {
+        message_id: String,
+        tool_call_id: String,
+        name: String,
+        args_json: String,
+    },
+    ToolCallCompleted {
+        tool_call_id: String,
+        output: String,
+        is_error: bool,
+    },
+    Error {
+        code: String,
+        message: String,
+        message_id: Option<String>,
+    },
+    Raw {
+        kind: String,
+        payload_json: String,
+    },
 }
 
 #[cfg(test)]
