@@ -41,12 +41,12 @@ pub mod imp {
         }
 
         pub fn write(&self, secret: &DeviceSecret) -> Result<(), MinosError> {
-            set_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET, secret.0.as_bytes()).map_err(
-                |e| MinosError::StoreIo {
+            set_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET, secret.0.as_bytes()).map_err(|e| {
+                MinosError::StoreIo {
                     path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
                     message: format!("keychain write: {e}"),
-                },
-            )
+                }
+            })
         }
 
         /// Delete the entry. Succeeds (`Ok`) if the entry doesn't exist,
