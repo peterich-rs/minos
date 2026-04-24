@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use chrono::Utc;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::core::server::SubscriptionMessage;
 use jsonrpsee::core::SubscriptionResult;
@@ -15,7 +14,7 @@ use jsonrpsee::types::ErrorObjectOwned;
 use jsonrpsee::PendingSubscriptionSink;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::{ConnectionState, MinosError};
-use minos_pairing::{ActiveToken, Pairing, PairingStore, TrustedDevice};
+use minos_pairing::{ActiveToken, Pairing, PairingStore};
 use minos_protocol::{
     HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
     SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
@@ -45,54 +44,15 @@ pub struct RpcServerImpl {
 
 #[async_trait]
 impl MinosRpcServer for RpcServerImpl {
-    async fn pair(&self, req: PairRequest) -> jsonrpsee::core::RpcResult<PairResponse> {
-        // Validate the one-shot pairing token before mutating any state.
-        // Spec §6.4: token IS validated server-side; the WS-upgrade layer
-        // is a future hardening, not a substitute for this check.
-        {
-            let token_guard = self.active_token.lock().unwrap();
-            let active = token_guard
-                .as_ref()
-                .ok_or_else(|| rpc_err(MinosError::PairingTokenInvalid))?;
-            if active.is_expired(Utc::now()) {
-                return Err(rpc_err(MinosError::PairingTokenInvalid));
-            }
-            if active.token != req.token {
-                return Err(rpc_err(MinosError::PairingTokenInvalid));
-            }
-        }
-        // Token consumed — invalidate so it cannot be replayed.
-        *self.active_token.lock().unwrap() = None;
-
-        {
-            let mut p = self.pairing.lock().unwrap();
-            p.accept_peer().map_err(rpc_err)?;
-        }
-
-        let mut current = self.store.load().map_err(rpc_err)?;
-        let dev = TrustedDevice {
-            device_id: req.device_id,
-            name: req.name,
-            host: self.host.clone(),
-            port: self.port,
-            paired_at: Utc::now(),
-        };
-        // Replace any existing entry for the same device_id; otherwise append.
-        if let Some(idx) = current.iter().position(|d| d.device_id == req.device_id) {
-            current[idx] = dev;
-        } else {
-            current.push(dev);
-        }
-        self.store.save(&current).map_err(rpc_err)?;
-
-        // Surface the new peer to events_stream subscribers. jsonrpsee does
-        // not give us a connection-lifecycle hook; emit on successful pair.
-        let _ = self.conn_state_tx.send(ConnectionState::Connected);
-
-        Ok(PairResponse {
-            ok: true,
-            mac_name: self.mac_name.clone(),
-        })
+    async fn pair(&self, _req: PairRequest) -> jsonrpsee::core::RpcResult<PairResponse> {
+        // Pairing is owned end-to-end by the relay broker (plan 05 Phase F.3).
+        // The Mac receives a Paired event from the relay's `Pair` LocalRpc
+        // handler — it never sees a peer-originated `pair` JSON-RPC. If a
+        // forwarded JSON-RPC frame somehow reaches here, the right answer is
+        // that the host explicitly does not trust this surface for pairing.
+        Err(rpc_err(MinosError::Unauthorized {
+            reason: "pair handled by relay, not host".into(),
+        }))
     }
 
     async fn health(&self) -> jsonrpsee::core::RpcResult<HealthResponse> {
