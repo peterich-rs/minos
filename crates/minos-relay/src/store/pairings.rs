@@ -8,10 +8,14 @@
 //! stringwise ordering.
 
 use minos_domain::DeviceId;
-use sqlx::SqlitePool;
+use sqlx::{Executor, Sqlite, SqlitePool};
 use uuid::Uuid;
 
 use crate::error::RelayError;
+
+/// SQLite trigger message used when a device is already present in some
+/// other pairing row.
+pub(crate) const SINGLE_PAIR_VIOLATION_MARKER: &str = "pairings_device_already_paired";
 
 /// Order `(a, b)` so `first < second` using the same string comparison
 /// SQLite applies to the CHECK constraint. The inputs must differ; callers
@@ -30,8 +34,10 @@ fn canonical(a: DeviceId, b: DeviceId) -> (String, String) {
 ///
 /// Canonicalizes the pair so a caller may pass the two device ids in either
 /// order. Idempotent: re-inserting an existing pair is a silent no-op via
-/// `ON CONFLICT DO NOTHING`. Pairing a device with itself is rejected by
-/// the `CHECK (device_a < device_b)` constraint and surfaces as a
+/// `ON CONFLICT DO NOTHING`. Any different row that reuses either device is
+/// rejected by the migration-installed trigger with
+/// [`SINGLE_PAIR_VIOLATION_MARKER`]. Pairing a device with itself is rejected
+/// by the `CHECK (device_a < device_b)` constraint and surfaces as a
 /// `StoreQuery` error.
 pub async fn insert_pairing(
     pool: &SqlitePool,
@@ -39,6 +45,18 @@ pub async fn insert_pairing(
     b: DeviceId,
     now: i64,
 ) -> Result<(), RelayError> {
+    insert_pairing_with_executor(pool, a, b, now).await
+}
+
+pub(crate) async fn insert_pairing_with_executor<'e, E>(
+    executor: E,
+    a: DeviceId,
+    b: DeviceId,
+    now: i64,
+) -> Result<(), RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let (lo, hi) = canonical(a, b);
 
     sqlx::query!(
@@ -51,7 +69,7 @@ pub async fn insert_pairing(
         hi,
         now,
     )
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| RelayError::StoreQuery {
         operation: "insert_pairing".to_string(),
@@ -67,6 +85,16 @@ pub async fn insert_pairing(
 /// at most one pair (spec §7.2), so any row that touches `id` names the
 /// peer in its other column.
 pub async fn get_pair(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceId>, RelayError> {
+    get_pair_with_executor(pool, id).await
+}
+
+pub(crate) async fn get_pair_with_executor<'e, E>(
+    executor: E,
+    id: DeviceId,
+) -> Result<Option<DeviceId>, RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let id_str = id.to_string();
 
     let row = sqlx::query!(
@@ -79,7 +107,7 @@ pub async fn get_pair(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceId
         id_str,
         id_str,
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|e| RelayError::StoreQuery {
         operation: "get_pair".to_string(),
@@ -109,14 +137,25 @@ pub async fn get_pair(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceId
 /// such row exists; callers that need strict semantics can check via
 /// [`get_pair`] first.
 pub async fn delete_pair(pool: &SqlitePool, a: DeviceId, b: DeviceId) -> Result<(), RelayError> {
+    delete_pair_with_executor(pool, a, b).await
+}
+
+pub(crate) async fn delete_pair_with_executor<'e, E>(
+    executor: E,
+    a: DeviceId,
+    b: DeviceId,
+) -> Result<(), RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let (lo, hi) = canonical(a, b);
 
     sqlx::query!(
         r#"DELETE FROM pairings WHERE device_a = ? AND device_b = ?"#,
         lo,
-        hi,
+        hi
     )
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| RelayError::StoreQuery {
         operation: "delete_pair".to_string(),
@@ -178,6 +217,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1, "repeat insert must be idempotent");
+    }
+
+    #[tokio::test]
+    async fn insert_pairing_rejects_second_distinct_pair_for_same_device() {
+        let pool = memory_pool().await;
+        let (a, b) = two_devices(&pool).await;
+        let c = DeviceId::new();
+        insert_device(&pool, c, "ios-2", DeviceRole::IosClient, T0)
+            .await
+            .unwrap();
+
+        insert_pairing(&pool, a, b, T0).await.unwrap();
+
+        let err = insert_pairing(&pool, a, c, T0 + 1).await.unwrap_err();
+        match err {
+            RelayError::StoreQuery { operation, message } => {
+                assert_eq!(operation, "insert_pairing");
+                assert!(message.contains(SINGLE_PAIR_VIOLATION_MARKER));
+            }
+            other => panic!("expected StoreQuery, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -40,16 +40,17 @@
 //!
 //! # Cleanup
 //!
-//! `run_session` removes the handle from the registry before returning
-//! (regardless of success / failure path), so the caller does not need to
-//! guard against session leaks.
+//! `run_session` removes the handle from the registry before returning,
+//! but only if the registry still points at the same concrete session.
+//! This keeps reconnect cleanup from evicting a replacement socket for the
+//! same `DeviceId`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures::StreamExt;
-use minos_protocol::{Envelope, LocalRpcOutcome, RpcError};
+use minos_protocol::{Envelope, EventKind, LocalRpcOutcome, RpcError};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
@@ -75,6 +76,9 @@ const PAIRED_TIMEOUT: Duration = Duration::from_secs(90);
 /// WS close code for heartbeat / internal server errors (RFC 6455).
 const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
 
+/// Standard close code used when a reconnect supersedes an older socket.
+const CLOSE_CODE_NORMAL: u16 = 1000;
+
 /// WS close code "Bad Request" — our signal for malformed envelope kinds
 /// or unsupported versions (per plan §8).
 const CLOSE_CODE_BAD_REQUEST: u16 = 4400;
@@ -99,8 +103,8 @@ pub async fn run_session(
     registry: Arc<SessionRegistry>,
     pairing: Arc<PairingService>,
     store: SqlitePool,
+    token_ttl: Duration,
 ) -> Result<(), RelayError> {
-    let device_id = session.device_id;
     let result = run_session_inner(
         &mut ws,
         &session,
@@ -108,11 +112,15 @@ pub async fn run_session(
         &registry,
         &pairing,
         &store,
+        token_ttl,
     )
     .await;
 
-    // Cleanup on any exit path: remove the session so routes don't linger.
-    registry.remove(device_id);
+    // Cleanup on any exit path: remove only if this is still the live
+    // registry entry. A reconnect may already have replaced it.
+    if registry.remove_current(&session).is_some() {
+        notify_live_peer_disconnect(&session, &registry).await;
+    }
 
     // Drain remaining outbox so the sender does not block; the receiver
     // goes out of scope right after anyway, but this keeps `Err` paths
@@ -132,14 +140,40 @@ async fn run_session_inner(
     registry: &SessionRegistry,
     pairing: &PairingService,
     store: &SqlitePool,
+    token_ttl: Duration,
 ) -> Result<(), RelayError> {
     let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
+    let mut revocation_rx = session.subscribe_revocation();
     // First tick fires immediately; skip it so we don't ping right after
     // accepting the socket.
     heartbeat.tick().await;
 
     loop {
+        if *revocation_rx.borrow() {
+            tracing::info!(
+                target: "minos_relay::envelope",
+                device = %session.device_id,
+                "session superseded by reconnect; closing old socket"
+            );
+            close_with(ws, CLOSE_CODE_NORMAL, "session_superseded").await;
+            break;
+        }
+
         tokio::select! {
+            biased;
+
+            changed = revocation_rx.changed() => {
+                if matches!(changed, Ok(())) && *revocation_rx.borrow_and_update() {
+                    tracing::info!(
+                        target: "minos_relay::envelope",
+                        device = %session.device_id,
+                        "session superseded by reconnect; closing old socket"
+                    );
+                    close_with(ws, CLOSE_CODE_NORMAL, "session_superseded").await;
+                    break;
+                }
+            }
+
             // Outbound: frame ready for this client.
             maybe_frame = outbox_rx.recv() => {
                 let Some(frame) = maybe_frame else {
@@ -158,7 +192,7 @@ async fn run_session_inner(
                         match serde_json::from_str::<Envelope>(&text) {
                             Ok(env) => {
                                 if !dispatch_envelope(
-                                    ws, session, registry, pairing, store, env,
+                                    ws, session, registry, pairing, store, token_ttl, env,
                                 )
                                 .await
                                 {
@@ -234,6 +268,37 @@ async fn run_session_inner(
     Ok(())
 }
 
+async fn notify_live_peer_disconnect(session: &SessionHandle, registry: &SessionRegistry) {
+    let Some(peer) = *session.paired_with.read().await else {
+        return;
+    };
+    let Some(peer_handle) = registry
+        .get(peer)
+        .filter(|handle| !handle.outbox.is_closed())
+    else {
+        return;
+    };
+    if *peer_handle.paired_with.read().await != Some(session.device_id) {
+        return;
+    }
+
+    let frame = Envelope::Event {
+        version: 1,
+        event: EventKind::PeerOffline {
+            peer_device_id: session.device_id,
+        },
+    };
+    if let Err(e) = peer_handle.outbox.try_send(frame) {
+        tracing::warn!(
+            target: "minos_relay::envelope",
+            error = ?e,
+            device = %session.device_id,
+            peer = %peer,
+            "failed to push Event::PeerOffline to live peer"
+        );
+    }
+}
+
 /// Serialise an envelope and send it as a text frame.
 ///
 /// Returns `false` if the send failed (caller breaks out of the loop).
@@ -260,6 +325,7 @@ async fn dispatch_envelope(
     registry: &SessionRegistry,
     pairing: &PairingService,
     store: &SqlitePool,
+    token_ttl: Duration,
     env: Envelope,
 ) -> bool {
     match env {
@@ -279,6 +345,7 @@ async fn dispatch_envelope(
                 registry,
                 pairing,
                 store,
+                token_ttl,
             };
             let outcome = local_rpc::handle(&ctx, &method, &params).await;
             let resp = Envelope::LocalRpcResponse {
@@ -345,6 +412,10 @@ pub async fn handle_forward(
         Err(RelayError::PeerOffline { .. }) => {
             Some(synth_peer_offline_forwarded(session.device_id, &payload))
         }
+        Err(RelayError::PeerBackpressure { .. }) => Some(synth_peer_backpressure_forwarded(
+            session.device_id,
+            &payload,
+        )),
         Err(e) => {
             tracing::warn!(
                 target: "minos_relay::envelope",
@@ -366,6 +437,22 @@ fn synth_peer_offline_forwarded(
     from: minos_domain::DeviceId,
     orig_payload: &serde_json::Value,
 ) -> Envelope {
+    synth_forward_error(from, orig_payload, -32001, "peer offline")
+}
+
+fn synth_peer_backpressure_forwarded(
+    from: minos_domain::DeviceId,
+    orig_payload: &serde_json::Value,
+) -> Envelope {
+    synth_forward_error(from, orig_payload, -32002, "peer backpressure")
+}
+
+fn synth_forward_error(
+    from: minos_domain::DeviceId,
+    orig_payload: &serde_json::Value,
+    code: i64,
+    message: &'static str,
+) -> Envelope {
     let id = orig_payload
         .get("id")
         .cloned()
@@ -373,8 +460,8 @@ fn synth_peer_offline_forwarded(
     let err_payload = serde_json::json!({
         "jsonrpc": "2.0",
         "error": {
-            "code": -32001,
-            "message": "peer offline",
+            "code": code,
+            "message": message,
         },
         "id": id,
     });
@@ -415,6 +502,7 @@ async fn close_with(ws: &mut WebSocket, code: u16, reason: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::registry::OUTBOX_CAPACITY;
     use crate::store::test_support::memory_pool;
     use minos_domain::{DeviceId, DeviceRole};
     use pretty_assertions::assert_eq;
@@ -512,6 +600,43 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn handle_forward_full_outbox_synthesizes_jsonrpc_backpressure_error() {
+        let registry = SessionRegistry::new();
+        let a = DeviceId::new();
+        let b = DeviceId::new();
+        let (ha, _rxa) = SessionHandle::new(a, DeviceRole::IosClient);
+        let (hb, _rxb) = SessionHandle::new(b, DeviceRole::MacHost);
+        *ha.paired_with.write().await = Some(b);
+        *hb.paired_with.write().await = Some(a);
+        registry.insert(ha.clone());
+        registry.insert(hb);
+
+        for id in 0..OUTBOX_CAPACITY {
+            registry
+                .route(
+                    a,
+                    b,
+                    serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "fill"}),
+                )
+                .await
+                .expect("fill routes must succeed before the outbox is full");
+        }
+
+        let payload = serde_json::json!({"jsonrpc": "2.0", "method": "ping", "id": 2});
+        let back = handle_forward(&ha, &registry, payload).await;
+        let env = back.expect("full outbox must synthesize a retryable error");
+        match env {
+            Envelope::Forwarded { from, payload, .. } => {
+                assert_eq!(from, a);
+                assert_eq!(payload["error"]["code"], -32002);
+                assert_eq!(payload["error"]["message"], "peer backpressure");
+                assert_eq!(payload["id"], 2);
+            }
+            other => panic!("expected Forwarded, got {other:?}"),
+        }
+    }
+
     // ── synth helper: shape sanity ────────────────────────────────────
 
     #[test]
@@ -532,6 +657,30 @@ mod tests {
                 assert_eq!(payload["jsonrpc"], "2.0");
                 assert_eq!(payload["error"]["code"], -32001);
                 assert_eq!(payload["id"], 7);
+            }
+            other => panic!("expected Forwarded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn synth_peer_backpressure_carries_jsonrpc_2_0_envelope() {
+        let from = DeviceId::new();
+        let env = synth_peer_backpressure_forwarded(
+            from,
+            &serde_json::json!({"id": 9, "jsonrpc": "2.0", "method": "x"}),
+        );
+        match env {
+            Envelope::Forwarded {
+                version,
+                from: f,
+                payload,
+            } => {
+                assert_eq!(version, 1);
+                assert_eq!(f, from);
+                assert_eq!(payload["jsonrpc"], "2.0");
+                assert_eq!(payload["error"]["code"], -32002);
+                assert_eq!(payload["error"]["message"], "peer backpressure");
+                assert_eq!(payload["id"], 9);
             }
             other => panic!("expected Forwarded, got {other:?}"),
         }

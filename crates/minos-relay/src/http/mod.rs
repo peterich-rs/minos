@@ -29,7 +29,7 @@
 //! "401 pre-upgrade" contract (see [`ws_devices`]) is easy to read at the
 //! call site.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::Router;
 use sqlx::SqlitePool;
@@ -51,6 +51,8 @@ pub struct RelayState {
     pub pairing: Arc<PairingService>,
     /// SQLite pool with migrations already applied.
     pub store: SqlitePool,
+    /// Configured pairing-token TTL for live `request_pairing_token` RPCs.
+    pub token_ttl: Duration,
     /// Crate version string; exposed via `/health`.
     ///
     /// Stored here rather than read from `env!("CARGO_PKG_VERSION")` at the
@@ -69,11 +71,13 @@ impl RelayState {
         registry: Arc<SessionRegistry>,
         pairing: Arc<PairingService>,
         store: SqlitePool,
+        token_ttl: Duration,
     ) -> Self {
         Self {
             registry,
             pairing,
             store,
+            token_ttl,
             version: env!("CARGO_PKG_VERSION"),
         }
     }

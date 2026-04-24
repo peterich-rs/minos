@@ -11,7 +11,8 @@
 //!    mark the row consumed, mint two fresh `DeviceSecret`s (one for each
 //!    side), hash them with argon2id, and insert the pairing row.
 //! 3. Forget — either side can dissolve the pair; the caller learns the
-//!    peer's `DeviceId` so it can broadcast the `Unpaired` event.
+//!    peer's `DeviceId` so it can broadcast the `Unpaired` event, and both
+//!    stored device-secret hashes are revoked in the same transaction.
 //!
 //! # Two hash primitives
 //!
@@ -31,14 +32,13 @@
 //!
 //! # Atomicity
 //!
-//! `consume_token` performs four store writes (upsert consumer device, two
-//! secret-hash upserts, one pairing insert). Per step-6 plan guidance we
-//! start with pool-wide autocommit: each store helper runs its own
-//! statement against the pool, and we rely on the token-consume CAS as the
-//! single atomicity gate. If step 12's e2e test reveals a partial-write
-//! flake, promote this method to `pool.begin()` + a shared `Executor` (the
-//! store helpers already take `&SqlitePool` and would need a minor
-//! refactor to `impl sqlx::Executor<'_, Database = Sqlite>`).
+//! `consume_token` starts with `BEGIN IMMEDIATE`, then wraps token validation,
+//! token consumption, secret-hash updates, and pairing insertion in one SQLite
+//! transaction. That write lock serializes concurrent consumes before any token
+//! or pairing lookup, so two valid outstanding tokens for the same issuer
+//! cannot both clear the prechecks. Any failure in the flow rolls the whole
+//! transaction back so the token is still usable and no partial secrets or
+//! pair rows leak into the store.
 
 use std::time::Duration;
 
@@ -159,61 +159,99 @@ impl PairingService {
         let now = Utc::now().timestamp_millis();
         let digest = sha256_hex(candidate.as_str());
 
-        let consumed = tokens::consume_token(&self.pool, &digest, now)
-            .await?
-            .ok_or(RelayError::PairingTokenInvalid)?;
-        let issuer = consumed.issuer_device_id;
+        let mut tx =
+            self.pool
+                .begin_with("BEGIN IMMEDIATE")
+                .await
+                .map_err(|e| RelayError::StoreQuery {
+                    operation: "begin_pairing_consume".to_string(),
+                    message: e.to_string(),
+                })?;
 
-        // Spec §10.2 R4: refuse if either side already has a pairing. The
-        // UI confirms replace via `forget_peer` + retry. We surface both
-        // "consumer paired" and "issuer paired" as the same error — the
-        // UI messaging is per-role but the broker contract is "state does
-        // not match the request".
-        //
-        // NB: at this point the token has already been marked consumed by
-        // the CAS above. That's intentional: we never want to leave a
-        // consumable token lying around if we already know the pair is
-        // impossible. A fresh request_token call starts over cleanly.
-        if pairings::get_pair(&self.pool, consumer).await?.is_some() {
-            return Err(RelayError::PairingStateMismatch {
-                actual: "paired".to_string(),
-            });
+        let result: Result<PairingOutcome, RelayError> = async {
+            let issuer = tokens::peek_usable_token_with_executor(&mut *tx, &digest, now)
+                .await?
+                .ok_or(RelayError::PairingTokenInvalid)?
+                .issuer_device_id;
+
+            if issuer == consumer {
+                return Err(RelayError::PairingStateMismatch {
+                    actual: "self".to_string(),
+                });
+            }
+
+            // Spec §10.2 R4: refuse if either side already has a pairing. The
+            // UI confirms replace via `forget_peer` + retry.
+            if pairings::get_pair_with_executor(&mut *tx, consumer)
+                .await?
+                .is_some()
+            {
+                return Err(RelayError::PairingStateMismatch {
+                    actual: "paired".to_string(),
+                });
+            }
+            if pairings::get_pair_with_executor(&mut *tx, issuer)
+                .await?
+                .is_some()
+            {
+                return Err(RelayError::PairingStateMismatch {
+                    actual: "paired".to_string(),
+                });
+            }
+
+            let issuer_secret = DeviceSecret::generate();
+            let consumer_secret = DeviceSecret::generate();
+            let issuer_hash = secret::hash_secret(&issuer_secret)?;
+            let consumer_hash = secret::hash_secret(&consumer_secret)?;
+
+            tokens::consume_token_with_executor(&mut *tx, &digest, now)
+                .await?
+                .ok_or(RelayError::PairingTokenInvalid)?;
+
+            if devices::get_device_with_executor(&mut *tx, consumer)
+                .await?
+                .is_none()
+            {
+                devices::insert_device_with_executor(
+                    &mut *tx,
+                    consumer,
+                    &consumer_name,
+                    DeviceRole::IosClient,
+                    now,
+                )
+                .await?;
+            }
+
+            devices::upsert_secret_hash_with_executor(&mut *tx, consumer, &consumer_hash).await?;
+            devices::upsert_secret_hash_with_executor(&mut *tx, issuer, &issuer_hash).await?;
+            pairings::insert_pairing_with_executor(&mut *tx, issuer, consumer, now)
+                .await
+                .map_err(normalize_pairing_insert_error)?;
+
+            Ok(PairingOutcome {
+                issuer_device_id: issuer,
+                issuer_secret,
+                consumer_secret,
+            })
         }
-        if pairings::get_pair(&self.pool, issuer).await?.is_some() {
-            return Err(RelayError::PairingStateMismatch {
-                actual: "paired".to_string(),
-            });
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| RelayError::StoreQuery {
+                    operation: "commit_pairing_consume".to_string(),
+                    message: e.to_string(),
+                })?;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| RelayError::StoreQuery {
+                    operation: "rollback_pairing_consume".to_string(),
+                    message: e.to_string(),
+                })?;
+                Err(err)
+            }
         }
-
-        let issuer_secret = DeviceSecret::generate();
-        let consumer_secret = DeviceSecret::generate();
-        let issuer_hash = secret::hash_secret(&issuer_secret)?;
-        let consumer_hash = secret::hash_secret(&consumer_secret)?;
-
-        // Upsert consumer device row. The device may already exist if this
-        // iOS client previously opened an Unpaired handshake socket — in
-        // that case `insert_device` returns a StoreQuery error for the PK
-        // conflict, which we swallow. Any other store error bubbles up.
-        if devices::get_device(&self.pool, consumer).await?.is_none() {
-            devices::insert_device(
-                &self.pool,
-                consumer,
-                &consumer_name,
-                DeviceRole::IosClient,
-                now,
-            )
-            .await?;
-        }
-
-        devices::upsert_secret_hash(&self.pool, consumer, &consumer_hash).await?;
-        devices::upsert_secret_hash(&self.pool, issuer, &issuer_hash).await?;
-        pairings::insert_pairing(&self.pool, issuer, consumer, now).await?;
-
-        Ok(PairingOutcome {
-            issuer_device_id: issuer,
-            issuer_secret,
-            consumer_secret,
-        })
     }
 
     /// Dissolve the pair that includes `either_side`.
@@ -229,11 +267,44 @@ impl PairingService {
     /// - [`RelayError::StoreQuery`] / [`RelayError::StoreDecode`] — any
     ///   underlying store op failed.
     pub async fn forget_pair(&self, either_side: DeviceId) -> Result<Option<DeviceId>, RelayError> {
-        let Some(peer) = pairings::get_pair(&self.pool, either_side).await? else {
-            return Ok(None);
-        };
-        pairings::delete_pair(&self.pool, either_side, peer).await?;
-        Ok(Some(peer))
+        let mut tx =
+            self.pool
+                .begin_with("BEGIN IMMEDIATE")
+                .await
+                .map_err(|e| RelayError::StoreQuery {
+                    operation: "begin_forget_pair".to_string(),
+                    message: e.to_string(),
+                })?;
+
+        let result: Result<Option<DeviceId>, RelayError> = async {
+            let Some(peer) = pairings::get_pair_with_executor(&mut *tx, either_side).await? else {
+                return Ok(None);
+            };
+
+            pairings::delete_pair_with_executor(&mut *tx, either_side, peer).await?;
+            devices::clear_secret_hash_with_executor(&mut *tx, either_side).await?;
+            devices::clear_secret_hash_with_executor(&mut *tx, peer).await?;
+
+            Ok(Some(peer))
+        }
+        .await;
+
+        match result {
+            Ok(peer) => {
+                tx.commit().await.map_err(|e| RelayError::StoreQuery {
+                    operation: "commit_forget_pair".to_string(),
+                    message: e.to_string(),
+                })?;
+                Ok(peer)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| RelayError::StoreQuery {
+                    operation: "rollback_forget_pair".to_string(),
+                    message: e.to_string(),
+                })?;
+                Err(err)
+            }
+        }
     }
 }
 
@@ -251,13 +322,30 @@ fn sha256_hex(input: &str) -> String {
     out
 }
 
+fn normalize_pairing_insert_error(err: RelayError) -> RelayError {
+    match err {
+        RelayError::StoreQuery { operation, message }
+            if operation == "insert_pairing"
+                && message.contains(pairings::SINGLE_PAIR_VIOLATION_MARKER) =>
+        {
+            RelayError::PairingStateMismatch {
+                actual: "paired".to_string(),
+            }
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::test_support::memory_pool;
     use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
     use std::time::Duration as StdDuration;
+    use tempfile::tempdir;
+    use tokio::sync::Barrier;
 
     const FIVE_MIN: StdDuration = StdDuration::from_mins(5);
 
@@ -440,6 +528,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn consume_self_pair_returns_state_mismatch_without_burning_token() {
+        let pool = memory_pool().await;
+        let svc = PairingService::new(pool.clone());
+        let issuer = mac_issuer(&pool).await;
+
+        let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
+        let err = svc
+            .consume_token(&token, issuer, "alice's mac".into())
+            .await
+            .unwrap_err();
+        match err {
+            RelayError::PairingStateMismatch { actual } => assert_eq!(actual, "self"),
+            other => panic!("expected PairingStateMismatch, got {other:?}"),
+        }
+
+        assert_eq!(pairings::get_pair(&pool, issuer).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, issuer).await.unwrap(), None);
+
+        let consumer = DeviceId::new();
+        let outcome = svc
+            .consume_token(&token, consumer, "iphone".into())
+            .await
+            .unwrap();
+        assert_eq!(outcome.issuer_device_id, issuer);
+        assert_eq!(
+            pairings::get_pair(&pool, issuer).await.unwrap(),
+            Some(consumer)
+        );
+    }
+
+    #[tokio::test]
     async fn consume_when_issuer_already_paired_returns_pairing_state_mismatch() {
         let pool = memory_pool().await;
         let svc = PairingService::new(pool.clone());
@@ -465,6 +584,153 @@ mod tests {
             RelayError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
             other => panic!("expected PairingStateMismatch, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn consume_two_outstanding_tokens_for_same_issuer_yields_one_success_and_one_paired_loser(
+    ) {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("pairing-race.db");
+        let url = format!("sqlite://{}?mode=rwc", db.display());
+        let pool = crate::store::connect(&url).await.unwrap();
+        let svc = PairingService::new(pool.clone());
+        let issuer = mac_issuer(&pool).await;
+
+        let (token_a, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
+        let (token_b, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
+        let consumer_a = DeviceId::new();
+        let consumer_b = DeviceId::new();
+        let barrier = Arc::new(Barrier::new(3));
+
+        let first = {
+            let svc = svc.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                svc.consume_token(&token_a, consumer_a, "iphone-a".into())
+                    .await
+                    .map(|outcome| (consumer_a, outcome))
+            })
+        };
+        let second = {
+            let svc = svc.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                svc.consume_token(&token_b, consumer_b, "iphone-b".into())
+                    .await
+                    .map(|outcome| (consumer_b, outcome))
+            })
+        };
+
+        barrier.wait().await;
+
+        let first = first.await.unwrap();
+        let second = second.await.unwrap();
+
+        let (winner, loser_result) = match (&first, &second) {
+            (Ok((winner, outcome)), Err(err)) => {
+                assert_eq!(outcome.issuer_device_id, issuer);
+                (*winner, err)
+            }
+            (Err(err), Ok((winner, outcome))) => {
+                assert_eq!(outcome.issuer_device_id, issuer);
+                (*winner, err)
+            }
+            (Ok(_), Ok(_)) => panic!("expected exactly one successful consume"),
+            (Err(left), Err(right)) => {
+                panic!("expected one success, got errors {left:?} and {right:?}")
+            }
+        };
+
+        match loser_result {
+            RelayError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
+            other => panic!("expected PairingStateMismatch, got {other:?}"),
+        }
+
+        assert_eq!(
+            pairings::get_pair(&pool, issuer).await.unwrap(),
+            Some(winner)
+        );
+        assert_eq!(
+            pairings::get_pair(&pool, winner).await.unwrap(),
+            Some(issuer)
+        );
+
+        let loser = if winner == consumer_a {
+            consumer_b
+        } else {
+            consumer_a
+        };
+        assert_eq!(pairings::get_pair(&pool, loser).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn consume_rolls_back_token_and_secret_hashes_when_pairing_insert_fails() {
+        let pool = memory_pool().await;
+        let svc = PairingService::new(pool.clone());
+        let issuer = mac_issuer(&pool).await;
+        let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
+        let consumer = DeviceId::new();
+
+        sqlx::query(
+            r#"
+            CREATE TRIGGER fail_pairing_insert
+            BEFORE INSERT ON pairings
+            BEGIN
+                SELECT RAISE(ABORT, 'pairing insert failed');
+            END;
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let err = svc
+            .consume_token(&token, consumer, "iphone".into())
+            .await
+            .unwrap_err();
+        match err {
+            RelayError::StoreQuery { operation, message } => {
+                assert_eq!(operation, "insert_pairing");
+                assert!(message.contains("pairing insert failed"));
+            }
+            other => panic!("expected StoreQuery, got {other:?}"),
+        }
+
+        assert_eq!(pairings::get_pair(&pool, issuer).await.unwrap(), None);
+        assert_eq!(pairings::get_pair(&pool, consumer).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, issuer).await.unwrap(), None);
+        assert_eq!(
+            devices::get_secret_hash(&pool, consumer).await.unwrap(),
+            None
+        );
+        assert_eq!(devices::get_device(&pool, consumer).await.unwrap(), None);
+
+        let consumed_at = sqlx::query_scalar::<_, Option<i64>>(
+            r#"SELECT consumed_at FROM pairing_tokens WHERE token_hash = ?"#,
+        )
+        .bind(sha256_hex(token.as_str()))
+        .fetch_optional(&pool)
+        .await
+        .unwrap()
+        .flatten();
+        assert_eq!(consumed_at, None);
+
+        sqlx::query(r#"DROP TRIGGER fail_pairing_insert"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let outcome = svc
+            .consume_token(&token, consumer, "iphone".into())
+            .await
+            .unwrap();
+        assert_eq!(outcome.issuer_device_id, issuer);
+        assert_eq!(
+            pairings::get_pair(&pool, issuer).await.unwrap(),
+            Some(consumer)
+        );
     }
 
     // ── integration: forget ────────────────────────────────────────────

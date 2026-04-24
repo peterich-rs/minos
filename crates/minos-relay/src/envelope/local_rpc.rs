@@ -12,8 +12,8 @@
 //! | Method | Role gate | Pre-state | Notes |
 //! |---|---|---|---|
 //! | `Ping` | any | any | returns `{"ok": true}` verbatim |
-//! | `RequestPairingToken` | `mac-host` | any | mints 5-minute token |
-//! | `Pair` | any | unpaired | consumes token, emits `Event::Paired` to issuer |
+//! | `RequestPairingToken` | `mac-host` | any | mints token using configured TTL |
+//! | `Pair` | `ios-client` | unpaired | consumes token, emits `Event::Paired` to issuer |
 //! | `ForgetPeer` | any | paired | emits `Event::Unpaired` to both sides |
 //!
 //! # Error code strings
@@ -29,10 +29,10 @@
 //! # Peer-event delivery (§10.2 R4)
 //!
 //! After a successful `pair`, we push `Event::Paired` onto the issuer's
-//! outbox via `try_send`. Failure to deliver is logged at warn-level but
-//! does not roll back the DB state — if the issuer's socket went away mid-
-//! pair, the DB is already consistent and the next reconnect will fetch
-//! the secret via the normal auth handshake (spec §7.2 / §9.4).
+//! outbox via `try_send`. If the issuer is offline or its outbox rejects
+//! the event, we compensate the already-committed pair by clearing the DB
+//! pairing row, revoking both secret hashes, and restoring the in-memory
+//! `paired_with` mirrors to the unpaired state.
 
 use std::time::Duration;
 
@@ -48,9 +48,6 @@ use crate::{
     store::devices,
 };
 
-/// Token TTL matches spec §6.1 "5 minutes".
-const PAIRING_TOKEN_TTL: Duration = Duration::from_mins(5);
-
 /// Read-only context threaded into every per-method handler.
 ///
 /// Reference-only so the dispatcher can build a fresh context per inbound
@@ -60,6 +57,7 @@ pub struct LocalRpcContext<'a> {
     pub registry: &'a SessionRegistry,
     pub pairing: &'a PairingService,
     pub store: &'a SqlitePool,
+    pub token_ttl: Duration,
 }
 
 /// Dispatch a decoded [`Envelope::LocalRpc`] to the right handler.
@@ -91,6 +89,73 @@ pub(crate) fn err(code: &str, message: impl Into<String>) -> LocalRpcOutcome {
     }
 }
 
+async fn compensate_pair_delivery_failure(
+    ctx: &LocalRpcContext<'_>,
+    issuer_handle: Option<&SessionHandle>,
+) -> Result<(), RelayError> {
+    if let Some(issuer_handle) = issuer_handle {
+        *issuer_handle.paired_with.write().await = None;
+    }
+    *ctx.session.paired_with.write().await = None;
+
+    match ctx.pairing.forget_pair(ctx.session.device_id).await? {
+        Some(_) => Ok(()),
+        None => Err(RelayError::StoreQuery {
+            operation: "compensate_pair_delivery_failure".to_string(),
+            message: "expected committed pair to exist during compensation".to_string(),
+        }),
+    }
+}
+
+async fn deliver_pair_to_current_issuer(
+    ctx: &LocalRpcContext<'_>,
+    issuer: minos_domain::DeviceId,
+    issuer_handle: &SessionHandle,
+    peer_name: &str,
+    issuer_secret: &DeviceSecret,
+) -> Result<(), LocalRpcOutcome> {
+    let frame = Envelope::Event {
+        version: 1,
+        event: EventKind::Paired {
+            peer_device_id: ctx.session.device_id,
+            peer_name: peer_name.to_string(),
+            your_device_secret: DeviceSecret(issuer_secret.as_str().to_string()),
+        },
+    };
+
+    // ORDER MATTERS: mirror paired_with BEFORE pushing Event::Paired so the
+    // issuer dispatcher cannot process a Forward with stale Unpaired state.
+    // Delivery still only counts as success if the queue operation targets
+    // the registry's current live session for this device.
+    *issuer_handle.paired_with.write().await = Some(ctx.session.device_id);
+    if let Err(e) = ctx.registry.try_send_current(issuer_handle, frame) {
+        tracing::warn!(
+            target: "minos_relay::envelope",
+            error = %e,
+            issuer = %issuer,
+            consumer = %ctx.session.device_id,
+            "failed to push Event::Paired to current issuer session; compensating committed pair"
+        );
+        if let Err(compensate_err) =
+            compensate_pair_delivery_failure(ctx, Some(issuer_handle)).await
+        {
+            tracing::error!(
+                target: "minos_relay::envelope",
+                error = %compensate_err,
+                issuer = %issuer,
+                consumer = %ctx.session.device_id,
+                "failed to compensate pair after issuer delivery failure"
+            );
+        }
+        return Err(err(
+            "internal",
+            "failed to deliver pairing secret to issuer; pairing rolled back",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Always returns `{"ok": true}`; see spec §6.1.
 ///
 /// `async` is kept for symmetry with the other handlers — the master
@@ -103,7 +168,8 @@ async fn handle_ping() -> LocalRpcOutcome {
     }
 }
 
-/// `request_pairing_token`: mac-host only; mints a fresh 5-minute token.
+/// `request_pairing_token`: mac-host only; mints a fresh token using the
+/// configured TTL.
 ///
 /// Spec §6.1 gates the caller's role. `device_name` is not a parameter —
 /// the mac already has a row in `devices` by the time this fires (inserted
@@ -115,7 +181,7 @@ async fn handle_request_pairing_token(ctx: &LocalRpcContext<'_>) -> LocalRpcOutc
 
     match ctx
         .pairing
-        .request_token(ctx.session.device_id, PAIRING_TOKEN_TTL)
+        .request_token(ctx.session.device_id, ctx.token_ttl)
         .await
     {
         Ok((token, expires_at)) => LocalRpcOutcome::Ok {
@@ -144,6 +210,7 @@ struct PairParams {
 /// `pair`: consume a token, mint two DeviceSecrets, notify the issuer.
 ///
 /// Guards:
+/// - reject if caller role is not `ios-client`.
 /// - reject if this session already reports a peer (must go through
 ///   `forget_peer` first, spec §10.2 R4).
 /// - reject invalid/expired/consumed tokens → `pairing_token_invalid`.
@@ -157,6 +224,13 @@ struct PairParams {
 /// 4. return the consumer's `{peer_device_id, peer_name, your_device_secret}`
 ///    payload per spec §7.1 step 11.
 async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> LocalRpcOutcome {
+    if ctx.session.role != DeviceRole::IosClient {
+        return err(
+            "unauthorized",
+            "only ios-client may pair with a pairing token",
+        );
+    }
+
     {
         // Read lock scoped so we don't hold it across the DB round-trip.
         if ctx.session.paired_with.read().await.is_some() {
@@ -190,10 +264,12 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
             );
         }
         Err(RelayError::PairingStateMismatch { actual }) => {
-            return err(
-                "pairing_state_mismatch",
-                format!("peer already paired (state: {actual})"),
-            );
+            let message = if actual == "self" {
+                "device cannot pair with itself".to_string()
+            } else {
+                format!("peer already paired (state: {actual})")
+            };
+            return err("pairing_state_mismatch", message);
         }
         Err(e) => {
             tracing::warn!(
@@ -207,7 +283,45 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
 
     let issuer = outcome.issuer_device_id;
 
-    // Update this session's pairing state to reflect the new peer.
+    let issuer_handle = match ctx.registry.get(issuer) {
+        Some(handle) => handle,
+        None => {
+            tracing::warn!(
+                target: "minos_relay::envelope",
+                issuer = %issuer,
+                consumer = %ctx.session.device_id,
+                "pair committed but issuer is offline; compensating committed pair"
+            );
+            if let Err(compensate_err) = compensate_pair_delivery_failure(ctx, None).await {
+                tracing::error!(
+                    target: "minos_relay::envelope",
+                    error = %compensate_err,
+                    issuer = %issuer,
+                    consumer = %ctx.session.device_id,
+                    "failed to compensate pair after issuer delivery failure"
+                );
+            }
+            return err(
+                "internal",
+                "failed to deliver pairing secret to issuer; pairing rolled back",
+            );
+        }
+    };
+
+    if let Err(outcome) = deliver_pair_to_current_issuer(
+        ctx,
+        issuer,
+        &issuer_handle,
+        &device_name,
+        &outcome.issuer_secret,
+    )
+    .await
+    {
+        return outcome;
+    }
+
+    // Update this session's pairing state only after the issuer has accepted
+    // the paired event, so compensation can keep the caller unpaired.
     *ctx.session.paired_with.write().await = Some(issuer);
 
     // Fetch issuer's display name for the consumer-side response payload.
@@ -233,33 +347,6 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
             "Mac".to_string()
         }
     };
-
-    // Push Event::Paired to the issuer. Best-effort: if the issuer's
-    // socket dropped between request_pairing_token and pair, the event
-    // fails silently — the issuer's next reconnect will observe the pair
-    // via the handshake path instead.
-    if let Some(issuer_handle) = ctx.registry.get(issuer) {
-        // ORDER MATTERS: mirror paired_with BEFORE pushing Event::Paired so the
-        // issuer dispatcher cannot process a Forward with stale Unpaired state.
-        *issuer_handle.paired_with.write().await = Some(ctx.session.device_id);
-
-        let frame = Envelope::Event {
-            version: 1,
-            event: EventKind::Paired {
-                peer_device_id: ctx.session.device_id,
-                peer_name: device_name.clone(),
-                your_device_secret: DeviceSecret(outcome.issuer_secret.as_str().to_string()),
-            },
-        };
-        if let Err(e) = issuer_handle.outbox.try_send(frame) {
-            tracing::warn!(
-                target: "minos_relay::envelope",
-                error = ?e,
-                issuer = %issuer,
-                "failed to push Event::Paired to issuer outbox"
-            );
-        }
-    }
 
     LocalRpcOutcome::Ok {
         result: serde_json::json!({
@@ -290,7 +377,16 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
     };
 
     match ctx.pairing.forget_pair(ctx.session.device_id).await {
-        Ok(_) => {}
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            tracing::warn!(
+                target: "minos_relay::envelope",
+                device = %ctx.session.device_id,
+                peer = %peer,
+                "forget_peer cache/store mismatch: pair row missing during forget"
+            );
+            return err("internal", "pairing state missing in store");
+        }
         Err(e) => {
             tracing::warn!(
                 target: "minos_relay::envelope",
@@ -322,6 +418,10 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
     }
 
     if let Some(peer_handle) = ctx.registry.get(peer) {
+        // ORDER MATTERS: sever paired_with BEFORE pushing Event::Unpaired so
+        // the peer dispatcher cannot route one last Forward off stale state.
+        *peer_handle.paired_with.write().await = None;
+
         if let Err(e) = peer_handle.outbox.try_send(unpaired) {
             tracing::warn!(
                 target: "minos_relay::envelope",
@@ -330,7 +430,6 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
                 "failed to push Event::Unpaired to peer"
             );
         }
-        *peer_handle.paired_with.write().await = None;
     }
 
     LocalRpcOutcome::Ok {
@@ -341,7 +440,7 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{devices, test_support::memory_pool};
+    use crate::store::{devices, pairings, test_support::memory_pool};
     use minos_domain::{DeviceId, DeviceRole};
     use pretty_assertions::assert_eq;
 
@@ -366,6 +465,21 @@ mod tests {
         SessionHandle::new(id, role)
     }
 
+    fn make_ctx<'a>(
+        session: &'a SessionHandle,
+        registry: &'a SessionRegistry,
+        pairing: &'a PairingService,
+        pool: &'a SqlitePool,
+    ) -> LocalRpcContext<'a> {
+        LocalRpcContext {
+            session,
+            registry,
+            pairing,
+            store: pool,
+            token_ttl: Duration::from_mins(5),
+        }
+    }
+
     // ── ping ──────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -375,12 +489,7 @@ mod tests {
         let pairing = PairingService::new(pool.clone());
         let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
         let (session, _rx) = make_session(mac, DeviceRole::MacHost);
-        let ctx = LocalRpcContext {
-            session: &session,
-            registry: &registry,
-            pairing: &pairing,
-            store: &pool,
-        };
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(&ctx, &LocalRpcMethod::Ping, &serde_json::json!({})).await;
         match out {
@@ -398,12 +507,7 @@ mod tests {
         let pairing = PairingService::new(pool.clone());
         let ios = insert_device_row(&pool, "iphone", DeviceRole::IosClient).await;
         let (session, _rx) = make_session(ios, DeviceRole::IosClient);
-        let ctx = LocalRpcContext {
-            session: &session,
-            registry: &registry,
-            pairing: &pairing,
-            store: &pool,
-        };
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(
             &ctx,
@@ -426,12 +530,7 @@ mod tests {
         let pairing = PairingService::new(pool.clone());
         let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
         let (session, _rx) = make_session(mac, DeviceRole::MacHost);
-        let ctx = LocalRpcContext {
-            session: &session,
-            registry: &registry,
-            pairing: &pairing,
-            store: &pool,
-        };
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(
             &ctx,
@@ -465,12 +564,7 @@ mod tests {
         let (session, _rx) = make_session(ios, DeviceRole::IosClient);
         // Pre-seed pairing state: session already has a peer.
         *session.paired_with.write().await = Some(DeviceId::new());
-        let ctx = LocalRpcContext {
-            session: &session,
-            registry: &registry,
-            pairing: &pairing,
-            store: &pool,
-        };
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(
             &ctx,
@@ -487,18 +581,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pair_rejects_mac_host_role_with_unauthorized() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
+        let (session, _rx) = make_session(mac, DeviceRole::MacHost);
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::Pair,
+            &serde_json::json!({"token": "x", "device_name": "mac"}),
+        )
+        .await;
+        match out {
+            LocalRpcOutcome::Err { error } => {
+                assert_eq!(error.code, "unauthorized");
+                assert_eq!(
+                    error.message,
+                    "only ios-client may pair with a pairing token"
+                );
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn pair_rejects_on_invalid_token() {
         let pool = memory_pool().await;
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
         let ios = insert_device_row(&pool, "iphone", DeviceRole::IosClient).await;
         let (session, _rx) = make_session(ios, DeviceRole::IosClient);
-        let ctx = LocalRpcContext {
-            session: &session,
-            registry: &registry,
-            pairing: &pairing,
-            store: &pool,
-        };
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(
             &ctx,
@@ -509,6 +625,34 @@ mod tests {
         match out {
             LocalRpcOutcome::Err { error } => {
                 assert_eq!(error.code, "pairing_token_invalid");
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pair_rejects_self_pair_with_state_mismatch() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+        let ios = insert_device_row(&pool, "iphone", DeviceRole::IosClient).await;
+        let (token, _) = pairing
+            .request_token(ios, Duration::from_mins(5))
+            .await
+            .unwrap();
+        let (session, _rx) = make_session(ios, DeviceRole::IosClient);
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::Pair,
+            &serde_json::json!({"token": token.as_str(), "device_name": "iphone"}),
+        )
+        .await;
+        match out {
+            LocalRpcOutcome::Err { error } => {
+                assert_eq!(error.code, "pairing_state_mismatch");
+                assert_eq!(error.message, "device cannot pair with itself");
             }
             other => panic!("expected Err, got {other:?}"),
         }
@@ -537,12 +681,7 @@ mod tests {
             .await
             .unwrap();
 
-        let ctx = LocalRpcContext {
-            session: &ios_handle,
-            registry: &registry,
-            pairing: &pairing,
-            store: &pool,
-        };
+        let ctx = make_ctx(&ios_handle, &registry, &pairing, &pool);
 
         let out = handle(
             &ctx,
@@ -595,6 +734,167 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn pair_compensates_if_issuer_is_unavailable() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::MacHost).await;
+        let (token, _) = pairing
+            .request_token(mac, Duration::from_mins(5))
+            .await
+            .unwrap();
+
+        let ios = DeviceId::new();
+        let (ios_handle, _ios_rx) = make_session(ios, DeviceRole::IosClient);
+        let ctx = make_ctx(&ios_handle, &registry, &pairing, &pool);
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::Pair,
+            &serde_json::json!({"token": token.as_str(), "device_name": "Fan's iPhone"}),
+        )
+        .await;
+
+        match out {
+            LocalRpcOutcome::Err { error } => {
+                assert_eq!(error.code, "internal");
+                assert_eq!(
+                    error.message,
+                    "failed to deliver pairing secret to issuer; pairing rolled back"
+                );
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+
+        assert_eq!(*ios_handle.paired_with.read().await, None);
+        assert_eq!(pairings::get_pair(&pool, mac).await.unwrap(), None);
+        assert_eq!(pairings::get_pair(&pool, ios).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, mac).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, ios).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn pair_compensates_if_issuer_outbox_is_full() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::MacHost).await;
+        let (mac_handle, _mac_rx) = make_session(mac, DeviceRole::MacHost);
+        registry.insert(mac_handle.clone());
+
+        for _ in 0..256 {
+            mac_handle
+                .outbox
+                .try_send(Envelope::Event {
+                    version: 1,
+                    event: EventKind::Unpaired,
+                })
+                .expect("pre-filling the issuer outbox must succeed");
+        }
+
+        let (token, _) = pairing
+            .request_token(mac, Duration::from_mins(5))
+            .await
+            .unwrap();
+
+        let ios = DeviceId::new();
+        let (ios_handle, _ios_rx) = make_session(ios, DeviceRole::IosClient);
+        let ctx = make_ctx(&ios_handle, &registry, &pairing, &pool);
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::Pair,
+            &serde_json::json!({"token": token.as_str(), "device_name": "Fan's iPhone"}),
+        )
+        .await;
+
+        match out {
+            LocalRpcOutcome::Err { error } => {
+                assert_eq!(error.code, "internal");
+                assert_eq!(
+                    error.message,
+                    "failed to deliver pairing secret to issuer; pairing rolled back"
+                );
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+
+        assert_eq!(*mac_handle.paired_with.read().await, None);
+        assert_eq!(*ios_handle.paired_with.read().await, None);
+        assert_eq!(pairings::get_pair(&pool, mac).await.unwrap(), None);
+        assert_eq!(pairings::get_pair(&pool, ios).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, mac).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, ios).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn pair_delivery_compensates_if_issuer_session_was_superseded() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::MacHost).await;
+        let (stale_handle, mut stale_rx) = make_session(mac, DeviceRole::MacHost);
+        registry.insert(stale_handle.clone());
+
+        let token = pairing
+            .request_token(mac, Duration::from_mins(5))
+            .await
+            .unwrap()
+            .0;
+
+        let ios = DeviceId::new();
+        let (ios_handle, _ios_rx) = make_session(ios, DeviceRole::IosClient);
+        let ctx = make_ctx(&ios_handle, &registry, &pairing, &pool);
+
+        let outcome = pairing
+            .consume_token(&token, ios, "Fan's iPhone".to_string())
+            .await
+            .unwrap();
+
+        let (replacement_handle, mut replacement_rx) = make_session(mac, DeviceRole::MacHost);
+        registry.insert(replacement_handle.clone());
+
+        let out = deliver_pair_to_current_issuer(
+            &ctx,
+            mac,
+            &stale_handle,
+            "Fan's iPhone",
+            &outcome.issuer_secret,
+        )
+        .await;
+
+        match out {
+            Err(LocalRpcOutcome::Err { error }) => {
+                assert_eq!(error.code, "internal");
+                assert_eq!(
+                    error.message,
+                    "failed to deliver pairing secret to issuer; pairing rolled back"
+                );
+            }
+            other => panic!("expected rollback Err, got {other:?}"),
+        }
+
+        assert!(matches!(
+            stale_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            replacement_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert_eq!(*stale_handle.paired_with.read().await, None);
+        assert_eq!(*replacement_handle.paired_with.read().await, None);
+        assert_eq!(*ios_handle.paired_with.read().await, None);
+        assert_eq!(pairings::get_pair(&pool, mac).await.unwrap(), None);
+        assert_eq!(pairings::get_pair(&pool, ios).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, mac).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, ios).await.unwrap(), None);
+    }
+
     // ── forget_peer ───────────────────────────────────────────────────
 
     #[tokio::test]
@@ -604,12 +904,7 @@ mod tests {
         let pairing = PairingService::new(pool.clone());
         let ios = insert_device_row(&pool, "iphone", DeviceRole::IosClient).await;
         let (session, _rx) = make_session(ios, DeviceRole::IosClient);
-        let ctx = LocalRpcContext {
-            session: &session,
-            registry: &registry,
-            pairing: &pairing,
-            store: &pool,
-        };
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(&ctx, &LocalRpcMethod::ForgetPeer, &serde_json::json!({})).await;
         match out {
@@ -617,6 +912,61 @@ mod tests {
                 assert_eq!(error.code, "pairing_state_mismatch");
             }
             other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn forget_peer_severs_peer_state_before_peer_event_is_observable() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
+        let (mac_handle, mut mac_rx) = make_session(mac, DeviceRole::MacHost);
+        registry.insert(mac_handle.clone());
+
+        let ios = DeviceId::new();
+        let (ios_handle, mut ios_rx) = make_session(ios, DeviceRole::IosClient);
+        registry.insert(ios_handle.clone());
+
+        let (token, _) = pairing
+            .request_token(mac, Duration::from_mins(5))
+            .await
+            .unwrap();
+
+        {
+            let ctx = make_ctx(&ios_handle, &registry, &pairing, &pool);
+            let _ = handle(
+                &ctx,
+                &LocalRpcMethod::Pair,
+                &serde_json::json!({"token": token.as_str(), "device_name": "iphone"}),
+            )
+            .await;
+            let _paired = mac_rx.recv().await;
+        }
+
+        let ctx = make_ctx(&mac_handle, &registry, &pairing, &pool);
+        let out = handle(&ctx, &LocalRpcMethod::ForgetPeer, &serde_json::json!({})).await;
+        match out {
+            LocalRpcOutcome::Ok { result } => {
+                assert_eq!(result, serde_json::json!({"ok": true}));
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+
+        assert_eq!(
+            *ios_handle.paired_with.read().await,
+            None,
+            "peer paired_with must be cleared before Event::Unpaired is observable"
+        );
+
+        let peer_event = ios_rx.recv().await.expect("iPhone must get Unpaired");
+        match peer_event {
+            Envelope::Event {
+                event: EventKind::Unpaired,
+                ..
+            } => {}
+            other => panic!("expected Unpaired, got {other:?}"),
         }
     }
 
@@ -644,12 +994,7 @@ mod tests {
         // in the post-pair state. Drain the Mac's Event::Paired from the
         // inbox so the subsequent Unpaired is the next event.
         {
-            let ctx = LocalRpcContext {
-                session: &ios_handle,
-                registry: &registry,
-                pairing: &pairing,
-                store: &pool,
-            };
+            let ctx = make_ctx(&ios_handle, &registry, &pairing, &pool);
             let _ = handle(
                 &ctx,
                 &LocalRpcMethod::Pair,
@@ -662,12 +1007,7 @@ mod tests {
         }
 
         // Now call forget_peer from the Mac's side.
-        let ctx = LocalRpcContext {
-            session: &mac_handle,
-            registry: &registry,
-            pairing: &pairing,
-            store: &pool,
-        };
+        let ctx = make_ctx(&mac_handle, &registry, &pairing, &pool);
         let out = handle(&ctx, &LocalRpcMethod::ForgetPeer, &serde_json::json!({})).await;
         match out {
             LocalRpcOutcome::Ok { result } => {
@@ -698,5 +1038,64 @@ mod tests {
             } => {}
             other => panic!("expected Unpaired, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn forget_peer_revokes_device_secret_hashes() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
+        let (mac_handle, _mac_rx) = make_session(mac, DeviceRole::MacHost);
+        registry.insert(mac_handle.clone());
+
+        let ios = DeviceId::new();
+        let (ios_handle, _ios_rx) = make_session(ios, DeviceRole::IosClient);
+        registry.insert(ios_handle.clone());
+
+        let (token, _) = pairing
+            .request_token(mac, Duration::from_mins(5))
+            .await
+            .unwrap();
+
+        {
+            let ctx = make_ctx(&ios_handle, &registry, &pairing, &pool);
+            let out = handle(
+                &ctx,
+                &LocalRpcMethod::Pair,
+                &serde_json::json!({"token": token.as_str(), "device_name": "iphone"}),
+            )
+            .await;
+            match out {
+                LocalRpcOutcome::Ok { .. } => {}
+                other => panic!("expected Ok, got {other:?}"),
+            }
+        }
+
+        assert!(devices::get_secret_hash(&pool, mac)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(devices::get_secret_hash(&pool, ios)
+            .await
+            .unwrap()
+            .is_some());
+
+        let ctx = make_ctx(&mac_handle, &registry, &pairing, &pool);
+        let out = handle(&ctx, &LocalRpcMethod::ForgetPeer, &serde_json::json!({})).await;
+        match out {
+            LocalRpcOutcome::Ok { result } => {
+                assert_eq!(result, serde_json::json!({"ok": true}));
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+
+        assert_eq!(pairings::get_pair(&pool, mac).await.unwrap(), None);
+        assert_eq!(pairings::get_pair(&pool, ios).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, mac).await.unwrap(), None);
+        assert_eq!(devices::get_secret_hash(&pool, ios).await.unwrap(), None);
+        assert_eq!(*mac_handle.paired_with.read().await, None);
+        assert_eq!(*ios_handle.paired_with.read().await, None);
     }
 }

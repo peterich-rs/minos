@@ -17,7 +17,7 @@
 //! newtypes, we can revisit in `minos-domain`.
 
 use minos_domain::{DeviceId, DeviceRole};
-use sqlx::SqlitePool;
+use sqlx::{Executor, Sqlite, SqlitePool};
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -43,7 +43,8 @@ pub struct DeviceRow {
 /// Both `created_at` and `last_seen_at` are set to `now` (unix epoch ms).
 /// `now` is injected from the caller so tests can use fixed-epoch literals.
 /// The row is inserted with `secret_hash = NULL`; pair-time completion
-/// happens via [`upsert_secret_hash`].
+/// happens via [`upsert_secret_hash`] and unpair-time revocation via
+/// [`clear_secret_hash`].
 pub async fn insert_device(
     pool: &SqlitePool,
     id: DeviceId,
@@ -51,6 +52,19 @@ pub async fn insert_device(
     role: DeviceRole,
     now: i64,
 ) -> Result<(), RelayError> {
+    insert_device_with_executor(pool, id, name, role, now).await
+}
+
+pub(crate) async fn insert_device_with_executor<'e, E>(
+    executor: E,
+    id: DeviceId,
+    name: &str,
+    role: DeviceRole,
+    now: i64,
+) -> Result<(), RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let id_str = id.to_string();
     let role_str = role.to_string();
 
@@ -65,7 +79,7 @@ pub async fn insert_device(
         now,
         now,
     )
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| RelayError::StoreQuery {
         operation: "insert_device".to_string(),
@@ -83,6 +97,17 @@ pub async fn upsert_secret_hash(
     id: DeviceId,
     hash: &str,
 ) -> Result<(), RelayError> {
+    upsert_secret_hash_with_executor(pool, id, hash).await
+}
+
+pub(crate) async fn upsert_secret_hash_with_executor<'e, E>(
+    executor: E,
+    id: DeviceId,
+    hash: &str,
+) -> Result<(), RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let id_str = id.to_string();
 
     let result = sqlx::query!(
@@ -90,7 +115,7 @@ pub async fn upsert_secret_hash(
         hash,
         id_str,
     )
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| RelayError::StoreQuery {
         operation: "upsert_secret_hash".to_string(),
@@ -104,10 +129,52 @@ pub async fn upsert_secret_hash(
     Ok(())
 }
 
+/// Clear a device's stored `secret_hash`.
+///
+/// Returns [`RelayError::DeviceNotFound`] if no row matches `id`.
+pub async fn clear_secret_hash(pool: &SqlitePool, id: DeviceId) -> Result<(), RelayError> {
+    clear_secret_hash_with_executor(pool, id).await
+}
+
+pub(crate) async fn clear_secret_hash_with_executor<'e, E>(
+    executor: E,
+    id: DeviceId,
+) -> Result<(), RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let id_str = id.to_string();
+
+    let result = sqlx::query(r#"UPDATE devices SET secret_hash = NULL WHERE device_id = ?"#)
+        .bind(&id_str)
+        .execute(executor)
+        .await
+        .map_err(|e| RelayError::StoreQuery {
+            operation: "clear_secret_hash".to_string(),
+            message: e.to_string(),
+        })?;
+
+    if result.rows_affected() == 0 {
+        return Err(RelayError::DeviceNotFound { device_id: id_str });
+    }
+
+    Ok(())
+}
+
 /// Look up a device by id.
 ///
 /// Returns `Ok(None)` if the row does not exist.
 pub async fn get_device(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceRow>, RelayError> {
+    get_device_with_executor(pool, id).await
+}
+
+pub(crate) async fn get_device_with_executor<'e, E>(
+    executor: E,
+    id: DeviceId,
+) -> Result<Option<DeviceRow>, RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let id_str = id.to_string();
 
     let row = sqlx::query!(
@@ -118,7 +185,7 @@ pub async fn get_device(pool: &SqlitePool, id: DeviceId) -> Result<Option<Device
         "#,
         id_str,
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|e| RelayError::StoreQuery {
         operation: "get_device".to_string(),
@@ -233,6 +300,24 @@ mod tests {
             row.secret_hash,
             Some("$argon2id$v=19$m=19456,t=2,p=1$salt$hash".to_string()),
         );
+    }
+
+    #[tokio::test]
+    async fn clear_secret_hash_removes_hash_visible_to_get() {
+        let pool = memory_pool().await;
+        let id = DeviceId::new();
+        insert_device(&pool, id, "ipad", DeviceRole::IosClient, T0)
+            .await
+            .unwrap();
+        upsert_secret_hash(&pool, id, "$argon2id$v=19$m=19456,t=2,p=1$salt$hash")
+            .await
+            .unwrap();
+
+        clear_secret_hash(&pool, id).await.unwrap();
+
+        assert_eq!(get_secret_hash(&pool, id).await.unwrap(), None);
+        let row = get_device(&pool, id).await.unwrap().unwrap();
+        assert_eq!(row.secret_hash, None);
     }
 
     #[tokio::test]

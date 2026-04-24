@@ -23,22 +23,15 @@
 //! # Backpressure (MVP)
 //!
 //! The outbox has a fixed capacity of [`OUTBOX_CAPACITY`] = 256 frames. On
-//! a slow consumer the channel fills up and `route()` has three options:
+//! a slow consumer the channel can fill up; when it does, `route()` now
+//! returns [`RelayError::PeerBackpressure`] instead of silently dropping the
+//! forwarded payload. That keeps the registry thin while ensuring the sender
+//! gets a deterministic failure instead of hanging until timeout.
 //!
-//! 1. **Drop the newest frame** (what we do today). `mpsc::Sender::try_send`
-//!    returns `TrySendError::Full`; we emit `tracing::warn!` and return
-//!    `Ok(())`.
-//! 2. **Drop the oldest frame** (what the plan §7 bullet asks for). This
-//!    requires popping one element off the receiver side, which the
-//!    registry does not own — only the writer task does. A true
-//!    drop-oldest policy must therefore live in the writer loop, not here.
-//! 3. **Queue across disconnect** (P1, out of scope for MVP).
-//!
-//! Option 1 is the pragmatic MVP default: it keeps the registry thin and
-//! avoids a second channel layer just to drain the tail. If step 12's e2e
-//! test reveals that drop-newest causes stale-state bugs (e.g. the newest
-//! `peer_online` is dropped), revisit by threading the receiver's
-//! `try_recv` into a `drain_one_then_retry` path owned by the writer.
+//! A true drop-oldest policy still has to live in the writer loop, not here:
+//! the registry owns only the sender side and cannot pop from the receiver.
+//! If step 12's e2e coverage shows that retry-on-backpressure is not enough,
+//! revisit this with a writer-owned `drain_one_then_retry` path.
 //!
 //! On [`TrySendError::Closed`] we translate to [`RelayError::PeerOffline`].
 //! The receiver going away means the writer task has shut down; from the
@@ -50,7 +43,7 @@ use std::time::Instant;
 use dashmap::DashMap;
 use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::Envelope;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, watch, RwLock};
 
 use crate::error::RelayError;
 
@@ -96,6 +89,9 @@ pub struct SessionHandle {
     /// Sender end only; the receiver lives inside the writer. `Clone` on
     /// `mpsc::Sender` is a cheap `Arc` bump.
     pub outbox: mpsc::Sender<ServerFrame>,
+    /// Session-local revocation signal used to actively supersede an old
+    /// socket when a reconnect replaces it in the registry.
+    revoked: watch::Sender<bool>,
     /// Timestamp of the most recent `Pong` frame we received from this
     /// client. Updated by the dispatcher's read branch (step 8); consumed
     /// by the heartbeat tick branch to decide when to close the socket as
@@ -115,14 +111,33 @@ impl SessionHandle {
     #[must_use]
     pub fn new(device_id: DeviceId, role: DeviceRole) -> (Self, mpsc::Receiver<ServerFrame>) {
         let (tx, rx) = mpsc::channel(OUTBOX_CAPACITY);
+        let (revoked, _revoked_rx) = watch::channel(false);
         let handle = Self {
             device_id,
             role,
             paired_with: Arc::new(RwLock::new(None)),
             outbox: tx,
+            revoked,
             last_pong_at: Arc::new(RwLock::new(Instant::now())),
         };
         (handle, rx)
+    }
+
+    /// Mark this session as superseded and wake any socket loop waiting on it.
+    pub fn revoke(&self) {
+        let _ = self.revoked.send(true);
+    }
+
+    /// Subscribe to revocation changes for this session.
+    #[must_use]
+    pub fn subscribe_revocation(&self) -> watch::Receiver<bool> {
+        self.revoked.subscribe()
+    }
+
+    /// True when `other` refers to the same concrete socket session.
+    #[must_use]
+    pub fn same_session(&self, other: &Self) -> bool {
+        self.outbox.same_channel(&other.outbox)
     }
 }
 
@@ -156,6 +171,18 @@ impl SessionRegistry {
         self.0.remove(&id).map(|(_k, v)| v)
     }
 
+    /// Remove and return `current` only if it is still the live entry.
+    ///
+    /// This makes disconnect cleanup ABA-safe: an old socket may close
+    /// after a reconnect has already inserted a fresh handle for the same
+    /// `DeviceId`, and in that case cleanup must leave the fresh entry in
+    /// place.
+    pub fn remove_current(&self, current: &SessionHandle) -> Option<SessionHandle> {
+        self.0
+            .remove_if(&current.device_id, |_, live| live.same_session(current))
+            .map(|(_k, v)| v)
+    }
+
     /// Clone the handle for `id` if a session is live.
     ///
     /// Returns a clone (cheap: one `Arc` bump on each field) rather than
@@ -163,6 +190,46 @@ impl SessionRegistry {
     /// holding the shard lock.
     pub fn get(&self, id: DeviceId) -> Option<SessionHandle> {
         self.0.get(&id).map(|r| r.clone())
+    }
+
+    /// Queue `frame` only if `current` is still the live registry entry.
+    ///
+    /// This is stricter than calling `current.outbox.try_send(...)`
+    /// directly: a superseded socket can keep its sender alive briefly
+    /// during reconnect teardown, so a stale handle may still accept a
+    /// frame even though the registry already points at a replacement.
+    /// We hold the DashMap shard lock across the synchronous `try_send`
+    /// so the liveness check and queueing happen against one stable entry.
+    pub fn try_send_current(
+        &self,
+        current: &SessionHandle,
+        frame: ServerFrame,
+    ) -> Result<(), RelayError> {
+        let Some(live) = self.0.get(&current.device_id) else {
+            return Err(RelayError::PeerOffline {
+                peer_device_id: current.device_id.to_string(),
+            });
+        };
+
+        if !live.same_session(current) {
+            return Err(RelayError::PeerOffline {
+                peer_device_id: current.device_id.to_string(),
+            });
+        }
+
+        match live.outbox.try_send(frame) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(RelayError::PeerBackpressure {
+                peer_device_id: current.device_id.to_string(),
+            }),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                drop(live);
+                self.remove_current(current);
+                Err(RelayError::PeerOffline {
+                    peer_device_id: current.device_id.to_string(),
+                })
+            }
+        }
     }
 
     /// Current number of live sessions. Useful for metrics and tests;
@@ -215,8 +282,8 @@ impl SessionRegistry {
     /// Behaviour:
     /// - `to` not in the registry → [`RelayError::PeerOffline`].
     /// - Outbox accepts → `Ok(())`.
-    /// - Outbox full → emit `tracing::warn!` and return `Ok(())`. See the
-    ///   module-level "Backpressure (MVP)" note for the rationale.
+    /// - Outbox full → emit `tracing::warn!` and return
+    ///   [`RelayError::PeerBackpressure`].
     /// - Outbox closed (receiver dropped) → evict only if the handle is
     ///   still the one whose sender we tried (ABA-safe via
     ///   [`mpsc::Sender::same_channel`]); if a reconnect has already
@@ -261,9 +328,11 @@ impl SessionRegistry {
                     target: "minos_relay::session",
                     to = %to,
                     from = %from,
-                    "outbox full; dropping forwarded frame (MVP drop-newest policy)"
+                    "outbox full; rejecting forwarded frame"
                 );
-                Ok(())
+                Err(RelayError::PeerBackpressure {
+                    peer_device_id: to.to_string(),
+                })
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 // Scoped eviction: only remove if the entry is STILL the
@@ -272,8 +341,7 @@ impl SessionRegistry {
                 // handle alive — the next route will succeed on the new
                 // outbox. Prevents the ABA race where we evict a
                 // just-reconnected session.
-                self.0
-                    .remove_if(&to, |_, v| v.outbox.same_channel(&handle.outbox));
+                self.remove_current(&handle);
                 Err(RelayError::PeerOffline {
                     peer_device_id: to.to_string(),
                 })
@@ -297,12 +365,14 @@ mod tests {
     // Small outbox variant so we can fill it deterministically in tests.
     fn make_tiny_handle(id: DeviceId, cap: usize) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
         let (tx, rx) = mpsc::channel(cap);
+        let (revoked, _revoked_rx) = watch::channel(false);
         (
             SessionHandle {
                 device_id: id,
                 role: DeviceRole::MacHost,
                 paired_with: Arc::new(RwLock::new(None)),
                 outbox: tx,
+                revoked,
                 last_pong_at: Arc::new(RwLock::new(Instant::now())),
             },
             rx,
@@ -358,6 +428,48 @@ mod tests {
         assert!(current.outbox.same_channel(&h2.outbox));
     }
 
+    #[tokio::test]
+    async fn remove_current_only_removes_matching_live_handle() {
+        let reg = SessionRegistry::new();
+        let id = DeviceId::new();
+        let (h1, _rx1) = make_handle(id);
+        let (h2, _rx2) = make_handle(id);
+
+        reg.insert(h1.clone());
+        reg.insert(h2.clone());
+
+        assert!(
+            reg.remove_current(&h1).is_none(),
+            "stale cleanup must not remove a replacement entry"
+        );
+        let current = reg.get(id).expect("replacement handle still live");
+        assert!(current.same_session(&h2));
+
+        let removed = reg
+            .remove_current(&h2)
+            .expect("current handle should be removed");
+        assert!(removed.same_session(&h2));
+        assert!(reg.get(id).is_none());
+    }
+
+    #[tokio::test]
+    async fn revoke_notifies_existing_and_late_subscribers() {
+        let id = DeviceId::new();
+        let (handle, _rx) = make_handle(id);
+        let mut subscriber = handle.subscribe_revocation();
+
+        assert!(!*subscriber.borrow());
+        handle.revoke();
+        subscriber.changed().await.unwrap();
+        assert!(*subscriber.borrow_and_update());
+
+        let late_subscriber = handle.subscribe_revocation();
+        assert!(
+            *late_subscriber.borrow(),
+            "late subscribers must observe the current revoked state"
+        );
+    }
+
     // ── routing: happy path ───────────────────────────────────────────
 
     #[tokio::test]
@@ -408,10 +520,10 @@ mod tests {
         }
     }
 
-    // ── routing: outbox full (drop-newest MVP) ────────────────────────
+    // ── routing: outbox full -> PeerBackpressure ──────────────────────
 
     #[tokio::test]
-    async fn route_to_full_outbox_warns_and_returns_ok() {
+    async fn route_to_full_outbox_returns_peer_backpressure_and_keeps_handle() {
         let reg = SessionRegistry::new();
         let a = DeviceId::new();
         let b = DeviceId::new();
@@ -421,9 +533,18 @@ mod tests {
 
         // First route succeeds; the channel holds one un-received frame.
         reg.route(a, b, serde_json::json!({"n": 1})).await.unwrap();
-        // Second route hits Full → warn! + Ok(()).
-        reg.route(a, b, serde_json::json!({"n": 2})).await.unwrap();
-        // Handle must still be live (we didn't treat Full as "peer gone").
+        // Second route hits Full -> deterministic backpressure error.
+        let err = reg
+            .route(a, b, serde_json::json!({"n": 2}))
+            .await
+            .unwrap_err();
+        match err {
+            RelayError::PeerBackpressure { peer_device_id } => {
+                assert_eq!(peer_device_id, b.0.to_string());
+            }
+            other => panic!("expected PeerBackpressure, got {other:?}"),
+        }
+        // Handle must still be live (backpressure is not "peer gone").
         assert!(reg.get(b).is_some());
     }
 
@@ -443,6 +564,50 @@ mod tests {
         assert!(matches!(err, RelayError::PeerOffline { .. }));
         // Stale entry was cleaned up.
         assert!(reg.get(b).is_none());
+    }
+
+    #[tokio::test]
+    async fn try_send_current_rejects_superseded_handle_even_if_stale_sender_is_open() {
+        let reg = SessionRegistry::new();
+        let id = DeviceId::new();
+        let (stale, mut stale_rx) = make_handle(id);
+        reg.insert(stale.clone());
+
+        let (current, mut current_rx) = make_handle(id);
+        reg.insert(current.clone());
+
+        // The stale sender can still accept frames until the old socket
+        // fully tears down, which is why pair completion must not use it
+        // directly as proof of delivery.
+        let stale_frame = Envelope::Event {
+            version: 1,
+            event: minos_protocol::EventKind::Unpaired,
+        };
+        stale
+            .outbox
+            .try_send(stale_frame.clone())
+            .expect("superseded sender should still be open for this regression");
+        assert_eq!(stale_rx.try_recv().unwrap(), stale_frame);
+
+        let guarded_frame = Envelope::Event {
+            version: 1,
+            event: minos_protocol::EventKind::ServerShutdown,
+        };
+        let err = reg
+            .try_send_current(&stale, guarded_frame)
+            .expect_err("stale handle must not count as the current live session");
+        assert!(matches!(err, RelayError::PeerOffline { .. }));
+        assert!(matches!(
+            stale_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            current_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+
+        let live = reg.get(id).expect("replacement handle still live");
+        assert!(live.same_session(&current));
     }
 
     // ── routing: ABA-safe eviction on reconnect race ─────────────────

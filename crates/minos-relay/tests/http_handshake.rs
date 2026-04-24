@@ -5,7 +5,7 @@
 //! (step 12) will do, but with a focused coverage of the handshake path
 //! added in step 9.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
 use minos_protocol::{Envelope, EventKind};
@@ -32,6 +32,7 @@ async fn spawn_relay() -> (String, tokio::task::JoinHandle<()>, sqlx::SqlitePool
         registry: Arc::new(SessionRegistry::new()),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
+        token_ttl: Duration::from_mins(5),
         version: "test",
     };
     let app = router(state);
@@ -130,10 +131,10 @@ async fn devices_first_connect_emits_unpaired_event() {
     );
 }
 
-// ── /devices: reconnect with correct secret → Event::PeerOnline ─────────
+// ── /devices: paired reconnect with peer offline → Event::PeerOffline ───
 
 #[tokio::test]
-async fn devices_authenticated_connect_emits_peer_online_event() {
+async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not_live() {
     use futures::StreamExt;
 
     let (base, _task, pool) = spawn_relay().await;
@@ -181,13 +182,40 @@ async fn devices_authenticated_connect_emits_peer_online_event() {
     let env: Envelope = serde_json::from_str(&text).unwrap();
     match env {
         Envelope::Event {
-            event: EventKind::PeerOnline { peer_device_id },
+            event: EventKind::PeerOffline { peer_device_id },
             ..
         } => {
             assert_eq!(peer_device_id, ios_id);
         }
-        other => panic!("expected Event::PeerOnline, got {other:?}"),
+        other => panic!("expected Event::PeerOffline, got {other:?}"),
     }
+}
+
+// ── /devices: existing row rejects spoofed X-Device-Role ───────────────
+
+#[tokio::test]
+async fn devices_role_spoof_rejects_with_401() {
+    let (base, _task, pool) = spawn_relay().await;
+
+    let id = DeviceId::new();
+    let secret = DeviceSecret::generate();
+    let secret_hash = hash_secret(&secret).unwrap();
+    store::devices::insert_device(&pool, id, "mac", DeviceRole::MacHost, 0)
+        .await
+        .unwrap();
+    store::devices::upsert_secret_hash(&pool, id, &secret_hash)
+        .await
+        .unwrap();
+
+    let url: Uri = format!("{}/devices", http_to_ws(&base)).parse().unwrap();
+    let builder = ClientRequestBuilder::new(url)
+        .with_header("X-Device-Id", id.to_string())
+        .with_header("X-Device-Role", DeviceRole::IosClient.to_string())
+        .with_header("X-Device-Secret", secret.as_str().to_string());
+    let err = tokio_tungstenite::connect_async(builder)
+        .await
+        .expect_err("spoofed role must fail");
+    assert_http_status(&err, 401, "spoofed X-Device-Role");
 }
 
 // ── /devices: reconnect with WRONG secret → 401 ─────────────────────────

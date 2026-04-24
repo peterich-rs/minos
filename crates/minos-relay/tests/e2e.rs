@@ -35,6 +35,12 @@
 //!    **pre-upgrade** with HTTP 401 (not WS close 4401); the plan's §12
 //!    bullet says "close 4401" but defers to step 9's actual design. See
 //!    `src/http/ws_devices.rs` module header for why (saves a round trip).
+//! 4. `e2e_reconnect_supersedes_old_socket` — a second authenticated socket
+//!    for the same device actively revokes the first one, and the new socket
+//!    still answers LocalRpc traffic after the old cleanup runs.
+//! 5. `e2e_presence_tracks_live_peer_membership` — paired reconnects surface
+//!    `PeerOffline` / `PeerOnline` from actual live sessions, notify the
+//!    opposite live peer on connect, and emit `PeerOffline` on disconnect.
 //!
 //! # Timing
 //!
@@ -63,9 +69,10 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
 };
 
-/// Short timeout for individual `recv` calls — the relay either speaks up
-/// within a handful of ms or the test is wedged and should fail fast.
-const RECV_TIMEOUT: Duration = Duration::from_millis(750);
+/// Short timeout for individual `recv` calls. Keep this comfortably above
+/// the whole-file parallel test jitter while still failing fast on hangs.
+const RECV_TIMEOUT: Duration = Duration::from_millis(1500);
+const DEFAULT_TOKEN_TTL: Duration = Duration::from_mins(5);
 
 type WsClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -95,6 +102,11 @@ impl Drop for Relay {
 
 /// Boot a fresh relay on an ephemeral port backed by a tempfile DB.
 async fn spawn_relay() -> anyhow::Result<Relay> {
+    spawn_relay_with_token_ttl(DEFAULT_TOKEN_TTL).await
+}
+
+/// Boot a fresh relay using an explicit pairing-token TTL.
+async fn spawn_relay_with_token_ttl(token_ttl: Duration) -> anyhow::Result<Relay> {
     // Create + immediately close the tempfile so SQLite can reopen it.
     // `NamedTempFile` is kept alive in the returned `Relay` so Drop will
     // unlink the file when the test ends.
@@ -107,6 +119,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
         registry: Arc::new(SessionRegistry::new()),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
+        token_ttl,
         version: "e2e-test",
     };
     let app = router(state);
@@ -180,6 +193,31 @@ async fn send_envelope(ws: &mut WsClient, env: &Envelope) -> anyhow::Result<()> 
     let text = serde_json::to_string(env)?;
     ws.send(Message::Text(text.into())).await?;
     Ok(())
+}
+
+/// Wait for the relay to actively close a superseded socket.
+async fn expect_close_frame(ws: &mut WsClient) -> anyhow::Result<()> {
+    loop {
+        let next = timeout(RECV_TIMEOUT, ws.next())
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for close frame"))?;
+        match next {
+            Some(Ok(Message::Close(_))) | None => return Ok(()),
+            Some(Ok(Message::Ping(p))) => {
+                ws.send(Message::Pong(p)).await?;
+            }
+            Some(Ok(Message::Pong(_))) => {}
+            Some(Ok(other)) => {
+                return Err(anyhow::anyhow!(
+                    "expected relay to close the socket, got {other:?}"
+                ));
+            }
+            Some(Err(WsError::ConnectionClosed)) | Some(Err(WsError::AlreadyClosed)) => {
+                return Ok(());
+            }
+            Some(Err(e)) => return Err(anyhow::anyhow!("ws error while waiting for close: {e}")),
+        }
+    }
 }
 
 /// Await the first frame and assert it's `Event::Unpaired`. Used right
@@ -460,6 +498,56 @@ async fn e2e_pair_forward_forget() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn e2e_request_pairing_token_respects_configured_ttl() -> anyhow::Result<()> {
+    let token_ttl = Duration::from_secs(42);
+    let relay = spawn_relay_with_token_ttl(token_ttl).await?;
+
+    let mac_id = DeviceId::new();
+    let mut mac =
+        connect_client(&relay, mac_id, DeviceRole::MacHost, None, Some("Fan's Mac")).await?;
+    expect_unpaired_event(&mut mac).await?;
+
+    let before = chrono::Utc::now();
+    send_envelope(
+        &mut mac,
+        &Envelope::LocalRpc {
+            version: 1,
+            id: 1,
+            method: LocalRpcMethod::RequestPairingToken,
+            params: serde_json::json!({}),
+        },
+    )
+    .await?;
+
+    let (outcome, stray_events) = recv_response_matching(&mut mac, 1).await?;
+    assert!(
+        stray_events.is_empty(),
+        "unexpected events before token response: {stray_events:?}"
+    );
+
+    let after = chrono::Utc::now();
+    let expires_at = match outcome {
+        LocalRpcOutcome::Ok { result } => chrono::DateTime::parse_from_rfc3339(
+            result["expires_at"]
+                .as_str()
+                .expect("expires_at is a string"),
+        )?
+        .with_timezone(&chrono::Utc),
+        other => panic!("expected Ok for request_pairing_token, got {other:?}"),
+    };
+
+    let ttl = chrono::Duration::from_std(token_ttl).unwrap();
+    let lower_bound = before + ttl;
+    let upper_bound = after + ttl;
+    assert!(
+        expires_at >= lower_bound && expires_at <= upper_bound,
+        "configured TTL not applied: expires_at={expires_at:?}, expected between {lower_bound:?} and {upper_bound:?}"
+    );
+
+    Ok(())
+}
+
 // ── negative: invalid pairing token ──────────────────────────────────────
 
 #[tokio::test]
@@ -532,6 +620,138 @@ async fn e2e_reconnect_with_wrong_secret_returns_401() -> anyhow::Result<()> {
         WsError::Http(resp) => assert_eq!(resp.status().as_u16(), 401, "expected HTTP 401"),
         other => panic!("expected WsError::Http(401), got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+
+    let id = DeviceId::new();
+    let secret = DeviceSecret::generate();
+    let secret_hash = hash_secret(&secret)?;
+    store::devices::insert_device(&relay.pool, id, "ios", DeviceRole::IosClient, 0).await?;
+    store::devices::upsert_secret_hash(&relay.pool, id, &secret_hash).await?;
+
+    let mut first = connect_client(
+        &relay,
+        id,
+        DeviceRole::IosClient,
+        Some(secret.as_str()),
+        Some("ios"),
+    )
+    .await?;
+    expect_unpaired_event(&mut first).await?;
+
+    let mut second = connect_client(
+        &relay,
+        id,
+        DeviceRole::IosClient,
+        Some(secret.as_str()),
+        Some("ios"),
+    )
+    .await?;
+    expect_unpaired_event(&mut second).await?;
+
+    expect_close_frame(&mut first).await?;
+
+    send_envelope(
+        &mut second,
+        &Envelope::LocalRpc {
+            version: 1,
+            id: 7,
+            method: LocalRpcMethod::Ping,
+            params: serde_json::json!({}),
+        },
+    )
+    .await?;
+    let (outcome, stray) = recv_response_matching(&mut second, 7).await?;
+    assert!(
+        stray.is_empty(),
+        "unexpected events before ping response: {stray:?}"
+    );
+    match outcome {
+        LocalRpcOutcome::Ok { result } => assert_eq!(result, serde_json::json!({"ok": true})),
+        other => panic!("expected Ok ping response on replacement socket, got {other:?}"),
+    }
+
+    second.send(Message::Close(None)).await.ok();
+    drop(second);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+
+    let mac_id = DeviceId::new();
+    let ios_id = DeviceId::new();
+    let mac_secret = DeviceSecret::generate();
+    let ios_secret = DeviceSecret::generate();
+    let mac_hash = hash_secret(&mac_secret)?;
+    let ios_hash = hash_secret(&ios_secret)?;
+
+    store::devices::insert_device(&relay.pool, mac_id, "mac", DeviceRole::MacHost, 0).await?;
+    store::devices::insert_device(&relay.pool, ios_id, "ios", DeviceRole::IosClient, 0).await?;
+    store::devices::upsert_secret_hash(&relay.pool, mac_id, &mac_hash).await?;
+    store::devices::upsert_secret_hash(&relay.pool, ios_id, &ios_hash).await?;
+    store::pairings::insert_pairing(&relay.pool, mac_id, ios_id, 0).await?;
+
+    let mut mac = connect_client(
+        &relay,
+        mac_id,
+        DeviceRole::MacHost,
+        Some(mac_secret.as_str()),
+        Some("mac"),
+    )
+    .await?;
+    match recv_envelope(&mut mac).await? {
+        Envelope::Event {
+            event: EventKind::PeerOffline { peer_device_id },
+            ..
+        } => assert_eq!(peer_device_id, ios_id),
+        other => panic!("expected initial PeerOffline on mac, got {other:?}"),
+    }
+
+    let mut ios = connect_client(
+        &relay,
+        ios_id,
+        DeviceRole::IosClient,
+        Some(ios_secret.as_str()),
+        Some("ios"),
+    )
+    .await?;
+    match recv_envelope(&mut ios).await? {
+        Envelope::Event {
+            event: EventKind::PeerOnline { peer_device_id },
+            ..
+        } => assert_eq!(peer_device_id, mac_id),
+        other => panic!("expected initial PeerOnline on ios, got {other:?}"),
+    }
+
+    match recv_envelope(&mut mac).await? {
+        Envelope::Event {
+            event: EventKind::PeerOnline { peer_device_id },
+            ..
+        } => assert_eq!(peer_device_id, ios_id),
+        other => panic!("expected PeerOnline on mac after ios connect, got {other:?}"),
+    }
+
+    ios.send(Message::Close(None)).await.ok();
+    drop(ios);
+
+    match recv_envelope(&mut mac).await? {
+        Envelope::Event {
+            event: EventKind::PeerOffline { peer_device_id },
+            ..
+        } => assert_eq!(peer_device_id, ios_id),
+        other => panic!("expected PeerOffline on mac after ios disconnect, got {other:?}"),
+    }
+
+    mac.send(Message::Close(None)).await.ok();
+    drop(mac);
 
     Ok(())
 }

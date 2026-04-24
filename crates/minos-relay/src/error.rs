@@ -82,4 +82,14 @@ pub enum RelayError {
     /// inconvenient.
     #[error("peer offline: {peer_device_id}")]
     PeerOffline { peer_device_id: String },
+
+    /// The routing target is connected but cannot currently accept more
+    /// forwarded frames.
+    ///
+    /// Emitted by `session::SessionRegistry::route` when the destination
+    /// outbox is full. This stays relay-local: callers that can recover in
+    /// protocol space should surface a deterministic retryable error to the
+    /// sender rather than hanging until timeout.
+    #[error("peer backpressure: {peer_device_id}")]
+    PeerBackpressure { peer_device_id: String },
 }

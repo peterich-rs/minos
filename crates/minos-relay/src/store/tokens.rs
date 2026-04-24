@@ -14,7 +14,7 @@
 //! happens to be the issuer" with other device ids in the same scope.
 
 use minos_domain::DeviceId;
-use sqlx::SqlitePool;
+use sqlx::{Executor, Sqlite, SqlitePool};
 use uuid::Uuid;
 
 use crate::error::RelayError;
@@ -75,11 +75,51 @@ pub async fn issue_token(
 /// The caller cannot distinguish between these three cases — that's a
 /// feature: leaking "token exists but is expired" vs. "no such token"
 /// helps an attacker enumerate issued tokens.
+pub(crate) async fn peek_usable_token_with_executor<'e, E>(
+    executor: E,
+    token_hash_candidate: &str,
+    now: i64,
+) -> Result<Option<ConsumedToken>, RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let issuer_device_id = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT issuer_device_id
+        FROM pairing_tokens
+        WHERE token_hash = ?
+          AND consumed_at IS NULL
+          AND expires_at > ?
+        "#,
+    )
+    .bind(token_hash_candidate)
+    .bind(now)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| RelayError::StoreQuery {
+        operation: "peek_usable_token".to_string(),
+        message: e.to_string(),
+    })?;
+
+    decode_consumed_token(issuer_device_id, "peek_usable_token")
+}
+
 pub async fn consume_token(
     pool: &SqlitePool,
     token_hash_candidate: &str,
     now: i64,
 ) -> Result<Option<ConsumedToken>, RelayError> {
+    consume_token_with_executor(pool, token_hash_candidate, now).await
+}
+
+pub(crate) async fn consume_token_with_executor<'e, E>(
+    executor: E,
+    token_hash_candidate: &str,
+    now: i64,
+) -> Result<Option<ConsumedToken>, RelayError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let row = sqlx::query!(
         r#"
         UPDATE pairing_tokens
@@ -93,21 +133,28 @@ pub async fn consume_token(
         token_hash_candidate,
         now,
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|e| RelayError::StoreQuery {
         operation: "consume_token".to_string(),
         message: e.to_string(),
     })?;
 
-    let Some(r) = row else {
+    decode_consumed_token(row.map(|r| r.issuer_device_id), "consume_token")
+}
+
+fn decode_consumed_token(
+    issuer_device_id: Option<String>,
+    operation: &str,
+) -> Result<Option<ConsumedToken>, RelayError> {
+    let Some(issuer_device_id) = issuer_device_id else {
         return Ok(None);
     };
 
-    let issuer_device_id = Uuid::parse_str(&r.issuer_device_id)
+    let issuer_device_id = Uuid::parse_str(&issuer_device_id)
         .map(DeviceId)
         .map_err(|e| RelayError::StoreDecode {
-            column: "pairing_tokens.issuer_device_id".to_string(),
+            column: format!("pairing_tokens.issuer_device_id ({operation})"),
             message: e.to_string(),
         })?;
     Ok(Some(ConsumedToken { issuer_device_id }))
