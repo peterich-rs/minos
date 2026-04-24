@@ -6,6 +6,7 @@ pub mod file_store;
 pub mod handle;
 pub mod logging;
 pub mod paths;
+pub mod relay_pairing;
 pub mod rpc_server;
 pub mod subscription;
 pub mod tailscale;
@@ -14,6 +15,7 @@ pub use agent::AgentGlue;
 pub use config::{RelayConfig, BACKEND_URL};
 pub use file_store::*;
 pub use handle::*;
+pub use relay_pairing::{PeerRecord, RelayQrPayload};
 pub use minos_agent_runtime::AgentState;
 pub use subscription::{AgentStateObserver, ConnectionStateObserver, Subscription};
 
