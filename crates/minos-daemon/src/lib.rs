@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
+pub mod config;
 pub mod file_store;
 pub mod handle;
 pub mod logging;
@@ -10,6 +11,7 @@ pub mod subscription;
 pub mod tailscale;
 
 pub use agent::AgentGlue;
+pub use config::{RelayConfig, BACKEND_URL};
 pub use file_store::*;
 pub use handle::*;
 pub use minos_agent_runtime::AgentState;
