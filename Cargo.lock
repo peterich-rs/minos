@@ -2009,9 +2009,11 @@ dependencies = [
 name = "minos-agent-runtime"
 version = "0.1.0"
 dependencies = [
+ "dashmap 6.1.0",
  "futures-util",
  "minos-agent-runtime",
  "minos-domain",
+ "minos-protocol",
  "serde",
  "serde_json",
  "tempfile",

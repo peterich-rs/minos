@@ -26,6 +26,7 @@ uniffi::setup_scaffolding!();
 
 pub mod approvals;
 pub(crate) mod codex_client;
+pub mod ingest;
 pub(crate) mod process;
 pub mod runtime;
 pub mod state;
