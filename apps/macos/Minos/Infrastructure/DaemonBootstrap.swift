@@ -13,7 +13,25 @@ import OSLog
 enum DaemonBootstrap {
     private static let logger = Logger(subsystem: "ai.minos.macos", category: "bootstrap")
 
-    /// Boot or rebooot the daemon. Idempotent — callers from
+    /// Default startDaemon factory used in production. Reads
+    /// LocalState off disk and the device-secret out of Keychain;
+    /// Swift only supplies what's not on the filesystem (CF token +
+    /// display name) before handing off to the Rust ctor.
+    static let defaultStartDaemon: @Sendable (RelayConfig, String) async throws
+        -> any DaemonDriving = { config, macName in
+        let localStatePath = AppDirectories.localStatePath()
+        let (selfDeviceId, peer) = try LocalStateLoader.loadOrInit(at: localStatePath)
+        let secret = KeychainDeviceSecret.read()
+        return try await DaemonHandle.start(
+            config: config,
+            selfDeviceId: selfDeviceId,
+            peer: peer,
+            secret: secret,
+            macName: macName
+        )
+    }
+
+    /// Boot or reboot the daemon. Idempotent — callers from
     /// SettingsSheet's "save & restart" path invoke this after stopping
     /// the previous daemon, and it picks up the freshly written
     /// Keychain creds.
@@ -23,27 +41,10 @@ enum DaemonBootstrap {
     /// real Rust runtime.
     static func bootstrap(
         _ appState: AppState,
-        startDaemon: @escaping @Sendable (RelayConfig, String) async throws -> any DaemonDriving = {
-            config,
-            macName in
-            // The Rust ctor reads LocalState off disk and the device-secret
-            // out of Keychain. Swift only supplies what's not on the
-            // filesystem: CF token + display name.
-            let localStatePath = AppDirectories.localStatePath()
-            let (selfDeviceId, peer) = try LocalStateLoader.loadOrInit(at: localStatePath)
-            let secret = KeychainDeviceSecret.read()
-            return try await DaemonHandle.start(
-                config: config,
-                selfDeviceId: selfDeviceId,
-                peer: peer,
-                secret: secret,
-                macName: macName
-            )
-        }
+        startDaemon: @escaping @Sendable (RelayConfig, String) async throws -> any DaemonDriving = defaultStartDaemon
     ) async {
         await appState.beginBoot()
         try? initLogging()
-
         let macName = hostName()
         logger.info("Bootstrapping daemon for \(macName, privacy: .public)")
 
@@ -64,72 +65,108 @@ enum DaemonBootstrap {
             cfClientSecret: creds.clientSecret
         )
 
-        var startedDaemon: (any DaemonDriving)?
-        var activeRelayLinkSubscription: (any SubscriptionHandle)?
-        var activePeerSubscription: (any SubscriptionHandle)?
-        var activeAgentSubscription: (any SubscriptionHandle)?
+        await runStart(appState: appState, config: config, macName: macName, startDaemon: startDaemon)
+    }
+
+    /// Inner half of `bootstrap`: spawn the daemon, wire observers, and
+    /// commit / fail-out. Split off so the outer function clears the
+    /// swiftlint function-body-length budget.
+    private static func runStart(
+        appState: AppState,
+        config: RelayConfig,
+        macName: String,
+        startDaemon: @Sendable (RelayConfig, String) async throws -> any DaemonDriving
+    ) async {
+        var inFlight = InFlight()
 
         do {
             let daemon = try await startDaemon(config, macName)
-            startedDaemon = daemon
+            inFlight.daemon = daemon
 
-            let relayObserver = RelayLinkObserver { state in
-                Task { @MainActor in
-                    appState.applyRelayLink(state)
-                }
-            }
-            let relayLinkSubscription = daemon.subscribeRelayLink(relayObserver)
-            activeRelayLinkSubscription = relayLinkSubscription
+            let subs = wireObservers(daemon: daemon, appState: appState)
+            inFlight.relayLinkSubscription = subs.relayLink
+            inFlight.peerSubscription = subs.peer
+            inFlight.agentSubscription = subs.agent
 
-            let peerObserver = PeerObserver { state in
-                Task { @MainActor in
-                    appState.applyPeer(state)
-                }
-            }
-            let peerSubscription = daemon.subscribePeer(peerObserver)
-            activePeerSubscription = peerSubscription
-
-            let agentObserver = AgentStateObserverAdapter { state in
-                Task { @MainActor in
-                    appState.applyAgentState(state)
-                }
-            }
-            let agentSubscription = daemon.subscribeAgentState(agentObserver)
-            activeAgentSubscription = agentSubscription
-
-            let relayLink = daemon.currentRelayLink()
-            let peer = daemon.currentPeer()
-            let agentState = daemon.currentAgentState()
-            let trustedDevice = try await daemon.currentTrustedDevice()
-
+            let snapshot = try await snapshot(of: daemon)
             await appState.finishBoot(
+                with: snapshot,
                 daemon: daemon,
-                relayLinkSubscription: relayLinkSubscription,
-                peerSubscription: peerSubscription,
-                relayLink: relayLink,
-                peer: peer,
-                trustedDevice: trustedDevice,
-                agentSubscription: agentSubscription,
-                agentState: agentState
+                relayLinkSubscription: subs.relayLink,
+                peerSubscription: subs.peer,
+                agentSubscription: subs.agent
             )
             logger.info("Boot complete; phase=running")
         } catch let error as MinosError {
-            activeRelayLinkSubscription?.cancel()
-            activePeerSubscription?.cancel()
-            activeAgentSubscription?.cancel()
-            try? await startedDaemon?.stop()
-            await appState.failBoot(with: error)
+            await failBoot(appState: appState, error: error, inFlight: inFlight)
         } catch {
-            activeRelayLinkSubscription?.cancel()
-            activePeerSubscription?.cancel()
-            activeAgentSubscription?.cancel()
-            try? await startedDaemon?.stop()
             let wrapped = MinosError.RpcCallFailed(
                 method: "swift.bootstrap",
                 message: String(describing: error)
             )
-            await appState.failBoot(with: wrapped)
+            await failBoot(appState: appState, error: wrapped, inFlight: inFlight)
         }
+    }
+
+    private struct WiredSubscriptions {
+        let relayLink: any SubscriptionHandle
+        let peer: any SubscriptionHandle
+        let agent: any SubscriptionHandle
+    }
+
+    private static func wireObservers(
+        daemon: any DaemonDriving,
+        appState: AppState
+    ) -> WiredSubscriptions {
+        let relayObserver = RelayLinkObserver { state in
+            Task { @MainActor in appState.applyRelayLink(state) }
+        }
+        let peerObserver = PeerObserver { state in
+            Task { @MainActor in appState.applyPeer(state) }
+        }
+        let agentObserver = AgentStateObserverAdapter { state in
+            Task { @MainActor in appState.applyAgentState(state) }
+        }
+        return WiredSubscriptions(
+            relayLink: daemon.subscribeRelayLink(relayObserver),
+            peer: daemon.subscribePeer(peerObserver),
+            agent: daemon.subscribeAgentState(agentObserver)
+        )
+    }
+
+    private static func snapshot(of daemon: any DaemonDriving) async throws -> AppState.BootSnapshot {
+        let relayLink = daemon.currentRelayLink()
+        let peer = daemon.currentPeer()
+        let agentState = daemon.currentAgentState()
+        let trustedDevice = try await daemon.currentTrustedDevice()
+        return AppState.BootSnapshot(
+            relayLink: relayLink,
+            peer: peer,
+            trustedDevice: trustedDevice,
+            agentState: agentState
+        )
+    }
+
+    /// Bag of in-flight references the bootstrap acquires before the
+    /// daemon hands off to the AppState. Bundled into one parameter so
+    /// `failBoot` clears the swiftlint param-count cap.
+    private struct InFlight {
+        var daemon: (any DaemonDriving)?
+        var relayLinkSubscription: (any SubscriptionHandle)?
+        var peerSubscription: (any SubscriptionHandle)?
+        var agentSubscription: (any SubscriptionHandle)?
+    }
+
+    private static func failBoot(
+        appState: AppState,
+        error: MinosError,
+        inFlight: InFlight
+    ) async {
+        inFlight.relayLinkSubscription?.cancel()
+        inFlight.peerSubscription?.cancel()
+        inFlight.agentSubscription?.cancel()
+        try? await inFlight.daemon?.stop()
+        await appState.failBoot(with: error)
     }
 
     private static func readEnvCreds() -> KeychainRelayConfig.Creds? {
@@ -208,8 +245,8 @@ enum LocalStateLoader {
     /// present but corrupt, surface as a Swift-side throw the bootstrap
     /// catches and converts into a `bootError`.
     static func loadOrInit(at path: URL) throws -> (selfDeviceId: DeviceId, peer: PeerRecord?) {
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: path.path) {
+        let manager = FileManager.default
+        if !manager.fileExists(atPath: path.path) {
             let initial = LocalStateJSON(selfDeviceId: UUID().uuidString.lowercased(), peer: nil)
             try save(initial, to: path)
             return (initial.selfDeviceId, nil)
@@ -247,17 +284,17 @@ enum KeychainDeviceSecret {
             kSecAttrService as String: KeychainRelayConfig.service,
             kSecAttrAccount as String: "device-secret",
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard
             status == errSecSuccess,
             let data = item as? Data,
-            let s = String(data: data, encoding: .utf8)
+            let utf8 = String(data: data, encoding: .utf8)
         else {
             return nil
         }
-        return DeviceSecret(s)
+        return DeviceSecret(utf8)
     }
 }

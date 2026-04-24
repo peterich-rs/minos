@@ -47,7 +47,7 @@ enum QRCodeRenderer {
                 "v": Int(payload.v),
                 "backend_url": payload.backendUrl,
                 "token": payload.token,
-                "mac_display_name": payload.macDisplayName,
+                "mac_display_name": payload.macDisplayName
             ],
             options: [.sortedKeys]
         )

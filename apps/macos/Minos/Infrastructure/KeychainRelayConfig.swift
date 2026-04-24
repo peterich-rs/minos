@@ -49,28 +49,28 @@ enum KeychainRelayConfig {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard
             status == errSecSuccess,
             let data = item as? Data,
-            let s = String(data: data, encoding: .utf8)
+            let utf8 = String(data: data, encoding: .utf8)
         else {
             return nil
         }
-        return s
+        return utf8
     }
 
     private static func writeItem(account: String, value: String) throws {
         let attrs: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: account
         ]
         let valueData: [String: Any] = [
-            kSecValueData as String: Data(value.utf8),
+            kSecValueData as String: Data(value.utf8)
         ]
         let combined = attrs.merging(valueData, uniquingKeysWith: { $1 })
         let status = SecItemAdd(combined as CFDictionary, nil)
@@ -88,7 +88,7 @@ enum KeychainRelayConfig {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: account
         ]
         let status = SecItemDelete(query as CFDictionary)
         if status != errSecSuccess && status != errSecItemNotFound {
