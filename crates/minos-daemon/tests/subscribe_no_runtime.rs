@@ -88,13 +88,17 @@ async fn subscribe_relay_link_and_peer_work_without_current_runtime() {
         !link.is_empty(),
         "relay-link observer must receive at least the initial snapshot"
     );
-    // Initial state of a freshly-spawned RelayClient is Disconnected (the
-    // subsequent Connecting { attempt: 0 } transition is racy — not
-    // asserted here).
-    assert_eq!(
-        link[0],
-        RelayLinkState::Disconnected,
-        "initial snapshot should be Disconnected, got {:?}",
+    // The subscribe call races the dispatcher task's first
+    // `link_tx.send(Connecting { attempt: 0 })`. Either is acceptable
+    // as an "initial snapshot"; what matters for *this* regression is
+    // that the call from a non-runtime thread didn't panic and the
+    // observer fired at least once.
+    assert!(
+        matches!(
+            link[0],
+            RelayLinkState::Disconnected | RelayLinkState::Connecting { attempt: 0 }
+        ),
+        "initial snapshot should be Disconnected or Connecting{{0}}, got {:?}",
         link[0]
     );
 
