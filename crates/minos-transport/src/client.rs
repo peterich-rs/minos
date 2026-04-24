@@ -35,22 +35,3 @@ impl WsClient {
         self.inner.is_connected()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::WsServer;
-    use jsonrpsee::server::RpcModule;
-
-    #[tokio::test]
-    async fn client_connects_to_local_server() {
-        // Spin up an empty server, then connect.
-        let server = WsServer::bind("127.0.0.1:0".parse().unwrap(), RpcModule::new(()))
-            .await
-            .unwrap();
-        let url = format!("ws://{}", server.addr()).parse().unwrap();
-        let client = WsClient::connect(&url).await.unwrap();
-        assert!(client.is_connected());
-        server.stop().await.unwrap();
-    }
-}

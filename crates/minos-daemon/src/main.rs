@@ -1,9 +1,8 @@
 use std::env;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
-use minos_daemon::{paths, DaemonConfig, DaemonHandle};
+use minos_daemon::{paths, DaemonHandle, LocalState, RelayConfig, BACKEND_URL};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -19,9 +18,9 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Print resolved runtime paths and Tailscale discovery status.
+    /// Print resolved runtime paths and the compile-time relay backend URL.
     Doctor,
-    /// Start the daemon and keep it running until Ctrl-C.
+    /// Start the daemon (dials the relay) and keep it running until Ctrl-C.
     Start(StartArgs),
 }
 
@@ -30,9 +29,6 @@ struct StartArgs {
     /// Human-readable Mac name shown to the peer during pairing.
     #[arg(long)]
     mac_name: Option<String>,
-    /// Bind to a specific socket instead of auto-discovering a Tailscale IP.
-    #[arg(long)]
-    bind: Option<SocketAddr>,
     /// Print a fresh pairing QR payload as JSON after startup.
     #[arg(long)]
     print_qr: bool,
@@ -69,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+#[allow(clippy::unused_async)]
 async fn doctor(paths: &ResolvedPaths) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "minos home: {}",
@@ -76,15 +73,11 @@ async fn doctor(paths: &ResolvedPaths) -> Result<(), Box<dyn std::error::Error>>
     );
     println!("data dir:   {}", display_path(&paths.data_dir));
     println!(
-        "devices:    {}",
-        display_path(&paths.data_dir.join("devices.json"))
+        "local state:{}",
+        display_path(&paths.data_dir.join("local-state.json"))
     );
     println!("log dir:    {}", display_path(&paths.log_dir));
-
-    match minos_daemon::discover_tailscale_ip_with_reason().await {
-        Ok(ip) => println!("tailscale:  ok ({ip})"),
-        Err(message) => println!("tailscale:  error ({message})"),
-    }
+    println!("relay:      {BACKEND_URL}");
 
     Ok(())
 }
@@ -97,23 +90,35 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
     );
     println!("data dir:   {}", display_path(&paths.data_dir));
     println!("log dir:    {}", display_path(&paths.log_dir));
+    println!("relay:      {BACKEND_URL}");
 
-    let handle = if let Some(bind_addr) = args.bind {
-        println!("binding:    explicit {bind_addr}");
-        DaemonHandle::start(DaemonConfig {
-            mac_name,
-            bind_addr,
-        })
-        .await?
-    } else {
-        println!("binding:    autobind via Tailscale");
-        DaemonHandle::start_autobind(mac_name).await?
-    };
+    // CLI reads CF creds from env; Swift's app delegate does the same in
+    // its own app-side plumbing. Empty env vars collapse to "no CF" —
+    // valid for the local dev relay (`cargo run -p minos-relay`).
+    let cf_client_id = env::var("CF_ACCESS_CLIENT_ID").unwrap_or_default();
+    let cf_client_secret = env::var("CF_ACCESS_CLIENT_SECRET").unwrap_or_default();
+    let config = RelayConfig::new(cf_client_id, cf_client_secret);
 
-    println!("endpoint:   {}:{}", handle.host(), handle.port());
+    let local_state = LocalState::load_or_init(&LocalState::default_path())?;
+
+    // Keychain read is macOS-only; on other platforms the CLI drives the
+    // daemon without a persisted device_secret (first-run path).
+    #[cfg(target_os = "macos")]
+    let secret = minos_daemon::KeychainTrustedDeviceStore.read()?;
+    #[cfg(not(target_os = "macos"))]
+    let secret: Option<minos_domain::DeviceSecret> = None;
+
+    let handle = DaemonHandle::start(
+        config,
+        local_state.self_device_id,
+        local_state.peer.clone(),
+        secret,
+        mac_name,
+    )
+    .await?;
 
     if args.print_qr {
-        let qr = handle.pairing_qr()?;
+        let qr = handle.pairing_qr().await?;
         println!("pairing_qr:");
         println!("{}", serde_json::to_string_pretty(&qr)?);
     }

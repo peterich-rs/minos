@@ -2,23 +2,26 @@ import XCTest
 
 @testable import Minos
 
+/// Plan 05 Phase K.2: agent-axis tests rewritten to wire the
+/// AgentStateObserverAdapter manually rather than driving through
+/// DaemonBootstrap (which now requires CF credentials in env or
+/// Keychain — process-level side effects we don't want in unit tests).
 final class AgentStateTests: XCTestCase {
     @MainActor
-    func testBootstrapObserverDrivesAgentState() async {
+    func testAgentObserverPushDrivesAppState() async {
         let daemon = MockDaemon()
-        let appState = AppState(terminator: {})
-        let expectedState = AgentState.running(
+        let appState = await bootedAppState(with: daemon)
+        let expected = AgentState.running(
             agent: .codex,
             threadId: "thread-42",
             startedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
 
-        await DaemonBootstrap.bootstrap(appState, startDaemon: { _ in daemon })
-        daemon.emitAgentState(expectedState)
+        daemon.emitAgentState(expected)
         await Task.yield()
 
         XCTAssertEqual(daemon.subscribeAgentStateCallCount, 1)
-        XCTAssertEqual(appState.agentState, expectedState)
+        XCTAssertEqual(appState.agentState, expected)
     }
 
     @MainActor
@@ -89,24 +92,44 @@ final class AgentStateTests: XCTestCase {
 
     @MainActor
     func testShutdownCancelsAgentSubscription() async {
-        let daemon = MockDaemon(currentState: .connected)
-        let connectionSubscription = MockSubscription()
-        let agentSubscription = MockSubscription()
+        let daemon = MockDaemon(currentRelayLink: .connected, currentPeer: .unpaired)
+        let relayLinkSub = MockSubscription()
+        let peerSub = MockSubscription()
+        let agentSub = MockSubscription()
         let appState = AppState(terminator: {})
 
         appState.daemon = daemon
-        appState.subscription = connectionSubscription
-        appState.agentSubscription = agentSubscription
+        appState.relayLinkSubscription = relayLinkSub
+        appState.peerSubscription = peerSub
+        appState.agentSubscription = agentSub
 
         await appState.shutdown()
 
-        XCTAssertEqual(agentSubscription.cancelCallCount, 1)
+        XCTAssertEqual(agentSub.cancelCallCount, 1)
+        XCTAssertEqual(relayLinkSub.cancelCallCount, 1)
+        XCTAssertEqual(peerSub.cancelCallCount, 1)
     }
 
+    /// Stand up an AppState in `.running` with the agent observer wired
+    /// through MockDaemon. Skips DaemonBootstrap (which would need CF
+    /// credentials we can't set without polluting the process env).
     @MainActor
     private func bootedAppState(with daemon: MockDaemon) async -> AppState {
         let appState = AppState(terminator: {})
-        await DaemonBootstrap.bootstrap(appState, startDaemon: { _ in daemon })
+        let agentObserver = AgentStateObserverAdapter { state in
+            Task { @MainActor in appState.applyAgentState(state) }
+        }
+        let agentSub = daemon.subscribeAgentState(agentObserver)
+
+        appState.finishBoot(
+            daemon: daemon,
+            relayLinkSubscription: MockSubscription(),
+            peerSubscription: MockSubscription(),
+            relayLink: .connected,
+            peer: .unpaired,
+            trustedDevice: nil,
+            agentSubscription: agentSub
+        )
         return appState
     }
 }

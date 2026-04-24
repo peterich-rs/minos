@@ -74,6 +74,7 @@ enum ErrorKind {
   envelopeVersionUnsupported,
   peerOffline,
   relayInternal,
+  cfAuthFailed,
   codexSpawnFailed,
   codexConnectFailed,
   codexProtocolError,
@@ -138,6 +139,8 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_PeerOffline;
   const factory MinosError.relayInternal({required String message}) =
       MinosError_RelayInternal;
+  const factory MinosError.cfAuthFailed({required String message}) =
+      MinosError_CfAuthFailed;
   const factory MinosError.codexSpawnFailed({required String message}) =
       MinosError_CodexSpawnFailed;
   const factory MinosError.codexConnectFailed({

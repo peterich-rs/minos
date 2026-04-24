@@ -24,20 +24,34 @@ minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
 minos-cli-detect = { path = "../minos-cli-detect", version = "0.1.0" }
 minos-transport = { path = "../minos-transport", version = "0.1.0" }
 tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
+futures-util = { workspace = true }
 jsonrpsee = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 mars-xlog = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+url = { workspace = true }
 async-trait = { workspace = true }
 uniffi = { workspace = true, optional = true, features = ["tokio"] }
 clap = { version = "4", features = ["derive"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { workspace = true }
+
 [dev-dependencies]
 minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", features = ["test-support"] }
+# Relay is pulled into dev-deps only so the relay_client_smoke integration
+# test can spin up an in-process broker without leaking a production
+# dependency cycle (daemon is the relay's client, not vice versa).
+minos-relay = { path = "../minos-relay", version = "0.1.0" }
+anyhow = { workspace = true }
+axum = { workspace = true }
+sqlx = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 pretty_assertions = { workspace = true }

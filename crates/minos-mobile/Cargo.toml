@@ -21,6 +21,29 @@ mars-xlog = { workspace = true }
 url = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+# Optional CLI deps for the fake-peer dev binary (gated on the `cli` feature).
+anyhow = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enables the fake-peer binary. Off by default so iOS shrinks with no
+# extra deps; turn on for `cargo run -p minos-mobile --bin fake-peer`.
+cli = [
+    "anyhow",
+    "clap",
+    "futures-util",
+    "tokio-tungstenite",
+    "tokio/macros",
+    "tokio/rt-multi-thread",
+]
+
+[[bin]]
+name = "fake-peer"
+path = "src/bin/fake-peer.rs"
+required-features = ["cli"]
 
 [dev-dependencies]
 tokio-test = { workspace = true }

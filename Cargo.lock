@@ -2040,10 +2040,13 @@ dependencies = [
 name = "minos-daemon"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "clap",
  "futures",
+ "futures-util",
  "jsonrpsee",
  "mars-xlog",
  "minos-agent-runtime",
@@ -2051,15 +2054,21 @@ dependencies = [
  "minos-domain",
  "minos-pairing",
  "minos-protocol",
+ "minos-relay",
  "minos-transport",
  "pretty_assertions",
+ "security-framework",
+ "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "tokio",
  "tokio-test",
+ "tokio-tungstenite 0.29.0",
  "tracing",
  "tracing-subscriber",
  "uniffi",
+ "url",
  "uuid",
 ]
 
@@ -2106,9 +2115,12 @@ dependencies = [
 name = "minos-mobile"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "chrono",
+ "clap",
  "futures",
+ "futures-util",
  "jsonrpsee",
  "mars-xlog",
  "minos-daemon",
@@ -2120,6 +2132,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-test",
+ "tokio-tungstenite 0.29.0",
  "tracing",
  "tracing-subscriber",
  "url",

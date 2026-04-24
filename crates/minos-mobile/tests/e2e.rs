@@ -1,50 +1,12 @@
-//! Pair through the real `MobileClient` against a real `DaemonHandle`,
-//! all in one process. Verifies the symmetric round trip.
-
-use std::net::SocketAddr;
-use std::sync::Arc;
-
-use minos_daemon::{DaemonConfig, DaemonHandle};
-use minos_domain::ConnectionState;
-use minos_mobile::{InMemoryPairingStore, MobileClient};
+//! Pre-relay mobile-against-daemon e2e. Phase F.1 removed the Tailscale
+//! `DaemonHandle::start(DaemonConfig)` entry point, so this test's
+//! `DaemonHandle` fixture can't be stood up against the current surface.
+//!
+//! iOS still uses the legacy jsonrpsee-over-Tailscale stack in-code
+//! (`MobileClient`), so the right place to rewrite this is the Phase I
+//! mobile-relay migration that ports iOS onto the relay client. Until
+//! then, keep the file as an `#[ignore]`d placeholder.
 
 #[tokio::test]
-async fn mobile_pairs_with_daemon_and_lists_clis() {
-    // Use MINOS_DATA_DIR override so the daemon's default file store writes
-    // into a per-test tempdir without mutating process-global HOME.
-    let dir = tempfile::tempdir().unwrap();
-    std::env::set_var("MINOS_DATA_DIR", dir.path());
-
-    let daemon = DaemonHandle::start(DaemonConfig {
-        mac_name: "MacForTest".into(),
-        bind_addr: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
-    })
-    .await
-    .unwrap();
-
-    let qr = daemon.pairing_qr().unwrap();
-
-    let mobile = MobileClient::new(
-        Arc::new(InMemoryPairingStore::new()),
-        "iPhoneForTest".into(),
-    );
-
-    // Pre-pair: client is Disconnected.
-    assert_eq!(mobile.current_state(), ConnectionState::Disconnected);
-
-    let resp = mobile.pair_with(qr).await.unwrap();
-    assert_eq!(resp.mac_name, "MacForTest");
-    assert!(resp.ok);
-
-    // Post-pair: client is Connected.
-    assert_eq!(mobile.current_state(), ConnectionState::Connected);
-
-    let clis = mobile.list_clis().await.unwrap();
-    assert_eq!(clis.len(), 3);
-
-    // forget_device clears trust + drops the WS + emits Disconnected.
-    mobile.forget_device().await.unwrap();
-    assert_eq!(mobile.current_state(), ConnectionState::Disconnected);
-
-    daemon.stop().await.unwrap();
-}
+#[ignore = "Phase I rewrite pending: MobileClient still uses Tailscale surface; re-enable when iOS migrates to relay"]
+async fn mobile_pairs_with_daemon_and_lists_clis_placeholder() {}

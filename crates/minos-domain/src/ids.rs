@@ -31,6 +31,32 @@ impl std::fmt::Display for DeviceId {
     }
 }
 
+// UniFFI bridge. `DeviceId` is a local type, so this is the *home*
+// registration (no `remote` keyword). Downstream crates that want the same
+// type across their own tag should pull these impls in with
+// `uniffi::use_remote_type!(DeviceId from minos_domain)` rather than
+// re-registering (which collides with the home-crate blanket impls).
+// Bridging via `String` keeps the registration self-contained so this crate
+// doesn't also have to own a `Uuid` bridge.
+#[cfg(feature = "uniffi")]
+mod uniffi_bridges {
+    use super::{DeviceId, DeviceSecret};
+    use uuid::Uuid;
+
+    uniffi::custom_type!(DeviceId, String, {
+        lower: |id| id.0.to_string(),
+        try_lift: |text| Uuid::parse_str(&text).map(DeviceId).map_err(Into::into),
+    });
+
+    // `DeviceSecret` is a newtype over `String`; UniFFI marshals it as a
+    // transparent string. The base64url contents cross the FFI untouched —
+    // Swift never needs to know this is "base64url-no-pad, 43 chars".
+    uniffi::custom_type!(DeviceSecret, String, {
+        lower: |s| s.0,
+        try_lift: |s| Ok(DeviceSecret(s)),
+    });
+}
+
 /// One-shot pairing token: 32 random bytes, presented as base64url.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -196,5 +222,29 @@ mod tests {
         let back: DeviceSecret = serde_json::from_str(&json).unwrap();
         assert_eq!(back.as_str(), "token-xyz");
         assert_eq!(s, back);
+    }
+
+    // Plan 05 Task A.3 contract tests: DeviceSecret already existed before
+    // the macOS relay-client migration plan landed (introduced by plan 04),
+    // so these duplicate intent with the tests above. Kept under the plan's
+    // chosen names so the plan's acceptance criteria are visible in tree.
+    #[test]
+    fn device_secret_round_trips_as_string() {
+        let s = DeviceSecret("hunter2-the-32-byte-base64-secret".into());
+        let j = serde_json::to_string(&s).unwrap();
+        assert_eq!(j, r#""hunter2-the-32-byte-base64-secret""#);
+        let back: DeviceSecret = serde_json::from_str(&j).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn device_secret_debug_redacts() {
+        let s = DeviceSecret("super-secret".into());
+        let d = format!("{s:?}");
+        assert!(
+            !d.contains("super-secret"),
+            "DeviceSecret Debug must not leak"
+        );
+        assert!(d.contains("DeviceSecret"));
     }
 }

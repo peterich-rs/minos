@@ -34,7 +34,7 @@ struct PairingQRView: View {
     }
 
     @ViewBuilder
-    private func qrContent(_ pairingPayload: QrPayload) -> some View {
+    private func qrContent(_ pairingPayload: RelayQrPayload) -> some View {
         if let generatedAt = appState.currentQrGeneratedAt {
             TimelineView(.periodic(from: generatedAt, by: 1)) { context in
                 content(
@@ -54,13 +54,13 @@ struct PairingQRView: View {
         }
     }
 
-    private func content(pairingPayload: QrPayload, isExpired: Bool) -> some View {
+    private func content(pairingPayload: RelayQrPayload, isExpired: Bool) -> some View {
         VStack(spacing: 16) {
             qrPanel(pairingPayload: pairingPayload, isExpired: isExpired)
 
             Text("有效期 5 分钟 · 在手机上扫描")
                 .font(.headline)
-            Text("\(pairingPayload.host):\(pairingPayload.port)")
+            Text(pairingPayload.macDisplayName)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -73,7 +73,7 @@ struct PairingQRView: View {
         }
     }
 
-    private func qrPanel(pairingPayload: QrPayload, isExpired: Bool) -> some View {
+    private func qrPanel(pairingPayload: RelayQrPayload, isExpired: Bool) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18)
                 .fill(Color(NSColor.windowBackgroundColor))
@@ -100,7 +100,7 @@ struct PairingQRView: View {
     }
 
     @ViewBuilder
-    private func qrImageContent(pairingPayload: QrPayload) -> some View {
+    private func qrImageContent(pairingPayload: RelayQrPayload) -> some View {
         if let image = QRCodeRenderer.image(for: pairingPayload) {
             Image(nsImage: image)
                 .interpolation(.none)

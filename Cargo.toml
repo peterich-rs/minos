@@ -60,6 +60,9 @@ subtle = "2"
 # ffi (consumed only by shim crates)
 uniffi = { version = "0.31", features = ["build"] }
 
+# macOS Keychain (consumed by minos-daemon under cfg(target_os = "macos"))
+security-framework = { version = "3", default-features = false }
+
 # test deps (declared here so all crates use the same versions)
 rstest = "0.23"
 proptest = "1"
