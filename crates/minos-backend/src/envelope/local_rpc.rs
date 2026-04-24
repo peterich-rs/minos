@@ -76,13 +76,200 @@ pub async fn handle(
         LocalRpcMethod::RequestPairingQr => handle_request_pairing_token(ctx).await,
         LocalRpcMethod::Pair => handle_pair(ctx, params).await,
         LocalRpcMethod::ForgetPeer => handle_forget_peer(ctx).await,
-        // C4 / C5 will wire these up end-to-end. They exist here only so
-        // the enum compiles and `cargo xtask check-all` stays green.
-        LocalRpcMethod::ListThreads => err("internal", "list_threads not yet implemented"),
-        LocalRpcMethod::ReadThread => err("internal", "read_thread not yet implemented"),
-        LocalRpcMethod::GetThreadLastSeq => {
-            err("internal", "get_thread_last_seq not yet implemented")
+        LocalRpcMethod::ListThreads => handle_list_threads(ctx, params).await,
+        LocalRpcMethod::ReadThread => handle_read_thread(ctx, params).await,
+        LocalRpcMethod::GetThreadLastSeq => handle_get_thread_last_seq(ctx, params).await,
+    }
+}
+
+/// Mobile → Backend. Return a paginated list of thread summaries owned by
+/// the calling device (the mobile caller's pairing partner, resolved via
+/// `session.paired_with`). Capped at 500 rows per call.
+async fn handle_list_threads(
+    ctx: &LocalRpcContext<'_>,
+    params: &serde_json::Value,
+) -> LocalRpcOutcome {
+    let p: minos_protocol::ListThreadsParams = match serde_json::from_value(params.clone()) {
+        Ok(v) => v,
+        Err(e) => return err("bad_request", format!("invalid params: {e}")),
+    };
+
+    // Scope the query to the caller's paired agent-host, if any. A mobile
+    // caller sees only their paired host's threads; an unpaired caller
+    // gets an empty list rather than all threads on the backend.
+    let owner_id = *ctx.session.paired_with.read().await;
+    let owner_s = owner_id.map(|id| id.to_string());
+
+    let threads = match crate::store::threads::list(
+        ctx.store,
+        owner_s.as_deref(),
+        p.agent,
+        p.before_ts_ms,
+        p.limit.min(500),
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::local_rpc",
+                error = ?e,
+                "list_threads failed"
+            );
+            return err("internal", "list_threads failed");
         }
+    };
+
+    let next_before_ts_ms = threads.last().map(|t| t.last_ts_ms);
+    let resp = minos_protocol::ListThreadsResponse {
+        threads,
+        next_before_ts_ms,
+    };
+    LocalRpcOutcome::Ok {
+        result: serde_json::to_value(resp).unwrap_or_else(|_| serde_json::json!({})),
+    }
+}
+
+/// Mobile → Backend. Read a window of translated UI events for one thread.
+/// A fresh `CodexTranslatorState` is instantiated per call, so history
+/// replays never share state with the live-ingest translator cache — this
+/// guarantees deterministic output on repeated reads and protects the live
+/// path from replay-induced mutation.
+async fn handle_read_thread(
+    ctx: &LocalRpcContext<'_>,
+    params: &serde_json::Value,
+) -> LocalRpcOutcome {
+    let p: minos_protocol::ReadThreadParams = match serde_json::from_value(params.clone()) {
+        Ok(v) => v,
+        Err(e) => return err("bad_request", format!("invalid params: {e}")),
+    };
+
+    let from_seq = p.from_seq.unwrap_or(0);
+    let limit = p.limit.min(2000);
+    let rows = match crate::store::raw_events::read_range(ctx.store, &p.thread_id, from_seq, limit)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::local_rpc",
+                error = ?e,
+                thread_id = %p.thread_id,
+                "read_thread.read_range failed"
+            );
+            return err("internal", "read_thread failed");
+        }
+    };
+
+    if rows.is_empty() {
+        // Distinguish empty-but-exists from not-found.
+        let exists: Option<i64> =
+            match sqlx::query_scalar("SELECT 1 FROM threads WHERE thread_id = ?1")
+                .bind(&p.thread_id)
+                .fetch_optional(ctx.store)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_backend::local_rpc",
+                        error = %e,
+                        "read_thread.exists_probe failed"
+                    );
+                    return err("internal", "read_thread failed");
+                }
+            };
+        if exists.is_none() {
+            return err(
+                "thread_not_found",
+                format!("thread not found: {}", p.thread_id),
+            );
+        }
+    }
+
+    // Fresh translator state per call. Codex is the only translator shipped
+    // today; other agents fall through to Raw so history is at least visible.
+    let mut state = minos_ui_protocol::CodexTranslatorState::new(p.thread_id.clone());
+    let mut ui_events: Vec<minos_ui_protocol::UiEventMessage> = Vec::new();
+    let mut last_seq_read = from_seq;
+    for row in &rows {
+        last_seq_read = u64::try_from(row.seq).unwrap_or(last_seq_read);
+        match row.agent {
+            minos_domain::AgentName::Codex => {
+                match minos_ui_protocol::translate_codex(&mut state, &row.payload) {
+                    Ok(v) => ui_events.extend(v),
+                    Err(e) => ui_events.push(minos_ui_protocol::UiEventMessage::Error {
+                        code: "translation_failed".into(),
+                        message: format!("{e}"),
+                        message_id: None,
+                    }),
+                }
+            }
+            other => {
+                // Claude / Gemini stubs: surface as a Raw placeholder so at
+                // least the history is browsable.
+                ui_events.push(minos_ui_protocol::UiEventMessage::Raw {
+                    kind: format!("unsupported_agent:{other:?}"),
+                    payload_json: serde_json::to_string(&row.payload).unwrap_or_default(),
+                });
+            }
+        }
+    }
+
+    // Pagination cursor: if we filled the page, hand the caller a `next_seq`
+    // to continue from. Otherwise the cursor is None (no more rows).
+    let next_seq = if u32::try_from(rows.len()).unwrap_or(u32::MAX) == limit {
+        Some(last_seq_read + 1)
+    } else {
+        None
+    };
+
+    // Look up end_reason (may be present even if rows are empty).
+    let end_reason_json: Option<Option<String>> =
+        sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = ?1")
+            .bind(&p.thread_id)
+            .fetch_optional(ctx.store)
+            .await
+            .unwrap_or(None);
+    let thread_end_reason = end_reason_json
+        .flatten()
+        .as_ref()
+        .and_then(|s| serde_json::from_str::<minos_ui_protocol::ThreadEndReason>(s).ok());
+
+    let resp = minos_protocol::ReadThreadResponse {
+        ui_events,
+        next_seq,
+        thread_end_reason,
+    };
+    LocalRpcOutcome::Ok {
+        result: serde_json::to_value(resp).unwrap_or_else(|_| serde_json::json!({})),
+    }
+}
+
+/// Host helper. Returns the largest persisted `seq` for `thread_id`, or 0
+/// if the thread has no ingested events yet.
+async fn handle_get_thread_last_seq(
+    ctx: &LocalRpcContext<'_>,
+    params: &serde_json::Value,
+) -> LocalRpcOutcome {
+    let p: minos_protocol::GetThreadLastSeqParams = match serde_json::from_value(params.clone()) {
+        Ok(v) => v,
+        Err(e) => return err("bad_request", format!("invalid params: {e}")),
+    };
+    let last_seq = match crate::store::raw_events::last_seq(ctx.store, &p.thread_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::local_rpc",
+                error = ?e,
+                "get_thread_last_seq failed"
+            );
+            return err("internal", "get_thread_last_seq failed");
+        }
+    };
+    LocalRpcOutcome::Ok {
+        result: serde_json::to_value(minos_protocol::GetThreadLastSeqResponse { last_seq })
+            .unwrap_or_else(|_| serde_json::json!({})),
     }
 }
 

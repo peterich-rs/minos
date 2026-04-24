@@ -96,6 +96,102 @@ pub async fn update_title(
     Ok(())
 }
 
+/// List thread summaries for the `LocalRpc::ListThreads` response.
+///
+/// Filters (all optional):
+/// - `owner_device_id`  — restrict to threads owned by this device.
+/// - `agent`            — restrict to a single CLI agent.
+/// - `before_ts_ms`     — only threads whose `last_ts_ms` is strictly less
+///   than this (exclusive cursor for pagination).
+///
+/// Ordering: `last_ts_ms DESC` — most-recently-active first. Capped at
+/// `limit` rows; the caller pins the upper bound in the dispatch layer.
+pub async fn list(
+    pool: &SqlitePool,
+    owner_device_id: Option<&str>,
+    agent: Option<AgentName>,
+    before_ts_ms: Option<i64>,
+    limit: u32,
+) -> Result<Vec<minos_protocol::ThreadSummary>, RelayError> {
+    let agent_s = agent.map(agent_str);
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            i64,
+            i64,
+            i64,
+            Option<i64>,
+            Option<String>,
+        ),
+    >(
+        r"SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason
+           FROM threads
+           WHERE (?1 IS NULL OR owner_device_id = ?1)
+             AND (?2 IS NULL OR agent = ?2)
+             AND (?3 IS NULL OR last_ts_ms < ?3)
+           ORDER BY last_ts_ms DESC
+           LIMIT ?4",
+    )
+    .bind(owner_device_id)
+    .bind(agent_s)
+    .bind(before_ts_ms)
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| RelayError::StoreQuery {
+        operation: "threads.list".into(),
+        message: e.to_string(),
+    })?;
+
+    rows.into_iter()
+        .map(
+            |(
+                thread_id,
+                agent_s,
+                title,
+                first_ts_ms,
+                last_ts_ms,
+                message_count,
+                ended_at_ms,
+                end_reason_json,
+            )| {
+                let agent = match agent_s.as_str() {
+                    "codex" => AgentName::Codex,
+                    "claude" => AgentName::Claude,
+                    "gemini" => AgentName::Gemini,
+                    other => {
+                        return Err(RelayError::StoreDecode {
+                            column: "threads.agent".into(),
+                            message: other.to_string(),
+                        })
+                    }
+                };
+                let end_reason = end_reason_json
+                    .as_ref()
+                    .map(|s| serde_json::from_str::<ThreadEndReason>(s))
+                    .transpose()
+                    .map_err(|e| RelayError::StoreDecode {
+                        column: "threads.end_reason".into(),
+                        message: e.to_string(),
+                    })?;
+                Ok(minos_protocol::ThreadSummary {
+                    thread_id,
+                    agent,
+                    title,
+                    first_ts_ms,
+                    last_ts_ms,
+                    message_count: u32::try_from(message_count).unwrap_or(u32::MAX),
+                    ended_at_ms,
+                    end_reason,
+                })
+            },
+        )
+        .collect()
+}
+
 /// Bump `message_count` by 1. Called when the translator places a new
 /// `MessageStarted` — gives the list view a cheap "N messages" badge.
 pub async fn increment_message_count(pool: &SqlitePool, thread_id: &str) -> Result<(), RelayError> {
@@ -208,5 +304,76 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(n, 3);
+    }
+
+    #[tokio::test]
+    async fn list_orders_by_last_ts_desc_and_limits() {
+        let pool = memory_pool().await;
+        seed_agent_host(&pool).await;
+        for i in 0..5 {
+            upsert(
+                &pool,
+                &format!("thr{i}"),
+                AgentName::Codex,
+                "dev1",
+                i * 1000,
+            )
+            .await
+            .unwrap();
+        }
+
+        let r = list(&pool, Some("dev1"), None, None, 3).await.unwrap();
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0].thread_id, "thr4");
+        assert_eq!(r[1].thread_id, "thr3");
+        assert_eq!(r[2].thread_id, "thr2");
+    }
+
+    #[tokio::test]
+    async fn list_filters_by_owner() {
+        let pool = memory_pool().await;
+        seed_agent_host(&pool).await;
+        sqlx::query(
+            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
+               VALUES ('dev2','Other','agent-host',0,0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        upsert(&pool, "mine", AgentName::Codex, "dev1", 1000)
+            .await
+            .unwrap();
+        upsert(&pool, "theirs", AgentName::Codex, "dev2", 2000)
+            .await
+            .unwrap();
+
+        let r = list(&pool, Some("dev1"), None, None, 50).await.unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].thread_id, "mine");
+    }
+
+    #[tokio::test]
+    async fn list_before_ts_cursor_excludes_boundary() {
+        let pool = memory_pool().await;
+        seed_agent_host(&pool).await;
+        for i in 0..5 {
+            upsert(
+                &pool,
+                &format!("thr{i}"),
+                AgentName::Codex,
+                "dev1",
+                i * 1000,
+            )
+            .await
+            .unwrap();
+        }
+
+        // before_ts_ms = 3000 must strictly exclude last_ts_ms = 3000.
+        let r = list(&pool, Some("dev1"), None, Some(3000), 50)
+            .await
+            .unwrap();
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0].thread_id, "thr2");
     }
 }
