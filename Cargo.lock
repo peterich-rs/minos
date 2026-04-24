@@ -2053,6 +2053,7 @@ dependencies = [
  "minos-protocol",
  "minos-transport",
  "pretty_assertions",
+ "security-framework",
  "serde",
  "serde_json",
  "tempfile",
