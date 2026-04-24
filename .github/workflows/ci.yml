@@ -37,6 +37,22 @@ jobs:
         # silently skipping like a fresh local checkout would.
         run: cargo install cargo-deny --locked
 
+      - name: Install sqlx-cli
+        # Needed for the offline-metadata freshness check below. Sqlite-only
+        # features keep the install lean; rust-cache persists the binary in
+        # `~/.cargo/bin` across runs, so the `cargo install` is a near-noop
+        # on cache hits.
+        run: cargo install sqlx-cli --no-default-features --features sqlite --locked
+
+      - name: Verify sqlx offline metadata
+        # Catches stale `.sqlx/` cache entries before they surface as opaque
+        # `cargo test` failures inside `cargo xtask check-all`. The
+        # `-- -p minos-relay --all-targets` forwarding is required because the
+        # workspace manifest sets `default-members = []`; without it,
+        # `cargo sqlx prepare` errors with "no crates to check". The `.sqlx/`
+        # directory was committed in a297e28 (relay store CRUD).
+        run: cargo sqlx prepare --check --workspace -- -p minos-relay --all-targets
+
       - name: cargo xtask check-all
         # Single source of truth — same command developers run locally.
         # Includes: cargo fmt --check, cargo clippy --workspace -- -D warnings,
