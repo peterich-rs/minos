@@ -20,30 +20,41 @@
 //! # Error handling
 //!
 //! - A connect-time HTTP 401 (CF Access or relay's pre-upgrade auth check)
-//!   is unambiguously an auth failure and is surfaced as
-//!   `MinosError::CfAuthFailed`. The task then exits with a `Disconnected`
-//!   link state — the caller must call [`RelayClient::stop`] and spawn a
-//!   fresh client once creds have been rotated. All other errors (including
-//!   full WS close-code mapping) fall back to exponential-backoff reconnect
+//!   is unambiguously an auth failure: `MinosError::CfAuthFailed` is written
+//!   into the shared `last_error` slot and the task exits with a
+//!   `Disconnected` link state. The caller must call [`RelayClient::stop`]
+//!   and spawn a fresh client once creds have been rotated.
+//! - WS close code `4401` (relay's post-upgrade stale-auth signal) is
+//!   terminal too: `MinosError::DeviceNotTrusted` lands in `last_error`
+//!   and the task exits — re-pairing is required before another connect
+//!   can succeed. Close code `4400` (malformed envelope / version mismatch)
+//!   records `MinosError::EnvelopeVersionUnsupported` but falls back to
+//!   the reconnect backoff, since a bug fix in-flight may re-establish the
+//!   link on the next cycle.
+//! - All other errors fall back to exponential-backoff reconnect
 //!   (1s → 2s → 4s → 8s → 16s → 30s cap, no max attempts).
 //! - `send_local_rpc` has a 10-second timeout. On timeout or on a dropped
 //!   dispatch task the entry is cleaned out of the pending map and
 //!   `MinosError::RelayInternal { message: "local rpc timeout" }` is
 //!   returned.
 //!
-//! # Phase F work (not yet wired here)
+//! # Persistence on `EventKind::Paired`
 //!
-//! - Mapping WS close codes 4400/4401/4409 into typed [`MinosError`] variants
-//!   beyond the pre-upgrade 401 path. For now those codes just trigger a
-//!   reconnect.
-//! - Delivering `Envelope::Forwarded` payloads into the jsonrpsee dispatch
-//!   loop. Phase E drops them at `warn!` level for visibility.
+//! When the relay finalises a pair and forwards us `your_device_secret`,
+//! the dispatch task writes it to the macOS Keychain via
+//! [`crate::KeychainTrustedDeviceStore::write`] and persists the matching
+//! [`PeerRecord`] into `local-state.json`. Failures of either side are
+//! logged at `warn` but do not block the in-memory `PeerState::Paired`
+//! update — the user still sees "paired" in the UI even if persistence
+//! is transiently broken.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, PeerState, RelayLinkState};
 use minos_protocol::envelope::{Envelope, EventKind, LocalRpcMethod, LocalRpcOutcome, RpcError};
@@ -54,10 +65,11 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::ClientRequestBuilder;
 use tokio_tungstenite::tungstenite::http::Uri;
-use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
+use crate::local_state::LocalState;
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
 use crate::rpc_server::{invoke_forwarded, wrap_response_envelope, RpcServerImpl};
 
@@ -111,6 +123,7 @@ impl RelayClient {
     /// with HTTP 401, in which case it exits after broadcasting
     /// `RelayLinkState::Disconnected`. Call [`Self::stop`] to tear the task
     /// down cleanly; the returned `JoinHandle` is awaited internally.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         config: RelayConfig,
         self_device_id: DeviceId,
@@ -119,6 +132,7 @@ impl RelayClient {
         mac_name: String,
         backend_url: String,
         rpc_server: Option<Arc<RpcServerImpl>>,
+        persistence: PersistenceCtx,
     ) -> (
         Arc<Self>,
         watch::Receiver<RelayLinkState>,
@@ -153,6 +167,9 @@ impl RelayClient {
             out_rx,
             pending: pending.clone(),
             rpc_server,
+            peer_store: persistence.peer_store,
+            local_state_path: persistence.local_state_path,
+            last_error: persistence.last_error,
         };
 
         let task = tokio::spawn(run_dispatch(dispatch_ctx, shutdown_rx));
@@ -278,6 +295,25 @@ impl RelayClient {
     }
 }
 
+/// Shared persistence handles threaded into the dispatcher.
+///
+/// `DaemonInner` owns the same `Arc`s; the dispatch task updates them when
+/// the relay forwards a `Paired` / `Unpaired` event so warm restarts pick
+/// up the most recent peer + error state.
+pub struct PersistenceCtx {
+    /// In-memory mirror of the persisted `PeerRecord` — same `Arc` as the
+    /// one in `DaemonInner::peer`. Updated on `EventKind::Paired` /
+    /// `Unpaired`; read by `DaemonHandle::current_trusted_device`.
+    pub peer_store: Arc<StdMutex<Option<PeerRecord>>>,
+    /// Path to `local-state.json`. Written on `EventKind::Paired` so the
+    /// self/peer device ids and paired-at timestamp survive restarts.
+    pub local_state_path: PathBuf,
+    /// Same `Arc` as `DaemonInner::last_error`. Populated on fatal-exit
+    /// paths (HTTP 401, WS close 4401/4400). Drained on `DaemonHandle::
+    /// last_error`.
+    pub last_error: Arc<StdMutex<Option<MinosError>>>,
+}
+
 /// Shared state plumbed into the dispatcher. Built once at spawn time; the
 /// dispatcher holds it until shutdown.
 ///
@@ -301,6 +337,15 @@ struct DispatchCtx {
     /// `Envelope::Forwarded`. `None` in tests that don't exercise the
     /// peer-RPC path; production wires the daemon's `RpcServerImpl` here.
     rpc_server: Option<Arc<RpcServerImpl>>,
+    /// Shared with `DaemonInner::peer`. Updated on every `EventKind::Paired`
+    /// / `Unpaired` so warm reads via `current_trusted_device` see the
+    /// newest record without round-tripping the watch channel.
+    peer_store: Arc<StdMutex<Option<PeerRecord>>>,
+    /// Persisted next to `device-secret` in the Keychain (which stores the
+    /// secret) so a warm start can rebuild `DaemonHandle::start`'s inputs.
+    local_state_path: PathBuf,
+    /// One-shot fatal-error signal drained by `DaemonHandle::last_error`.
+    last_error: Arc<StdMutex<Option<MinosError>>>,
 }
 
 /// Outcome of a single connect-attempt cycle. Drives the outer
@@ -381,6 +426,13 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
                 error = %e,
                 "invalid backend URL — treating as auth-failure-equivalent"
             );
+            store_last_error(
+                &ctx.last_error,
+                MinosError::ConnectFailed {
+                    url: ctx.backend_url.clone(),
+                    message: e.to_string(),
+                },
+            );
             return CycleOutcome::AuthFailed;
         }
     };
@@ -391,10 +443,22 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
         res = tokio_tungstenite::connect_async(request) => match res {
             Ok((stream, _resp)) => stream,
             Err(WsError::Http(resp)) if resp.status().as_u16() == 401 => {
+                let body = resp
+                    .body()
+                    .as_ref()
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned);
+                let message = body.unwrap_or_else(|| {
+                    "relay handshake returned HTTP 401 (CF Access or relay pre-upgrade check)".into()
+                });
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
+                    %message,
                     "relay handshake returned HTTP 401 — auth failure, exiting task"
                 );
+                store_last_error(&ctx.last_error, MinosError::CfAuthFailed { message });
                 return CycleOutcome::AuthFailed;
             }
             Err(e) => {
@@ -473,12 +537,7 @@ async fn dispatch_loop(
                     }
                     Some(Ok(Message::Pong(_) | Message::Binary(_) | Message::Frame(_))) => {}
                     Some(Ok(Message::Close(frame))) => {
-                        tracing::info!(
-                            target: "minos_daemon::relay_client",
-                            close = ?frame,
-                            "relay sent Close; reconnecting"
-                        );
-                        return CycleOutcome::Reconnect;
+                        return classify_close(frame, ctx);
                     }
                     Some(Err(e)) => {
                         tracing::warn!(
@@ -560,14 +619,22 @@ async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
     }
 }
 
-/// Apply a server-initiated `EventKind` to the peer-state watch channel.
 fn route_event(event: EventKind, ctx: &DispatchCtx) {
     match event {
         EventKind::Paired {
             peer_device_id,
             peer_name,
-            your_device_secret: _,
+            your_device_secret,
         } => {
+            let record = PeerRecord {
+                device_id: peer_device_id,
+                name: peer_name.clone(),
+                paired_at: Utc::now(),
+            };
+            persist_pairing(&record, &your_device_secret, ctx);
+            if let Ok(mut guard) = ctx.peer_store.lock() {
+                *guard = Some(record);
+            }
             let _ = ctx.peer_tx.send(PeerState::Paired {
                 peer_id: peer_device_id,
                 peer_name,
@@ -597,6 +664,10 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
             });
         }
         EventKind::Unpaired => {
+            clear_pairing(ctx);
+            if let Ok(mut guard) = ctx.peer_store.lock() {
+                *guard = None;
+            }
             let _ = ctx.peer_tx.send(PeerState::Unpaired);
         }
         EventKind::ServerShutdown => {
@@ -608,6 +679,135 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
                 "relay signalled server_shutdown; awaiting socket close"
             );
         }
+    }
+}
+
+/// Writes `device-secret` to the macOS Keychain and the updated
+/// `PeerRecord` into `local-state.json`. Failures log at `warn` but do
+/// not block the in-memory state transition — the UI still gets to
+/// observe `PeerState::Paired` even if persistence is temporarily broken.
+fn persist_pairing(record: &PeerRecord, secret: &DeviceSecret, ctx: &DispatchCtx) {
+    #[cfg(target_os = "macos")]
+    if let Err(e) = crate::KeychainTrustedDeviceStore.write(secret) {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %e,
+            "failed to persist device-secret to Keychain on Paired; \
+             continuing with in-memory state so UI still updates"
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = secret;
+
+    let ls = LocalState {
+        self_device_id: ctx.self_device_id,
+        peer: Some(record.clone()),
+    };
+    if let Err(e) = ls.save(&ctx.local_state_path) {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %e,
+            path = %ctx.local_state_path.display(),
+            "failed to persist local-state.json on Paired; \
+             continuing with in-memory state so UI still updates"
+        );
+    }
+}
+
+/// Mirror of [`persist_pairing`] for `Unpaired` — wipes the Keychain
+/// entry and overwrites `local-state.json` with an empty `peer`. Called
+/// when the *peer* initiates a forget; the local `forget_peer` RPC
+/// handler does the same writes itself, so the relay-echoed event is a
+/// (benign) idempotent re-apply.
+fn clear_pairing(ctx: &DispatchCtx) {
+    #[cfg(target_os = "macos")]
+    if let Err(e) = crate::KeychainTrustedDeviceStore.delete() {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %e,
+            "failed to clear device-secret from Keychain on Unpaired"
+        );
+    }
+
+    let ls = LocalState {
+        self_device_id: ctx.self_device_id,
+        peer: None,
+    };
+    if let Err(e) = ls.save(&ctx.local_state_path) {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %e,
+            path = %ctx.local_state_path.display(),
+            "failed to persist local-state.json on Unpaired"
+        );
+    }
+}
+
+/// Map a WS close frame onto the outer `CycleOutcome`, populating
+/// `last_error` when the code is one the spec §7.5 table calls out.
+///
+/// - `4401`: terminal — the relay has revoked our `device-secret`; exit
+///   the task so the caller can prompt re-pair.
+/// - `4400`: non-terminal — malformed / version-mismatched envelope.
+///   Record `EnvelopeVersionUnsupported` so a follow-up UI read surfaces
+///   the hint, but still reconnect: transient bugs may resolve on their
+///   own and the user otherwise gets no signal at all.
+/// - anything else: quiet reconnect (unchanged behaviour).
+fn classify_close(frame: Option<CloseFrame>, ctx: &DispatchCtx) -> CycleOutcome {
+    let code: Option<u16> = frame.as_ref().map(|f| f.code.into());
+    let reason: Option<String> = frame
+        .as_ref()
+        .map(|f| f.reason.to_string())
+        .filter(|s| !s.is_empty());
+    match code {
+        Some(4401) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                code = 4401,
+                ?reason,
+                "relay closed socket with 4401 — stale device auth, re-pair required"
+            );
+            store_last_error(
+                &ctx.last_error,
+                MinosError::DeviceNotTrusted {
+                    device_id: ctx.self_device_id.to_string(),
+                },
+            );
+            CycleOutcome::AuthFailed
+        }
+        Some(4400) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                code = 4400,
+                ?reason,
+                "relay closed socket with 4400 — envelope rejected; \
+                 will reconnect but recording EnvelopeVersionUnsupported"
+            );
+            store_last_error(
+                &ctx.last_error,
+                MinosError::EnvelopeVersionUnsupported { version: 1 },
+            );
+            CycleOutcome::Reconnect
+        }
+        other => {
+            tracing::info!(
+                target: "minos_daemon::relay_client",
+                code = ?other,
+                ?reason,
+                "relay sent Close; reconnecting"
+            );
+            CycleOutcome::Reconnect
+        }
+    }
+}
+
+/// Write a fatal error into the shared slot, overwriting any prior
+/// value. Callers drain via [`crate::DaemonHandle::last_error`], so a
+/// second error arriving before the first drain is expected to win —
+/// the more recent signal is more useful to the UI.
+fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(err);
     }
 }
 

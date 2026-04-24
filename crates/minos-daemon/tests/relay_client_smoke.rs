@@ -19,12 +19,12 @@
 //! dev-dep is scoped to this file.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use minos_daemon::config::RelayConfig;
-use minos_daemon::relay_client::RelayClient;
-use minos_domain::{DeviceId, RelayLinkState};
+use minos_daemon::relay_client::{PersistenceCtx, RelayClient};
+use minos_domain::{DeviceId, MinosError, RelayLinkState};
 use minos_protocol::envelope::LocalRpcMethod;
 use minos_relay::{
     http::{router, RelayState},
@@ -34,7 +34,7 @@ use minos_relay::{
 };
 use pretty_assertions::assert_eq;
 use sqlx::SqlitePool;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -104,12 +104,29 @@ fn test_config() -> RelayConfig {
     RelayConfig::new(String::new(), String::new())
 }
 
+/// Fresh `PersistenceCtx` backed by a throwaway tempdir.
+///
+/// The returned `TempDir` must stay in scope for the duration of the test
+/// — the dispatch task writes `local-state.json` underneath it on every
+/// `EventKind::Paired` / `Unpaired`. Dropping early would race those
+/// writes against the directory teardown.
+fn test_persistence() -> (PersistenceCtx, TempDir) {
+    let tmp = TempDir::new().expect("tempdir");
+    let ctx = PersistenceCtx {
+        peer_store: Arc::new(StdMutex::new(None)),
+        local_state_path: tmp.path().join("local-state.json"),
+        last_error: Arc::new(StdMutex::new(None::<MinosError>)),
+    };
+    (ctx, tmp)
+}
+
 // ── tests ────────────────────────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
 async fn connect_becomes_connected() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
+    let (persistence, _tmp) = test_persistence();
 
     let (client, mut link_rx, _peer_rx) = RelayClient::spawn(
         test_config(),
@@ -119,6 +136,7 @@ async fn connect_becomes_connected() -> anyhow::Result<()> {
         "Fan's Mac".to_string(),
         backend_url,
         None,
+        persistence,
     );
 
     // Initial state is `Disconnected`; wait for `Connected` within the
@@ -149,6 +167,7 @@ async fn connect_becomes_connected() -> anyhow::Result<()> {
 async fn ping_local_rpc_returns_ok_true() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
+    let (persistence, _tmp) = test_persistence();
 
     let (client, mut link_rx, _peer_rx) = RelayClient::spawn(
         test_config(),
@@ -158,6 +177,7 @@ async fn ping_local_rpc_returns_ok_true() -> anyhow::Result<()> {
         "Fan's Mac".to_string(),
         backend_url,
         None,
+        persistence,
     );
 
     // Wait until the link is up so the Ping isn't racing the handshake.
@@ -189,6 +209,7 @@ async fn ping_local_rpc_returns_ok_true() -> anyhow::Result<()> {
 async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
+    let (persistence, _tmp) = test_persistence();
 
     let mac_name = "Fan's MacBook Pro".to_string();
     let (client, mut link_rx, _peer_rx) = RelayClient::spawn(
@@ -199,6 +220,7 @@ async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> 
         mac_name.clone(),
         backend_url.clone(),
         None,
+        persistence,
     );
 
     timeout(STEP_TIMEOUT, async {

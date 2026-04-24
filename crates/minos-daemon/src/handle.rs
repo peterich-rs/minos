@@ -9,17 +9,17 @@
 //! WS-server façade used.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use tokio::runtime::Handle;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::watch;
 
 use crate::agent::AgentGlue;
 use crate::config::{RelayConfig, BACKEND_URL};
 use crate::local_state::LocalState;
 use crate::paths;
-use crate::relay_client::RelayClient;
+use crate::relay_client::{PersistenceCtx, RelayClient};
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
 
 struct DaemonInner {
@@ -27,23 +27,23 @@ struct DaemonInner {
     link_rx: watch::Receiver<minos_domain::RelayLinkState>,
     peer_rx: watch::Receiver<minos_domain::PeerState>,
     self_device_id: DeviceId,
-    /// In-memory mirror of the trusted peer. `RelayClient::forget_peer` +
-    /// an `Unpaired` event from the relay update this; `DaemonHandle::
-    /// current_trusted_device` reads it. Behind a tokio `Mutex` because
-    /// `forget_peer` is async.
-    peer: Arc<Mutex<Option<PeerRecord>>>,
+    /// In-memory mirror of the trusted peer. Shared `Arc` with the
+    /// relay-client dispatch task, which updates it on every
+    /// `EventKind::Paired` / `Unpaired` so warm reads via
+    /// `current_trusted_device` always see the newest record.
+    peer: Arc<StdMutex<Option<PeerRecord>>>,
     local_state_path: PathBuf,
     /// Kept on the inner — future trace logging and eventual UniFFI
     /// getters need the display name that was minted into the relay
     /// handshake.
     #[allow(dead_code)]
     mac_name: String,
-    /// Spec §6.5 gap: the relay-client task populates this via a shared
-    /// `Arc` when a fatal error tears the link down (CF auth, corrupt
-    /// handshake, …). Population is wired in a later Phase F task; here
-    /// we only declare the field and expose the getter so Swift callers
-    /// have a stable surface.
-    last_error: Arc<std::sync::Mutex<Option<MinosError>>>,
+    /// Populated by the relay-client task on fatal exit paths (pre-upgrade
+    /// HTTP 401 → `CfAuthFailed`; post-upgrade WS close 4401 →
+    /// `DeviceNotTrusted`; close 4400 → `EnvelopeVersionUnsupported`).
+    /// Drained on read so the UI sees each failure at most once per
+    /// occurrence.
+    last_error: Arc<StdMutex<Option<MinosError>>>,
     agent: Arc<AgentGlue>,
     /// Captured under `DaemonHandle::start` (which always runs inside a
     /// Tokio runtime — either the CLI's `#[tokio::main]` or UniFFI's
@@ -88,6 +88,13 @@ impl DaemonHandle {
             agent: agent.clone(),
         });
 
+        // Shared between `DaemonInner` and the relay dispatch task — the
+        // latter writes on every Paired/Unpaired event so warm reads here
+        // always see the freshest record without round-tripping the
+        // watch channel.
+        let peer_store: Arc<StdMutex<Option<PeerRecord>>> = Arc::new(StdMutex::new(peer.clone()));
+        let last_error: Arc<StdMutex<Option<MinosError>>> = Arc::new(StdMutex::new(None));
+
         let (relay, link_rx, peer_rx) = RelayClient::spawn(
             config,
             self_device_id,
@@ -96,6 +103,11 @@ impl DaemonHandle {
             mac_name.clone(),
             BACKEND_URL.to_owned(),
             Some(rpc_server),
+            PersistenceCtx {
+                peer_store: peer_store.clone(),
+                local_state_path: local_state_path.clone(),
+                last_error: last_error.clone(),
+            },
         );
 
         Ok(Arc::new(Self {
@@ -104,10 +116,10 @@ impl DaemonHandle {
                 link_rx,
                 peer_rx,
                 self_device_id,
-                peer: Arc::new(Mutex::new(peer)),
+                peer: peer_store,
                 local_state_path,
                 mac_name,
-                last_error: Arc::new(std::sync::Mutex::new(None)),
+                last_error,
                 agent,
                 rt_handle: Handle::current(),
             }),
@@ -130,9 +142,11 @@ impl DaemonHandle {
 
     /// Return the currently trusted peer record (from our in-memory
     /// mirror). Returns `Ok(None)` if we have no paired peer yet.
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     pub async fn current_trusted_device(&self) -> Result<Option<PeerRecord>, MinosError> {
-        Ok(self.inner.peer.lock().await.clone())
+        // `async fn` kept for UniFFI parity with the other getters — the
+        // underlying lock is sync and never held across an await point.
+        Ok(self.inner.peer.lock().unwrap().clone())
     }
 
     /// Mint a pairing QR by round-tripping `request_pairing_token` to
@@ -146,10 +160,16 @@ impl DaemonHandle {
     /// Forget the currently paired peer. Calls the relay first; on
     /// success, clears the in-memory mirror, persists an empty
     /// `local-state.json`, and — on macOS — wipes the Keychain entry.
+    ///
+    /// The relay echoes an `Event::Unpaired` back to us when it finalises,
+    /// and the dispatch task runs its own mirror of this cleanup
+    /// (keychain delete + local-state save). The writes are idempotent,
+    /// so the race between "we wrote it first" and "the echo re-applies"
+    /// is benign.
     #[allow(clippy::missing_errors_doc)]
     pub async fn forget_peer(&self) -> Result<(), MinosError> {
         self.inner.relay.forget_peer().await?;
-        *self.inner.peer.lock().await = None;
+        *self.inner.peer.lock().unwrap() = None;
         let ls = LocalState {
             self_device_id: self.inner.self_device_id,
             peer: None,
@@ -175,14 +195,19 @@ impl DaemonHandle {
     }
 
     /// Drain the last fatal relay-side error, if any. Consuming on read
-    /// avoids repeatedly flagging the same failure in the UI. Population
-    /// is wired up in a later Phase F task — for now this always returns
-    /// `None` (the field starts empty and nothing sets it yet).
+    /// avoids repeatedly flagging the same failure in the UI.
+    ///
+    /// Populated by the relay-client dispatch task on three paths:
+    /// - pre-upgrade HTTP 401 → `CfAuthFailed { message: <resp body> }`
+    /// - WS close 4401 → `DeviceNotTrusted { device_id: self_device_id }`
+    /// - WS close 4400 → `EnvelopeVersionUnsupported { version: 1 }`
+    ///
+    /// Swift reads this after observing a `RelayLinkState::Disconnected`
+    /// and promotes the value into `AppState.bootError` / `displayError`
+    /// so the onboarding or settings sheet can explain *why* the link
+    /// went down.
     #[must_use]
     pub fn last_error(&self) -> Option<MinosError> {
-        // TODO(plan-05 F.x): RelayClient must set this via a shared
-        // `Arc<Mutex<Option<MinosError>>>` before exiting on fatal
-        // errors (CF auth, bad handshake). See spec §6.5 gap note.
         self.inner.last_error.lock().unwrap().take()
     }
 
