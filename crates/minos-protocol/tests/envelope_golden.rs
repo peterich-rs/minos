@@ -15,6 +15,7 @@
 //! single `fixture()` helper without `pub`-exposing it.
 
 use minos_protocol::{Envelope, EventKind, LocalRpcMethod, LocalRpcOutcome};
+use minos_ui_protocol::UiEventMessage;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
@@ -194,4 +195,53 @@ fn event_server_shutdown() {
         panic!("expected Event");
     };
     assert!(matches!(event, EventKind::ServerShutdown));
+}
+
+#[test]
+fn ingest() {
+    let env = round_trip("ingest.json");
+    let Envelope::Ingest {
+        version,
+        agent,
+        thread_id,
+        seq,
+        payload,
+        ts_ms,
+    } = env
+    else {
+        panic!("expected Ingest");
+    };
+    assert_eq!(version, 1);
+    assert_eq!(agent, minos_domain::AgentName::Codex);
+    assert_eq!(thread_id, "thr_abc");
+    assert_eq!(seq, 42);
+    assert_eq!(payload["method"], "item/agentMessage/delta");
+    assert_eq!(payload["params"]["delta"], "Hi");
+    assert_eq!(ts_ms, 1_714_000_000_000);
+}
+
+#[test]
+fn event_ui_event_message() {
+    let env = round_trip("event_ui_event_message.json");
+    let Envelope::Event { version, event } = env else {
+        panic!("expected Event");
+    };
+    assert_eq!(version, 1);
+    let EventKind::UiEventMessage {
+        thread_id,
+        seq,
+        ui,
+        ts_ms,
+    } = event
+    else {
+        panic!("expected UiEventMessage");
+    };
+    assert_eq!(thread_id, "thr_abc");
+    assert_eq!(seq, 42);
+    assert_eq!(ts_ms, 1_714_000_000_000);
+    let UiEventMessage::TextDelta { message_id, text } = ui else {
+        panic!("expected TextDelta");
+    };
+    assert_eq!(message_id, "msg_def");
+    assert_eq!(text, "Hi");
 }
