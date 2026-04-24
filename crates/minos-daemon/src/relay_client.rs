@@ -70,11 +70,11 @@ const LOCAL_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 /// drains continuously, so the steady-state depth is effectively zero.
 const OUTBOUND_QUEUE_DEPTH: usize = 64;
 
-/// Channel between outside callers and the background dispatch task; the
-/// task owns the WS stream and is the sole writer. Using `oneshot` for the
-/// reply lets `send_local_rpc` await just its own correlated response
-/// without scanning a shared queue.
-struct Pending(HashMap<u64, oneshot::Sender<LocalRpcOutcome>>);
+/// Correlation table for outbound `LocalRpc`. The dispatch task inserts
+/// arriving `LocalRpcResponse` outcomes by id; `send_local_rpc` removes
+/// on timeout / success. Using a plain `HashMap` (not `DashMap`) is fine
+/// here — the send path is the sole writer and contention is low.
+type Pending = HashMap<u64, oneshot::Sender<LocalRpcOutcome>>;
 
 struct Inner {
     /// Correlation ids for outbound `LocalRpc`. Starts at 1, monotonic for
@@ -123,19 +123,21 @@ impl RelayClient {
         watch::Receiver<PeerState>,
     ) {
         let (link_tx, link_rx) = watch::channel(RelayLinkState::Disconnected);
-        let initial_peer = peer.as_ref().map_or(PeerState::Unpaired, |p| PeerState::Paired {
-            peer_id: p.device_id,
-            peer_name: p.name.clone(),
-            // We haven't connected yet — the relay will emit PeerOnline
-            // or PeerOffline inside the first authenticated frame.
-            online: false,
-        });
+        let initial_peer = peer
+            .as_ref()
+            .map_or(PeerState::Unpaired, |p| PeerState::Paired {
+                peer_id: p.device_id,
+                peer_name: p.name.clone(),
+                // We haven't connected yet — the relay will emit PeerOnline
+                // or PeerOffline inside the first authenticated frame.
+                online: false,
+            });
         let (peer_tx, peer_rx) = watch::channel(initial_peer);
 
         let (out_tx, out_rx) = mpsc::channel::<Envelope>(OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-        let pending = Arc::new(Mutex::new(Pending(HashMap::new())));
+        let pending: Arc<Mutex<Pending>> = Arc::new(Mutex::new(HashMap::new()));
 
         let dispatch_ctx = DispatchCtx {
             config,
@@ -187,7 +189,7 @@ impl RelayClient {
         // drains quickly.
         {
             let mut pending = self.pending_map().lock().await;
-            pending.0.insert(id, tx);
+            pending.insert(id, tx);
         }
 
         let envelope = Envelope::LocalRpc {
@@ -198,7 +200,7 @@ impl RelayClient {
         };
 
         if let Err(e) = self.inner.out_tx.send(envelope).await {
-            self.pending_map().lock().await.0.remove(&id);
+            self.pending_map().lock().await.remove(&id);
             return Err(MinosError::RelayInternal {
                 message: format!("relay dispatch task stopped: {e}"),
             });
@@ -208,13 +210,13 @@ impl RelayClient {
             Ok(Ok(LocalRpcOutcome::Ok { result })) => Ok(result),
             Ok(Ok(LocalRpcOutcome::Err { error })) => Err(rpc_error_to_minos(&error)),
             Ok(Err(_dropped)) => {
-                self.pending_map().lock().await.0.remove(&id);
+                self.pending_map().lock().await.remove(&id);
                 Err(MinosError::RelayInternal {
                     message: "local rpc timeout".into(),
                 })
             }
             Err(_elapsed) => {
-                self.pending_map().lock().await.0.remove(&id);
+                self.pending_map().lock().await.remove(&id);
                 Err(MinosError::RelayInternal {
                     message: "local rpc timeout".into(),
                 })
@@ -352,10 +354,7 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
 /// One connect + dispatch cycle. Returns `Reconnect` on any transport-level
 /// failure, `AuthFailed` on a pre-upgrade HTTP 401, and `Shutdown` when the
 /// outer `shutdown_rx` fires mid-cycle.
-async fn run_once(
-    ctx: &mut DispatchCtx,
-    shutdown_rx: &mut oneshot::Receiver<()>,
-) -> CycleOutcome {
+async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>) -> CycleOutcome {
     let headers = build_headers(
         &ctx.config,
         ctx.self_device_id,
@@ -503,7 +502,7 @@ async fn handle_inbound_text(text: &str, ctx: &DispatchCtx) -> Result<(), serde_
 async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
     match envelope {
         Envelope::LocalRpcResponse { id, outcome, .. } => {
-            let entry = { ctx.pending.lock().await.0.remove(&id) };
+            let entry = { ctx.pending.lock().await.remove(&id) };
             if let Some(tx) = entry {
                 let _ = tx.send(outcome);
             } else {
@@ -628,12 +627,12 @@ fn build_request(
     backend_url: &str,
     headers: &AuthHeaders,
 ) -> Result<ClientRequestBuilder, MinosError> {
-    let uri: Uri = backend_url.parse().map_err(|e: tokio_tungstenite::tungstenite::http::uri::InvalidUri| {
-        MinosError::ConnectFailed {
+    let uri: Uri = backend_url.parse().map_err(
+        |e: tokio_tungstenite::tungstenite::http::uri::InvalidUri| MinosError::ConnectFailed {
             url: backend_url.into(),
             message: format!("invalid backend URL: {e}"),
-        }
-    })?;
+        },
+    )?;
     let mut builder = ClientRequestBuilder::new(uri);
     for (k, v) in headers.iter() {
         builder = builder.with_header(k, v);
