@@ -148,9 +148,12 @@ jobs:
       - name: frb codegen drift
         # Regenerate the bridge and fail if anything changed. Catches
         # forgotten `cargo xtask gen-frb` runs before they reach main.
+        # The config lives at the repo root but we run from apps/mobile so
+        # frb's internal `fvm flutter --version` resolves the pinned SDK
+        # via .fvmrc (mirrors `xtask::gen_frb`).
         run: |
-          flutter_rust_bridge_codegen generate --config-file flutter_rust_bridge.yaml
-          git diff --exit-code -- apps/mobile/lib/src/rust crates/minos-ffi-frb/src/frb_generated.rs
+          flutter_rust_bridge_codegen generate --config-file "$GITHUB_WORKSPACE/flutter_rust_bridge.yaml"
+          git diff --exit-code -- "$GITHUB_WORKSPACE/apps/mobile/lib/src/rust" "$GITHUB_WORKSPACE/crates/minos-ffi-frb/src/frb_generated.rs"
         working-directory: apps/mobile
 
   macos:
