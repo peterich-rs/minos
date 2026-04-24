@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT secret_hash FROM devices WHERE device_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "secret_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "884ad6d54ac574373f1af54942a580bf1ca604d4c7605bca18ea83e78164d784"
+}

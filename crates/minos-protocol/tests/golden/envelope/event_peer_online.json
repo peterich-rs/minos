@@ -1,0 +1,6 @@
+{
+  "kind": "event",
+  "v": 1,
+  "type": "peer_online",
+  "peer_device_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+}

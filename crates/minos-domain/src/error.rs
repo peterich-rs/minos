@@ -33,6 +33,11 @@ pub enum ErrorKind {
     CliProbeTimeout,
     CliProbeFailed,
     RpcCallFailed,
+    Unauthorized,
+    ConnectionStateMismatch,
+    EnvelopeVersionUnsupported,
+    PeerOffline,
+    RelayInternal,
     CodexSpawnFailed,
     CodexConnectFailed,
     CodexProtocolError,
@@ -50,18 +55,20 @@ impl ErrorKind {
     ///   3. one arm in `MinosError::kind`
     ///   4. two arms (zh + en) here
     ///   5. one arm in Swift's `MinosError.kind` extension
+    ///   6. the frb mirror enums `_MinosError` and `_ErrorKind` in
+    ///      `crates/minos-ffi-frb/src/api/minos.rs` (re-run `cargo xtask gen-frb`)
     #[must_use]
     pub fn user_message(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Self::BindFailed, Lang::Zh) => "无法绑定本机端口；请检查 Tailscale 是否已启动并登录",
+            (Self::BindFailed, Lang::Zh) => "无法绑定中继监听地址；请检查 MINOS_RELAY_LISTEN 配置",
             (Self::BindFailed, Lang::En) => {
-                "Cannot bind local port; please verify Tailscale is running and signed in"
+                "Cannot bind relay listen address; check MINOS_RELAY_LISTEN"
             }
             (Self::ConnectFailed, Lang::Zh) => {
-                "无法连接 Mac；请确认两端均已加入同一 Tailscale 网络"
+                "无法连接中继服务；请检查网络与 Cloudflare Access 令牌"
             }
             (Self::ConnectFailed, Lang::En) => {
-                "Cannot reach Mac; ensure both devices are on the same Tailscale network"
+                "Cannot reach relay; check network and Cloudflare Access token"
             }
             (Self::Disconnected, Lang::Zh) => "连接已断开，正在重试",
             (Self::Disconnected, Lang::En) => "Disconnected; reconnecting",
@@ -85,6 +92,20 @@ impl ErrorKind {
             (Self::CliProbeFailed, Lang::En) => "CLI probe failed",
             (Self::RpcCallFailed, Lang::Zh) => "服务端错误，请稍后重试",
             (Self::RpcCallFailed, Lang::En) => "Server error, please retry",
+            (Self::Unauthorized, Lang::Zh) => "操作未授权，请确认登录状态",
+            (Self::Unauthorized, Lang::En) => "Unauthorized for this operation",
+            (Self::ConnectionStateMismatch, Lang::Zh) => "连接状态不符合要求，请稍后重试",
+            (Self::ConnectionStateMismatch, Lang::En) => {
+                "Connection state mismatch; please retry later"
+            }
+            (Self::EnvelopeVersionUnsupported, Lang::Zh) => "协议版本不兼容，请升级应用",
+            (Self::EnvelopeVersionUnsupported, Lang::En) => {
+                "Protocol version unsupported; please update the app"
+            }
+            (Self::PeerOffline, Lang::Zh) => "对端设备离线，请检查配对设备",
+            (Self::PeerOffline, Lang::En) => "Paired device offline; please check status",
+            (Self::RelayInternal, Lang::Zh) => "中继服务异常，请稍后重试",
+            (Self::RelayInternal, Lang::En) => "Relay service error; please retry later",
             (Self::CodexSpawnFailed, Lang::Zh) => "无法启动 Codex CLI；请确认已安装 `codex`",
             (Self::CodexSpawnFailed, Lang::En) => "Failed to launch codex CLI; is codex installed?",
             (Self::CodexConnectFailed, Lang::Zh) => "无法连接 Codex 服务",
@@ -146,6 +167,22 @@ pub enum MinosError {
     #[error("rpc call failed: {method}: {message}")]
     RpcCallFailed { method: String, message: String },
 
+    // ── relay layer (spec §10.1) ──
+    #[error("unauthorized for this operation: {reason}")]
+    Unauthorized { reason: String },
+
+    #[error("relay connection state not suitable: expected {expected}, got {actual}")]
+    ConnectionStateMismatch { expected: String, actual: String },
+
+    #[error("envelope version unsupported: {version}")]
+    EnvelopeVersionUnsupported { version: u8 },
+
+    #[error("peer offline: {peer_device_id}")]
+    PeerOffline { peer_device_id: String },
+
+    #[error("relay internal error: {message}")]
+    RelayInternal { message: String },
+
     // ── agent runtime layer (spec §5.3) ──
     #[error("failed to spawn codex: {message}")]
     CodexSpawnFailed { message: String },
@@ -185,6 +222,11 @@ impl MinosError {
             Self::CliProbeTimeout { .. } => ErrorKind::CliProbeTimeout,
             Self::CliProbeFailed { .. } => ErrorKind::CliProbeFailed,
             Self::RpcCallFailed { .. } => ErrorKind::RpcCallFailed,
+            Self::Unauthorized { .. } => ErrorKind::Unauthorized,
+            Self::ConnectionStateMismatch { .. } => ErrorKind::ConnectionStateMismatch,
+            Self::EnvelopeVersionUnsupported { .. } => ErrorKind::EnvelopeVersionUnsupported,
+            Self::PeerOffline { .. } => ErrorKind::PeerOffline,
+            Self::RelayInternal { .. } => ErrorKind::RelayInternal,
             Self::CodexSpawnFailed { .. } => ErrorKind::CodexSpawnFailed,
             Self::CodexConnectFailed { .. } => ErrorKind::CodexConnectFailed,
             Self::CodexProtocolError { .. } => ErrorKind::CodexProtocolError,
@@ -301,6 +343,35 @@ mod tests {
                 ErrorKind::RpcCallFailed,
             ),
             (
+                MinosError::Unauthorized {
+                    reason: String::new(),
+                },
+                ErrorKind::Unauthorized,
+            ),
+            (
+                MinosError::ConnectionStateMismatch {
+                    expected: String::new(),
+                    actual: String::new(),
+                },
+                ErrorKind::ConnectionStateMismatch,
+            ),
+            (
+                MinosError::EnvelopeVersionUnsupported { version: 0 },
+                ErrorKind::EnvelopeVersionUnsupported,
+            ),
+            (
+                MinosError::PeerOffline {
+                    peer_device_id: String::new(),
+                },
+                ErrorKind::PeerOffline,
+            ),
+            (
+                MinosError::RelayInternal {
+                    message: String::new(),
+                },
+                ErrorKind::RelayInternal,
+            ),
+            (
                 MinosError::CodexSpawnFailed {
                     message: String::new(),
                 },
@@ -338,7 +409,7 @@ mod tests {
         ];
         assert_eq!(
             cases.len(),
-            18,
+            23,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -346,36 +417,99 @@ mod tests {
         }
     }
 
+    /// Central list of every `ErrorKind`, used by the two exhaustive tests
+    /// below. Adding a new kind requires adding it here as well.
+    const ALL_KINDS: &[ErrorKind] = &[
+        ErrorKind::BindFailed,
+        ErrorKind::ConnectFailed,
+        ErrorKind::Disconnected,
+        ErrorKind::PairingTokenInvalid,
+        ErrorKind::PairingStateMismatch,
+        ErrorKind::DeviceNotTrusted,
+        ErrorKind::StoreIo,
+        ErrorKind::StoreCorrupt,
+        ErrorKind::CliProbeTimeout,
+        ErrorKind::CliProbeFailed,
+        ErrorKind::RpcCallFailed,
+        ErrorKind::Unauthorized,
+        ErrorKind::ConnectionStateMismatch,
+        ErrorKind::EnvelopeVersionUnsupported,
+        ErrorKind::PeerOffline,
+        ErrorKind::RelayInternal,
+        ErrorKind::CodexSpawnFailed,
+        ErrorKind::CodexConnectFailed,
+        ErrorKind::CodexProtocolError,
+        ErrorKind::AgentAlreadyRunning,
+        ErrorKind::AgentNotRunning,
+        ErrorKind::AgentNotSupported,
+        ErrorKind::AgentSessionIdMismatch,
+    ];
+
     #[test]
     fn every_error_kind_has_user_message_in_both_langs() {
-        let kinds = [
-            ErrorKind::BindFailed,
-            ErrorKind::ConnectFailed,
-            ErrorKind::Disconnected,
-            ErrorKind::PairingTokenInvalid,
-            ErrorKind::PairingStateMismatch,
-            ErrorKind::DeviceNotTrusted,
-            ErrorKind::StoreIo,
-            ErrorKind::StoreCorrupt,
-            ErrorKind::CliProbeTimeout,
-            ErrorKind::CliProbeFailed,
-            ErrorKind::RpcCallFailed,
-            ErrorKind::CodexSpawnFailed,
-            ErrorKind::CodexConnectFailed,
-            ErrorKind::CodexProtocolError,
-            ErrorKind::AgentAlreadyRunning,
-            ErrorKind::AgentNotRunning,
-            ErrorKind::AgentNotSupported,
-            ErrorKind::AgentSessionIdMismatch,
-        ];
         assert_eq!(
-            kinds.len(),
-            18,
-            "add a kind when you add a MinosError variant"
+            ALL_KINDS.len(),
+            23,
+            "add a kind when you add an ErrorKind variant"
         );
-        for k in kinds {
+        for k in ALL_KINDS {
             assert!(!k.user_message(Lang::Zh).is_empty(), "missing zh for {k:?}");
             assert!(!k.user_message(Lang::En).is_empty(), "missing en for {k:?}");
         }
+    }
+
+    #[test]
+    fn no_tailscale_strings_remain_in_user_messages() {
+        // Relay rollout (spec §10.1) removes Tailscale from the user-facing
+        // copy; a regression would reintroduce it in a translation edit.
+        // Guard both the relay-specific kinds called out in the spec AND
+        // every other kind so future edits can't leak these words back in.
+        let banned = ["tailscale", "tailnet"];
+        for k in ALL_KINDS {
+            for lang in [Lang::Zh, Lang::En] {
+                let msg = k.user_message(lang);
+                let lower = msg.to_lowercase();
+                for word in banned {
+                    assert!(
+                        !lower.contains(word),
+                        "banned word {word:?} leaked into user_message for {k:?} / {lang:?}: {msg}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn relay_error_variants_user_messages_match_spec() {
+        // Spot-check the new relay copy so edits to the translation table
+        // show up as failing asserts rather than silent drift.
+        assert_eq!(
+            ErrorKind::BindFailed.user_message(Lang::En),
+            "Cannot bind relay listen address; check MINOS_RELAY_LISTEN"
+        );
+        assert_eq!(
+            ErrorKind::ConnectFailed.user_message(Lang::En),
+            "Cannot reach relay; check network and Cloudflare Access token"
+        );
+        assert_eq!(
+            ErrorKind::Unauthorized.user_message(Lang::En),
+            "Unauthorized for this operation"
+        );
+        assert_eq!(
+            ErrorKind::EnvelopeVersionUnsupported.user_message(Lang::En),
+            "Protocol version unsupported; please update the app"
+        );
+        assert_eq!(
+            ErrorKind::PeerOffline.user_message(Lang::En),
+            "Paired device offline; please check status"
+        );
+        assert_eq!(
+            ErrorKind::RelayInternal.user_message(Lang::En),
+            "Relay service error; please retry later"
+        );
+        assert_eq!(
+            ErrorKind::ConnectionStateMismatch.user_message(Lang::En),
+            "Connection state mismatch; please retry later"
+        );
     }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM pairing_tokens WHERE expires_at <= ? AND consumed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "40713016f582c81dee9afdf2db06a93c4e51f314f806aa2cec74b291eb2d90c2"
+}

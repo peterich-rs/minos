@@ -7,7 +7,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1"
+anyhow = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 minos-agent-runtime = { path = "../crates/minos-agent-runtime", version = "0.1.0" }
 minos-domain = { path = "../crates/minos-domain", version = "0.1.0" }

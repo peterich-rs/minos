@@ -1,0 +1,8 @@
+{
+  "kind": "event",
+  "v": 1,
+  "type": "paired",
+  "peer_device_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "peer_name": "Mac-mini",
+  "your_device_secret": "Sg3AfM5V0_3Vp1IvGxPzWwXhE-3HXfLQyIJzj6TZAmE"
+}

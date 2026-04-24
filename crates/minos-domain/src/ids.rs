@@ -55,6 +55,50 @@ impl PairingToken {
     }
 }
 
+/// Long-lived per-device bearer secret minted by the relay at pair time.
+///
+/// 32 random bytes, presented as base64url-no-pad (43 chars). `Debug` and
+/// `Display` are **redacted** so accidental log/trace formatting never leaks
+/// the secret. Use [`DeviceSecret::as_str`] or the transparent `serde`
+/// representation when the plain value is genuinely needed (e.g. sending the
+/// WebSocket `Authorization` header or writing to the keychain).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeviceSecret(pub String);
+
+impl DeviceSecret {
+    /// Generate a fresh secret from the OS CSPRNG (32 bytes → base64url-no-pad).
+    ///
+    /// # Panics
+    /// Panics only if `getrandom` cannot supply entropy from the OS, which
+    /// indicates an unrecoverable platform fault.
+    #[must_use]
+    pub fn generate() -> Self {
+        let mut bytes = [0_u8; 32];
+        getrandom::fill(&mut bytes).expect("OS CSPRNG must be available");
+        Self(URL_SAFE_NO_PAD.encode(bytes))
+    }
+
+    /// Borrow the underlying base64url string. Prefer this over `Display`
+    /// (which is redacted) whenever the plain value is genuinely needed.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for DeviceSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted DeviceSecret>")
+    }
+}
+
+impl std::fmt::Display for DeviceSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted DeviceSecret>")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +140,61 @@ mod tests {
                 assert!(seen.insert(t.0), "collision");
             }
         }
+    }
+
+    #[test]
+    fn device_secret_debug_and_display_are_redacted() {
+        // Use a fixed sentinel so we can assert the plaintext NEVER appears.
+        let sentinel = "super-secret-123";
+        let s = DeviceSecret(sentinel.to_owned());
+
+        let dbg = format!("{s:?}");
+        let disp = format!("{s}");
+
+        assert_eq!(dbg, "<redacted DeviceSecret>");
+        assert_eq!(disp, "<redacted DeviceSecret>");
+        assert!(
+            !dbg.contains(sentinel),
+            "Debug must not leak plaintext secret: {dbg}"
+        );
+        assert!(
+            !disp.contains(sentinel),
+            "Display must not leak plaintext secret: {disp}"
+        );
+    }
+
+    #[test]
+    fn device_secret_as_str_returns_plaintext() {
+        let s = DeviceSecret("abc".to_owned());
+        assert_eq!(s.as_str(), "abc");
+    }
+
+    #[test]
+    fn device_secret_generate_is_43_chars_base64url() {
+        // 32 bytes base64-encoded with no padding = 43 chars.
+        let s = DeviceSecret::generate();
+        assert_eq!(s.as_str().len(), 43);
+        assert!(s
+            .as_str()
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
+
+    #[test]
+    fn device_secret_generate_is_unique() {
+        let a = DeviceSecret::generate();
+        let b = DeviceSecret::generate();
+        assert_ne!(a.as_str(), b.as_str());
+    }
+
+    #[test]
+    fn device_secret_serde_is_transparent_string() {
+        let s = DeviceSecret("token-xyz".to_owned());
+        let json = serde_json::to_string(&s).unwrap();
+        // Transparent → bare JSON string, no struct wrapping.
+        assert_eq!(json, "\"token-xyz\"");
+        let back: DeviceSecret = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.as_str(), "token-xyz");
+        assert_eq!(s, back);
     }
 }

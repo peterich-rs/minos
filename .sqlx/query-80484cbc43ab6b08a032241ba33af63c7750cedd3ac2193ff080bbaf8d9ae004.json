@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT role FROM devices WHERE device_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "role",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "80484cbc43ab6b08a032241ba33af63c7750cedd3ac2193ff080bbaf8d9ae004"
+}

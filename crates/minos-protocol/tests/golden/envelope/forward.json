@@ -1,0 +1,9 @@
+{
+  "kind": "forward",
+  "v": 1,
+  "payload": {
+    "jsonrpc": "2.0",
+    "method": "list_clis",
+    "id": 1
+  }
+}

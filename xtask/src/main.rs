@@ -41,6 +41,10 @@ enum Cmd {
     BuildIos,
     /// Generate apps/macos/Minos.xcodeproj from apps/macos/project.yml.
     GenXcode,
+    /// Wipe and recreate the relay SQLite DB at ./minos-relay.db.
+    RelayDbReset,
+    /// Run the relay binary with dev-friendly defaults.
+    RelayRun,
 }
 
 fn main() -> Result<()> {
@@ -54,6 +58,8 @@ fn main() -> Result<()> {
         Cmd::BuildMacos => build_macos(),
         Cmd::BuildIos => build_ios(),
         Cmd::GenXcode => gen_xcode(),
+        Cmd::RelayDbReset => relay_db_reset(),
+        Cmd::RelayRun => relay_run(),
     }
 }
 
@@ -1010,6 +1016,64 @@ fn ensure_uniffi_bindgen_swift_wrapper() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run the relay binary with dev-friendly defaults.
+///
+/// Convenience wrapper for `cargo run -p minos-relay -- --listen 127.0.0.1:8787
+/// --db ./minos-relay.db --log-level debug`. Used by plan §11 acceptance for
+/// booting the relay during iteration.
+fn relay_run() -> Result<()> {
+    let root = workspace_root()?;
+    eprintln!("==> cargo run -p minos-relay (dev listen 127.0.0.1:8787)");
+    run(
+        "cargo",
+        &[
+            "run",
+            "-p",
+            "minos-relay",
+            "--",
+            "--listen",
+            "127.0.0.1:8787",
+            "--db",
+            "./minos-relay.db",
+            "--log-level",
+            "debug",
+        ],
+        &root,
+    )
+}
+
+/// Wipe and recreate the relay SQLite DB at ./minos-relay.db.
+///
+/// Removes the db file (plus `-shm` / `-wal` sidecars if SQLite is in WAL mode)
+/// and then re-runs migrations via `--exit-after-migrate`. Idempotent — missing
+/// files are ignored.
+fn relay_db_reset() -> Result<()> {
+    let root = workspace_root()?;
+
+    for suffix in ["", "-shm", "-wal"] {
+        let path = root.join(format!("minos-relay.db{suffix}"));
+        if path.exists() {
+            eprintln!("==> rm {}", path.display());
+            fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        }
+    }
+
+    eprintln!("==> cargo run -p minos-relay -- --db ./minos-relay.db --exit-after-migrate");
+    run(
+        "cargo",
+        &[
+            "run",
+            "-p",
+            "minos-relay",
+            "--",
+            "--db",
+            "./minos-relay.db",
+            "--exit-after-migrate",
+        ],
+        &root,
+    )
 }
 
 fn cargo_bin_dir() -> Result<PathBuf> {

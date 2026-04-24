@@ -20,7 +20,7 @@ minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 # `flutter_rust_bridge_codegen 2.11.1` tool installed for this workspace; the
 # generated `frb_generated.rs` embeds a codegen-version constant that must
 # match the runtime exactly, else the generated boilerplate fails to compile.
-flutter_rust_bridge = "=2.11.1"
+flutter_rust_bridge = "=2.12.0"
 
 # The frb adapter owns a small dedicated Tokio runtime for FFI-triggered
 # background work such as forwarding `watch::Receiver` updates into Dart

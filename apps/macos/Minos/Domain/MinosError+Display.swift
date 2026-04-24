@@ -25,6 +25,16 @@ extension MinosError {
             return .cliProbeFailed
         case .RpcCallFailed:
             return .rpcCallFailed
+        case .Unauthorized:
+            return .unauthorized
+        case .ConnectionStateMismatch:
+            return .connectionStateMismatch
+        case .EnvelopeVersionUnsupported:
+            return .envelopeVersionUnsupported
+        case .PeerOffline:
+            return .peerOffline
+        case .RelayInternal:
+            return .relayInternal
         case .CodexSpawnFailed:
             return .codexSpawnFailed
         case .CodexConnectFailed:

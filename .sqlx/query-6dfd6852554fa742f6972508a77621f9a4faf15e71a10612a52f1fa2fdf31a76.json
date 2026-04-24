@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO pairing_tokens (token_hash, issuer_device_id, created_at, expires_at, consumed_at)\n        VALUES (?, ?, ?, ?, NULL)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "6dfd6852554fa742f6972508a77621f9a4faf15e71a10612a52f1fa2fdf31a76"
+}

@@ -37,6 +37,22 @@ jobs:
         # silently skipping like a fresh local checkout would.
         run: cargo install cargo-deny --locked
 
+      - name: Install sqlx-cli
+        # Needed for the offline-metadata freshness check below. Sqlite-only
+        # features keep the install lean; rust-cache persists the binary in
+        # `~/.cargo/bin` across runs, so the `cargo install` is a near-noop
+        # on cache hits.
+        run: cargo install sqlx-cli --no-default-features --features sqlite --locked
+
+      - name: Verify sqlx offline metadata
+        # Catches stale `.sqlx/` cache entries before they surface as opaque
+        # `cargo test` failures inside `cargo xtask check-all`. The
+        # `-- -p minos-relay --all-targets` forwarding is required because the
+        # workspace manifest sets `default-members = []`; without it,
+        # `cargo sqlx prepare` errors with "no crates to check". The `.sqlx/`
+        # directory was committed in a297e28 (relay store CRUD).
+        run: cargo sqlx prepare --check --workspace -- -p minos-relay --all-targets
+
       - name: cargo xtask check-all
         # Single source of truth — same command developers run locally.
         # Includes: cargo fmt --check, cargo clippy --workspace -- -D warnings,
@@ -132,9 +148,12 @@ jobs:
       - name: frb codegen drift
         # Regenerate the bridge and fail if anything changed. Catches
         # forgotten `cargo xtask gen-frb` runs before they reach main.
+        # The config lives at the repo root but we run from apps/mobile so
+        # frb's internal `fvm flutter --version` resolves the pinned SDK
+        # via .fvmrc (mirrors `xtask::gen_frb`).
         run: |
-          flutter_rust_bridge_codegen generate --config-file flutter_rust_bridge.yaml
-          git diff --exit-code -- apps/mobile/lib/src/rust crates/minos-ffi-frb/src/frb_generated.rs
+          flutter_rust_bridge_codegen generate --config-file "$GITHUB_WORKSPACE/flutter_rust_bridge.yaml"
+          git diff --exit-code -- "$GITHUB_WORKSPACE/apps/mobile/lib/src/rust" "$GITHUB_WORKSPACE/crates/minos-ffi-frb/src/frb_generated.rs"
         working-directory: apps/mobile
 
   macos:
