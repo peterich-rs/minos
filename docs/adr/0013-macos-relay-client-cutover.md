@@ -1,6 +1,6 @@
 # ADR 0013 · macOS Relay-Client Cutover Shape
 
-Status: Proposed
+Status: Accepted
 Date: 2026-04-24
 Owner: fannnzhang
 Related spec: `docs/superpowers/specs/macos-relay-client-migration-design.md`

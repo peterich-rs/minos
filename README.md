@@ -1,6 +1,6 @@
 # Minos
 
-Native macOS status-bar app + Flutter mobile client + shared Rust core for remote AI-coding control. Drive `codex` / `claude` / `gemini` on a Mac from a paired phone over Tailscale.
+Native macOS status-bar app + Flutter mobile client + shared Rust core for remote AI-coding control. Drive `codex` / `claude` / `gemini` on a Mac from a paired phone. The macOS app (plan 05) talks to the `minos-relay` WSS broker behind Cloudflare Access; iOS / Flutter is still on the Tier A Tailscale pipeline until plan 06 ports it.
 
 ## Status
 
@@ -55,18 +55,23 @@ By default, the CLI keeps its runtime files under `~/.minos/` so ad hoc testing
 doesn't mix with the macOS app's platform-native paths.
 
 ```bash
-# Show resolved paths and the current Tailscale discovery result.
+# Show resolved paths, the local-state.json location, and the compile-time
+# relay backend URL (overridable at build time via MINOS_BACKEND_URL).
 cargo run -p minos-daemon -- doctor
 
-# Start the daemon without Tailscale, using an ephemeral loopback port.
-cargo run -p minos-daemon -- start --bind 127.0.0.1:0 --print-qr
+# Start the daemon against the relay. Needs a reachable relay — boot a
+# local one first with `cargo run -p minos-relay`, or point to a hosted
+# one at build time. Pass `--print-qr` to mint a pairing QR once the
+# link is up.
+cargo run -p minos-daemon -- start --print-qr
 
 # Inspect what the library would use on macOS without the CLI overrides.
 cargo run -p minos-daemon -- --platform-paths doctor
 ```
 
-On this repository's current MVP path, production pairing still assumes a
-Tailscale `100.x.y.z` address between the Mac and the phone.
+CF Service Token credentials come from `CF_ACCESS_CLIENT_ID` /
+`CF_ACCESS_CLIENT_SECRET` for the CLI; the macOS app reads them from the
+Keychain (written via the in-app Settings sheet).
 
 ## Mobile app (iOS)
 
@@ -87,7 +92,7 @@ cargo xtask build-ios
 open apps/mobile/ios/Runner.xcodeproj
 ```
 
-During development without a real device, start `cargo run -p minos-daemon -- start --print-qr` on the Mac, copy the printed QR JSON, and paste it in the iOS Simulator via the `kDebugMode`-only FAB on the pairing page.
+During development without a real device: iOS Tier A still uses the pre-relay Tailscale pair flow, so spin up the legacy minos-daemon stack on that side. The Mac-side relay flow has its own dev bin instead — see `cargo run -p minos-mobile --bin fake-peer --features cli`, which drives the relay end-to-end without an iPhone.
 
 ## Repository layout
 
