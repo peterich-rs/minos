@@ -2115,9 +2115,12 @@ dependencies = [
 name = "minos-mobile"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "chrono",
+ "clap",
  "futures",
+ "futures-util",
  "jsonrpsee",
  "mars-xlog",
  "minos-daemon",
@@ -2129,6 +2132,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-test",
+ "tokio-tungstenite 0.29.0",
  "tracing",
  "tracing-subscriber",
  "url",
