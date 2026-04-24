@@ -30,12 +30,12 @@ enum DaemonBootstrap {
             // out of Keychain. Swift only supplies what's not on the
             // filesystem: CF token + display name.
             let localStatePath = AppDirectories.localStatePath()
-            let localState = try LocalStateLoader.loadOrInit(at: localStatePath)
+            let (selfDeviceId, peer) = try LocalStateLoader.loadOrInit(at: localStatePath)
             let secret = KeychainDeviceSecret.read()
             return try await DaemonHandle.start(
                 config: config,
-                selfDeviceId: localState.selfDeviceId,
-                peer: localState.peer,
+                selfDeviceId: selfDeviceId,
+                peer: peer,
                 secret: secret,
                 macName: macName
             )
@@ -167,13 +167,38 @@ enum AppDirectories {
     }
 }
 
+/// JSON shape mirroring the Rust `LocalState` struct
+/// (`crates/minos-daemon/src/local_state.rs`). Snake-case keys match
+/// the Rust serde derive verbatim, including the `paired_at` ISO-8601
+/// timestamp inside the optional `peer` block.
 struct LocalStateJSON: Codable {
     let selfDeviceId: DeviceId
-    let peer: PeerRecord?
+    let peer: PeerRecordJSON?
 
     enum CodingKeys: String, CodingKey {
         case selfDeviceId = "self_device_id"
         case peer
+    }
+
+    func toRecord() -> PeerRecord? {
+        peer.map { json in
+            PeerRecord(deviceId: json.deviceId, name: json.name, pairedAt: json.pairedAt)
+        }
+    }
+}
+
+/// JSON-side mirror of `PeerRecord`. The UniFFI-generated `PeerRecord`
+/// struct is not `Codable` (no auto-derive across the FFI boundary), so
+/// we shadow the three live fields and convert at the boundary.
+struct PeerRecordJSON: Codable {
+    let deviceId: DeviceId
+    let name: String
+    let pairedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case deviceId = "device_id"
+        case name
+        case pairedAt = "paired_at"
     }
 }
 
@@ -182,20 +207,24 @@ enum LocalStateLoader {
     /// file is missing, mint a fresh DeviceId and persist it; if it's
     /// present but corrupt, surface as a Swift-side throw the bootstrap
     /// catches and converts into a `bootError`.
-    static func loadOrInit(at path: URL) throws -> LocalStateJSON {
+    static func loadOrInit(at path: URL) throws -> (selfDeviceId: DeviceId, peer: PeerRecord?) {
         let fm = FileManager.default
         if !fm.fileExists(atPath: path.path) {
-            let initial = LocalStateJSON(selfDeviceId: DeviceId(), peer: nil)
+            let initial = LocalStateJSON(selfDeviceId: UUID().uuidString.lowercased(), peer: nil)
             try save(initial, to: path)
-            return initial
+            return (initial.selfDeviceId, nil)
         }
         let data = try Data(contentsOf: path)
-        return try JSONDecoder().decode(LocalStateJSON.self, from: data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let json = try decoder.decode(LocalStateJSON.self, from: data)
+        return (json.selfDeviceId, json.toRecord())
     }
 
     private static func save(_ state: LocalStateJSON, to path: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
         try FileManager.default.createDirectory(
             at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true

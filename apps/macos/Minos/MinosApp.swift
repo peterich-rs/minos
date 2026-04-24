@@ -18,7 +18,8 @@ struct MinosApp: App {
             MenuBarView(appState: appState)
         } label: {
             StatusIcon(
-                connectionState: appState.connectionState,
+                link: appState.relayLink,
+                peer: appState.peer,
                 hasBootError: appState.bootError != nil
             )
             .frame(width: 18, height: 18)

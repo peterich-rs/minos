@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Menubar popover content. Walks the AppState.phase ladder
+/// (awaitingConfig → running → bootFailed) and within `.running`
+/// renders the dual-axis status + action items gated by canShowQr /
+/// canForgetPeer.
+///
+/// Plan 05 Phase J.2.
 struct MenuBarView: View {
     @Bindable var appState: AppState
 
@@ -9,171 +15,180 @@ struct MenuBarView: View {
                 errorBanner(displayError)
             }
 
-            if let bootError = appState.bootError {
-                bootErrorContent(bootError)
-            } else if appState.connectionState == nil {
-                bootingContent
-            } else if appState.trustedDevice != nil {
-                pairedContent
-            } else if appState.isShowingQr {
-                PairingQRView(appState: appState)
-            } else {
-                unpairedContent
+            switch appState.phase {
+            case .awaitingConfig:
+                awaitingConfigContent
+            case .bootFailed:
+                bootErrorContent(appState.bootError)
+            case .running:
+                runningContent
             }
         }
         .padding(14)
         .frame(width: 360)
-    }
-
-    private var unpairedContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header(
-                title: appState.connectionState?.displayLabel() ?? "正在启动…",
-                subtitle: appState.endpointDisplay
-            )
-
-            Divider()
-
-            actionButton("显示配对二维码…") {
-                Task {
-                    await appState.showQr()
-                }
-            }
-
-            AgentSegmentView(appState: appState)
-
-            actionButton("在 Finder 中显示今日日志…") {
-                Task {
-                    await appState.revealTodayLog()
-                }
-            }
-
-            Divider()
-
-            actionButton("退出 Minos") {
-                Task {
-                    await appState.shutdown()
-                }
-            }
+        .sheet(isPresented: $appState.onboardingVisible) {
+            OnboardingSheet(appState: appState)
+        }
+        .sheet(isPresented: $appState.settingsVisible) {
+            SettingsSheet(appState: appState)
         }
     }
 
-    private var pairedContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header(title: "已配对 · 等待回连", subtitle: appState.trustedDevice?.name)
+    // ── Phase: awaiting configuration ────────────────────────────────
 
-            Divider()
-
-            actionButton("忘记已配对设备", role: .destructive) {
-                Task {
-                    await appState.forgetDevice()
-                }
-            }
-
-            AgentSegmentView(appState: appState)
-
-            actionButton("在 Finder 中显示今日日志…") {
-                Task {
-                    await appState.revealTodayLog()
-                }
-            }
-
-            Divider()
-
-            actionButton("退出 Minos") {
-                Task {
-                    await appState.shutdown()
-                }
-            }
-        }
-    }
-
-    private var bootingContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header(title: "正在启动…", subtitle: nil)
-
-            Divider()
-
-            actionButton("在 Finder 中显示今日日志…") {
-                Task {
-                    await appState.revealTodayLog()
-                }
-            }
-
-            Divider()
-
-            actionButton("退出 Minos") {
-                Task {
-                    await appState.shutdown()
-                }
-            }
-        }
-    }
-
-    private func bootErrorContent(_ bootError: MinosError) -> some View {
+    private var awaitingConfigContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                StatusIcon(connectionState: nil, hasBootError: true)
-                Text("Minos · 启动失败")
+                Image(systemName: "bolt.slash")
+                    .foregroundStyle(.red)
+                    .imageScale(.large)
+                Text("Minos · 等待配置")
                     .font(.headline)
             }
 
-            Text(bootError.userMessage(lang: .zh))
-                .font(.subheadline)
-
-            DisclosureGroup("详情") {
-                Text(bootError.technicalDetails)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
-            }
-
-            Button("重试") {
-                Task {
-                    await DaemonBootstrap.bootstrap(appState)
-                }
-            }
-            .keyboardShortcut(.defaultAction)
+            Text("尚未配置 Cloudflare Service Token，请先填入 Relay 设置后重试。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Divider()
 
-            actionButton("在 Finder 中显示今日日志…") {
-                Task {
-                    await appState.revealTodayLog()
-                }
+            actionButton("Relay 设置…") {
+                appState.onboardingVisible = true
             }
-
             actionButton("退出 Minos") {
-                Task {
-                    await appState.shutdown()
-                }
+                Task { await appState.shutdown() }
             }
         }
     }
 
-    private func header(title: String, subtitle: String?) -> some View {
+    // ── Phase: running ──────────────────────────────────────────────
+
+    @ViewBuilder
+    private var runningContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+
+            Divider()
+
+            if appState.isShowingQr {
+                PairingQRView(appState: appState)
+            } else {
+                runningActions
+            }
+        }
+    }
+
+    private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 StatusIcon(
-                    connectionState: appState.connectionState,
-                    hasBootError: appState.bootError != nil
+                    link: appState.relayLink,
+                    peer: appState.peer,
+                    hasBootError: false
                 )
                 Text("Minos")
                     .font(.headline)
             }
 
-            Text(title)
+            Text(appState.relayLink.displayLabel())
                 .font(.subheadline.weight(.medium))
 
-            if let subtitle {
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Text(appState.peer.displayLabel())
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var runningActions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if appState.canShowQr {
+                actionButton("显示配对二维码…") {
+                    Task { await appState.showQr() }
+                }
+            }
+
+            if appState.canForgetPeer {
+                actionButton("忘记已配对设备", role: .destructive) {
+                    Task { await appState.forgetPeer() }
+                }
+            } else if case .paired = appState.peer {
+                // Paired but the link is not connected — surface a
+                // disabled affordance so users know the action exists
+                // and what they need to do (wait for reconnect) before
+                // it becomes available.
+                actionButton("忘记已配对设备 (需要后端在线)", action: {})
+                    .disabled(true)
+            }
+
+            AgentSegmentView(appState: appState)
+
+            actionButton("Relay 设置…") {
+                appState.settingsVisible = true
+            }
+            actionButton("在 Finder 中显示今日日志…") {
+                Task { await appState.revealTodayLog() }
+            }
+
+            Divider()
+
+            actionButton("退出 Minos") {
+                Task { await appState.shutdown() }
             }
         }
     }
+
+    // ── Phase: boot failed ──────────────────────────────────────────
+
+    private func bootErrorContent(_ bootError: MinosError?) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                StatusIcon(
+                    link: .disconnected,
+                    peer: .unpaired,
+                    hasBootError: true
+                )
+                Text("Minos · 启动失败")
+                    .font(.headline)
+            }
+
+            if let bootError {
+                Text(bootError.userMessage(lang: .zh))
+                    .font(.subheadline)
+
+                DisclosureGroup("详情") {
+                    Text(bootError.technicalDetails)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
+            } else {
+                Text("未知启动错误")
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            }
+
+            Button("重试") {
+                Task { await DaemonBootstrap.bootstrap(appState) }
+            }
+            .keyboardShortcut(.defaultAction)
+
+            Divider()
+
+            actionButton("Relay 设置…") {
+                appState.settingsVisible = true
+            }
+            actionButton("在 Finder 中显示今日日志…") {
+                Task { await appState.revealTodayLog() }
+            }
+            actionButton("退出 Minos") {
+                Task { await appState.shutdown() }
+            }
+        }
+    }
+
+    // ── Shared widgets ──────────────────────────────────────────────
 
     private func errorBanner(_ error: MinosError) -> some View {
         HStack(spacing: 8) {
