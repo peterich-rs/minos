@@ -1,0 +1,13 @@
+[
+  {
+    "kind":"message_started",
+    "message_id":"<uuid>",
+    "role":"assistant",
+    "started_at_ms":1714000008000
+  },
+  {
+    "kind":"text_delta",
+    "message_id":"<uuid>",
+    "text":""
+  }
+]

@@ -1,0 +1,8 @@
+[
+  {"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1714000006000}},
+  {"method":"item/toolCall/started","params":{"itemId":"i1","toolCallId":"tc_1","name":"apply_patch"}},
+  {"method":"item/toolCall/arguments","params":{"toolCallId":"tc_1","argumentsDelta":"{\"diff\":"}},
+  {"method":"item/toolCall/arguments","params":{"toolCallId":"tc_1","argumentsDelta":"\"...\"}"}},
+  {"method":"item/toolCall/argumentsCompleted","params":{"toolCallId":"tc_1"}},
+  {"method":"item/toolCall/completed","params":{"toolCallId":"tc_1","output":"patched 1 file","isError":false}}
+]

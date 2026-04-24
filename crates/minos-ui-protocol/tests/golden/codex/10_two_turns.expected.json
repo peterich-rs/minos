@@ -1,0 +1,8 @@
+[
+  {"kind":"message_started","message_id":"<uuid>","role":"assistant","started_at_ms":1},
+  {"kind":"text_delta","message_id":"<uuid>","text":"one"},
+  {"kind":"message_completed","message_id":"<uuid>","finished_at_ms":2},
+  {"kind":"message_started","message_id":"<uuid>","role":"assistant","started_at_ms":3},
+  {"kind":"text_delta","message_id":"<uuid>","text":"two"},
+  {"kind":"message_completed","message_id":"<uuid>","finished_at_ms":4}
+]

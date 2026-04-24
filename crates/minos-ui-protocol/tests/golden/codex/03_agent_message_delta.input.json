@@ -1,0 +1,6 @@
+[
+  {"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1714000002000}},
+  {"method":"item/agentMessage/delta","params":{"itemId":"i1","delta":"Hel"}},
+  {"method":"item/agentMessage/delta","params":{"itemId":"i1","delta":"lo"}},
+  {"method":"turn/completed","params":{"finishedAtMs":1714000003000}}
+]
