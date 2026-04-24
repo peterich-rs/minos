@@ -379,6 +379,20 @@ async fn dispatch_envelope(
             close_with(ws, CLOSE_CODE_BAD_REQUEST, "client_sent_server_frame").await;
             false
         }
+        // `Ingest` is reserved for the host → backend direction and will
+        // be wired up in C4/C5. Until then, treat it the same way as any
+        // other unexpected client frame: close 4400 and keep the
+        // invariants clean. This keeps the match exhaustive without
+        // accidentally committing a half-baked ingest path here.
+        Envelope::Ingest { .. } => {
+            tracing::warn!(
+                target: "minos_backend::envelope",
+                "ingest envelope received before ingest pipeline exists; closing 4400"
+            );
+            send_version_unsupported(ws, 0).await;
+            close_with(ws, CLOSE_CODE_BAD_REQUEST, "ingest_not_yet_supported").await;
+            false
+        }
     }
 }
 

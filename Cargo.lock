@@ -2182,6 +2182,7 @@ version = "0.1.0"
 dependencies = [
  "jsonrpsee",
  "minos-domain",
+ "minos-ui-protocol",
  "pretty_assertions",
  "serde",
  "serde_json",

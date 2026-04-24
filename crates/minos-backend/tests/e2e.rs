@@ -292,7 +292,7 @@ async fn e2e_pair_forward_forget() -> anyhow::Result<()> {
         &Envelope::LocalRpc {
             version: 1,
             id: 1,
-            method: LocalRpcMethod::RequestPairingToken,
+            method: LocalRpcMethod::RequestPairingQr,
             params: serde_json::json!({}),
         },
     )
@@ -516,7 +516,7 @@ async fn e2e_request_pairing_token_respects_configured_ttl() -> anyhow::Result<(
         &Envelope::LocalRpc {
             version: 1,
             id: 1,
-            method: LocalRpcMethod::RequestPairingToken,
+            method: LocalRpcMethod::RequestPairingQr,
             params: serde_json::json!({}),
         },
     )

@@ -1,6 +1,7 @@
 //! Request and response payload types.
 
 use minos_domain::{AgentDescriptor, AgentName, DeviceId, PairingToken};
+use minos_ui_protocol::{ThreadEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +51,108 @@ pub struct StartAgentResponse {
 pub struct SendUserMessageRequest {
     pub session_id: String,
     pub text: String,
+}
+
+/// Deep-link QR payload minted by the Mac and scanned by iOS. Carries the
+/// backend URL, a display name for the host, a short-lived one-shot
+/// `pairing_token`, its RFC-3339-ish epoch-ms expiry, and — when the
+/// backend sits behind a Cloudflare Access service-token — the two
+/// service-token headers so the iPhone can authenticate against the edge
+/// before the bearer-secret WebSocket handshake.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PairingQrPayload {
+    pub v: u8,
+    pub backend_url: String,
+    pub host_display_name: String,
+    pub pairing_token: String,
+    pub expires_at_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cf_access_client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cf_access_client_secret: Option<String>,
+}
+
+/// Parameters for `request_pairing_qr` — the Mac tells the backend which
+/// display name to embed so the iPhone UI can say "Pair with <name>?".
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RequestPairingQrParams {
+    pub host_display_name: String,
+}
+
+/// Response from `request_pairing_qr`; wraps a [`PairingQrPayload`] for
+/// the Mac to render directly as a QR code.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RequestPairingQrResponse {
+    pub qr_payload: PairingQrPayload,
+}
+
+/// Compact summary of one persisted thread, returned by `list_threads`
+/// for the mobile history list.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSummary {
+    pub thread_id: String,
+    pub agent: AgentName,
+    pub title: Option<String>,
+    pub first_ts_ms: i64,
+    pub last_ts_ms: i64,
+    pub message_count: u32,
+    pub ended_at_ms: Option<i64>,
+    pub end_reason: Option<ThreadEndReason>,
+}
+
+/// Parameters for `list_threads`. `before_ts_ms` paginates older entries;
+/// `agent` filters by CLI kind.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListThreadsParams {
+    pub limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_ts_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+}
+
+/// Response from `list_threads`; `next_before_ts_ms` is set iff there is
+/// a strictly older page the caller can request.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListThreadsResponse {
+    pub threads: Vec<ThreadSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_before_ts_ms: Option<i64>,
+}
+
+/// Parameters for `read_thread`. `from_seq` resumes from after the given
+/// sequence; if omitted, the backend returns the oldest `limit` events.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ReadThreadParams {
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_seq: Option<u64>,
+    pub limit: u32,
+}
+
+/// Response from `read_thread`. `next_seq` is set iff more events exist
+/// past the returned window. `thread_end_reason` is set iff the thread is
+/// closed.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ReadThreadResponse {
+    pub ui_events: Vec<UiEventMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_seq: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_end_reason: Option<ThreadEndReason>,
+}
+
+/// Parameters for `get_thread_last_seq` (host-only helper).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GetThreadLastSeqParams {
+    pub thread_id: String,
+}
+
+/// Response from `get_thread_last_seq`; `last_seq` is `0` when the thread
+/// is unknown or empty.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GetThreadLastSeqResponse {
+    pub last_seq: u64,
 }
 
 #[cfg(test)]
@@ -121,5 +224,194 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let back: SendUserMessageRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
+    }
+}
+
+#[cfg(test)]
+mod new_type_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn pairing_qr_payload_round_trip_with_cf() {
+        let p = PairingQrPayload {
+            v: 2,
+            backend_url: "wss://minos.fan-nn.top/devices".into(),
+            host_display_name: "Mac".into(),
+            pairing_token: "tok".into(),
+            expires_at_ms: 1,
+            cf_access_client_id: Some("id".into()),
+            cf_access_client_secret: Some("sec".into()),
+        };
+        let back: PairingQrPayload =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn pairing_qr_payload_without_cf_omits_fields() {
+        let p = PairingQrPayload {
+            v: 2,
+            backend_url: "x".into(),
+            host_display_name: "x".into(),
+            pairing_token: "t".into(),
+            expires_at_ms: 0,
+            cf_access_client_id: None,
+            cf_access_client_secret: None,
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        assert!(!s.contains("cf_access_client_id"));
+        assert!(!s.contains("cf_access_client_secret"));
+    }
+
+    #[test]
+    fn request_pairing_qr_params_round_trip() {
+        let p = RequestPairingQrParams {
+            host_display_name: "Fan's Mac".into(),
+        };
+        let back: RequestPairingQrParams =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn request_pairing_qr_response_round_trip() {
+        let r = RequestPairingQrResponse {
+            qr_payload: PairingQrPayload {
+                v: 1,
+                backend_url: "wss://example.com/devices".into(),
+                host_display_name: "Mac".into(),
+                pairing_token: "tok".into(),
+                expires_at_ms: 42,
+                cf_access_client_id: None,
+                cf_access_client_secret: None,
+            },
+        };
+        let back: RequestPairingQrResponse =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn thread_summary_round_trip_with_end_reason() {
+        let s = ThreadSummary {
+            thread_id: "thr_1".into(),
+            agent: AgentName::Codex,
+            title: Some("A thread".into()),
+            first_ts_ms: 100,
+            last_ts_ms: 200,
+            message_count: 3,
+            ended_at_ms: Some(300),
+            end_reason: Some(ThreadEndReason::AgentDone),
+        };
+        let back: ThreadSummary =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn thread_summary_round_trip_open_thread() {
+        let s = ThreadSummary {
+            thread_id: "thr_2".into(),
+            agent: AgentName::Claude,
+            title: None,
+            first_ts_ms: 100,
+            last_ts_ms: 200,
+            message_count: 1,
+            ended_at_ms: None,
+            end_reason: None,
+        };
+        let back: ThreadSummary =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn list_threads_params_round_trip_filters() {
+        let p = ListThreadsParams {
+            limit: 50,
+            before_ts_ms: Some(1_000),
+            agent: Some(AgentName::Gemini),
+        };
+        let back: ListThreadsParams =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn list_threads_params_round_trip_omits_none_fields() {
+        let p = ListThreadsParams {
+            limit: 10,
+            before_ts_ms: None,
+            agent: None,
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        assert!(!s.contains("before_ts_ms"));
+        assert!(!s.contains("agent"));
+    }
+
+    #[test]
+    fn list_threads_response_round_trip() {
+        let r = ListThreadsResponse {
+            threads: vec![ThreadSummary {
+                thread_id: "thr_1".into(),
+                agent: AgentName::Codex,
+                title: None,
+                first_ts_ms: 1,
+                last_ts_ms: 2,
+                message_count: 0,
+                ended_at_ms: None,
+                end_reason: None,
+            }],
+            next_before_ts_ms: Some(1),
+        };
+        let back: ListThreadsResponse =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn read_thread_params_round_trip() {
+        let p = ReadThreadParams {
+            thread_id: "thr_1".into(),
+            from_seq: Some(10),
+            limit: 100,
+        };
+        let back: ReadThreadParams =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn read_thread_response_round_trip() {
+        let r = ReadThreadResponse {
+            ui_events: vec![UiEventMessage::TextDelta {
+                message_id: "msg_1".into(),
+                text: "Hi".into(),
+            }],
+            next_seq: Some(2),
+            thread_end_reason: Some(ThreadEndReason::AgentDone),
+        };
+        let back: ReadThreadResponse =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn get_thread_last_seq_params_round_trip() {
+        let p = GetThreadLastSeqParams {
+            thread_id: "thr_1".into(),
+        };
+        let back: GetThreadLastSeqParams =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn get_thread_last_seq_response_round_trip() {
+        let r = GetThreadLastSeqResponse { last_seq: 42 };
+        let back: GetThreadLastSeqResponse =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(r, back);
     }
 }

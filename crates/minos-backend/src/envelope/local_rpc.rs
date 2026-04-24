@@ -12,7 +12,7 @@
 //! | Method | Role gate | Pre-state | Notes |
 //! |---|---|---|---|
 //! | `Ping` | any | any | returns `{"ok": true}` verbatim |
-//! | `RequestPairingToken` | `mac-host` | any | mints token using configured TTL |
+//! | `RequestPairingQr` | `mac-host` | any | mints token using configured TTL (C4 rewrites body to return `PairingQrPayload`) |
 //! | `Pair` | `ios-client` | unpaired | consumes token, emits `Event::Paired` to issuer |
 //! | `ForgetPeer` | any | paired | emits `Event::Unpaired` to both sides |
 //!
@@ -70,9 +70,19 @@ pub async fn handle(
 ) -> LocalRpcOutcome {
     match method {
         LocalRpcMethod::Ping => handle_ping().await,
-        LocalRpcMethod::RequestPairingToken => handle_request_pairing_token(ctx).await,
+        // C4 will rebuild this handler around the QR payload. For now we
+        // keep the legacy `{token, expires_at}` body so the rename
+        // compiles and existing tests still pass.
+        LocalRpcMethod::RequestPairingQr => handle_request_pairing_token(ctx).await,
         LocalRpcMethod::Pair => handle_pair(ctx, params).await,
         LocalRpcMethod::ForgetPeer => handle_forget_peer(ctx).await,
+        // C4 / C5 will wire these up end-to-end. They exist here only so
+        // the enum compiles and `cargo xtask check-all` stays green.
+        LocalRpcMethod::ListThreads => err("internal", "list_threads not yet implemented"),
+        LocalRpcMethod::ReadThread => err("internal", "read_thread not yet implemented"),
+        LocalRpcMethod::GetThreadLastSeq => {
+            err("internal", "get_thread_last_seq not yet implemented")
+        }
     }
 }
 
@@ -509,7 +519,7 @@ mod tests {
 
         let out = handle(
             &ctx,
-            &LocalRpcMethod::RequestPairingToken,
+            &LocalRpcMethod::RequestPairingQr,
             &serde_json::json!({}),
         )
         .await;
@@ -532,7 +542,7 @@ mod tests {
 
         let out = handle(
             &ctx,
-            &LocalRpcMethod::RequestPairingToken,
+            &LocalRpcMethod::RequestPairingQr,
             &serde_json::json!({}),
         )
         .await;

@@ -11,6 +11,7 @@ uniffi = ["dep:uniffi", "minos-domain/uniffi"]
 
 [dependencies]
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
+minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jsonrpsee = { workspace = true }
