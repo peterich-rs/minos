@@ -6,7 +6,7 @@ async fn connect_creates_tables_and_migrates() {
     let db = dir.path().join("smoke.db");
     let url = format!("sqlite://{}", db.display());
 
-    let pool = minos_relay::store::connect(&url).await.unwrap();
+    let pool = minos_backend::store::connect(&url).await.unwrap();
 
     for table in ["devices", "pairings", "pairing_tokens"] {
         let row: Option<String> =

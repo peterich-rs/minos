@@ -1,10 +1,10 @@
-//! `minos-relay` binary entrypoint.
+//! `minos-backend` binary entrypoint.
 //!
 //! Wires the library modules (`config`, `store`, `pairing`, `session`,
 //! `http`) into a running axum server. Plan §10 acceptance:
 //!
 //! ```sh
-//! cargo run -p minos-relay -- --listen 127.0.0.1:8787 --db ./tmp.db
+//! cargo run -p minos-backend -- --listen 127.0.0.1:8787 --db ./tmp.db
 //! ```
 //!
 //! The binary logs `migrations applied` and `listening` on boot, answers
@@ -35,14 +35,14 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use mars_xlog::{LogLevel, Xlog, XlogConfig, XlogLayer, XlogLayerConfig};
-use minos_protocol::{Envelope, EventKind};
-use minos_relay::{
+use minos_backend::{
     config::Config,
     http::{self, RelayState},
     pairing::PairingService,
     session::SessionRegistry,
     store,
 };
+use minos_protocol::{Envelope, EventKind};
 use sqlx::SqlitePool;
 use tokio::signal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -53,8 +53,8 @@ const TOKEN_GC_INTERVAL: Duration = Duration::from_mins(1);
 /// Drain window after broadcasting `ServerShutdown` (plan §10 step 8).
 const SHUTDOWN_DRAIN: Duration = Duration::from_millis(500);
 
-/// xlog file prefix. Spec §9.4 reserves `relay` for the server process.
-const XLOG_NAME_PREFIX: &str = "relay";
+/// xlog file prefix. Spec §9.4 reserves `backend` for the server process.
+const XLOG_NAME_PREFIX: &str = "backend";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
 /// global tracing subscriber.
 ///
 /// Mirrors the daemon crate's `logging::init` wiring (spec §9.4). The xlog
-/// layer writes `relay_YYYYMMDD.xlog` under `--log-dir`; the fmt layer
+/// layer writes `backend_YYYYMMDD.xlog` under `--log-dir`; the fmt layer
 /// emits human-readable records to stdout for developer ergonomics.
 fn init_tracing(cfg: &Config) -> Result<()> {
     let log_dir = cfg.resolved_log_dir();
@@ -149,7 +149,7 @@ fn init_tracing(cfg: &Config) -> Result<()> {
         XlogLayer::with_config(logger, XlogLayerConfig::new(xlog_level).enabled(true));
 
     // `RUST_LOG` (or --log-level) may carry full directives like
-    // "minos_relay=debug,info"; fall back to "info" if parsing fails so a
+    // "minos_backend=debug,info"; fall back to "info" if parsing fails so a
     // typo'd level never crashes the process.
     let filter = EnvFilter::try_new(&cfg.log_level).unwrap_or_else(|_| EnvFilter::new("info"));
 
@@ -163,7 +163,7 @@ fn init_tracing(cfg: &Config) -> Result<()> {
     tracing::info!(
         name_prefix = XLOG_NAME_PREFIX,
         dir = %log_dir.display(),
-        "relay logging initialized"
+        "backend logging initialized"
     );
     Ok(())
 }
@@ -228,7 +228,7 @@ async fn wait_for_signal() {
 /// Parse `Config::log_level` into a [`mars_xlog::LogLevel`].
 ///
 /// Accepts plain keywords (`trace`/`debug`/`info`/`warn`/`error`) and
-/// `env_logger`-style directives like `minos_relay=debug,info`: we take
+/// `env_logger`-style directives like `minos_backend=debug,info`: we take
 /// the first comma-segment, strip any `target=` prefix, and match the
 /// keyword case-insensitively. Unknown/unmappable input falls back to
 /// `Info` with a `debug!` trace so typos don't change the gate silently.

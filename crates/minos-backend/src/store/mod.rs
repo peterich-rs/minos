@@ -20,7 +20,7 @@ pub use tokens::{consume_token, gc_expired, issue_token, ConsumedToken};
 
 /// Open the SQLite pool at `db_url` and run all embedded migrations.
 ///
-/// `db_url` is a sqlx connection string, e.g. `sqlite://./minos-relay.db`
+/// `db_url` is a sqlx connection string, e.g. `sqlite://./minos-backend.db`
 /// or `sqlite::memory:` for tests. Missing files are created on connect
 /// via `SqliteConnectOptions::create_if_missing(true)`.
 pub async fn connect(db_url: &str) -> Result<SqlitePool, RelayError> {

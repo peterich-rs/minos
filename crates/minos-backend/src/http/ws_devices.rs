@@ -150,7 +150,7 @@ pub async fn upgrade(
             // manifest as a PK conflict; we log and continue because by
             // the time we upgrade, a row is present either way.
             tracing::warn!(
-                target: "minos_relay::http",
+                target: "minos_backend::http",
                 error = %e,
                 device_id = %device_id,
                 "first-connect insert_device failed (possibly a race)"
@@ -183,7 +183,7 @@ pub async fn upgrade(
             }
             Err(ActivationAuthError::Unauthorized(message)) => {
                 tracing::info!(
-                    target: "minos_relay::http",
+                    target: "minos_backend::http",
                     device_id = %device_id,
                     reason = %message,
                     "device auth changed before websocket activation; closing 4401"
@@ -193,7 +193,7 @@ pub async fn upgrade(
             }
             Err(ActivationAuthError::Internal(message)) => {
                 tracing::warn!(
-                    target: "minos_relay::http",
+                    target: "minos_backend::http",
                     device_id = %device_id,
                     error = %message,
                     "failed to revalidate websocket auth during activation"
@@ -216,7 +216,7 @@ pub async fn upgrade(
         .await
         {
             tracing::warn!(
-                target: "minos_relay::http",
+                target: "minos_backend::http",
                 error = %e,
                 device_id = %device_id,
                 "run_session exited with error"
@@ -403,7 +403,7 @@ fn log_cf_access_presence(headers: &HeaderMap) {
     let cf_sec = headers.contains_key(HDR_CF_ACCESS_SECRET);
     if cf_id || cf_sec {
         tracing::debug!(
-            target: "minos_relay::http",
+            target: "minos_backend::http",
             cf_access_client_id_present = cf_id,
             cf_access_client_secret_present = cf_sec,
             "CF-Access headers observed (edge-validated; relay does not re-check)"
@@ -431,7 +431,7 @@ async fn activate_live_session(registry: &SessionRegistry, handle: &SessionHandl
     };
     if let Err(e) = handle.outbox.try_send(init_frame) {
         tracing::warn!(
-            target: "minos_relay::http",
+            target: "minos_backend::http",
             error = ?e,
             device_id = %handle.device_id,
             "failed to push initial Event onto outbox"
@@ -443,7 +443,7 @@ async fn activate_live_session(registry: &SessionRegistry, handle: &SessionHandl
     let replaced_existing = if let Some(prev) = registry.insert(handle.clone()) {
         prev.revoke();
         tracing::info!(
-            target: "minos_relay::http",
+            target: "minos_backend::http",
             device_id = %handle.device_id,
             "replaced previous session for device (reconnect)"
         );
@@ -503,7 +503,7 @@ async fn notify_live_peer_connected(
     };
     if let Err(e) = peer_handle.outbox.try_send(frame) {
         tracing::warn!(
-            target: "minos_relay::http",
+            target: "minos_backend::http",
             error = ?e,
             device_id = %device_id,
             peer = %peer,

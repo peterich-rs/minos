@@ -1,4 +1,4 @@
-//! CLI + env configuration for the `minos-relay` binary.
+//! CLI + env configuration for the `minos-backend` binary.
 //!
 //! Design: `clap` 4 derive + `env = "..."` attributes so every flag has a
 //! paired environment-variable override. Defaults are codified as
@@ -13,7 +13,7 @@
 //! # Exit-after-migrate
 //!
 //! `--exit-after-migrate` is a boot-time flag used by
-//! `cargo xtask relay-db-reset` (plan §11). When set, `main.rs` applies
+//! `cargo xtask backend-db-reset` (plan §11). When set, `main.rs` applies
 //! migrations and exits with code 0 without binding the axum listener or
 //! spawning the GC task. The plan's §10 "steps 1–8" body only runs when
 //! this flag is absent.
@@ -27,36 +27,36 @@ use clap::Parser;
 /// Default pairing-token TTL (5 minutes) per plan §10.
 const DEFAULT_TOKEN_TTL_SECS: u64 = 300;
 
-/// Minos relay: axum WebSocket hub with SQLite state.
+/// Minos backend: axum WebSocket hub with SQLite state.
 #[derive(Debug, Clone, Parser)]
 #[command(version, about)]
 pub struct Config {
     /// TCP socket to listen on.
-    #[arg(long, env = "MINOS_RELAY_LISTEN", default_value = "127.0.0.1:8787")]
+    #[arg(long, env = "MINOS_BACKEND_LISTEN", default_value = "127.0.0.1:8787")]
     pub listen: SocketAddr,
 
     /// SQLite database path. Created on first run via sqlx
     /// `create_if_missing(true)`.
-    #[arg(long, env = "MINOS_RELAY_DB", default_value = "./minos-relay.db")]
+    #[arg(long, env = "MINOS_BACKEND_DB", default_value = "./minos-backend.db")]
     pub db: PathBuf,
 
     /// Directory for xlog files. Defaults to `~/Library/Logs/Minos/` on
     /// macOS and `$TMPDIR/minos` elsewhere (resolved at runtime; not shown
     /// in `--help` because the default is platform-dependent).
-    #[arg(long, env = "MINOS_RELAY_LOG_DIR")]
+    #[arg(long, env = "MINOS_BACKEND_LOG_DIR")]
     pub log_dir: Option<PathBuf>,
 
     /// Log level. Accepts plain levels (`trace`/`debug`/`info`/`warn`/`error`)
-    /// and full `env_logger`-style directives (e.g. `minos_relay=debug,info`).
+    /// and full `env_logger`-style directives (e.g. `minos_backend=debug,info`).
     #[arg(long, env = "RUST_LOG", default_value = "info")]
     pub log_level: String,
 
     /// Pairing token TTL in seconds.
-    #[arg(long, env = "MINOS_RELAY_TOKEN_TTL", default_value_t = DEFAULT_TOKEN_TTL_SECS)]
+    #[arg(long, env = "MINOS_BACKEND_TOKEN_TTL", default_value_t = DEFAULT_TOKEN_TTL_SECS)]
     pub token_ttl_secs: u64,
 
     /// Run migrations, then exit with code 0. Used by
-    /// `cargo xtask relay-db-reset`. When set, no listener is bound and no
+    /// `cargo xtask backend-db-reset`. When set, no listener is bound and no
     /// background tasks are spawned.
     #[arg(long)]
     pub exit_after_migrate: bool,
@@ -72,7 +72,7 @@ impl Config {
     }
 
     /// Log directory with the platform default applied when `--log-dir` /
-    /// `MINOS_RELAY_LOG_DIR` was not provided. See [`default_log_dir`].
+    /// `MINOS_BACKEND_LOG_DIR` was not provided. See [`default_log_dir`].
     #[must_use]
     pub fn resolved_log_dir(&self) -> PathBuf {
         self.log_dir.clone().unwrap_or_else(default_log_dir)
@@ -117,10 +117,10 @@ mod tests {
 
     fn clear_env() {
         for key in [
-            "MINOS_RELAY_LISTEN",
-            "MINOS_RELAY_DB",
-            "MINOS_RELAY_LOG_DIR",
-            "MINOS_RELAY_TOKEN_TTL",
+            "MINOS_BACKEND_LISTEN",
+            "MINOS_BACKEND_DB",
+            "MINOS_BACKEND_LOG_DIR",
+            "MINOS_BACKEND_TOKEN_TTL",
             "RUST_LOG",
         ] {
             std::env::remove_var(key);
@@ -141,13 +141,13 @@ mod tests {
     fn default_flags_match_plan_defaults() {
         let _g = env_scope();
 
-        let cfg = Config::try_parse_from(["minos-relay"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         assert_eq!(
             cfg.listen,
             "127.0.0.1:8787".parse::<SocketAddr>().unwrap(),
             "default --listen must match plan §10"
         );
-        assert_eq!(cfg.db, PathBuf::from("./minos-relay.db"));
+        assert_eq!(cfg.db, PathBuf::from("./minos-backend.db"));
         assert_eq!(cfg.log_level, "info");
         assert_eq!(cfg.token_ttl_secs, DEFAULT_TOKEN_TTL_SECS);
         assert!(!cfg.exit_after_migrate);
@@ -158,12 +158,12 @@ mod tests {
     fn token_ttl_wraps_seconds_into_duration() {
         let _g = env_scope();
 
-        let cfg = Config::try_parse_from(["minos-relay"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         // Plan §10 default: 300 seconds. `from_mins(5)` is the same
         // Duration; clippy prefers the larger-unit form.
         assert_eq!(cfg.token_ttl(), Duration::from_mins(5));
 
-        let cfg = Config::try_parse_from(["minos-relay", "--token-ttl-secs", "42"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend", "--token-ttl-secs", "42"]).unwrap();
         assert_eq!(cfg.token_ttl(), Duration::from_secs(42));
     }
 
@@ -171,7 +171,7 @@ mod tests {
     fn listen_flag_overrides_default() {
         let _g = env_scope();
 
-        let cfg = Config::try_parse_from(["minos-relay", "--listen", "0.0.0.0:9999"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend", "--listen", "0.0.0.0:9999"]).unwrap();
         assert_eq!(cfg.listen, "0.0.0.0:9999".parse::<SocketAddr>().unwrap());
     }
 
@@ -180,7 +180,7 @@ mod tests {
         let _g = env_scope();
 
         let cfg = Config::try_parse_from([
-            "minos-relay",
+            "minos-backend",
             "--db",
             "/tmp/test.db",
             "--log-dir",
@@ -198,7 +198,7 @@ mod tests {
     fn exit_after_migrate_flag_flips_boolean() {
         let _g = env_scope();
 
-        let cfg = Config::try_parse_from(["minos-relay", "--exit-after-migrate"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend", "--exit-after-migrate"]).unwrap();
         assert!(cfg.exit_after_migrate);
     }
 
@@ -206,7 +206,7 @@ mod tests {
     fn resolved_log_dir_uses_provided_path_when_set() {
         let _g = env_scope();
 
-        let cfg = Config::try_parse_from(["minos-relay", "--log-dir", "/tmp/explicit"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend", "--log-dir", "/tmp/explicit"]).unwrap();
         assert_eq!(cfg.resolved_log_dir(), PathBuf::from("/tmp/explicit"));
     }
 
@@ -218,7 +218,7 @@ mod tests {
         // is platform-dependent — rather than pin the exact path (and
         // depend on HOME/TMPDIR shape), assert the "Minos"/"minos"
         // convention.
-        let cfg = Config::try_parse_from(["minos-relay"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         let dir = cfg.resolved_log_dir();
         let tail = dir
             .file_name()
@@ -237,18 +237,18 @@ mod tests {
     #[test]
     fn env_var_overrides_listen_default() {
         let _g = env_scope();
-        std::env::set_var("MINOS_RELAY_LISTEN", "127.0.0.1:4242");
+        std::env::set_var("MINOS_BACKEND_LISTEN", "127.0.0.1:4242");
 
-        let cfg = Config::try_parse_from(["minos-relay"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         assert_eq!(cfg.listen, "127.0.0.1:4242".parse::<SocketAddr>().unwrap());
     }
 
     #[test]
     fn env_var_overrides_token_ttl_default() {
         let _g = env_scope();
-        std::env::set_var("MINOS_RELAY_TOKEN_TTL", "600");
+        std::env::set_var("MINOS_BACKEND_TOKEN_TTL", "600");
 
-        let cfg = Config::try_parse_from(["minos-relay"]).unwrap();
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         assert_eq!(cfg.token_ttl_secs, 600);
         assert_eq!(cfg.token_ttl(), Duration::from_mins(10));
     }

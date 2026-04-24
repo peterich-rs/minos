@@ -1,9 +1,9 @@
-//! End-to-end integration test for the Minos relay.
+//! End-to-end integration test for the Minos backend.
 //!
 //! Spawns a real axum server on an ephemeral port with a `tempfile`-backed
 //! SQLite DB, drives it with two raw `tokio-tungstenite` clients, and walks
 //! the full spec §7.1 pairing + forward + forget_peer loop. The test is the
-//! capstone correctness proof for the relay crate — if this passes, the
+//! capstone correctness proof for the backend crate — if this passes, the
 //! envelope protocol, session registry, local-RPC dispatcher, pairing
 //! service, and WS handshake all round-trip together over real sockets.
 //!
@@ -53,14 +53,14 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
-use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
-use minos_protocol::{Envelope, EventKind, LocalRpcMethod, LocalRpcOutcome};
-use minos_relay::{
+use minos_backend::{
     http::{router, RelayState},
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
     store,
 };
+use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
+use minos_protocol::{Envelope, EventKind, LocalRpcMethod, LocalRpcOutcome};
 use sqlx::SqlitePool;
 use tempfile::NamedTempFile;
 use tokio::{net::TcpStream, task::JoinHandle, time::timeout};

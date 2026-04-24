@@ -152,7 +152,7 @@ async fn run_session_inner(
     loop {
         if *revocation_rx.borrow() {
             tracing::info!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 device = %session.device_id,
                 "session superseded by reconnect; closing old socket"
             );
@@ -166,7 +166,7 @@ async fn run_session_inner(
             changed = revocation_rx.changed() => {
                 if matches!(changed, Ok(())) && *revocation_rx.borrow_and_update() {
                     tracing::info!(
-                        target: "minos_relay::envelope",
+                        target: "minos_backend::envelope",
                         device = %session.device_id,
                         "session superseded by reconnect; closing old socket"
                     );
@@ -202,7 +202,7 @@ async fn run_session_inner(
                             }
                             Err(e) => {
                                 tracing::warn!(
-                                    target: "minos_relay::envelope",
+                                    target: "minos_backend::envelope",
                                     error = %e,
                                     "malformed envelope; closing 4400"
                                 );
@@ -214,7 +214,7 @@ async fn run_session_inner(
                     }
                     Some(Ok(Message::Binary(_))) => {
                         tracing::warn!(
-                            target: "minos_relay::envelope",
+                            target: "minos_backend::envelope",
                             "binary frame rejected; closing 4400"
                         );
                         send_version_unsupported(ws, 0).await;
@@ -235,7 +235,7 @@ async fn run_session_inner(
                     }
                     Some(Err(e)) => {
                         tracing::warn!(
-                            target: "minos_relay::envelope",
+                            target: "minos_backend::envelope",
                             error = %e,
                             "ws read error; closing"
                         );
@@ -252,7 +252,7 @@ async fn run_session_inner(
 
                 if elapsed > limit {
                     tracing::info!(
-                        target: "minos_relay::envelope",
+                        target: "minos_backend::envelope",
                         device = %session.device_id,
                         elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
                         limit_ms = u64::try_from(limit.as_millis()).unwrap_or(u64::MAX),
@@ -291,7 +291,7 @@ async fn notify_live_peer_disconnect(session: &SessionHandle, registry: &Session
     };
     if let Err(e) = peer_handle.outbox.try_send(frame) {
         tracing::warn!(
-            target: "minos_relay::envelope",
+            target: "minos_backend::envelope",
             error = ?e,
             device = %session.device_id,
             peer = %peer,
@@ -308,7 +308,7 @@ async fn send_envelope(ws: &mut WebSocket, env: &Envelope) -> bool {
         Ok(json) => ws.send(Message::Text(json)).await.is_ok(),
         Err(e) => {
             tracing::error!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = %e,
                 "envelope serialise failed; dropping frame"
             );
@@ -372,7 +372,7 @@ async fn dispatch_envelope(
         // and close with 4400, same as an unknown kind.
         Envelope::LocalRpcResponse { .. } | Envelope::Forwarded { .. } | Envelope::Event { .. } => {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 "server-only envelope kind from client; closing 4400"
             );
             send_version_unsupported(ws, 0).await;
@@ -398,7 +398,7 @@ pub async fn handle_forward(
     let peer = *session.paired_with.read().await;
     let Some(peer) = peer else {
         tracing::warn!(
-            target: "minos_relay::envelope",
+            target: "minos_backend::envelope",
             device = %session.device_id,
             "forward from unpaired session; synthesising peer_offline"
         );
@@ -419,7 +419,7 @@ pub async fn handle_forward(
         )),
         Err(e) => {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = %e,
                 "forward route failed"
             );

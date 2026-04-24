@@ -130,7 +130,7 @@ async fn deliver_pair_to_current_issuer(
     *issuer_handle.paired_with.write().await = Some(ctx.session.device_id);
     if let Err(e) = ctx.registry.try_send_current(issuer_handle, frame) {
         tracing::warn!(
-            target: "minos_relay::envelope",
+            target: "minos_backend::envelope",
             error = %e,
             issuer = %issuer,
             consumer = %ctx.session.device_id,
@@ -140,7 +140,7 @@ async fn deliver_pair_to_current_issuer(
             compensate_pair_delivery_failure(ctx, Some(issuer_handle)).await
         {
             tracing::error!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = %compensate_err,
                 issuer = %issuer,
                 consumer = %ctx.session.device_id,
@@ -192,7 +192,7 @@ async fn handle_request_pairing_token(ctx: &LocalRpcContext<'_>) -> LocalRpcOutc
         },
         Err(e) => {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = %e,
                 "request_pairing_token failed"
             );
@@ -274,7 +274,7 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
         }
         Err(e) => {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = %e,
                 "pair consume_token failed"
             );
@@ -286,14 +286,14 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
 
     let Some(issuer_handle) = ctx.registry.get(issuer) else {
         tracing::warn!(
-            target: "minos_relay::envelope",
+            target: "minos_backend::envelope",
             issuer = %issuer,
             consumer = %ctx.session.device_id,
             "pair committed but issuer is offline; compensating committed pair"
         );
         if let Err(compensate_err) = compensate_pair_delivery_failure(ctx, None).await {
             tracing::error!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = %compensate_err,
                 issuer = %issuer,
                 consumer = %ctx.session.device_id,
@@ -329,7 +329,7 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
         Ok(Some(row)) => row.display_name,
         Ok(None) => {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 issuer = %issuer,
                 "pair succeeded but issuer device row missing"
             );
@@ -337,7 +337,7 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
         }
         Err(e) => {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = %e,
                 issuer = %issuer,
                 "pair: lookup of issuer display_name failed"
@@ -378,7 +378,7 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
         Ok(Some(_)) => {}
         Ok(None) => {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 device = %ctx.session.device_id,
                 peer = %peer,
                 "forget_peer cache/store mismatch: pair row missing during forget"
@@ -387,7 +387,7 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
         }
         Err(e) => {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = %e,
                 "forget_pair failed"
             );
@@ -408,7 +408,7 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
     };
     if let Err(e) = ctx.session.outbox.try_send(unpaired.clone()) {
         tracing::warn!(
-            target: "minos_relay::envelope",
+            target: "minos_backend::envelope",
             error = ?e,
             device = %ctx.session.device_id,
             "failed to push Event::Unpaired to self"
@@ -422,7 +422,7 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
 
         if let Err(e) = peer_handle.outbox.try_send(unpaired) {
             tracing::warn!(
-                target: "minos_relay::envelope",
+                target: "minos_backend::envelope",
                 error = ?e,
                 peer = %peer,
                 "failed to push Event::Unpaired to peer"

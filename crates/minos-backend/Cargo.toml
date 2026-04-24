@@ -1,10 +1,10 @@
 [package]
-name = "minos-relay"
+name = "minos-backend"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Minos relay server: WebSocket hub, auth, and REST management API."
+description = "Minos backend server: WebSocket hub, auth, and REST management API."
 
 [dependencies]
 # async runtime

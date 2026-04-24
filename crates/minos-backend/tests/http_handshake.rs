@@ -7,14 +7,14 @@
 
 use std::{sync::Arc, time::Duration};
 
-use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
-use minos_protocol::{Envelope, EventKind};
-use minos_relay::{
+use minos_backend::{
     http::{router, RelayState},
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
     store,
 };
+use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
+use minos_protocol::{Envelope, EventKind};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::{
     client::ClientRequestBuilder, http::Uri, protocol::Message, Error as WsError,
@@ -60,7 +60,7 @@ async fn health_returns_ok_with_name_and_version() {
     let resp = reqwest_style_get(&format!("{base}/health")).await;
     assert_eq!(resp.status, 200);
     assert!(
-        resp.body.contains("minos-relay"),
+        resp.body.contains("minos-backend"),
         "body missing crate name: {:?}",
         resp.body
     );

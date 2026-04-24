@@ -41,10 +41,10 @@ enum Cmd {
     BuildIos,
     /// Generate apps/macos/Minos.xcodeproj from apps/macos/project.yml.
     GenXcode,
-    /// Wipe and recreate the relay SQLite DB at ./minos-relay.db.
-    RelayDbReset,
-    /// Run the relay binary with dev-friendly defaults.
-    RelayRun,
+    /// Wipe and recreate the backend SQLite DB at ./minos-backend.db.
+    BackendDbReset,
+    /// Run the backend binary with dev-friendly defaults.
+    BackendRun,
 }
 
 fn main() -> Result<()> {
@@ -58,8 +58,8 @@ fn main() -> Result<()> {
         Cmd::BuildMacos => build_macos(),
         Cmd::BuildIos => build_ios(),
         Cmd::GenXcode => gen_xcode(),
-        Cmd::RelayDbReset => relay_db_reset(),
-        Cmd::RelayRun => relay_run(),
+        Cmd::BackendDbReset => backend_db_reset(),
+        Cmd::BackendRun => backend_run(),
     }
 }
 
@@ -1018,25 +1018,25 @@ fn ensure_uniffi_bindgen_swift_wrapper() -> Result<()> {
     Ok(())
 }
 
-/// Run the relay binary with dev-friendly defaults.
+/// Run the backend binary with dev-friendly defaults.
 ///
-/// Convenience wrapper for `cargo run -p minos-relay -- --listen 127.0.0.1:8787
-/// --db ./minos-relay.db --log-level debug`. Used by plan §11 acceptance for
-/// booting the relay during iteration.
-fn relay_run() -> Result<()> {
+/// Convenience wrapper for `cargo run -p minos-backend -- --listen 127.0.0.1:8787
+/// --db ./minos-backend.db --log-level debug`. Used by plan §11 acceptance for
+/// booting the backend during iteration.
+fn backend_run() -> Result<()> {
     let root = workspace_root()?;
-    eprintln!("==> cargo run -p minos-relay (dev listen 127.0.0.1:8787)");
+    eprintln!("==> cargo run -p minos-backend (dev listen 127.0.0.1:8787)");
     run(
         "cargo",
         &[
             "run",
             "-p",
-            "minos-relay",
+            "minos-backend",
             "--",
             "--listen",
             "127.0.0.1:8787",
             "--db",
-            "./minos-relay.db",
+            "./minos-backend.db",
             "--log-level",
             "debug",
         ],
@@ -1044,32 +1044,32 @@ fn relay_run() -> Result<()> {
     )
 }
 
-/// Wipe and recreate the relay SQLite DB at ./minos-relay.db.
+/// Wipe and recreate the backend SQLite DB at ./minos-backend.db.
 ///
 /// Removes the db file (plus `-shm` / `-wal` sidecars if SQLite is in WAL mode)
 /// and then re-runs migrations via `--exit-after-migrate`. Idempotent — missing
 /// files are ignored.
-fn relay_db_reset() -> Result<()> {
+fn backend_db_reset() -> Result<()> {
     let root = workspace_root()?;
 
     for suffix in ["", "-shm", "-wal"] {
-        let path = root.join(format!("minos-relay.db{suffix}"));
+        let path = root.join(format!("minos-backend.db{suffix}"));
         if path.exists() {
             eprintln!("==> rm {}", path.display());
             fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
         }
     }
 
-    eprintln!("==> cargo run -p minos-relay -- --db ./minos-relay.db --exit-after-migrate");
+    eprintln!("==> cargo run -p minos-backend -- --db ./minos-backend.db --exit-after-migrate");
     run(
         "cargo",
         &[
             "run",
             "-p",
-            "minos-relay",
+            "minos-backend",
             "--",
             "--db",
-            "./minos-relay.db",
+            "./minos-backend.db",
             "--exit-after-migrate",
         ],
         &root,

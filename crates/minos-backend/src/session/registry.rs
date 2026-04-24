@@ -264,7 +264,7 @@ impl SessionRegistry {
         for handle in self.0.iter() {
             if let Err(err) = handle.outbox.try_send(frame.clone()) {
                 tracing::debug!(
-                    target: "minos_relay::session",
+                    target: "minos_backend::session",
                     device_id = %handle.device_id,
                     error = ?err,
                     "broadcast try_send failed; dropping frame for this peer"
@@ -325,7 +325,7 @@ impl SessionRegistry {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
-                    target: "minos_relay::session",
+                    target: "minos_backend::session",
                     to = %to,
                     from = %from,
                     "outbox full; rejecting forwarded frame"
