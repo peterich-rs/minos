@@ -355,7 +355,7 @@ mod tests {
             pool,
             id,
             "alice's mac",
-            DeviceRole::MacHost,
+            DeviceRole::AgentHost,
             Utc::now().timestamp_millis(),
         )
         .await
@@ -502,7 +502,7 @@ mod tests {
 
         // Pre-seed a pairing: consumer_id ↔ some third device.
         let third = DeviceId::new();
-        devices::insert_device(&pool, third, "third", DeviceRole::MacHost, 0)
+        devices::insert_device(&pool, third, "third", DeviceRole::AgentHost, 0)
             .await
             .unwrap();
         let consumer = DeviceId::new();

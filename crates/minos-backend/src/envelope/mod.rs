@@ -586,7 +586,7 @@ mod tests {
         let a = DeviceId::new();
         let b = DeviceId::new();
         let (ha, _rxa) = SessionHandle::new(a, DeviceRole::IosClient);
-        let (hb, mut rxb) = SessionHandle::new(b, DeviceRole::MacHost);
+        let (hb, mut rxb) = SessionHandle::new(b, DeviceRole::AgentHost);
         // Mark them paired in both directions.
         *ha.paired_with.write().await = Some(b);
         *hb.paired_with.write().await = Some(a);
@@ -621,7 +621,7 @@ mod tests {
         let a = DeviceId::new();
         let b = DeviceId::new();
         let (ha, _rxa) = SessionHandle::new(a, DeviceRole::IosClient);
-        let (hb, _rxb) = SessionHandle::new(b, DeviceRole::MacHost);
+        let (hb, _rxb) = SessionHandle::new(b, DeviceRole::AgentHost);
         *ha.paired_with.write().await = Some(b);
         *hb.paired_with.write().await = Some(a);
         registry.insert(ha.clone());

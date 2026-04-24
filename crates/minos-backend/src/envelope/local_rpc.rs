@@ -12,7 +12,7 @@
 //! | Method | Role gate | Pre-state | Notes |
 //! |---|---|---|---|
 //! | `Ping` | any | any | returns `{"ok": true}` verbatim |
-//! | `RequestPairingQr` | `mac-host` | any | mints token using configured TTL (C4 rewrites body to return `PairingQrPayload`) |
+//! | `RequestPairingQr` | `agent-host` | any | mints token using configured TTL (C4 rewrites body to return `PairingQrPayload`) |
 //! | `Pair` | `ios-client` | unpaired | consumes token, emits `Event::Paired` to issuer |
 //! | `ForgetPeer` | any | paired | emits `Event::Unpaired` to both sides |
 //!
@@ -178,15 +178,15 @@ async fn handle_ping() -> LocalRpcOutcome {
     }
 }
 
-/// `request_pairing_token`: mac-host only; mints a fresh token using the
+/// `request_pairing_token`: agent-host only; mints a fresh token using the
 /// configured TTL.
 ///
 /// Spec §6.1 gates the caller's role. `device_name` is not a parameter —
 /// the mac already has a row in `devices` by the time this fires (inserted
 /// on handshake).
 async fn handle_request_pairing_token(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
-    if ctx.session.role != DeviceRole::MacHost {
-        return err("unauthorized", "only mac-host may request pairing tokens");
+    if ctx.session.role != DeviceRole::AgentHost {
+        return err("unauthorized", "only agent-host may request pairing tokens");
     }
 
     match ctx
@@ -495,8 +495,8 @@ mod tests {
         let pool = memory_pool().await;
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
-        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
-        let (session, _rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (session, _rx) = make_session(mac, DeviceRole::AgentHost);
         let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(&ctx, &LocalRpcMethod::Ping, &serde_json::json!({})).await;
@@ -536,8 +536,8 @@ mod tests {
         let pool = memory_pool().await;
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
-        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
-        let (session, _rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (session, _rx) = make_session(mac, DeviceRole::AgentHost);
         let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(
@@ -589,12 +589,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pair_rejects_mac_host_role_with_unauthorized() {
+    async fn pair_rejects_agent_host_role_with_unauthorized() {
         let pool = memory_pool().await;
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
-        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
-        let (session, _rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (session, _rx) = make_session(mac, DeviceRole::AgentHost);
         let ctx = make_ctx(&session, &registry, &pairing, &pool);
 
         let out = handle(
@@ -673,8 +673,8 @@ mod tests {
         let pairing = PairingService::new(pool.clone());
 
         // Mac issuer: registered + live session in the registry.
-        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::MacHost).await;
-        let (mac_handle, mut mac_rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::AgentHost).await;
+        let (mac_handle, mut mac_rx) = make_session(mac, DeviceRole::AgentHost);
         registry.insert(mac_handle.clone());
 
         // iOS consumer: separate session.
@@ -748,7 +748,7 @@ mod tests {
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
 
-        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::MacHost).await;
+        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::AgentHost).await;
         let (token, _) = pairing
             .request_token(mac, Duration::from_mins(5))
             .await
@@ -789,8 +789,8 @@ mod tests {
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
 
-        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::MacHost).await;
-        let (mac_handle, _mac_rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::AgentHost).await;
+        let (mac_handle, _mac_rx) = make_session(mac, DeviceRole::AgentHost);
         registry.insert(mac_handle.clone());
 
         for _ in 0..256 {
@@ -844,8 +844,8 @@ mod tests {
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
 
-        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::MacHost).await;
-        let (stale_handle, mut stale_rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "Fan's Mac", DeviceRole::AgentHost).await;
+        let (stale_handle, mut stale_rx) = make_session(mac, DeviceRole::AgentHost);
         registry.insert(stale_handle.clone());
 
         let token = pairing
@@ -863,7 +863,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (replacement_handle, mut replacement_rx) = make_session(mac, DeviceRole::MacHost);
+        let (replacement_handle, mut replacement_rx) = make_session(mac, DeviceRole::AgentHost);
         registry.insert(replacement_handle.clone());
 
         let out = deliver_pair_to_current_issuer(
@@ -929,8 +929,8 @@ mod tests {
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
 
-        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
-        let (mac_handle, mut mac_rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (mac_handle, mut mac_rx) = make_session(mac, DeviceRole::AgentHost);
         registry.insert(mac_handle.clone());
 
         let ios = DeviceId::new();
@@ -985,8 +985,8 @@ mod tests {
         let pairing = PairingService::new(pool.clone());
 
         // Fully wire a pair: Mac issues token, iPhone consumes it.
-        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
-        let (mac_handle, mut mac_rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (mac_handle, mut mac_rx) = make_session(mac, DeviceRole::AgentHost);
         registry.insert(mac_handle.clone());
 
         let ios = DeviceId::new();
@@ -1054,8 +1054,8 @@ mod tests {
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
 
-        let mac = insert_device_row(&pool, "mac", DeviceRole::MacHost).await;
-        let (mac_handle, _mac_rx) = make_session(mac, DeviceRole::MacHost);
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (mac_handle, _mac_rx) = make_session(mac, DeviceRole::AgentHost);
         registry.insert(mac_handle.clone());
 
         let ios = DeviceId::new();

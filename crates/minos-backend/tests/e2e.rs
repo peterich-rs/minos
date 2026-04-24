@@ -10,7 +10,7 @@
 //! # Test layout
 //!
 //! 1. `e2e_pair_forward_forget` — happy path:
-//!    - Two fresh clients connect (mac-host A, ios-client B) and each
+//!    - Two fresh clients connect (agent-host A, ios-client B) and each
 //!      observes `Event::Unpaired` as their first server frame.
 //!    - A calls `request_pairing_token`; receives `{ token, expires_at }`.
 //!    - B calls `pair(token, device_name)`; receives
@@ -273,7 +273,8 @@ async fn e2e_pair_forward_forget() -> anyhow::Result<()> {
     let a_id = DeviceId::new();
     let b_id = DeviceId::new();
 
-    let mut a = connect_client(&relay, a_id, DeviceRole::MacHost, None, Some("Fan's Mac")).await?;
+    let mut a =
+        connect_client(&relay, a_id, DeviceRole::AgentHost, None, Some("Fan's Mac")).await?;
     let mut b = connect_client(
         &relay,
         b_id,
@@ -506,8 +507,14 @@ async fn e2e_request_pairing_token_respects_configured_ttl() -> anyhow::Result<(
     let relay = spawn_relay_with_token_ttl(token_ttl).await?;
 
     let mac_id = DeviceId::new();
-    let mut mac =
-        connect_client(&relay, mac_id, DeviceRole::MacHost, None, Some("Fan's Mac")).await?;
+    let mut mac = connect_client(
+        &relay,
+        mac_id,
+        DeviceRole::AgentHost,
+        None,
+        Some("Fan's Mac"),
+    )
+    .await?;
     expect_unpaired_event(&mut mac).await?;
 
     let before = chrono::Utc::now();
@@ -695,7 +702,7 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let mac_hash = hash_secret(&mac_secret)?;
     let ios_hash = hash_secret(&ios_secret)?;
 
-    store::devices::insert_device(&relay.pool, mac_id, "mac", DeviceRole::MacHost, 0).await?;
+    store::devices::insert_device(&relay.pool, mac_id, "mac", DeviceRole::AgentHost, 0).await?;
     store::devices::insert_device(&relay.pool, ios_id, "ios", DeviceRole::IosClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, mac_id, &mac_hash).await?;
     store::devices::upsert_secret_hash(&relay.pool, ios_id, &ios_hash).await?;
@@ -704,7 +711,7 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let mut mac = connect_client(
         &relay,
         mac_id,
-        DeviceRole::MacHost,
+        DeviceRole::AgentHost,
         Some(mac_secret.as_str()),
         Some("mac"),
     )

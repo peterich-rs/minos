@@ -75,7 +75,7 @@ pub struct SessionHandle {
     /// The role this device speaks in (known at handshake time via the
     /// `X-Device-Role` header; step 9 will parse it). Drives role-gated
     /// local RPC dispatch, e.g. `request_pairing_token` accepts only
-    /// [`DeviceRole::MacHost`].
+    /// [`DeviceRole::AgentHost`].
     pub role: DeviceRole,
     /// The peer this session is currently paired with, if any.
     ///
@@ -357,9 +357,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_handle(id: DeviceId) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
-        // Tests default to `MacHost` — role-gating is not exercised by the
+        // Tests default to `AgentHost` — role-gating is not exercised by the
         // registry itself; the envelope dispatcher (step 8) tests cover it.
-        SessionHandle::new(id, DeviceRole::MacHost)
+        SessionHandle::new(id, DeviceRole::AgentHost)
     }
 
     // Small outbox variant so we can fill it deterministically in tests.
@@ -369,7 +369,7 @@ mod tests {
         (
             SessionHandle {
                 device_id: id,
-                role: DeviceRole::MacHost,
+                role: DeviceRole::AgentHost,
                 paired_with: Arc::new(RwLock::new(None)),
                 outbox: tx,
                 revoked,

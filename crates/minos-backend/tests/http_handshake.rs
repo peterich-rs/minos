@@ -147,7 +147,7 @@ async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not
     let mac_hash = hash_secret(&mac_secret).unwrap();
     let ios_hash = hash_secret(&ios_secret).unwrap();
 
-    store::devices::insert_device(&pool, mac_id, "mac", DeviceRole::MacHost, 0)
+    store::devices::insert_device(&pool, mac_id, "mac", DeviceRole::AgentHost, 0)
         .await
         .unwrap();
     store::devices::insert_device(&pool, ios_id, "ios", DeviceRole::IosClient, 0)
@@ -167,7 +167,7 @@ async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not
     let url: Uri = format!("{}/devices", http_to_ws(&base)).parse().unwrap();
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", mac_id.to_string())
-        .with_header("X-Device-Role", DeviceRole::MacHost.to_string())
+        .with_header("X-Device-Role", DeviceRole::AgentHost.to_string())
         .with_header("X-Device-Secret", mac_secret.as_str().to_string());
 
     let (mut ws, _resp) = tokio_tungstenite::connect_async(builder)
@@ -200,7 +200,7 @@ async fn devices_role_spoof_rejects_with_401() {
     let id = DeviceId::new();
     let secret = DeviceSecret::generate();
     let secret_hash = hash_secret(&secret).unwrap();
-    store::devices::insert_device(&pool, id, "mac", DeviceRole::MacHost, 0)
+    store::devices::insert_device(&pool, id, "mac", DeviceRole::AgentHost, 0)
         .await
         .unwrap();
     store::devices::upsert_secret_hash(&pool, id, &secret_hash)

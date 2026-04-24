@@ -191,7 +191,7 @@ mod tests {
 
     async fn issuer_device(pool: &SqlitePool) -> DeviceId {
         let id = DeviceId::new();
-        insert_device(pool, id, "mac", DeviceRole::MacHost, T0)
+        insert_device(pool, id, "mac", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         id

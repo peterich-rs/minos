@@ -259,14 +259,14 @@ mod tests {
     async fn insert_then_get_round_trips_all_columns() {
         let pool = memory_pool().await;
         let id = DeviceId::new();
-        insert_device(&pool, id, "alice's mac", DeviceRole::MacHost, T0)
+        insert_device(&pool, id, "alice's mac", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
 
         let got = get_device(&pool, id).await.unwrap().unwrap();
         assert_eq!(got.device_id, id);
         assert_eq!(got.display_name, "alice's mac");
-        assert_eq!(got.role, DeviceRole::MacHost);
+        assert_eq!(got.role, DeviceRole::AgentHost);
         assert_eq!(got.secret_hash, None);
         assert_eq!(got.created_at, T0);
         assert_eq!(got.last_seen_at, T0);

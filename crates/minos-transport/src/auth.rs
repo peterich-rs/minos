@@ -191,7 +191,7 @@ mod tests {
     fn device_role_is_kebab_case_in_header() {
         // Covers all three variants — the header value is the Display impl.
         for (role, expected) in [
-            (DeviceRole::MacHost, "mac-host"),
+            (DeviceRole::AgentHost, "agent-host"),
             (DeviceRole::IosClient, "ios-client"),
             (DeviceRole::BrowserAdmin, "browser-admin"),
         ] {

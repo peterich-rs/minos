@@ -49,7 +49,7 @@
 //! Step 9 does not introduce any new LocalRpc gating — step 8's dispatcher
 //! already enforces the correct behaviour:
 //! - `Ping` is always allowed.
-//! - `RequestPairingToken` rejects non-`MacHost` callers.
+//! - `RequestPairingQr` rejects non-`AgentHost` callers.
 //! - `Pair` rejects if already paired.
 //! - `ForgetPeer` rejects if Unpaired.
 //! - `Forward` synthesises a JSON-RPC "peer offline" response when
@@ -556,10 +556,10 @@ mod tests {
     #[test]
     fn extract_device_role_kebab_case_parses() {
         let mut headers = HeaderMap::new();
-        headers.insert(HDR_DEVICE_ROLE, "mac-host".parse().unwrap());
+        headers.insert(HDR_DEVICE_ROLE, "agent-host".parse().unwrap());
         assert_eq!(
             extract_device_role(&headers).unwrap(),
-            Some(DeviceRole::MacHost)
+            Some(DeviceRole::AgentHost)
         );
     }
 
@@ -582,7 +582,7 @@ mod tests {
         let row = DeviceRow {
             device_id: DeviceId::new(),
             display_name: "mac".to_string(),
-            role: DeviceRole::MacHost,
+            role: DeviceRole::AgentHost,
             secret_hash: None,
             created_at: 0,
             last_seen_at: 0,
@@ -682,7 +682,7 @@ mod tests {
         // through `classify` — exercises the DeviceRow shape from sqlx.
         let pool = memory_pool().await;
         let id = DeviceId::new();
-        insert_device(&pool, id, "smoke", DeviceRole::MacHost, 0)
+        insert_device(&pool, id, "smoke", DeviceRole::AgentHost, 0)
             .await
             .unwrap();
         let row = store::devices::get_device(&pool, id)
@@ -717,7 +717,7 @@ mod tests {
         let secret = minos_domain::DeviceSecret::generate();
         let hash = crate::pairing::secret::hash_secret(&secret).unwrap();
 
-        insert_device(&pool, mac_id, "mac", DeviceRole::MacHost, 0)
+        insert_device(&pool, mac_id, "mac", DeviceRole::AgentHost, 0)
             .await
             .unwrap();
         insert_device(&pool, ios_id, "ios", DeviceRole::IosClient, 0)
@@ -733,8 +733,8 @@ mod tests {
         let paired_with = revalidate_live_session_auth(
             &pool,
             mac_id,
-            DeviceRole::MacHost,
-            Some(DeviceRole::MacHost),
+            DeviceRole::AgentHost,
+            Some(DeviceRole::AgentHost),
             Some(secret.as_str()),
         )
         .await
@@ -752,7 +752,7 @@ mod tests {
         let replacement = minos_domain::DeviceSecret::generate();
         let replacement_hash = crate::pairing::secret::hash_secret(&replacement).unwrap();
 
-        insert_device(&pool, id, "mac", DeviceRole::MacHost, 0)
+        insert_device(&pool, id, "mac", DeviceRole::AgentHost, 0)
             .await
             .unwrap();
         store::devices::upsert_secret_hash(&pool, id, &original_hash)
@@ -760,7 +760,7 @@ mod tests {
             .unwrap();
 
         let existing = store::devices::get_device(&pool, id).await.unwrap();
-        let role = resolve_device_role(existing.as_ref(), Some(DeviceRole::MacHost)).unwrap();
+        let role = resolve_device_role(existing.as_ref(), Some(DeviceRole::AgentHost)).unwrap();
         let classification = classify(existing, Some(secret.as_str())).unwrap();
         assert!(matches!(classification, Classification::Authenticated));
 
@@ -772,7 +772,7 @@ mod tests {
             &pool,
             id,
             role,
-            Some(DeviceRole::MacHost),
+            Some(DeviceRole::AgentHost),
             Some(secret.as_str()),
         )
         .await
@@ -824,7 +824,7 @@ mod tests {
         let device_id = DeviceId::new();
         let peer_id = DeviceId::new();
 
-        let (peer_handle, mut peer_outbox_rx) = SessionHandle::new(peer_id, DeviceRole::MacHost);
+        let (peer_handle, mut peer_outbox_rx) = SessionHandle::new(peer_id, DeviceRole::AgentHost);
         *peer_handle.paired_with.write().await = Some(device_id);
         registry.insert(peer_handle.clone());
 

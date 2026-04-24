@@ -179,7 +179,7 @@ mod tests {
     async fn two_devices(pool: &SqlitePool) -> (DeviceId, DeviceId) {
         let a = DeviceId::new();
         let b = DeviceId::new();
-        insert_device(pool, a, "mac", DeviceRole::MacHost, T0)
+        insert_device(pool, a, "mac", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         insert_device(pool, b, "ios", DeviceRole::IosClient, T0)
