@@ -788,14 +788,15 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
         }
 
         if file_name == "minos_daemon.swift" {
-            updated = replace_required(
-                updated,
-                DUPLICATE_DAEMON_NEWTYPE_BLOCK,
-                "",
-                "minos_daemon.swift: DeviceId/Uuid duplicate typealias block (emitted \
-                 alongside minos_domain.swift; kept only in the domain file to avoid \
-                 duplicate symbols)",
-            )?;
+            // `DeviceId`/`Uuid` used to be registered in both minos-domain and
+            // minos-daemon, so both Swift files emitted the typealias block
+            // and we had to strip one copy. After the plan-05 refactor,
+            // `DeviceId` is registered only in its home crate `minos-domain`
+            // (see minos-domain::ids::uniffi_bridges), so the block already
+            // appears exactly once. Stripping is therefore a no-op in the
+            // current world; `replace_optional` still scrubs the block if a
+            // future upstream uniffi-bindgen-swift release reintroduces it.
+            updated = replace_optional(updated, DUPLICATE_DAEMON_NEWTYPE_BLOCK, "");
             updated = replace_required(
                 updated,
                 VTABLE_DECL_OLD,
@@ -811,6 +812,19 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Replace `needle` with `replacement` in `buf` if present. Unlike
+/// `replace_required`, silently no-ops when the needle is absent. Use when
+/// the fixup is conditional — e.g. stripping a duplicate block that may or
+/// may not have been emitted depending on how the Rust side registered its
+/// UniFFI bridges.
+fn replace_optional(buf: String, needle: &str, replacement: &str) -> String {
+    if buf.contains(needle) {
+        buf.replace(needle, replacement)
+    } else {
+        buf
+    }
 }
 
 /// Replace `needle` with `replacement` in `buf` and bail if `needle` is not
@@ -1138,5 +1152,17 @@ mod tests {
             msg.contains("vtable decl"),
             "error should include caller-supplied context: {msg}"
         );
+    }
+
+    #[test]
+    fn replace_optional_replaces_when_needle_present() {
+        let result = replace_optional("hello world".into(), "world", "there");
+        assert_eq!(result, "hello there");
+    }
+
+    #[test]
+    fn replace_optional_returns_buf_unchanged_when_needle_missing() {
+        let result = replace_optional("hello world".into(), "MISSING", "x");
+        assert_eq!(result, "hello world");
     }
 }
