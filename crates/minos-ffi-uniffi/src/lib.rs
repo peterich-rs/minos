@@ -35,9 +35,11 @@ pub fn kind_message(kind: ErrorKind, lang: Lang) -> String {
 }
 
 pub use minos_agent_runtime::AgentState;
-pub use minos_daemon::{AgentStateObserver, ConnectionStateObserver, DaemonHandle, Subscription};
-pub use minos_domain::{
-    AgentDescriptor, AgentName, AgentStatus, ConnectionState, DeviceId, PairingState, PairingToken,
+pub use minos_daemon::{
+    AgentStateObserver, DaemonHandle, PeerRecord, PeerStateObserver, RelayConfig,
+    RelayLinkStateObserver, RelayQrPayload, Subscription,
 };
-pub use minos_pairing::{QrPayload, TrustedDevice};
+pub use minos_domain::{
+    AgentDescriptor, AgentName, AgentStatus, DeviceId, DeviceSecret, PeerState, RelayLinkState,
+};
 pub use minos_protocol::{SendUserMessageRequest, StartAgentRequest, StartAgentResponse};
