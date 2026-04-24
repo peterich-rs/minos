@@ -25,7 +25,10 @@ pub use local_state::LocalState;
 pub use minos_agent_runtime::AgentState;
 pub use relay_client::RelayClient;
 pub use relay_pairing::{PeerRecord, RelayQrPayload};
-pub use subscription::{AgentStateObserver, ConnectionStateObserver, Subscription};
+pub use subscription::{
+    AgentStateObserver, ConnectionStateObserver, PeerStateObserver, RelayLinkStateObserver,
+    Subscription,
+};
 
 /// Module-level wrapper so callers don't need `tailscale::discover_ip` —
 /// spec §5.1 #4 calls for this name.
@@ -52,4 +55,8 @@ uniffi::setup_scaffolding!();
 mod uniffi_reexports {
     uniffi::use_remote_type!(minos_pairing::minos_domain::PairingToken);
     uniffi::use_remote_type!(minos_pairing::chrono::DateTime<chrono::Utc>);
+    // `DeviceSecret`'s home registration in `minos-domain` uses the
+    // `impl<UT>` blanket coverage, so it is already available under this
+    // crate's `UniFfiTag` with no extra re-registration needed — same
+    // pattern as `DeviceId`.
 }

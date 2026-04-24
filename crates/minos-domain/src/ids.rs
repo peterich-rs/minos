@@ -40,12 +40,20 @@ impl std::fmt::Display for DeviceId {
 // doesn't also have to own a `Uuid` bridge.
 #[cfg(feature = "uniffi")]
 mod uniffi_bridges {
-    use super::DeviceId;
+    use super::{DeviceId, DeviceSecret};
     use uuid::Uuid;
 
     uniffi::custom_type!(DeviceId, String, {
         lower: |id| id.0.to_string(),
         try_lift: |text| Uuid::parse_str(&text).map(DeviceId).map_err(Into::into),
+    });
+
+    // `DeviceSecret` is a newtype over `String`; UniFFI marshals it as a
+    // transparent string. The base64url contents cross the FFI untouched —
+    // Swift never needs to know this is "base64url-no-pad, 43 chars".
+    uniffi::custom_type!(DeviceSecret, String, {
+        lower: |s| s.0,
+        try_lift: |s| Ok(DeviceSecret(s)),
     });
 }
 

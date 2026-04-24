@@ -8,6 +8,10 @@ pub const BACKEND_URL: &str = match option_env!("MINOS_BACKEND_URL") {
 };
 
 /// Runtime relay config (CF Service Token pair). Backend URL is BACKEND_URL (compile-time).
+///
+/// Derives `uniffi::Record` so Swift can pass it to
+/// `DaemonHandle::start`; the two String fields marshal as plain strings.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug)]
 pub struct RelayConfig {
     pub cf_client_id: String,
