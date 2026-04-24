@@ -71,7 +71,9 @@ use tokio_tungstenite::{
 
 /// Short timeout for individual `recv` calls. Keep this comfortably above
 /// the whole-file parallel test jitter while still failing fast on hangs.
-const RECV_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Sized for slow shared CI runners (GHA Linux occasionally takes >1.5s
+/// per round-trip under load); local runs complete well under the bound.
+const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_TOKEN_TTL: Duration = Duration::from_mins(5);
 
 type WsClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
