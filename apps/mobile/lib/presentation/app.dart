@@ -3,12 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/minos_providers.dart';
-import 'package:minos/presentation/pages/home_page.dart';
 import 'package:minos/presentation/pages/pairing_page.dart';
+import 'package:minos/presentation/pages/thread_list_page.dart';
 import 'package:minos/src/rust/api/minos.dart' as core;
 
 /// Root of the Minos app. Provides the Shad theme and routes between
-/// [PairingPage] and [HomePage] based on the latest [ConnectionState].
+/// [PairingPage] and [ThreadListPage] based on the latest [ConnectionState].
 class MinosApp extends StatelessWidget {
   const MinosApp({super.key});
 
@@ -41,7 +41,7 @@ class _Router extends ConsumerWidget {
     final state = ref.watch(connectionStateProvider);
     return state.when(
       data: (s) => switch (s) {
-        core.ConnectionState_Connected() => const HomePage(),
+        core.ConnectionState_Connected() => const ThreadListPage(),
         _ => const PairingPage(),
       },
       loading: () => const PairingPage(),

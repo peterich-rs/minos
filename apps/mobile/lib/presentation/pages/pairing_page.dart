@@ -26,7 +26,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
   @override
   Widget build(BuildContext context) {
     // Surface MinosError -> destructive toast whenever the submission fails.
-    ref.listen<AsyncValue<PairResponse?>>(pairingControllerProvider, (_, next) {
+    ref.listen<AsyncValue<bool>>(pairingControllerProvider, (_, next) {
       if (next is AsyncError) {
         final err = next.error;
         if (err is MinosError) {

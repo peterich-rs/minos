@@ -36,6 +36,8 @@ extension MinosErrorDisplay on MinosError {
     MinosError_TranslationNotImplemented() =>
       ErrorKind.translationNotImplemented,
     MinosError_TranslationFailed() => ErrorKind.translationFailed,
+    MinosError_PairingQrVersionUnsupported() =>
+      ErrorKind.pairingQrVersionUnsupported,
   };
 
   /// Localized user-facing message for this error, looked up via the Rust
