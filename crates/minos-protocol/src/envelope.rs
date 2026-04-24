@@ -123,9 +123,9 @@ pub enum Envelope {
 pub enum LocalRpcMethod {
     /// Cheap liveness check. Params: `{}`. Result: `{"ok": true}`.
     Ping,
-    /// Mac-host role only. Mints a fresh one-shot pairing token and
-    /// returns a `PairingQrPayload` for the Mac to render as a QR code
-    /// (spec §6.1). Params: `{"host_display_name": "..."}`.
+    /// Agent-host role only. Mints a fresh one-shot pairing token and
+    /// returns a `PairingQrPayload` for the agent-host to render as a QR
+    /// code (spec §6.1). Params: `{"host_display_name": "..."}`.
     RequestPairingQr,
     /// iOS-client role only. Consumes a pairing token and, on success,
     /// the relay emits [`EventKind::Paired`] to the Mac (spec §7.1).
@@ -134,7 +134,7 @@ pub enum LocalRpcMethod {
     /// Either role. Tears down the pairing for both devices and emits
     /// [`EventKind::Unpaired`] to the peer (spec §7.4).
     ForgetPeer,
-    /// Mobile → Backend. List thread summaries for the paired Mac.
+    /// Mobile → Backend. List thread summaries for the paired agent-host.
     /// Params: [`messages::ListThreadsParams`]. Result:
     /// [`messages::ListThreadsResponse`].
     ListThreads,
@@ -142,7 +142,7 @@ pub enum LocalRpcMethod {
     /// thread. Params: [`messages::ReadThreadParams`]. Result:
     /// [`messages::ReadThreadResponse`].
     ReadThread,
-    /// Host-only helper. Mac-host asks the backend for the last seq it
+    /// Host-only helper. Agent-host asks the backend for the last seq it
     /// persisted on a given thread, so the host can decide whether to
     /// re-ingest on startup. Params:
     /// [`messages::GetThreadLastSeqParams`]. Result:
