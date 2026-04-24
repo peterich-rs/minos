@@ -2042,6 +2042,7 @@ dependencies = [
  "mars-xlog",
  "minos-domain",
  "minos-protocol",
+ "minos-ui-protocol",
  "pretty_assertions",
  "proptest",
  "rstest",

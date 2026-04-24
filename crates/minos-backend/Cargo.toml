@@ -51,6 +51,7 @@ mars-xlog = { workspace = true }
 # workspace crates
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

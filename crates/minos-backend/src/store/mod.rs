@@ -12,6 +12,8 @@ use crate::error::RelayError;
 
 pub mod devices;
 pub mod pairings;
+pub mod raw_events;
+pub mod threads;
 pub mod tokens;
 
 pub use devices::{get_device, get_secret_hash, insert_device, upsert_secret_hash, DeviceRow};
