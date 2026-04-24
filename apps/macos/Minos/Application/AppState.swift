@@ -2,21 +2,51 @@ import AppKit
 import Observation
 import OSLog
 
+/// Top-level lifecycle phase the menubar UI ladders against. Distinct
+/// from the per-axis state (`relayLink`, `peer`) — `phase` answers "are
+/// we configured / running / broken?", the axes answer "given we're
+/// running, what's the status?".
+///
+/// Spec §6 freezes the three values and their UI ladder; bootError is
+/// a sub-state of `bootFailed` but kept on its own field so stale errors
+/// can be cleared without forcing a phase transition.
+enum Phase: Sendable {
+    case awaitingConfig
+    case running
+    case bootFailed
+}
+
 @Observable
 final class AppState: @unchecked Sendable {
+    // ── Daemon + subscriptions ──
     var daemon: (any DaemonDriving)?
-    var subscription: (any SubscriptionHandle)?
+    var relayLinkSubscription: (any SubscriptionHandle)?
+    var peerSubscription: (any SubscriptionHandle)?
     var agentSubscription: (any SubscriptionHandle)?
-    var connectionState: ConnectionState?
-    var agentState: AgentState = .idle
-    var currentQr: QrPayload?
+
+    // ── Lifecycle ──
+    var phase: Phase = .awaitingConfig
+
+    // ── Dual-axis state ──
+    var relayLink: RelayLinkState = .disconnected
+    var peer: PeerState = .unpaired
+    var trustedDevice: PeerRecord?
+
+    // ── Pairing UX ──
+    var currentQr: RelayQrPayload?
     var currentQrGeneratedAt: Date?
+    var isShowingQr: Bool = false
+    var onboardingVisible: Bool = false
+    var settingsVisible: Bool = false
+
+    // ── Agent runtime ──
+    var agentState: AgentState = .idle
     var currentSession: StartAgentResponse?
-    var trustedDevice: TrustedDevice?
     var agentError: MinosError?
+
+    // ── Errors ──
     var bootError: MinosError?
     var displayError: MinosError?
-    var isShowingQr = false
 
     @ObservationIgnored
     private let logger = Logger(subsystem: "ai.minos.macos", category: "appState")
@@ -28,35 +58,46 @@ final class AppState: @unchecked Sendable {
     private var agentErrorTask: Task<Void, Never>?
 
     @ObservationIgnored
-    private let forgetConfirmation: @MainActor @Sendable (TrustedDevice) -> Bool
+    private let forgetConfirmation: @MainActor @Sendable (PeerRecord) -> Bool
 
     @ObservationIgnored
     private let terminator: @MainActor @Sendable () -> Void
 
     init(
-        forgetConfirmation: (@MainActor @Sendable (TrustedDevice) -> Bool)? = nil,
+        forgetConfirmation: (@MainActor @Sendable (PeerRecord) -> Bool)? = nil,
         terminator: (@MainActor @Sendable () -> Void)? = nil
     ) {
-        self.forgetConfirmation = forgetConfirmation ?? { trustedDevice in
-            AppState.defaultForgetConfirmation(trustedDevice)
+        self.forgetConfirmation = forgetConfirmation ?? { peer in
+            AppState.defaultForgetConfirmation(peer)
         }
         self.terminator = terminator ?? { NSApp.terminate(nil) }
     }
 
+    // ── Computed gates for menu items ──
+
+    /// Show the "显示配对二维码…" item only when:
+    /// - the daemon is running (so we have someone to ask),
+    /// - the relay link is up (so the QR token can actually be minted),
+    /// - and there is no peer already paired (a second peer would be a
+    ///   second pairing, not currently supported).
     var canShowQr: Bool {
-        bootError == nil && trustedDevice == nil && daemon != nil
+        guard phase == .running, daemon != nil else { return false }
+        if case .connected = relayLink, case .unpaired = peer { return true }
+        return false
     }
 
-    var canForgetDevice: Bool {
-        bootError == nil && trustedDevice != nil && daemon != nil
+    /// Show the "忘记已配对设备" item only when:
+    /// - the daemon is running,
+    /// - the relay link is up (so the host can issue ForgetPeer),
+    /// - and a peer is currently paired.
+    var canForgetPeer: Bool {
+        guard phase == .running, daemon != nil else { return false }
+        guard case .connected = relayLink else { return false }
+        if case .paired = peer { return true }
+        return false
     }
 
-    var endpointDisplay: String? {
-        guard bootError == nil, trustedDevice == nil, let daemon else {
-            return nil
-        }
-        return "\(daemon.host()):\(daemon.port())"
-    }
+    // ── Phase transitions ──
 
     @MainActor
     func beginBoot() {
@@ -71,10 +112,14 @@ final class AppState: @unchecked Sendable {
         currentQrGeneratedAt = nil
         isShowingQr = false
         trustedDevice = nil
-        connectionState = nil
-        subscription?.cancel()
+        relayLink = .disconnected
+        peer = .unpaired
+        phase = .awaitingConfig
+        relayLinkSubscription?.cancel()
+        peerSubscription?.cancel()
         agentSubscription?.cancel()
-        subscription = nil
+        relayLinkSubscription = nil
+        peerSubscription = nil
         agentSubscription = nil
         daemon = nil
     }
@@ -82,9 +127,11 @@ final class AppState: @unchecked Sendable {
     @MainActor
     func finishBoot(
         daemon: any DaemonDriving,
-        subscription: any SubscriptionHandle,
-        connectionState: ConnectionState,
-        trustedDevice: TrustedDevice?,
+        relayLinkSubscription: any SubscriptionHandle,
+        peerSubscription: any SubscriptionHandle,
+        relayLink: RelayLinkState,
+        peer: PeerState,
+        trustedDevice: PeerRecord?,
         agentSubscription: (any SubscriptionHandle)? = nil,
         agentState: AgentState = .idle
     ) {
@@ -94,12 +141,15 @@ final class AppState: @unchecked Sendable {
         agentError = nil
         bootError = nil
         self.daemon = daemon
-        self.subscription = subscription
+        self.relayLinkSubscription = relayLinkSubscription
+        self.peerSubscription = peerSubscription
         self.agentSubscription = agentSubscription
-        self.connectionState = connectionState
+        self.relayLink = relayLink
+        self.peer = peer
         self.agentState = agentState
-        currentSession = nil
+        self.currentSession = nil
         self.trustedDevice = trustedDevice
+        self.phase = .running
     }
 
     @MainActor
@@ -107,12 +157,15 @@ final class AppState: @unchecked Sendable {
         logger.error("Boot failed: \(error.technicalDetails, privacy: .public)")
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()
-        subscription?.cancel()
+        relayLinkSubscription?.cancel()
+        peerSubscription?.cancel()
         agentSubscription?.cancel()
-        subscription = nil
+        relayLinkSubscription = nil
+        peerSubscription = nil
         agentSubscription = nil
         daemon = nil
-        connectionState = nil
+        relayLink = .disconnected
+        peer = .unpaired
         agentState = .idle
         currentSession = nil
         trustedDevice = nil
@@ -121,11 +174,33 @@ final class AppState: @unchecked Sendable {
         isShowingQr = false
         agentError = nil
         bootError = error
+        phase = .bootFailed
     }
 
+    /// Push from the relay-link observer. Pure assignment — gate logic
+    /// reads from the property, not the call site.
     @MainActor
-    func applyConnectionState(_ state: ConnectionState) {
-        connectionState = state
+    func applyRelayLink(_ state: RelayLinkState) {
+        relayLink = state
+    }
+
+    /// Push from the peer observer. Mirror the trustedDevice cache so
+    /// pairing-aware UI doesn't have to wait for `current_trusted_device`
+    /// to round-trip the daemon.
+    @MainActor
+    func applyPeer(_ state: PeerState) {
+        peer = state
+        switch state {
+        case let .paired(id, name, _):
+            trustedDevice = PeerRecord(deviceId: id, name: name, pairedAt: Date())
+        case .unpaired:
+            trustedDevice = nil
+            currentQr = nil
+            currentQrGeneratedAt = nil
+            isShowingQr = false
+        case .pairing:
+            break
+        }
     }
 
     @MainActor
@@ -155,8 +230,8 @@ final class AppState: @unchecked Sendable {
     }
 
     @MainActor
-    func forgetDevice() async {
-        guard bootError == nil, let daemon, let trustedDevice else {
+    func forgetPeer() async {
+        guard canForgetPeer, let daemon, let trustedDevice else {
             return
         }
         guard forgetConfirmation(trustedDevice) else {
@@ -164,7 +239,11 @@ final class AppState: @unchecked Sendable {
         }
 
         do {
-            try await daemon.forgetDevice(id: trustedDevice.deviceId)
+            try await daemon.forgetPeer()
+            // The daemon's peer observer will push Unpaired shortly; the
+            // local clear here is belt-and-suspenders so menus refresh
+            // synchronously even if the observer is briefly delayed.
+            self.peer = .unpaired
             self.trustedDevice = nil
             currentQr = nil
             currentQrGeneratedAt = nil
@@ -182,11 +261,13 @@ final class AppState: @unchecked Sendable {
         agentErrorTask?.cancel()
 
         let currentDaemon = daemon
-        let currentSubscription = subscription
+        let currentRelayLinkSubscription = relayLinkSubscription
+        let currentPeerSubscription = peerSubscription
         let currentAgentSubscription = agentSubscription
 
         daemon = nil
-        subscription = nil
+        relayLinkSubscription = nil
+        peerSubscription = nil
         agentSubscription = nil
         agentState = .idle
         currentSession = nil
@@ -195,7 +276,8 @@ final class AppState: @unchecked Sendable {
         isShowingQr = false
         agentError = nil
 
-        currentSubscription?.cancel()
+        currentRelayLinkSubscription?.cancel()
+        currentPeerSubscription?.cancel()
         currentAgentSubscription?.cancel()
 
         do {
@@ -218,7 +300,7 @@ final class AppState: @unchecked Sendable {
         }
 
         do {
-            let pairingPayload = try daemon.pairingQr()
+            let pairingPayload = try await daemon.pairingQr()
             currentQr = pairingPayload
             currentQrGeneratedAt = Date()
             isShowingQr = showing
@@ -245,11 +327,11 @@ final class AppState: @unchecked Sendable {
     }
 
     @MainActor
-    static func defaultForgetConfirmation(_ trustedDevice: TrustedDevice) -> Bool {
+    static func defaultForgetConfirmation(_ peer: PeerRecord) -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "忘记已配对设备"
-        alert.informativeText = "忘记 \(trustedDevice.name) 后需要重新扫码才能再次配对。继续吗？"
+        alert.informativeText = "忘记 \(peer.name) 后需要重新扫码才能再次配对。继续吗？"
         alert.addButton(withTitle: "取消")
         alert.addButton(withTitle: "忘记")
         return alert.runModal() == .alertSecondButtonReturn
@@ -275,7 +357,7 @@ extension AppState {
 
     @MainActor
     func startAgent() async {
-        guard bootError == nil, let daemon else {
+        guard phase == .running, let daemon else {
             return
         }
 
@@ -295,7 +377,7 @@ extension AppState {
 
     @MainActor
     func sendAgentPing() async {
-        guard bootError == nil, let daemon, let currentSession else {
+        guard phase == .running, let daemon, let currentSession else {
             return
         }
 
@@ -314,7 +396,7 @@ extension AppState {
 
     @MainActor
     func stopAgent() async {
-        guard bootError == nil, let daemon else {
+        guard phase == .running, let daemon else {
             return
         }
 
