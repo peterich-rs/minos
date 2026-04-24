@@ -60,6 +60,38 @@ pub struct Config {
     /// background tasks are spawned.
     #[arg(long)]
     pub exit_after_migrate: bool,
+
+    /// Cloudflare Access `CF-Access-Client-Id` for tunnelled traffic.
+    ///
+    /// When `public_url` is a `wss://` origin fronted by `cloudflared`, the
+    /// mobile client must present this id on every connect. The backend
+    /// embeds the pair into the pairing QR payload so the host never sees
+    /// it — see spec §13.3 and ADR 0014 (Phase E).
+    #[arg(long, env = "MINOS_BACKEND_CF_ACCESS_CLIENT_ID")]
+    pub cf_access_client_id: Option<String>,
+
+    /// Cloudflare Access `CF-Access-Client-Secret`. Paired with
+    /// `cf_access_client_id`; both must be set or both empty.
+    #[arg(long, env = "MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET")]
+    pub cf_access_client_secret: Option<String>,
+
+    /// Public WebSocket origin the mobile client should connect to.
+    /// Embedded into the pairing QR payload so mobile doesn't need to
+    /// resolve DNS for the backend. Defaults to the local dev address;
+    /// production deploys override via `MINOS_BACKEND_PUBLIC_URL`.
+    #[arg(
+        long,
+        env = "MINOS_BACKEND_PUBLIC_URL",
+        default_value = "ws://127.0.0.1:8787/devices"
+    )]
+    pub public_url: String,
+
+    /// Escape hatch: allow `wss://` `public_url` without CF Access tokens.
+    /// Intended for local tunnel experiments where TLS is present but CF
+    /// Access is not configured yet. Default off — production deploys must
+    /// set the CF tokens.
+    #[arg(long, env = "MINOS_BACKEND_ALLOW_DEV", default_value_t = false)]
+    pub allow_dev: bool,
 }
 
 impl Config {
@@ -76,6 +108,42 @@ impl Config {
     #[must_use]
     pub fn resolved_log_dir(&self) -> PathBuf {
         self.log_dir.clone().unwrap_or_else(default_log_dir)
+    }
+
+    /// Validate CF Access configuration at startup.
+    ///
+    /// Contract (spec §13.3): when `public_url` begins with `wss://`, the
+    /// backend is running behind `cloudflared` and MUST hand the mobile
+    /// client an `(id, secret)` pair via the pairing QR. If the operator
+    /// forgot to set the env vars, refuse to boot so the mis-config
+    /// surfaces loud and early instead of silently handing out QR codes
+    /// that will fail at the tunnel edge.
+    ///
+    /// Escape hatch: `--allow-dev` / `MINOS_BACKEND_ALLOW_DEV=1` relaxes
+    /// the check for local TLS experiments. `ws://` origins always
+    /// validate — CF Access is meaningful only for TLS tunnels.
+    ///
+    /// # Errors
+    /// Returns a human-readable message suitable for surfacing from main
+    /// (`eprintln!` + non-zero exit). Callers shouldn't try to interpret
+    /// the string programmatically.
+    pub fn validate(&self) -> Result<(), String> {
+        let id_set = self.cf_access_client_id.is_some();
+        let secret_set = self.cf_access_client_secret.is_some();
+        if id_set != secret_set {
+            return Err(
+                "MINOS_BACKEND_CF_ACCESS_CLIENT_ID and ..._SECRET must be set together or both left unset"
+                    .into(),
+            );
+        }
+        let both_missing = !id_set;
+        if self.public_url.starts_with("wss://") && both_missing && !self.allow_dev {
+            return Err(
+                "MINOS_BACKEND_CF_ACCESS_CLIENT_ID/SECRET are required when MINOS_BACKEND_PUBLIC_URL is wss://; set MINOS_BACKEND_ALLOW_DEV=1 to override"
+                    .into(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -121,6 +189,10 @@ mod tests {
             "MINOS_BACKEND_DB",
             "MINOS_BACKEND_LOG_DIR",
             "MINOS_BACKEND_TOKEN_TTL",
+            "MINOS_BACKEND_CF_ACCESS_CLIENT_ID",
+            "MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET",
+            "MINOS_BACKEND_PUBLIC_URL",
+            "MINOS_BACKEND_ALLOW_DEV",
             "RUST_LOG",
         ] {
             std::env::remove_var(key);
@@ -251,5 +323,64 @@ mod tests {
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         assert_eq!(cfg.token_ttl_secs, 600);
         assert_eq!(cfg.token_ttl(), Duration::from_mins(10));
+    }
+
+    // ── CF Access validation ──────────────────────────────────────────
+
+    #[test]
+    fn default_public_url_is_local_ws() {
+        let _g = env_scope();
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
+        assert_eq!(cfg.public_url, "ws://127.0.0.1:8787/devices");
+        assert!(cfg.cf_access_client_id.is_none());
+        assert!(cfg.cf_access_client_secret.is_none());
+        assert!(!cfg.allow_dev);
+    }
+
+    #[test]
+    fn validate_ok_for_local_ws_without_cf_tokens() {
+        let _g = env_scope();
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
+        cfg.validate()
+            .expect("local ws:// must not require CF tokens");
+    }
+
+    #[test]
+    fn validate_rejects_wss_without_cf_tokens_unless_allow_dev() {
+        let _g = env_scope();
+        std::env::set_var(
+            "MINOS_BACKEND_PUBLIC_URL",
+            "wss://tunnel.example.com/devices",
+        );
+
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
+        let err = cfg
+            .validate()
+            .expect_err("wss:// without CF tokens must fail");
+        assert!(err.contains("CF_ACCESS_CLIENT_ID"), "{err}");
+    }
+
+    #[test]
+    fn validate_allow_dev_waives_wss_check() {
+        let _g = env_scope();
+        std::env::set_var(
+            "MINOS_BACKEND_PUBLIC_URL",
+            "wss://tunnel.example.com/devices",
+        );
+        std::env::set_var("MINOS_BACKEND_ALLOW_DEV", "true");
+
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
+        cfg.validate()
+            .expect("allow-dev must waive the CF token check");
+    }
+
+    #[test]
+    fn validate_requires_both_cf_tokens_together() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_BACKEND_CF_ACCESS_CLIENT_ID", "id-only");
+
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
+        let err = cfg.validate().expect_err("half-set pair must fail");
+        assert!(err.contains("must be set together"), "{err}");
     }
 }

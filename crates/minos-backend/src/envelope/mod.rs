@@ -56,6 +56,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     error::RelayError,
+    http::BackendPublicConfig,
     ingest::translate::ThreadTranslators,
     pairing::PairingService,
     session::{ServerFrame, SessionHandle, SessionRegistry},
@@ -107,6 +108,7 @@ pub async fn run_session(
     store: SqlitePool,
     token_ttl: Duration,
     translators: Arc<ThreadTranslators>,
+    public_cfg: Arc<BackendPublicConfig>,
 ) -> Result<(), RelayError> {
     let result = run_session_inner(
         &mut ws,
@@ -117,6 +119,7 @@ pub async fn run_session(
         &store,
         token_ttl,
         &translators,
+        &public_cfg,
     )
     .await;
 
@@ -148,6 +151,7 @@ async fn run_session_inner(
     store: &SqlitePool,
     token_ttl: Duration,
     translators: &ThreadTranslators,
+    public_cfg: &BackendPublicConfig,
 ) -> Result<(), RelayError> {
     let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
     let mut revocation_rx = session.subscribe_revocation();
@@ -200,7 +204,7 @@ async fn run_session_inner(
                             Ok(env) => {
                                 if !dispatch_envelope(
                                     ws, session, registry, pairing, store, token_ttl,
-                                    translators, env,
+                                    translators, public_cfg, env,
                                 )
                                 .await
                                 {
@@ -336,6 +340,7 @@ async fn dispatch_envelope(
     store: &SqlitePool,
     token_ttl: Duration,
     translators: &ThreadTranslators,
+    public_cfg: &BackendPublicConfig,
     env: Envelope,
 ) -> bool {
     match env {
@@ -356,6 +361,9 @@ async fn dispatch_envelope(
                 pairing,
                 store,
                 token_ttl,
+                public_url: &public_cfg.public_url,
+                cf_access_client_id: public_cfg.cf_access_client_id.as_deref(),
+                cf_access_client_secret: public_cfg.cf_access_client_secret.as_deref(),
             };
             let outcome = local_rpc::handle(&ctx, &method, &params).await;
             let resp = Envelope::LocalRpcResponse {

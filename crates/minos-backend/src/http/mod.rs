@@ -41,6 +41,17 @@ use crate::{
 pub mod health;
 pub mod ws_devices;
 
+/// Backend-public config snapshot shared by every WS session. Bundles the
+/// pieces of [`crate::config::Config`] the `RequestPairingQr` handler
+/// needs so the envelope dispatcher doesn't have to thread three separate
+/// arguments through `run_session` / `dispatch_envelope`.
+#[derive(Debug, Clone)]
+pub struct BackendPublicConfig {
+    pub public_url: String,
+    pub cf_access_client_id: Option<String>,
+    pub cf_access_client_secret: Option<String>,
+}
+
 /// Shared state for every HTTP handler.
 ///
 /// Cheap to clone: the service types are `Arc`-wrapped, and [`SqlitePool`]
@@ -57,6 +68,10 @@ pub struct RelayState {
     pub token_ttl: Duration,
     /// Per-thread translator-state cache for the live ingest path.
     pub translators: Arc<ThreadTranslators>,
+    /// Public-facing config snapshot (public URL + CF Access tokens) used
+    /// by `RequestPairingQr` to assemble the QR payload. `Arc` so
+    /// `RelayState::clone` is still cheap.
+    pub public_cfg: Arc<BackendPublicConfig>,
     /// Crate version string; exposed via `/health`.
     ///
     /// Stored here rather than read from `env!("CARGO_PKG_VERSION")` at the
@@ -83,6 +98,11 @@ impl RelayState {
             store,
             token_ttl,
             translators: ThreadTranslators::new(),
+            public_cfg: Arc::new(BackendPublicConfig {
+                public_url: "ws://127.0.0.1:8787/devices".into(),
+                cf_access_client_id: None,
+                cf_access_client_secret: None,
+            }),
             version: env!("CARGO_PKG_VERSION"),
         }
     }

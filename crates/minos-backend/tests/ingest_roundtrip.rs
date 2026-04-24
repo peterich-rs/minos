@@ -58,6 +58,11 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
         store: pool.clone(),
         token_ttl: Duration::from_mins(5),
         translators: ThreadTranslators::new(),
+        public_cfg: Arc::new(minos_backend::http::BackendPublicConfig {
+            public_url: "ws://127.0.0.1:8787/devices".into(),
+            cf_access_client_id: None,
+            cf_access_client_secret: None,
+        }),
         version: "ingest-roundtrip-test",
     };
     let app = router(state);

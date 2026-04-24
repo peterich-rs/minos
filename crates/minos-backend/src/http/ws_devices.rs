@@ -169,6 +169,7 @@ pub async fn upgrade(
     let store = state.store.clone();
     let token_ttl = state.token_ttl;
     let translators = Arc::clone(&state.translators);
+    let public_cfg = Arc::clone(&state.public_cfg);
     Ok(ws.on_upgrade(move |mut socket| async move {
         match revalidate_live_session_auth(
             &store,
@@ -220,6 +221,7 @@ pub async fn upgrade(
             store,
             token_ttl,
             translators,
+            public_cfg,
         )
         .await
         {

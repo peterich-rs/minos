@@ -58,6 +58,16 @@ pub struct LocalRpcContext<'a> {
     pub pairing: &'a PairingService,
     pub store: &'a SqlitePool,
     pub token_ttl: Duration,
+    /// Public WebSocket origin the backend advertises to mobile via the
+    /// pairing QR payload (spec §6.1 `PairingQrPayload.backend_url`).
+    pub public_url: &'a str,
+    /// Optional Cloudflare Access client id to embed in the QR payload.
+    /// `None` for local dev deployments without a CF tunnel.
+    pub cf_access_client_id: Option<&'a str>,
+    /// Optional Cloudflare Access client secret to embed in the QR payload.
+    /// MUST be `Some` iff `cf_access_client_id` is `Some` (checked by
+    /// [`crate::config::Config::validate`] at startup).
+    pub cf_access_client_secret: Option<&'a str>,
 }
 
 /// Dispatch a decoded [`Envelope::LocalRpc`] to the right handler.
@@ -70,10 +80,7 @@ pub async fn handle(
 ) -> LocalRpcOutcome {
     match method {
         LocalRpcMethod::Ping => handle_ping().await,
-        // C4 will rebuild this handler around the QR payload. For now we
-        // keep the legacy `{token, expires_at}` body so the rename
-        // compiles and existing tests still pass.
-        LocalRpcMethod::RequestPairingQr => handle_request_pairing_token(ctx).await,
+        LocalRpcMethod::RequestPairingQr => handle_request_pairing_token(ctx, params).await,
         LocalRpcMethod::Pair => handle_pair(ctx, params).await,
         LocalRpcMethod::ForgetPeer => handle_forget_peer(ctx).await,
         LocalRpcMethod::ListThreads => handle_list_threads(ctx, params).await,
@@ -365,36 +372,62 @@ async fn handle_ping() -> LocalRpcOutcome {
     }
 }
 
-/// `request_pairing_token`: agent-host only; mints a fresh token using the
-/// configured TTL.
+/// `request_pairing_qr`: agent-host only; mints a fresh token and returns
+/// a full `PairingQrPayload` the host renders into a QR code for the
+/// mobile client to scan.
 ///
-/// Spec §6.1 gates the caller's role. `device_name` is not a parameter —
-/// the mac already has a row in `devices` by the time this fires (inserted
-/// on handshake).
-async fn handle_request_pairing_token(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
+/// C4 replaces the earlier legacy `{token, expires_at}` body with the v2
+/// QR payload that bundles:
+///   - backend WebSocket URL (so mobile doesn't need DNS)
+///   - host display name (echoed from the RPC params)
+///   - one-shot pairing token + its expiry (unix epoch ms)
+///   - optional Cloudflare Access credentials (spec §13.3 / ADR 0014)
+///
+/// Spec §6.1 gates the caller's role. The CF tokens flow through the
+/// backend's env vars — the agent-host never sees them, and a rotation
+/// on the backend is immediately effective for any subsequent pairing.
+async fn handle_request_pairing_token(
+    ctx: &LocalRpcContext<'_>,
+    params: &serde_json::Value,
+) -> LocalRpcOutcome {
     if ctx.session.role != DeviceRole::AgentHost {
         return err("unauthorized", "only agent-host may request pairing tokens");
     }
 
-    match ctx
+    let p: minos_protocol::RequestPairingQrParams = match serde_json::from_value(params.clone()) {
+        Ok(v) => v,
+        Err(e) => return err("bad_request", format!("invalid params: {e}")),
+    };
+
+    let (token, expires_at) = match ctx
         .pairing
         .request_token(ctx.session.device_id, ctx.token_ttl)
         .await
     {
-        Ok((token, expires_at)) => LocalRpcOutcome::Ok {
-            result: serde_json::json!({
-                "token": token.as_str(),
-                "expires_at": expires_at.to_rfc3339(),
-            }),
-        },
+        Ok(v) => v,
         Err(e) => {
             tracing::warn!(
                 target: "minos_backend::envelope",
                 error = %e,
-                "request_pairing_token failed"
+                "request_pairing_qr token mint failed"
             );
-            err("internal", e.to_string())
+            return err("internal", e.to_string());
         }
+    };
+
+    let qr_payload = minos_protocol::PairingQrPayload {
+        v: 2,
+        backend_url: ctx.public_url.to_string(),
+        host_display_name: p.host_display_name,
+        pairing_token: token.as_str().to_string(),
+        expires_at_ms: expires_at.timestamp_millis(),
+        cf_access_client_id: ctx.cf_access_client_id.map(str::to_owned),
+        cf_access_client_secret: ctx.cf_access_client_secret.map(str::to_owned),
+    };
+
+    let resp = minos_protocol::RequestPairingQrResponse { qr_payload };
+    LocalRpcOutcome::Ok {
+        result: serde_json::to_value(resp).unwrap_or_else(|_| serde_json::json!({})),
     }
 }
 
@@ -672,6 +705,9 @@ mod tests {
             pairing,
             store: pool,
             token_ttl: Duration::from_mins(5),
+            public_url: "ws://127.0.0.1:8787/devices",
+            cf_access_client_id: None,
+            cf_access_client_secret: None,
         }
     }
 
@@ -719,7 +755,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_pairing_token_happy_path_returns_token_and_expires_at() {
+    async fn request_pairing_qr_happy_path_returns_full_qr_payload() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (session, _rx) = make_session(mac, DeviceRole::AgentHost);
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::RequestPairingQr,
+            &serde_json::json!({"host_display_name": "Fan's Mac"}),
+        )
+        .await;
+        match out {
+            LocalRpcOutcome::Ok { result } => {
+                let qr = &result["qr_payload"];
+                assert_eq!(qr["v"], 2);
+                assert_eq!(qr["backend_url"], "ws://127.0.0.1:8787/devices");
+                assert_eq!(qr["host_display_name"], "Fan's Mac");
+                let tok = qr["pairing_token"].as_str().expect("pairing_token string");
+                assert!(tok.len() >= 32, "token too short: {tok:?}");
+                assert!(qr["expires_at_ms"].is_i64());
+                // CF tokens omitted in the default (local dev) context.
+                assert!(qr.get("cf_access_client_id").is_none());
+                assert!(qr.get("cf_access_client_secret").is_none());
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_pairing_qr_embeds_cf_tokens_when_configured() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (session, _rx) = make_session(mac, DeviceRole::AgentHost);
+        // Manual ctx override with CF tokens set.
+        let ctx = LocalRpcContext {
+            session: &session,
+            registry: &registry,
+            pairing: &pairing,
+            store: &pool,
+            token_ttl: Duration::from_mins(5),
+            public_url: "wss://tunnel.example.com/devices",
+            cf_access_client_id: Some("client-id.access"),
+            cf_access_client_secret: Some("super-secret"),
+        };
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::RequestPairingQr,
+            &serde_json::json!({"host_display_name": "prod"}),
+        )
+        .await;
+        let LocalRpcOutcome::Ok { result } = out else {
+            panic!("expected Ok, got {out:?}");
+        };
+        let qr = &result["qr_payload"];
+        assert_eq!(qr["backend_url"], "wss://tunnel.example.com/devices");
+        assert_eq!(qr["cf_access_client_id"], "client-id.access");
+        assert_eq!(qr["cf_access_client_secret"], "super-secret");
+    }
+
+    #[tokio::test]
+    async fn request_pairing_qr_rejects_missing_host_display_name() {
         let pool = memory_pool().await;
         let registry = SessionRegistry::new();
         let pairing = PairingService::new(pool.clone());
@@ -734,17 +836,10 @@ mod tests {
         )
         .await;
         match out {
-            LocalRpcOutcome::Ok { result } => {
-                assert!(result["token"].is_string());
-                // Plaintext token is a base64url-style string ≥ 32 chars.
-                let tok = result["token"].as_str().unwrap();
-                assert!(tok.len() >= 32, "token too short: {tok:?}");
-                let expires = result["expires_at"].as_str().expect("expires_at string");
-                // RFC3339 parse round-trip sanity check.
-                let _: chrono::DateTime<chrono::Utc> =
-                    expires.parse().expect("expires_at is RFC3339");
+            LocalRpcOutcome::Err { error } => {
+                assert_eq!(error.code, "bad_request");
             }
-            other => panic!("expected Ok, got {other:?}"),
+            other => panic!("expected Err, got {other:?}"),
         }
     }
 

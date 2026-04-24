@@ -60,6 +60,13 @@ const XLOG_NAME_PREFIX: &str = "backend";
 async fn main() -> Result<()> {
     let cfg = Config::parse();
 
+    // Fail fast on invalid CF Access configuration rather than handing out
+    // pairing QRs that will be rejected at the CF edge. See spec §13.3.
+    if let Err(msg) = cfg.validate() {
+        eprintln!("minos-backend: configuration error: {msg}");
+        std::process::exit(2);
+    }
+
     init_tracing(&cfg).context("init tracing")?;
 
     let db_url = format!("sqlite://{}?mode=rwc", cfg.db.display());
@@ -77,12 +84,18 @@ async fn main() -> Result<()> {
 
     let registry = Arc::new(SessionRegistry::new());
     let pairing = Arc::new(PairingService::new(pool.clone()));
-    let state = RelayState::new(
+    let mut state = RelayState::new(
         registry.clone(),
         pairing.clone(),
         pool.clone(),
         cfg.token_ttl(),
     );
+    // Override the default public-cfg with env-sourced values from cfg.
+    state.public_cfg = Arc::new(crate::http::BackendPublicConfig {
+        public_url: cfg.public_url.clone(),
+        cf_access_client_id: cfg.cf_access_client_id.clone(),
+        cf_access_client_secret: cfg.cf_access_client_secret.clone(),
+    });
 
     let gc_task = spawn_token_gc(pool.clone());
 

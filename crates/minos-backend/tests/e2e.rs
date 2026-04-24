@@ -12,7 +12,10 @@
 //! 1. `e2e_pair_forward_forget` — happy path:
 //!    - Two fresh clients connect (agent-host A, ios-client B) and each
 //!      observes `Event::Unpaired` as their first server frame.
-//!    - A calls `request_pairing_token`; receives `{ token, expires_at }`.
+//!    - A calls `request_pairing_qr`; receives a `PairingQrPayload` v2
+//!      (C4 replaced the legacy `{ token, expires_at }` shape with the
+//!      full QR envelope). We extract `qr_payload.pairing_token` to
+//!      drive the subsequent `pair` call.
 //!    - B calls `pair(token, device_name)`; receives
 //!      `{ peer_device_id, peer_name, your_device_secret }` and A observes
 //!      `Event::Paired` with B's info plus its own fresh device secret.
@@ -123,6 +126,11 @@ async fn spawn_relay_with_token_ttl(token_ttl: Duration) -> anyhow::Result<Relay
         store: pool.clone(),
         token_ttl,
         translators: minos_backend::ingest::translate::ThreadTranslators::new(),
+        public_cfg: Arc::new(minos_backend::http::BackendPublicConfig {
+            public_url: "ws://127.0.0.1:8787/devices".into(),
+            cf_access_client_id: None,
+            cf_access_client_secret: None,
+        }),
         version: "e2e-test",
     };
     let app = router(state);
@@ -288,14 +296,14 @@ async fn e2e_pair_forward_forget() -> anyhow::Result<()> {
     expect_unpaired_event(&mut a).await?;
     expect_unpaired_event(&mut b).await?;
 
-    // --- step 3: A requests a pairing token ------------------------------
+    // --- step 3: A requests a pairing QR (C4: QR payload, not bare token) ----
     send_envelope(
         &mut a,
         &Envelope::LocalRpc {
             version: 1,
             id: 1,
             method: LocalRpcMethod::RequestPairingQr,
-            params: serde_json::json!({}),
+            params: serde_json::json!({"host_display_name": "Fan's Mac"}),
         },
     )
     .await?;
@@ -307,16 +315,18 @@ async fn e2e_pair_forward_forget() -> anyhow::Result<()> {
     );
     let token = match outcome {
         LocalRpcOutcome::Ok { result } => {
+            let qr = &result["qr_payload"];
+            assert_eq!(qr["v"], 2, "QR payload version must be 2: {qr:?}");
             assert!(
-                result["expires_at"].is_string(),
-                "missing expires_at: {result:?}"
+                qr["expires_at_ms"].is_i64(),
+                "missing expires_at_ms: {qr:?}"
             );
-            result["token"]
+            qr["pairing_token"]
                 .as_str()
-                .expect("token is a string")
+                .expect("pairing_token is a string")
                 .to_owned()
         }
-        other => panic!("expected Ok for request_pairing_token, got {other:?}"),
+        other => panic!("expected Ok for request_pairing_qr, got {other:?}"),
     };
 
     // --- step 4: B pairs with the token ----------------------------------
@@ -525,7 +535,7 @@ async fn e2e_request_pairing_token_respects_configured_ttl() -> anyhow::Result<(
             version: 1,
             id: 1,
             method: LocalRpcMethod::RequestPairingQr,
-            params: serde_json::json!({}),
+            params: serde_json::json!({"host_display_name": "Fan's Mac"}),
         },
     )
     .await?;
@@ -537,18 +547,21 @@ async fn e2e_request_pairing_token_respects_configured_ttl() -> anyhow::Result<(
     );
 
     let after = chrono::Utc::now();
-    let expires_at = match outcome {
-        LocalRpcOutcome::Ok { result } => chrono::DateTime::parse_from_rfc3339(
-            result["expires_at"]
-                .as_str()
-                .expect("expires_at is a string"),
-        )?
-        .with_timezone(&chrono::Utc),
-        other => panic!("expected Ok for request_pairing_token, got {other:?}"),
+    // QR v2 returns expires_at_ms (unix epoch ms) rather than an RFC3339
+    // string — C4 renamed the field.
+    let expires_at_ms = match outcome {
+        LocalRpcOutcome::Ok { result } => result["qr_payload"]["expires_at_ms"]
+            .as_i64()
+            .expect("expires_at_ms is an i64"),
+        other => panic!("expected Ok for request_pairing_qr, got {other:?}"),
     };
+    let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(expires_at_ms)
+        .expect("expires_at_ms within chrono range");
 
     let ttl = chrono::Duration::from_std(token_ttl).unwrap();
-    let lower_bound = before + ttl;
+    // QR v2 carries `expires_at_ms`; we lose sub-millisecond precision on
+    // the conversion, so accept a 1ms slack on the lower bound.
+    let lower_bound = before + ttl - chrono::Duration::milliseconds(1);
     let upper_bound = after + ttl;
     assert!(
         expires_at >= lower_bound && expires_at <= upper_bound,
