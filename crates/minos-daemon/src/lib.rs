@@ -23,20 +23,8 @@ pub use tailscale::discover_ip_with_reason as discover_tailscale_ip_with_reason;
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
 
-#[cfg(feature = "uniffi")]
-mod uniffi_bridges {
-    use minos_domain::DeviceId;
-    use uuid::Uuid;
-
-    uniffi::custom_type!(Uuid, String, {
-        remote,
-        lower: |uuid| uuid.to_string(),
-        try_lift: |text| Uuid::parse_str(&text).map_err(Into::into),
-    });
-
-    uniffi::custom_type!(DeviceId, Uuid, {
-        remote,
-        lower: |device_id| device_id.0,
-        try_lift: |uuid| Ok(DeviceId(uuid)),
-    });
-}
+// `DeviceId` is now registered in its home crate `minos-domain` with blanket
+// `impl<UT>` coverage, which already applies to this crate's tag — no local
+// registration needed here. If the daemon later exposes APIs that need a
+// `Uuid` crossing UniFFI, reintroduce a dedicated bridge (and see the
+// `minos-pairing` crate for the `remote custom_type!` pattern).
