@@ -34,3 +34,16 @@ uniffi::setup_scaffolding!();
 // registration needed here. If the daemon later exposes APIs that need a
 // `Uuid` crossing UniFFI, reintroduce a dedicated bridge (and see the
 // `minos-pairing` crate for the `remote custom_type!` pattern).
+//
+// `PairingToken` and `DateTime<Utc>` have their UniFFI custom_type!
+// registrations in `minos-pairing` (under the `remote` keyword, which ties
+// them to that crate's `UniFfiTag`). The relay-flow types in
+// `relay_pairing.rs` use them inside `uniffi::Record` fields and therefore
+// need the trait impls under this crate's own tag — pull them in with
+// `use_remote_type!` rather than re-registering, to keep the single source
+// of truth in `minos-pairing`.
+#[cfg(feature = "uniffi")]
+mod uniffi_reexports {
+    uniffi::use_remote_type!(minos_pairing::minos_domain::PairingToken);
+    uniffi::use_remote_type!(minos_pairing::chrono::DateTime<chrono::Utc>);
+}
