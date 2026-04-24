@@ -35,6 +35,8 @@ extension MinosError {
             return .peerOffline
         case .RelayInternal:
             return .relayInternal
+        case .CfAuthFailed:
+            return .cfAuthFailed
         case .CodexSpawnFailed:
             return .codexSpawnFailed
         case .CodexConnectFailed:
