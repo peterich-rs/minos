@@ -377,6 +377,23 @@ const _: fn() = || {
         crate::api::minos::MinosError::RelayInternal { message } => {
             let _: String = message;
         }
+        crate::api::minos::MinosError::CodexSpawnFailed { message } => {
+            let _: String = message;
+        }
+        crate::api::minos::MinosError::CodexConnectFailed { url, message } => {
+            let _: String = url;
+            let _: String = message;
+        }
+        crate::api::minos::MinosError::CodexProtocolError { method, message } => {
+            let _: String = method;
+            let _: String = message;
+        }
+        crate::api::minos::MinosError::AgentAlreadyRunning => {}
+        crate::api::minos::MinosError::AgentNotRunning => {}
+        crate::api::minos::MinosError::AgentNotSupported { agent } => {
+            let _: crate::api::minos::AgentName = agent;
+        }
+        crate::api::minos::MinosError::AgentSessionIdMismatch => {}
     }
     {
         let PairResponse = None::<crate::api::minos::PairResponse>.unwrap();
@@ -439,6 +456,19 @@ impl SseDecode for String {
     }
 }
 
+impl SseDecode for crate::api::minos::AgentName {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::minos::AgentName::Codex,
+            1 => crate::api::minos::AgentName::Claude,
+            2 => crate::api::minos::AgentName::Gemini,
+            _ => unreachable!("Invalid variant for AgentName: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -494,6 +524,13 @@ impl SseDecode for crate::api::minos::ErrorKind {
             13 => crate::api::minos::ErrorKind::EnvelopeVersionUnsupported,
             14 => crate::api::minos::ErrorKind::PeerOffline,
             15 => crate::api::minos::ErrorKind::RelayInternal,
+            16 => crate::api::minos::ErrorKind::CodexSpawnFailed,
+            17 => crate::api::minos::ErrorKind::CodexConnectFailed,
+            18 => crate::api::minos::ErrorKind::CodexProtocolError,
+            19 => crate::api::minos::ErrorKind::AgentAlreadyRunning,
+            20 => crate::api::minos::ErrorKind::AgentNotRunning,
+            21 => crate::api::minos::ErrorKind::AgentNotSupported,
+            22 => crate::api::minos::ErrorKind::AgentSessionIdMismatch,
             _ => unreachable!("Invalid variant for ErrorKind: {}", inner),
         };
     }
@@ -638,6 +675,41 @@ impl SseDecode for crate::api::minos::MinosError {
                     message: var_message,
                 };
             }
+            16 => {
+                let mut var_message = <String>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::CodexSpawnFailed {
+                    message: var_message,
+                };
+            }
+            17 => {
+                let mut var_url = <String>::sse_decode(deserializer);
+                let mut var_message = <String>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::CodexConnectFailed {
+                    url: var_url,
+                    message: var_message,
+                };
+            }
+            18 => {
+                let mut var_method = <String>::sse_decode(deserializer);
+                let mut var_message = <String>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::CodexProtocolError {
+                    method: var_method,
+                    message: var_message,
+                };
+            }
+            19 => {
+                return crate::api::minos::MinosError::AgentAlreadyRunning;
+            }
+            20 => {
+                return crate::api::minos::MinosError::AgentNotRunning;
+            }
+            21 => {
+                let mut var_agent = <crate::api::minos::AgentName>::sse_decode(deserializer);
+                return crate::api::minos::MinosError::AgentNotSupported { agent: var_agent };
+            }
+            22 => {
+                return crate::api::minos::MinosError::AgentSessionIdMismatch;
+            }
             _ => {
                 unimplemented!("");
             }
@@ -762,6 +834,28 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<MobileClient>> for MobileClien
 }
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::AgentName> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::AgentName::Codex => 0.into_dart(),
+            crate::api::minos::AgentName::Claude => 1.into_dart(),
+            crate::api::minos::AgentName::Gemini => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::AgentName>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::AgentName>>
+    for crate::api::minos::AgentName
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::AgentName> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ConnectionState> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self.0 {
@@ -808,6 +902,13 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ErrorKind> 
             crate::api::minos::ErrorKind::EnvelopeVersionUnsupported => 13.into_dart(),
             crate::api::minos::ErrorKind::PeerOffline => 14.into_dart(),
             crate::api::minos::ErrorKind::RelayInternal => 15.into_dart(),
+            crate::api::minos::ErrorKind::CodexSpawnFailed => 16.into_dart(),
+            crate::api::minos::ErrorKind::CodexConnectFailed => 17.into_dart(),
+            crate::api::minos::ErrorKind::CodexProtocolError => 18.into_dart(),
+            crate::api::minos::ErrorKind::AgentAlreadyRunning => 19.into_dart(),
+            crate::api::minos::ErrorKind::AgentNotRunning => 20.into_dart(),
+            crate::api::minos::ErrorKind::AgentNotSupported => 21.into_dart(),
+            crate::api::minos::ErrorKind::AgentSessionIdMismatch => 22.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -918,6 +1019,27 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::MinosError>
             crate::api::minos::MinosError::RelayInternal { message } => {
                 [15.into_dart(), message.into_into_dart().into_dart()].into_dart()
             }
+            crate::api::minos::MinosError::CodexSpawnFailed { message } => {
+                [16.into_dart(), message.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::minos::MinosError::CodexConnectFailed { url, message } => [
+                17.into_dart(),
+                url.into_into_dart().into_dart(),
+                message.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::MinosError::CodexProtocolError { method, message } => [
+                18.into_dart(),
+                method.into_into_dart().into_dart(),
+                message.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::MinosError::AgentAlreadyRunning => [19.into_dart()].into_dart(),
+            crate::api::minos::MinosError::AgentNotRunning => [20.into_dart()].into_dart(),
+            crate::api::minos::MinosError::AgentNotSupported { agent } => {
+                [21.into_dart(), agent.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::minos::MinosError::AgentSessionIdMismatch => [22.into_dart()].into_dart(),
             _ => {
                 unimplemented!("");
             }
@@ -1020,6 +1142,23 @@ impl SseEncode for String {
     }
 }
 
+impl SseEncode for crate::api::minos::AgentName {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::minos::AgentName::Codex => 0,
+                crate::api::minos::AgentName::Claude => 1,
+                crate::api::minos::AgentName::Gemini => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
 impl SseEncode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1072,6 +1211,13 @@ impl SseEncode for crate::api::minos::ErrorKind {
                 crate::api::minos::ErrorKind::EnvelopeVersionUnsupported => 13,
                 crate::api::minos::ErrorKind::PeerOffline => 14,
                 crate::api::minos::ErrorKind::RelayInternal => 15,
+                crate::api::minos::ErrorKind::CodexSpawnFailed => 16,
+                crate::api::minos::ErrorKind::CodexConnectFailed => 17,
+                crate::api::minos::ErrorKind::CodexProtocolError => 18,
+                crate::api::minos::ErrorKind::AgentAlreadyRunning => 19,
+                crate::api::minos::ErrorKind::AgentNotRunning => 20,
+                crate::api::minos::ErrorKind::AgentNotSupported => 21,
+                crate::api::minos::ErrorKind::AgentSessionIdMismatch => 22,
                 _ => {
                     unimplemented!("");
                 }
@@ -1188,6 +1334,33 @@ impl SseEncode for crate::api::minos::MinosError {
             crate::api::minos::MinosError::RelayInternal { message } => {
                 <i32>::sse_encode(15, serializer);
                 <String>::sse_encode(message, serializer);
+            }
+            crate::api::minos::MinosError::CodexSpawnFailed { message } => {
+                <i32>::sse_encode(16, serializer);
+                <String>::sse_encode(message, serializer);
+            }
+            crate::api::minos::MinosError::CodexConnectFailed { url, message } => {
+                <i32>::sse_encode(17, serializer);
+                <String>::sse_encode(url, serializer);
+                <String>::sse_encode(message, serializer);
+            }
+            crate::api::minos::MinosError::CodexProtocolError { method, message } => {
+                <i32>::sse_encode(18, serializer);
+                <String>::sse_encode(method, serializer);
+                <String>::sse_encode(message, serializer);
+            }
+            crate::api::minos::MinosError::AgentAlreadyRunning => {
+                <i32>::sse_encode(19, serializer);
+            }
+            crate::api::minos::MinosError::AgentNotRunning => {
+                <i32>::sse_encode(20, serializer);
+            }
+            crate::api::minos::MinosError::AgentNotSupported { agent } => {
+                <i32>::sse_encode(21, serializer);
+                <crate::api::minos::AgentName>::sse_encode(agent, serializer);
+            }
+            crate::api::minos::MinosError::AgentSessionIdMismatch => {
+                <i32>::sse_encode(22, serializer);
             }
             _ => {
                 unimplemented!("");

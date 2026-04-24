@@ -2006,6 +2006,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "minos-agent-runtime"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "minos-agent-runtime",
+ "minos-domain",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tracing",
+ "uniffi",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "minos-cli-detect"
 version = "0.1.0"
 dependencies = [
@@ -2027,6 +2046,7 @@ dependencies = [
  "futures",
  "jsonrpsee",
  "mars-xlog",
+ "minos-agent-runtime",
  "minos-cli-detect",
  "minos-domain",
  "minos-pairing",
@@ -2074,9 +2094,11 @@ dependencies = [
 name = "minos-ffi-uniffi"
 version = "0.1.0"
 dependencies = [
+ "minos-agent-runtime",
  "minos-daemon",
  "minos-domain",
  "minos-pairing",
+ "minos-protocol",
  "uniffi",
 ]
 
@@ -2128,6 +2150,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "uniffi",
 ]
 
 [[package]]
@@ -4758,6 +4781,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "minos-agent-runtime",
+ "minos-domain",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

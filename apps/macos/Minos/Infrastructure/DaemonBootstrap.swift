@@ -18,6 +18,7 @@ enum DaemonBootstrap {
 
         var startedDaemon: (any DaemonDriving)?
         var activeSubscription: (any SubscriptionHandle)?
+        var activeAgentSubscription: (any SubscriptionHandle)?
 
         do {
             let daemon = try await startDaemon(macName)
@@ -31,22 +32,35 @@ enum DaemonBootstrap {
             let subscription = daemon.subscribeObserver(adapter)
             activeSubscription = subscription
 
+            let agentAdapter = AgentStateObserverAdapter { state in
+                Task { @MainActor in
+                    appState.applyAgentState(state)
+                }
+            }
+            let agentSubscription = daemon.subscribeAgentState(agentAdapter)
+            activeAgentSubscription = agentSubscription
+
             let state = daemon.currentState()
+            let agentState = daemon.currentAgentState()
             let trustedDevice = try daemon.currentTrustedDevice()
 
             await appState.finishBoot(
                 daemon: daemon,
                 subscription: subscription,
                 connectionState: state,
-                trustedDevice: trustedDevice
+                trustedDevice: trustedDevice,
+                agentSubscription: agentSubscription,
+                agentState: agentState
             )
             logger.info("Boot complete on \(daemon.host(), privacy: .public):\(daemon.port())")
         } catch let error as MinosError {
             activeSubscription?.cancel()
+            activeAgentSubscription?.cancel()
             try? await startedDaemon?.stop()
             await appState.failBoot(with: error)
         } catch {
             activeSubscription?.cancel()
+            activeAgentSubscription?.cancel()
             try? await startedDaemon?.stop()
             let wrapped = MinosError.RpcCallFailed(method: "swift.bootstrap", message: String(describing: error))
             await appState.failBoot(with: wrapped)

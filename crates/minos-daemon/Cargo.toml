@@ -7,9 +7,17 @@ authors.workspace = true
 description = "Mac-side composition root: WS server + file store + RPC handlers + CLI detect."
 
 [features]
-uniffi = ["dep:uniffi", "minos-domain/uniffi", "minos-pairing/uniffi"]
+test-support = ["minos-agent-runtime/test-support"]
+uniffi = [
+	"dep:uniffi",
+	"minos-agent-runtime/uniffi",
+	"minos-domain/uniffi",
+	"minos-protocol/uniffi",
+	"minos-pairing/uniffi",
+]
 
 [dependencies]
+minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
@@ -29,6 +37,7 @@ uniffi = { workspace = true, optional = true, features = ["tokio"] }
 clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
+minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", features = ["test-support"] }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 pretty_assertions = { workspace = true }

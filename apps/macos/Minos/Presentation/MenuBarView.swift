@@ -40,6 +40,8 @@ struct MenuBarView: View {
                 }
             }
 
+            AgentSegmentView(appState: appState)
+
             actionButton("在 Finder 中显示今日日志…") {
                 Task {
                     await appState.revealTodayLog()
@@ -67,6 +69,8 @@ struct MenuBarView: View {
                     await appState.forgetDevice()
                 }
             }
+
+            AgentSegmentView(appState: appState)
 
             actionButton("在 Finder 中显示今日日志…") {
                 Task {

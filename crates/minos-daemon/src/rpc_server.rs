@@ -9,14 +9,20 @@ use std::time::Instant;
 
 use chrono::Utc;
 use jsonrpsee::core::async_trait;
+use jsonrpsee::core::server::SubscriptionMessage;
 use jsonrpsee::core::SubscriptionResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use jsonrpsee::PendingSubscriptionSink;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::{ConnectionState, MinosError};
 use minos_pairing::{ActiveToken, Pairing, PairingStore, TrustedDevice};
-use minos_protocol::{HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse};
-use tokio::sync::watch;
+use minos_protocol::{
+    HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+};
+use tokio::sync::{broadcast, watch};
+
+use crate::agent::AgentGlue;
 
 pub struct RpcServerImpl {
     pub started_at: Instant,
@@ -34,6 +40,7 @@ pub struct RpcServerImpl {
     /// successful `pair()`, this emits `Connected` so UI receivers learn
     /// about the new peer without a separate transport-layer event.
     pub conn_state_tx: Arc<watch::Sender<ConnectionState>>,
+    pub agent: Arc<AgentGlue>,
 }
 
 #[async_trait]
@@ -99,16 +106,43 @@ impl MinosRpcServer for RpcServerImpl {
         Ok(detect_all(self.runner.clone()).await)
     }
 
+    async fn start_agent(
+        &self,
+        req: StartAgentRequest,
+    ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
+        self.agent.start_agent(req).await.map_err(rpc_err)
+    }
+
+    async fn send_user_message(
+        &self,
+        req: SendUserMessageRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.send_user_message(req).await.map_err(rpc_err)
+    }
+
+    async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.stop_agent().await.map_err(rpc_err)
+    }
+
     async fn subscribe_events(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        // MVP: not implemented; reject the subscription.
-        // jsonrpsee 0.24: `pending.reject()` closes the upgrade with an error.
-        pending
-            .reject(ErrorObjectOwned::owned(
-                4001,
-                "subscribe_events not yet implemented (P1)",
-                None::<()>,
-            ))
-            .await;
+        let mut rx = self.agent.event_stream();
+        let sink = pending.accept().await?;
+
+        loop {
+            match rx.recv().await {
+                Ok(evt) => {
+                    let message = SubscriptionMessage::from_json(&evt)?;
+                    if sink.send(message).await.is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped = n, "subscribe_events subscriber lagged");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+
         Ok(())
     }
 }

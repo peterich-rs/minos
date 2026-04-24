@@ -3,13 +3,23 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig};
+use minos_domain::{AgentEvent, AgentName};
+use tempfile::TempDir;
+use tokio::runtime::Builder;
+use tokio::sync::broadcast::error::RecvError;
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "Minos build & codegen orchestration")]
 struct Cli {
+    /// Opt in to the real-codex smoke leg during `check-all`.
+    #[arg(long, global = true)]
+    with_codex: bool,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -39,8 +49,9 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let with_codex = codex_smoke_requested(cli.with_codex)?;
     match cli.cmd {
-        Cmd::CheckAll => check_all(),
+        Cmd::CheckAll => check_all(with_codex),
         Cmd::Bootstrap => bootstrap(),
         Cmd::GenUniffi => gen_uniffi(),
         Cmd::GenFrb => gen_frb(),
@@ -52,7 +63,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn check_all() -> Result<()> {
+fn check_all(with_codex: bool) -> Result<()> {
     let workspace_root = workspace_root()?;
     eprintln!("==> cargo fmt --check");
     run("cargo", &["fmt", "--all", "--check"], &workspace_root)?;
@@ -145,8 +156,119 @@ fn check_all() -> Result<()> {
 
     frb_drift_guard(&workspace_root)?;
 
+    if with_codex {
+        codex_smoke_leg()?;
+    }
+
     eprintln!("OK: all checks pass.");
     Ok(())
+}
+
+fn codex_smoke_requested(with_codex_flag: bool) -> Result<bool> {
+    let Some(value) = std::env::var_os("MINOS_XTASK_WITH_CODEX") else {
+        return Ok(with_codex_flag);
+    };
+    let value = value.to_string_lossy();
+    if value == "1" {
+        return Ok(true);
+    }
+    bail!(
+        "MINOS_XTASK_WITH_CODEX must be set to `1` when present; got {:?}",
+        value.as_ref()
+    )
+}
+
+fn codex_smoke_leg() -> Result<()> {
+    let codex_bin = if let Some(path) = which(AgentName::Codex.bin_name()) {
+        PathBuf::from(path)
+    } else {
+        eprintln!("==> codex smoke: skipped (codex not found on PATH)");
+        return Ok(());
+    };
+
+    eprintln!("==> codex smoke (real codex app-server)");
+    Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("building tokio runtime for codex smoke")?
+        .block_on(codex_smoke_leg_async(codex_bin))
+}
+
+async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
+    let tempdir = TempDir::new().context("creating tempdir for codex smoke")?;
+    let workspace_root = tempdir.path().join("workspace");
+    fs::create_dir_all(&workspace_root)
+        .with_context(|| format!("mkdir {}", workspace_root.display()))?;
+
+    let mut cfg = AgentRuntimeConfig::new(workspace_root);
+    cfg.codex_bin = Some(codex_bin);
+    cfg.handshake_call_timeout = Duration::from_secs(30);
+    let runtime = AgentRuntime::new(cfg);
+
+    let outcome = runtime
+        .start(AgentName::Codex)
+        .await
+        .context("codex smoke: start_agent failed")?;
+    let session_id = outcome.session_id;
+    let watcher = tokio::spawn(wait_for_codex_ok_token(runtime.event_stream()));
+
+    let result = async {
+        runtime
+            .send_user_message(&session_id, "reply with the word ok")
+            .await
+            .context("codex smoke: send_user_message failed")?;
+        watcher
+            .await
+            .context("codex smoke: event watcher task failed")??;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    let stop_result = runtime
+        .stop()
+        .await
+        .context("codex smoke: stop_agent failed");
+
+    match (result, stop_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(err), Ok(())) => Err(err),
+        (Ok(()), Err(stop_err)) => Err(stop_err),
+        (Err(err), Err(stop_err)) => {
+            Err(err.context(format!("codex smoke cleanup also failed: {stop_err:#}")))
+        }
+    }
+}
+
+async fn wait_for_codex_ok_token(
+    mut events: tokio::sync::broadcast::Receiver<AgentEvent>,
+) -> Result<()> {
+    tokio::time::timeout(Duration::from_mins(1), async move {
+        loop {
+            match events.recv().await {
+                Ok(AgentEvent::TokenChunk { text }) => {
+                    if text.to_ascii_lowercase().contains("ok") {
+                        return Ok(());
+                    }
+                }
+                Ok(AgentEvent::Done { exit_code }) => {
+                    bail!(
+                        "codex smoke: session finished before emitting an `ok` token (exit_code={exit_code})"
+                    );
+                }
+                Ok(_) => {}
+                Err(RecvError::Lagged(skipped)) => {
+                    eprintln!(
+                        "    codex smoke: event subscriber lagged by {skipped} messages; continuing"
+                    );
+                }
+                Err(RecvError::Closed) => {
+                    bail!("codex smoke: event stream closed before receiving an `ok` token");
+                }
+            }
+        }
+    })
+    .await
+    .context("codex smoke: timed out waiting up to 60s for a TokenChunk containing `ok`")?
 }
 
 /// Regenerate the Dart/Rust bridge and fail on any drift — tracked diffs OR
@@ -495,6 +617,7 @@ fn gen_uniffi() -> Result<()> {
     )?;
 
     normalize_generated_uniffi_imports(&out_dir)?;
+    prune_unexpected_uniffi_outputs(&out_dir);
 
     for generated in [
         "MinosCore.swift",
@@ -507,8 +630,67 @@ fn gen_uniffi() -> Result<()> {
         }
     }
 
+    verify_generated_uniffi_surface(&out_dir)?;
+
     eprintln!("OK: {}", out_dir.display());
     Ok(())
+}
+
+fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
+    require_generated_text(
+        &out_dir.join("minos_agent_runtime.swift"),
+        "public enum AgentState",
+        "generated Swift enum for runtime-owned AgentState",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "public protocol AgentStateObserver",
+        "generated Swift callback protocol for agent-state updates",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "open func startAgent(req: StartAgentRequest)",
+        "generated DaemonHandle.startAgent binding",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "open func subscribeAgentState(observer: AgentStateObserver)",
+        "generated DaemonHandle.subscribeAgentState binding",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct StartAgentRequest",
+        "generated Swift record for StartAgentRequest",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct StartAgentResponse",
+        "generated Swift record for StartAgentResponse",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct SendUserMessageRequest",
+        "generated Swift record for SendUserMessageRequest",
+    )?;
+
+    Ok(())
+}
+
+fn require_generated_text(path: &Path, needle: &str, context: &str) -> Result<()> {
+    let buf = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    if !buf.contains(needle) {
+        bail!(
+            "codegen drift: {} missing {} (expected substring: {:?})",
+            path.display(),
+            context,
+            needle,
+        );
+    }
+    Ok(())
+}
+
+fn prune_unexpected_uniffi_outputs(out_dir: &Path) {
+    let _ = out_dir;
 }
 
 fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
@@ -555,8 +737,10 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     }
 
     for file_name in [
+        "minos_agent_runtime.swift",
         "minos_daemon.swift",
         "minos_domain.swift",
+        "minos_protocol.swift",
         "minos_pairing.swift",
     ] {
         let path = out_dir.join(file_name);
@@ -569,6 +753,10 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
 
         let mut updated = original
             .replace(
+                "#if canImport(minos_agent_runtimeFFI)\nimport minos_agent_runtimeFFI\n#endif",
+                MODULE_IMPORT,
+            )
+            .replace(
                 "#if canImport(minos_daemonFFI)\nimport minos_daemonFFI\n#endif",
                 MODULE_IMPORT,
             )
@@ -579,10 +767,14 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
             .replace(
                 "#if canImport(minos_pairingFFI)\nimport minos_pairingFFI\n#endif",
                 MODULE_IMPORT,
+            )
+            .replace(
+                "#if canImport(minos_protocolFFI)\nimport minos_protocolFFI\n#endif",
+                MODULE_IMPORT,
             );
 
         // Every per-crate file self-imports at least its own FFI submodule, so after
-        // the three replacements above at least one `import MinosCoreFFI` block
+        // the replacements above at least one `import MinosCoreFFI` block
         // must be present. If none is, the `#if canImport(..._FFI)` pragma layout
         // upstream has changed and we need to refresh the needles.
         if !updated.contains(MODULE_IMPORT) {

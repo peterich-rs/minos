@@ -27,7 +27,7 @@ use crate::frb_generated::StreamSink;
 // Re-exported `pub use` so `crate::api::minos::TypeName` resolves for the
 // generated wire code in `frb_generated.rs`. Mirror declarations below still
 // provide the shape metadata the codegen needs.
-pub use minos_domain::{ConnectionState, ErrorKind, Lang, MinosError, PairingState};
+pub use minos_domain::{AgentName, ConnectionState, ErrorKind, Lang, MinosError, PairingState};
 pub use minos_protocol::PairResponse;
 
 // ───────────────────────────── opaque client ─────────────────────────────
@@ -156,6 +156,14 @@ pub enum _Lang {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(AgentName))]
+pub enum _AgentName {
+    Codex,
+    Claude,
+    Gemini,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(ErrorKind))]
 pub enum _ErrorKind {
     BindFailed,
@@ -174,6 +182,13 @@ pub enum _ErrorKind {
     EnvelopeVersionUnsupported,
     PeerOffline,
     RelayInternal,
+    CodexSpawnFailed,
+    CodexConnectFailed,
+    CodexProtocolError,
+    AgentAlreadyRunning,
+    AgentNotRunning,
+    AgentNotSupported,
+    AgentSessionIdMismatch,
 }
 
 #[allow(dead_code)]
@@ -202,6 +217,13 @@ pub enum _MinosError {
     EnvelopeVersionUnsupported { version: u8 },
     PeerOffline { peer_device_id: String },
     RelayInternal { message: String },
+    CodexSpawnFailed { message: String },
+    CodexConnectFailed { url: String, message: String },
+    CodexProtocolError { method: String, message: String },
+    AgentAlreadyRunning,
+    AgentNotRunning,
+    AgentNotSupported { agent: AgentName },
+    AgentSessionIdMismatch,
 }
 
 #[cfg(test)]

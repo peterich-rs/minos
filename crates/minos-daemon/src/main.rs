@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
-use minos_daemon::{DaemonConfig, DaemonHandle};
+use minos_daemon::{paths, DaemonConfig, DaemonHandle};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -138,7 +138,7 @@ fn resolve_paths(args: &CliPaths) -> Result<ResolvedPaths, Box<dyn std::error::E
 
     let minos_home = match &args.minos_home {
         Some(path) => expand_tilde(path)?,
-        None => default_minos_home()?,
+        None => paths::minos_home()?,
     };
 
     let data_dir = match &args.data_dir {
@@ -160,11 +160,6 @@ fn resolve_paths(args: &CliPaths) -> Result<ResolvedPaths, Box<dyn std::error::E
 fn apply_paths(paths: &ResolvedPaths) {
     env::set_var("MINOS_DATA_DIR", &paths.data_dir);
     env::set_var("MINOS_LOG_DIR", &paths.log_dir);
-}
-
-fn default_minos_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let home = env::var("HOME")?;
-    Ok(PathBuf::from(home).join(".minos"))
 }
 
 fn platform_data_dir() -> PathBuf {

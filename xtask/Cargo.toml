@@ -9,6 +9,10 @@ publish = false
 [dependencies]
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+minos-agent-runtime = { path = "../crates/minos-agent-runtime", version = "0.1.0" }
+minos-domain = { path = "../crates/minos-domain", version = "0.1.0" }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 
 [lints]
 workspace = true

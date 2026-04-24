@@ -44,6 +44,8 @@ abstract class MobileClient implements RustOpaqueInterface {
   Stream<ConnectionState> subscribeState();
 }
 
+enum AgentName { codex, claude, gemini }
+
 @freezed
 sealed class ConnectionState with _$ConnectionState {
   const ConnectionState._();
@@ -72,6 +74,13 @@ enum ErrorKind {
   envelopeVersionUnsupported,
   peerOffline,
   relayInternal,
+  codexSpawnFailed,
+  codexConnectFailed,
+  codexProtocolError,
+  agentAlreadyRunning,
+  agentNotRunning,
+  agentNotSupported,
+  agentSessionIdMismatch,
 }
 
 enum Lang { zh, en }
@@ -129,6 +138,23 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_PeerOffline;
   const factory MinosError.relayInternal({required String message}) =
       MinosError_RelayInternal;
+  const factory MinosError.codexSpawnFailed({required String message}) =
+      MinosError_CodexSpawnFailed;
+  const factory MinosError.codexConnectFailed({
+    required String url,
+    required String message,
+  }) = MinosError_CodexConnectFailed;
+  const factory MinosError.codexProtocolError({
+    required String method,
+    required String message,
+  }) = MinosError_CodexProtocolError;
+  const factory MinosError.agentAlreadyRunning() =
+      MinosError_AgentAlreadyRunning;
+  const factory MinosError.agentNotRunning() = MinosError_AgentNotRunning;
+  const factory MinosError.agentNotSupported({required AgentName agent}) =
+      MinosError_AgentNotSupported;
+  const factory MinosError.agentSessionIdMismatch() =
+      MinosError_AgentSessionIdMismatch;
 }
 
 class PairResponse {

@@ -38,6 +38,13 @@ pub enum ErrorKind {
     EnvelopeVersionUnsupported,
     PeerOffline,
     RelayInternal,
+    CodexSpawnFailed,
+    CodexConnectFailed,
+    CodexProtocolError,
+    AgentAlreadyRunning,
+    AgentNotRunning,
+    AgentNotSupported,
+    AgentSessionIdMismatch,
 }
 
 impl ErrorKind {
@@ -99,6 +106,22 @@ impl ErrorKind {
             (Self::PeerOffline, Lang::En) => "Paired device offline; please check status",
             (Self::RelayInternal, Lang::Zh) => "中继服务异常，请稍后重试",
             (Self::RelayInternal, Lang::En) => "Relay service error; please retry later",
+            (Self::CodexSpawnFailed, Lang::Zh) => "无法启动 Codex CLI；请确认已安装 `codex`",
+            (Self::CodexSpawnFailed, Lang::En) => "Failed to launch codex CLI; is codex installed?",
+            (Self::CodexConnectFailed, Lang::Zh) => "无法连接 Codex 服务",
+            (Self::CodexConnectFailed, Lang::En) => "Could not reach codex app-server",
+            (Self::CodexProtocolError, Lang::Zh) => "Codex 返回错误，请查看日志",
+            (Self::CodexProtocolError, Lang::En) => "Codex returned an error — see log",
+            (Self::AgentAlreadyRunning, Lang::Zh) => "Agent 已在运行",
+            (Self::AgentAlreadyRunning, Lang::En) => "An agent session is already running",
+            (Self::AgentNotRunning, Lang::Zh) => "当前没有 Agent 会话",
+            (Self::AgentNotRunning, Lang::En) => "No agent session is running",
+            (Self::AgentNotSupported, Lang::Zh) => "这一期仅支持 Codex",
+            (Self::AgentNotSupported, Lang::En) => "Only Codex is supported in this phase",
+            (Self::AgentSessionIdMismatch, Lang::Zh) => "会话已失效，请重新启动",
+            (Self::AgentSessionIdMismatch, Lang::En) => {
+                "Session is no longer active; please restart"
+            }
         }
     }
 }
@@ -159,6 +182,28 @@ pub enum MinosError {
 
     #[error("relay internal error: {message}")]
     RelayInternal { message: String },
+
+    // ── agent runtime layer (spec §5.3) ──
+    #[error("failed to spawn codex: {message}")]
+    CodexSpawnFailed { message: String },
+
+    #[error("failed to connect codex WS at {url}: {message}")]
+    CodexConnectFailed { url: String, message: String },
+
+    #[error("codex protocol error on {method}: {message}")]
+    CodexProtocolError { method: String, message: String },
+
+    #[error("agent is already running")]
+    AgentAlreadyRunning,
+
+    #[error("no agent session is running")]
+    AgentNotRunning,
+
+    #[error("agent {agent:?} not supported in this build")]
+    AgentNotSupported { agent: crate::AgentName },
+
+    #[error("session id does not match the active session")]
+    AgentSessionIdMismatch,
 }
 
 impl MinosError {
@@ -182,6 +227,13 @@ impl MinosError {
             Self::EnvelopeVersionUnsupported { .. } => ErrorKind::EnvelopeVersionUnsupported,
             Self::PeerOffline { .. } => ErrorKind::PeerOffline,
             Self::RelayInternal { .. } => ErrorKind::RelayInternal,
+            Self::CodexSpawnFailed { .. } => ErrorKind::CodexSpawnFailed,
+            Self::CodexConnectFailed { .. } => ErrorKind::CodexConnectFailed,
+            Self::CodexProtocolError { .. } => ErrorKind::CodexProtocolError,
+            Self::AgentAlreadyRunning => ErrorKind::AgentAlreadyRunning,
+            Self::AgentNotRunning => ErrorKind::AgentNotRunning,
+            Self::AgentNotSupported { .. } => ErrorKind::AgentNotSupported,
+            Self::AgentSessionIdMismatch => ErrorKind::AgentSessionIdMismatch,
         }
     }
 
@@ -216,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)] // one tuple per variant; list is the point
+    #[allow(clippy::too_many_lines)] // fixture table grows with each new variant
     fn kind_exhaustively_matches_every_variant() {
         let cases: Vec<(MinosError, ErrorKind)> = vec![
             (
@@ -319,10 +371,45 @@ mod tests {
                 },
                 ErrorKind::RelayInternal,
             ),
+            (
+                MinosError::CodexSpawnFailed {
+                    message: String::new(),
+                },
+                ErrorKind::CodexSpawnFailed,
+            ),
+            (
+                MinosError::CodexConnectFailed {
+                    url: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::CodexConnectFailed,
+            ),
+            (
+                MinosError::CodexProtocolError {
+                    method: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::CodexProtocolError,
+            ),
+            (
+                MinosError::AgentAlreadyRunning,
+                ErrorKind::AgentAlreadyRunning,
+            ),
+            (MinosError::AgentNotRunning, ErrorKind::AgentNotRunning),
+            (
+                MinosError::AgentNotSupported {
+                    agent: crate::AgentName::Codex,
+                },
+                ErrorKind::AgentNotSupported,
+            ),
+            (
+                MinosError::AgentSessionIdMismatch,
+                ErrorKind::AgentSessionIdMismatch,
+            ),
         ];
         assert_eq!(
             cases.len(),
-            16,
+            23,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -349,13 +436,20 @@ mod tests {
         ErrorKind::EnvelopeVersionUnsupported,
         ErrorKind::PeerOffline,
         ErrorKind::RelayInternal,
+        ErrorKind::CodexSpawnFailed,
+        ErrorKind::CodexConnectFailed,
+        ErrorKind::CodexProtocolError,
+        ErrorKind::AgentAlreadyRunning,
+        ErrorKind::AgentNotRunning,
+        ErrorKind::AgentNotSupported,
+        ErrorKind::AgentSessionIdMismatch,
     ];
 
     #[test]
     fn every_error_kind_has_user_message_in_both_langs() {
         assert_eq!(
             ALL_KINDS.len(),
-            16,
+            23,
             "add a kind when you add an ErrorKind variant"
         );
         for k in ALL_KINDS {

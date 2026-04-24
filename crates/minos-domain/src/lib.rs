@@ -13,6 +13,7 @@
 pub mod agent;
 pub mod connection;
 pub mod error;
+pub mod events;
 pub mod ids;
 pub mod pairing_state;
 pub mod role;
@@ -20,6 +21,7 @@ pub mod role;
 pub use agent::*;
 pub use connection::*;
 pub use error::*;
+pub use events::*;
 pub use ids::*;
 pub use pairing_state::*;
 pub use role::*;
