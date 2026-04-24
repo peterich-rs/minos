@@ -7,9 +7,14 @@ import SwiftUI
 /// persisted Keychain values won't take effect until the user unsets
 /// the env vars before relaunching.
 ///
+/// Presented as a real top-level `Window` scene (see `MinosApp`), NOT as
+/// a `.sheet` inside the MenuBarExtra popover — same reason as
+/// `OnboardingSheet`: popover focus semantics break text input.
+///
 /// Plan 05 Phase J.1.
 struct SettingsSheet: View {
     @Bindable var appState: AppState
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var clientId: String = ""
     @State private var clientSecret: String = ""
 
@@ -29,7 +34,7 @@ struct SettingsSheet: View {
                 .textFieldStyle(.roundedBorder)
 
             HStack {
-                Button("取消") { appState.settingsVisible = false }
+                Button("取消") { dismissWindow(id: WindowID.settings) }
                 Spacer()
                 Button("保存") { save() }
                     .keyboardShortcut(.defaultAction)
@@ -48,7 +53,7 @@ struct SettingsSheet: View {
 
     private func save() {
         try? KeychainRelayConfig.write(.init(clientId: clientId, clientSecret: clientSecret))
-        appState.settingsVisible = false
+        dismissWindow(id: WindowID.settings)
         Task {
             // Stop the running daemon (so the next bootstrap can mint a
             // fresh relay client with the new creds) then re-enter

@@ -46,8 +46,10 @@ final class AppState: @unchecked Sendable {
     var currentQr: RelayQrPayload?
     var currentQrGeneratedAt: Date?
     var isShowingQr: Bool = false
-    var onboardingVisible: Bool = false
-    var settingsVisible: Bool = false
+    // Onboarding / Settings visibility is NOT modelled on AppState — the
+    // two screens live in real top-level Window scenes and are driven by
+    // `@Environment(\.openWindow)` / `dismissWindow` with a stable
+    // `WindowID`. See `MinosApp`.
 
     // ── Agent runtime ──
     var agentState: AgentState = .idle

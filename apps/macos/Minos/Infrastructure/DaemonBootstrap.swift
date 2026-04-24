@@ -52,10 +52,14 @@ enum DaemonBootstrap {
         // open Minos.app`) work without touching user creds.
         let creds = readEnvCreds() ?? KeychainRelayConfig.read()
         guard let creds else {
-            logger.info("No CF credentials present; surfacing onboarding")
+            // No creds yet — leave the menubar on `.awaitingConfig` and
+            // let the user open the Onboarding window from there. We
+            // deliberately do NOT auto-open the window on launch; that
+            // would yank focus from whatever the user is doing, and
+            // LSUIElement apps have no Dock icon to signal the steal.
+            logger.info("No CF credentials present; staying in awaitingConfig")
             await MainActor.run {
                 appState.phase = .awaitingConfig
-                appState.onboardingVisible = true
             }
             return
         }

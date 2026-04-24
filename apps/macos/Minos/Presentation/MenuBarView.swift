@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Menubar popover content. Walks the AppState.phase ladder
@@ -8,6 +9,7 @@ import SwiftUI
 /// Plan 05 Phase J.2.
 struct MenuBarView: View {
     @Bindable var appState: AppState
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -26,12 +28,17 @@ struct MenuBarView: View {
         }
         .padding(14)
         .frame(width: 360)
-        .sheet(isPresented: $appState.onboardingVisible) {
-            OnboardingSheet(appState: appState)
-        }
-        .sheet(isPresented: $appState.settingsVisible) {
-            SettingsSheet(appState: appState)
-        }
+        // Onboarding + Settings are declared as App-level Window scenes,
+        // not .sheet() from here — see MinosApp.swift for the why.
+    }
+
+    /// Open the onboarding / settings window. LSUIElement apps need an
+    /// explicit `NSApp.activate` so the new window becomes key and its
+    /// TextFields can receive focus; without it the window opens behind
+    /// the current frontmost app.
+    private func openAuxiliaryWindow(_ id: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        openWindow(id: id)
     }
 
     // ── Phase: awaiting configuration ────────────────────────────────
@@ -53,7 +60,7 @@ struct MenuBarView: View {
             Divider()
 
             actionButton("Relay 设置…") {
-                appState.onboardingVisible = true
+                openAuxiliaryWindow(WindowID.onboarding)
             }
             actionButton("退出 Minos") {
                 Task { await appState.shutdown() }
@@ -123,7 +130,7 @@ struct MenuBarView: View {
             AgentSegmentView(appState: appState)
 
             actionButton("Relay 设置…") {
-                appState.settingsVisible = true
+                openAuxiliaryWindow(WindowID.settings)
             }
             actionButton("在 Finder 中显示今日日志…") {
                 Task { await appState.revealTodayLog() }
@@ -177,7 +184,7 @@ struct MenuBarView: View {
             Divider()
 
             actionButton("Relay 设置…") {
-                appState.settingsVisible = true
+                openAuxiliaryWindow(WindowID.settings)
             }
             actionButton("在 Finder 中显示今日日志…") {
                 Task { await appState.revealTodayLog() }

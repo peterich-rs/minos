@@ -5,9 +5,14 @@ import SwiftUI
 /// halves to the Keychain via `KeychainRelayConfig` and triggers a fresh
 /// daemon bootstrap so the menubar transitions awaitingConfig → running.
 ///
+/// Presented as a real top-level `Window` scene (see `MinosApp`), NOT as
+/// a `.sheet` inside the MenuBarExtra popover — the popover's auto-
+/// dismiss on focus change made the TextFields unusable otherwise.
+///
 /// Plan 05 Phase J.1.
 struct OnboardingSheet: View {
     @Bindable var appState: AppState
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var clientId: String = ""
     @State private var clientSecret: String = ""
     @State private var saving: Bool = false
@@ -58,7 +63,7 @@ struct OnboardingSheet: View {
             try KeychainRelayConfig.write(
                 .init(clientId: clientId, clientSecret: clientSecret)
             )
-            appState.onboardingVisible = false
+            dismissWindow(id: WindowID.onboarding)
             Task { await DaemonBootstrap.bootstrap(appState) }
         } catch {
             self.error = "保存失败：\(error.localizedDescription)"
