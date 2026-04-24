@@ -25,7 +25,7 @@ pub use error::*;
 pub use events::*;
 pub use ids::*;
 pub use pairing_state::*;
-pub use relay_state::RelayLinkState;
+pub use relay_state::{PeerState, RelayLinkState};
 pub use role::*;
 
 // UniFFI 0.31 per-crate scaffolding: every crate that carries `uniffi::*`
