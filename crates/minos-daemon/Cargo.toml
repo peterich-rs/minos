@@ -49,6 +49,8 @@ minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", feat
 # test can spin up an in-process broker without leaking a production
 # dependency cycle (daemon is the relay's client, not vice versa).
 minos-relay = { path = "../minos-relay", version = "0.1.0" }
+anyhow = { workspace = true }
+axum = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
