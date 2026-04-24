@@ -1,5 +1,5 @@
 //! `AgentRuntime` — the state-machine façade glue between `CodexProcess`,
-//! `CodexClient`, and the outbound `AgentEvent` / `AgentState` streams.
+//! `CodexClient`, and the outbound `RawIngest` / `AgentState` streams.
 //!
 //! Spec §5.1 drives the surface; §6.1 / §6.3 / §6.4 drive the sequencing.
 //!
@@ -8,8 +8,9 @@
 //! - `stop()` is idempotent: `Idle | Crashed` short-circuit to `Ok(())`.
 //! - `send_user_message()` distinguishes `AgentNotRunning` (no session at
 //!   all) from `AgentSessionIdMismatch` (session id drift).
-//! - Unexpected ServerRequest methods are warn-logged and forwarded as
-//!   [`AgentEvent::Raw`] but NOT replied to.
+//! - Unexpected ServerRequest methods are warn-logged and forwarded as a
+//!   `RawIngest` carrying a synthetic method name (`server_request/<name>`)
+//!   but NOT replied to.
 //! - Broadcast capacity defaults to 256; lagged subscribers log warnings but
 //!   are not disconnected.
 //!
@@ -21,10 +22,11 @@
 //!   `state_tx` on process exit — guaranteeing we don't race between
 //!   expected and unexpected terminations.
 //! - A single `event_pump_task` owns the `CodexClient` (move-consumed from
-//!   the active session) and reads `next_inbound()` in a loop. It
-//!   translates notifications into `AgentEvent`s via `translate_notification`
-//!   and broadcasts them; it handles approvals + unknown server requests by
-//!   replying through the same client handle.
+//!   the active session) and reads `next_inbound()` in a loop. It forwards
+//!   every notification verbatim to the `ingest_tx` broadcast as
+//!   `RawIngest { agent, thread_id, payload, ts_ms }`; the backend's
+//!   ingest handler translates on write (plan §B6). It handles approvals +
+//!   unknown server requests by replying through the same client handle.
 //! - Public `send_user_message` / `stop` use a separate `CodexClient` handle
 //!   (Clone-safe) to issue outbound requests. Clone-safety is achieved via
 //!   `Arc<CodexClient>` — every operation goes through the pump task's
@@ -35,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use minos_domain::{AgentEvent, AgentName, MinosError};
+use minos_domain::{AgentName, MinosError};
 use serde_json::Value;
 use tokio::sync::{broadcast, oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -46,7 +48,30 @@ use crate::approvals::{build_auto_reject, APPROVAL_METHODS};
 use crate::codex_client::{CodexClient, Inbound};
 use crate::process::{reason_from_exit, CodexProcess};
 use crate::state::AgentState;
-use crate::translate::translate_notification;
+
+/// One raw native event emitted by an agent CLI, as captured by the
+/// `event_pump_task`. The backend's ingest handler (plan §B6) persists
+/// these verbatim under `(thread_id, seq)` and runs the per-agent
+/// translator on read / live fan-out. Seq is **not** carried here: it is
+/// a transport concern assigned by the `Ingestor` (plan §B4).
+#[derive(Debug, Clone)]
+pub struct RawIngest {
+    pub agent: AgentName,
+    pub thread_id: String,
+    /// The full JSON-RPC notification as a single `Value`, e.g.
+    /// `{ "method": "item/agentMessage/delta", "params": {...} }`. The
+    /// shape is CLI-specific; translators are the only code that interprets
+    /// it.
+    pub payload: Value,
+    pub ts_ms: i64,
+}
+
+fn current_unix_ms() -> i64 {
+    use std::time::UNIX_EPOCH;
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
 
 /// Default timeout for the one-shot `initialize` + `thread/start` handshake.
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -121,7 +146,7 @@ struct Inner {
     cfg: AgentRuntimeConfig,
     state_tx: watch::Sender<AgentState>,
     _state_rx_guard: watch::Receiver<AgentState>,
-    event_tx: broadcast::Sender<AgentEvent>,
+    ingest_tx: broadcast::Sender<RawIngest>,
     active: Mutex<Option<Active>>,
 }
 
@@ -147,13 +172,13 @@ impl AgentRuntime {
     #[must_use]
     pub fn new(cfg: AgentRuntimeConfig) -> Arc<Self> {
         let (state_tx, state_rx_guard) = watch::channel(AgentState::Idle);
-        let event_tx = broadcast::Sender::new(cfg.event_buffer.max(1));
+        let ingest_tx = broadcast::Sender::new(cfg.event_buffer.max(1));
         Arc::new(Self {
             inner: Arc::new(Inner {
                 cfg,
                 state_tx,
                 _state_rx_guard: state_rx_guard,
-                event_tx,
+                ingest_tx,
                 active: Mutex::new(None),
             }),
         })
@@ -173,13 +198,18 @@ impl AgentRuntime {
         self.inner.state_tx.subscribe()
     }
 
-    /// A fresh `broadcast::Receiver<AgentEvent>`. Channel capacity is fixed
+    /// A fresh `broadcast::Receiver<RawIngest>`. Channel capacity is fixed
     /// at `cfg.event_buffer` (default 256); slow subscribers get
     /// `RecvError::Lagged(n)` — the runtime logs a warning once per lag and
     /// does not attempt to reconnect them.
+    ///
+    /// Each `RawIngest` carries the verbatim JSON-RPC notification the CLI
+    /// sent. The backend's ingest dispatcher is the only layer that
+    /// translates; downstream subscribers that need a `UiEventMessage` stream
+    /// should go through the backend path (plan §B6).
     #[must_use]
-    pub fn event_stream(&self) -> broadcast::Receiver<AgentEvent> {
-        self.inner.event_tx.subscribe()
+    pub fn ingest_stream(&self) -> broadcast::Receiver<RawIngest> {
+        self.inner.ingest_tx.subscribe()
     }
 
     /// Start a codex session. See spec §5.1 "Start sequence" for the
@@ -321,7 +351,7 @@ impl AgentRuntime {
         // Wire up supervisor + event pump.
         let expected_exit = Arc::new(AtomicBool::new(false));
         let state_tx = self.inner.state_tx.clone();
-        let event_tx = self.inner.event_tx.clone();
+        let ingest_tx = self.inner.ingest_tx.clone();
 
         // Two termination signals feed the supervisor:
         // 1. `stop_signal_rx` — `stop()` asks for a graceful teardown.
@@ -343,7 +373,9 @@ impl AgentRuntime {
         let event_pump_client = Arc::clone(&client);
         let event_pump_task = tokio::spawn(event_pump_loop(
             event_pump_client,
-            event_tx,
+            ingest_tx,
+            agent,
+            thread_id.clone(),
             Some(ws_closed_tx),
         ));
 
@@ -697,19 +729,27 @@ fn spawn_supervisor(
 
 async fn event_pump_loop(
     client: Arc<CodexClient>,
-    event_tx: broadcast::Sender<AgentEvent>,
+    ingest_tx: broadcast::Sender<RawIngest>,
+    agent: AgentName,
+    thread_id: String,
     mut ws_closed_tx: Option<oneshot::Sender<()>>,
 ) {
     while let Some(inbound) = client.next_inbound().await {
         match inbound {
             Inbound::Notification { method, params } => {
-                let evt = translate_notification(&method, &params);
+                let payload = serde_json::json!({ "method": method, "params": params });
+                let ingest = RawIngest {
+                    agent,
+                    thread_id: thread_id.clone(),
+                    payload,
+                    ts_ms: current_unix_ms(),
+                };
                 // `send` fails only when there are no receivers — fine to ignore.
-                if let Err(e) = event_tx.send(evt) {
+                if let Err(e) = ingest_tx.send(ingest) {
                     debug!(
                         target: "minos_agent_runtime::runtime",
                         error = %e,
-                        "broadcast send failed (no subscribers)",
+                        "ingest broadcast send failed (no subscribers)",
                     );
                 }
             }
@@ -742,12 +782,19 @@ async fn event_pump_loop(
                     warn!(
                         target: "minos_agent_runtime::runtime",
                         method = %method,
-                        "unexpected server request; forwarding as Raw and not replying",
+                        "unexpected server request; forwarding as ingest and not replying",
                     );
                 }
-                let _ = event_tx.send(AgentEvent::Raw {
-                    kind: format!("server_request/{method}"),
-                    payload_json: serde_json::to_string(&params).unwrap_or_default(),
+                // Forward as a synthetic notification so ingest subscribers see
+                // the server request too. The backend's translator will fall
+                // through to the Raw variant for unknown method names.
+                let synthetic_method = format!("server_request/{method}");
+                let payload = serde_json::json!({ "method": synthetic_method, "params": params });
+                let _ = ingest_tx.send(RawIngest {
+                    agent,
+                    thread_id: thread_id.clone(),
+                    payload,
+                    ts_ms: current_unix_ms(),
                 });
             }
             Inbound::Closed => break,

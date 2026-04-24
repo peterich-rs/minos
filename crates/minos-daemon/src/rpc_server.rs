@@ -9,10 +9,7 @@ use std::time::Instant;
 
 use chrono::Utc;
 use jsonrpsee::core::async_trait;
-use jsonrpsee::core::server::SubscriptionMessage;
-use jsonrpsee::core::SubscriptionResult;
 use jsonrpsee::types::ErrorObjectOwned;
-use jsonrpsee::PendingSubscriptionSink;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::{ConnectionState, MinosError};
 use minos_pairing::{ActiveToken, Pairing, PairingStore, TrustedDevice};
@@ -20,7 +17,7 @@ use minos_protocol::{
     HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
     SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 use crate::agent::AgentGlue;
 
@@ -122,28 +119,6 @@ impl MinosRpcServer for RpcServerImpl {
 
     async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()> {
         self.agent.stop_agent().await.map_err(rpc_err)
-    }
-
-    async fn subscribe_events(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        let mut rx = self.agent.event_stream();
-        let sink = pending.accept().await?;
-
-        loop {
-            match rx.recv().await {
-                Ok(evt) => {
-                    let message = SubscriptionMessage::from_json(&evt)?;
-                    if sink.send(message).await.is_err() {
-                        break;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped = n, "subscribe_events subscriber lagged");
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-
-        Ok(())
     }
 }
 

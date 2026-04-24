@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig};
-use minos_domain::{AgentEvent, AgentName};
+use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, RawIngest};
+use minos_domain::AgentName;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
 use tokio::sync::broadcast::error::RecvError;
@@ -210,7 +210,7 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
         .await
         .context("codex smoke: start_agent failed")?;
     let session_id = outcome.session_id;
-    let watcher = tokio::spawn(wait_for_codex_ok_token(runtime.event_stream()));
+    let watcher = tokio::spawn(wait_for_codex_ok_token(runtime.ingest_stream()));
 
     let result = async {
         runtime
@@ -240,22 +240,28 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
 }
 
 async fn wait_for_codex_ok_token(
-    mut events: tokio::sync::broadcast::Receiver<AgentEvent>,
+    mut events: tokio::sync::broadcast::Receiver<RawIngest>,
 ) -> Result<()> {
     tokio::time::timeout(Duration::from_mins(1), async move {
         loop {
             match events.recv().await {
-                Ok(AgentEvent::TokenChunk { text }) => {
-                    if text.to_ascii_lowercase().contains("ok") {
-                        return Ok(());
+                Ok(RawIngest { payload, .. }) => {
+                    let method = payload.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                    if method == "item/agentMessage/delta" {
+                        let delta = payload
+                            .get("params")
+                            .and_then(|p| p.get("delta"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if delta.to_ascii_lowercase().contains("ok") {
+                            return Ok(());
+                        }
+                    } else if method == "thread/archived" {
+                        bail!(
+                            "codex smoke: thread archived before emitting an `ok` agent-message delta"
+                        );
                     }
                 }
-                Ok(AgentEvent::Done { exit_code }) => {
-                    bail!(
-                        "codex smoke: session finished before emitting an `ok` token (exit_code={exit_code})"
-                    );
-                }
-                Ok(_) => {}
                 Err(RecvError::Lagged(skipped)) => {
                     eprintln!(
                         "    codex smoke: event subscriber lagged by {skipped} messages; continuing"
@@ -268,7 +274,7 @@ async fn wait_for_codex_ok_token(
         }
     })
     .await
-    .context("codex smoke: timed out waiting up to 60s for a TokenChunk containing `ok`")?
+    .context("codex smoke: timed out waiting up to 60s for an `ok` agent-message delta")?
 }
 
 /// Regenerate the Dart/Rust bridge and fail on any drift — tracked diffs OR

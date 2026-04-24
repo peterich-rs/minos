@@ -7,7 +7,7 @@ use std::time::Duration;
 use minos_agent_runtime::test_support::{FakeCodexServer, Step};
 use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig};
 use minos_daemon::{AgentGlue, AgentState, DaemonConfig, DaemonHandle};
-use minos_domain::{AgentEvent, AgentName};
+use minos_domain::AgentName;
 use minos_protocol::{MinosRpcClient, SendUserMessageRequest, StartAgentRequest};
 use serde_json::json;
 
@@ -54,6 +54,11 @@ async fn start_send_stream_stop_against_fake_codex_server() {
     agent_cfg.test_ws_url = Some(format!("ws://127.0.0.1:{port}").parse().unwrap());
     let agent = Arc::new(AgentGlue::new_with_runtime(AgentRuntime::new(agent_cfg)));
 
+    // Observe the agent's raw ingest stream directly. The subscribe_events
+    // JSON-RPC surface was removed in plan §B3 — events now flow to the
+    // backend via the `Ingestor` (plan §B4), not through jsonrpsee.
+    let mut ingest_rx = agent.ingest_stream();
+
     let handle = DaemonHandle::start_with_agent_glue(
         DaemonConfig {
             mac_name: "agent-e2e".into(),
@@ -68,7 +73,6 @@ async fn start_send_stream_stop_against_fake_codex_server() {
         .build(&format!("ws://{}", handle.addr()))
         .await
         .unwrap();
-    let mut subscription = MinosRpcClient::subscribe_events(&client).await.unwrap();
 
     let start = MinosRpcClient::start_agent(
         &client,
@@ -107,15 +111,14 @@ async fn start_send_stream_stop_against_fake_codex_server() {
     .await
     .unwrap();
 
-    let event = tokio::time::timeout(Duration::from_secs(2), subscription.next())
+    let ingest = tokio::time::timeout(Duration::from_secs(2), ingest_rx.recv())
         .await
-        .expect("expected an agent event within 2s")
-        .expect("subscription stream closed")
-        .expect("subscription yielded an error");
-    match event {
-        AgentEvent::TokenChunk { text } => assert_eq!(text, "Hello from fake codex"),
-        other => panic!("expected TokenChunk, got {other:?}"),
-    }
+        .expect("expected an ingest frame within 2s")
+        .expect("ingest broadcast receive error");
+    assert_eq!(ingest.agent, AgentName::Codex);
+    assert_eq!(ingest.thread_id, "thr-daemon");
+    assert_eq!(ingest.payload["method"], "item/agentMessage/delta");
+    assert_eq!(ingest.payload["params"]["delta"], "Hello from fake codex");
 
     MinosRpcClient::stop_agent(&client).await.unwrap();
 
@@ -131,7 +134,7 @@ async fn start_send_stream_stop_against_fake_codex_server() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    drop(subscription);
+    drop(ingest_rx);
     drop(client);
     handle.stop().await.unwrap();
     fake.stop().await;
