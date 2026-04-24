@@ -56,6 +56,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     error::RelayError,
+    ingest::translate::ThreadTranslators,
     pairing::PairingService,
     session::{ServerFrame, SessionHandle, SessionRegistry},
 };
@@ -96,6 +97,7 @@ const CLOSE_CODE_BAD_REQUEST: u16 = 4400;
 /// that callers would plausibly surface; normal socket-close paths are
 /// `Ok(())`. Step 10 wires a [`From<RelayError>`] into `MinosError` at the
 /// axum handler layer.
+#[allow(clippy::too_many_arguments)] // Pipes state through; each arg is used.
 pub async fn run_session(
     mut ws: WebSocket,
     session: SessionHandle,
@@ -104,6 +106,7 @@ pub async fn run_session(
     pairing: Arc<PairingService>,
     store: SqlitePool,
     token_ttl: Duration,
+    translators: Arc<ThreadTranslators>,
 ) -> Result<(), RelayError> {
     let result = run_session_inner(
         &mut ws,
@@ -113,6 +116,7 @@ pub async fn run_session(
         &pairing,
         &store,
         token_ttl,
+        &translators,
     )
     .await;
 
@@ -134,6 +138,7 @@ pub async fn run_session(
 /// Inner loop kept separate so `run_session` can guarantee cleanup on
 /// every exit arm (including `?` short-circuits).
 #[allow(clippy::too_many_lines)] // Central select! loop; splitting obscures the control flow.
+#[allow(clippy::too_many_arguments)]
 async fn run_session_inner(
     ws: &mut WebSocket,
     session: &SessionHandle,
@@ -142,6 +147,7 @@ async fn run_session_inner(
     pairing: &PairingService,
     store: &SqlitePool,
     token_ttl: Duration,
+    translators: &ThreadTranslators,
 ) -> Result<(), RelayError> {
     let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
     let mut revocation_rx = session.subscribe_revocation();
@@ -193,7 +199,8 @@ async fn run_session_inner(
                         match serde_json::from_str::<Envelope>(&text) {
                             Ok(env) => {
                                 if !dispatch_envelope(
-                                    ws, session, registry, pairing, store, token_ttl, env,
+                                    ws, session, registry, pairing, store, token_ttl,
+                                    translators, env,
                                 )
                                 .await
                                 {
@@ -320,6 +327,7 @@ async fn send_envelope(ws: &mut WebSocket, env: &Envelope) -> bool {
 }
 
 /// Dispatch a parsed envelope. Returns `false` to signal "break the loop".
+#[allow(clippy::too_many_arguments)] // Pipes state through; each arg is used.
 async fn dispatch_envelope(
     ws: &mut WebSocket,
     session: &SessionHandle,
@@ -327,6 +335,7 @@ async fn dispatch_envelope(
     pairing: &PairingService,
     store: &SqlitePool,
     token_ttl: Duration,
+    translators: &ThreadTranslators,
     env: Envelope,
 ) -> bool {
     match env {
@@ -379,19 +388,57 @@ async fn dispatch_envelope(
             close_with(ws, CLOSE_CODE_BAD_REQUEST, "client_sent_server_frame").await;
             false
         }
-        // `Ingest` is reserved for the host → backend direction and will
-        // be wired up in C4/C5. Until then, treat it the same way as any
-        // other unexpected client frame: close 4400 and keep the
-        // invariants clean. This keeps the match exhaustive without
-        // accidentally committing a half-baked ingest path here.
-        Envelope::Ingest { .. } => {
-            tracing::warn!(
-                target: "minos_backend::envelope",
-                "ingest envelope received before ingest pipeline exists; closing 4400"
-            );
-            send_version_unsupported(ws, 0).await;
-            close_with(ws, CLOSE_CODE_BAD_REQUEST, "ingest_not_yet_supported").await;
-            false
+        // Host → backend raw event stream. Only agent-host role is
+        // permitted; anyone else is a protocol violation and the socket
+        // closes 4400. The dispatch itself is crash-safe: translator errors
+        // surface as synthetic UI-event frames, DB errors surface as
+        // RelayError and drop the event (with a warn log) but keep the
+        // session alive.
+        Envelope::Ingest {
+            version,
+            agent,
+            thread_id,
+            seq,
+            payload,
+            ts_ms,
+        } => {
+            if version != 1 {
+                send_version_unsupported(ws, 0).await;
+                close_with(ws, CLOSE_CODE_BAD_REQUEST, "version_unsupported").await;
+                return false;
+            }
+            if session.role != minos_domain::DeviceRole::AgentHost {
+                tracing::warn!(
+                    target: "minos_backend::envelope",
+                    role = ?session.role,
+                    "ingest from non-agent-host role; closing 4400"
+                );
+                send_version_unsupported(ws, 0).await;
+                close_with(ws, CLOSE_CODE_BAD_REQUEST, "ingest_forbidden_role").await;
+                return false;
+            }
+            if let Err(e) = crate::ingest::dispatch(
+                store,
+                registry,
+                translators,
+                agent,
+                &thread_id,
+                seq,
+                &payload,
+                ts_ms,
+                session.device_id,
+            )
+            .await
+            {
+                tracing::warn!(
+                    target: "minos_backend::envelope",
+                    error = ?e,
+                    thread_id = %thread_id,
+                    seq,
+                    "ingest dispatch failed; keeping session open"
+                );
+            }
+            true
         }
     }
 }

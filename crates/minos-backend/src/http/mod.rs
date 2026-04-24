@@ -34,15 +34,17 @@ use std::{sync::Arc, time::Duration};
 use axum::Router;
 use sqlx::SqlitePool;
 
-use crate::{pairing::PairingService, session::SessionRegistry};
+use crate::{
+    ingest::translate::ThreadTranslators, pairing::PairingService, session::SessionRegistry,
+};
 
 pub mod health;
 pub mod ws_devices;
 
 /// Shared state for every HTTP handler.
 ///
-/// Cheap to clone: the two service types are `Arc`-wrapped, and
-/// [`SqlitePool`] is itself an `Arc` internally.
+/// Cheap to clone: the service types are `Arc`-wrapped, and [`SqlitePool`]
+/// is itself an `Arc` internally.
 #[derive(Clone)]
 pub struct RelayState {
     /// In-memory map of live WS sessions.
@@ -53,6 +55,8 @@ pub struct RelayState {
     pub store: SqlitePool,
     /// Configured pairing-token TTL for live `request_pairing_token` RPCs.
     pub token_ttl: Duration,
+    /// Per-thread translator-state cache for the live ingest path.
+    pub translators: Arc<ThreadTranslators>,
     /// Crate version string; exposed via `/health`.
     ///
     /// Stored here rather than read from `env!("CARGO_PKG_VERSION")` at the
@@ -78,6 +82,7 @@ impl RelayState {
             pairing,
             store,
             token_ttl,
+            translators: ThreadTranslators::new(),
             version: env!("CARGO_PKG_VERSION"),
         }
     }

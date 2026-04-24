@@ -122,6 +122,7 @@ async fn spawn_relay_with_token_ttl(token_ttl: Duration) -> anyhow::Result<Relay
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
         token_ttl,
+        translators: minos_backend::ingest::translate::ThreadTranslators::new(),
         version: "e2e-test",
     };
     let app = router(state);

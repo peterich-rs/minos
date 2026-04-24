@@ -22,6 +22,7 @@ pub mod config;
 pub mod envelope;
 pub mod error;
 pub mod http;
+pub mod ingest;
 pub mod pairing;
 pub mod session;
 pub mod store;

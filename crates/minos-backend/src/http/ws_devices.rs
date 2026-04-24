@@ -168,6 +168,7 @@ pub async fn upgrade(
     let pairing = Arc::clone(&state.pairing);
     let store = state.store.clone();
     let token_ttl = state.token_ttl;
+    let translators = Arc::clone(&state.translators);
     Ok(ws.on_upgrade(move |mut socket| async move {
         match revalidate_live_session_auth(
             &store,
@@ -211,7 +212,14 @@ pub async fn upgrade(
         activate_live_session(registry.as_ref(), &handle).await;
 
         if let Err(e) = run_session(
-            socket, handle, outbox_rx, registry, pairing, store, token_ttl,
+            socket,
+            handle,
+            outbox_rx,
+            registry,
+            pairing,
+            store,
+            token_ttl,
+            translators,
         )
         .await
         {

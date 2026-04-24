@@ -33,6 +33,7 @@ async fn spawn_relay() -> (String, tokio::task::JoinHandle<()>, sqlx::SqlitePool
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
         token_ttl: Duration::from_mins(5),
+        translators: minos_backend::ingest::translate::ThreadTranslators::new(),
         version: "test",
     };
     let app = router(state);
