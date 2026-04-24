@@ -146,11 +146,10 @@ impl RelayClient {
             link_tx,
             peer_tx,
             out_rx,
-            shutdown_rx,
             pending: pending.clone(),
         };
 
-        let task = tokio::spawn(run_dispatch(dispatch_ctx));
+        let task = tokio::spawn(run_dispatch(dispatch_ctx, shutdown_rx));
 
         let inner = Arc::new(Inner {
             next_id: AtomicU64::new(1),
@@ -275,6 +274,9 @@ impl RelayClient {
 
 /// Shared state plumbed into the dispatcher. Built once at spawn time; the
 /// dispatcher holds it until shutdown.
+///
+/// `shutdown_rx` lives as a sibling variable in `run_dispatch` instead of a
+/// field so `tokio::select!` can borrow it independently of `&mut ctx`.
 struct DispatchCtx {
     config: RelayConfig,
     self_device_id: DeviceId,
@@ -284,14 +286,305 @@ struct DispatchCtx {
     link_tx: watch::Sender<RelayLinkState>,
     peer_tx: watch::Sender<PeerState>,
     out_rx: mpsc::Receiver<Envelope>,
-    shutdown_rx: oneshot::Receiver<()>,
     pending: Arc<Mutex<Pending>>,
 }
 
+/// Outcome of a single connect-attempt cycle. Drives the outer
+/// connect → dispatch → reconnect loop.
+enum CycleOutcome {
+    /// Either a WS error, a clean close from the relay, or a server-shutdown
+    /// event. Back off and retry.
+    Reconnect,
+    /// Handshake rejected with HTTP 401 (CF Access or the relay's own
+    /// pre-upgrade auth check). Fatal — exit the task so the caller can
+    /// rotate creds and spawn a new client.
+    AuthFailed,
+    /// External `stop()` signal. Exit cleanly without notifying further.
+    Shutdown,
+}
+
 /// Background task body. Runs the connect → dispatch → reconnect loop
-/// until signaled to exit via `shutdown_rx`.
-async fn run_dispatch(_ctx: DispatchCtx) {
-    // Phase E scaffold: real loop lands in the next commit.
+/// until signaled to exit via `shutdown_rx` or a fatal auth failure.
+///
+/// Shutdown is polled inside each inner awaitable — `run_once` (which
+/// races the connect handshake and dispatch loop against shutdown) and
+/// the backoff sleep — so the outer loop never holds a second borrow of
+/// `shutdown_rx`.
+async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<()>) {
+    let mut attempt: u32 = 0;
+
+    loop {
+        // Announce the intent to connect (or reconnect). The caller's UI
+        // reads this to show a spinner and surface the retry count.
+        let _ = ctx.link_tx.send(RelayLinkState::Connecting { attempt });
+
+        let outcome = run_once(&mut ctx, &mut shutdown_rx).await;
+
+        match outcome {
+            CycleOutcome::Shutdown | CycleOutcome::AuthFailed => {
+                let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
+                return;
+            }
+            CycleOutcome::Reconnect => {
+                attempt = attempt.saturating_add(1);
+                let delay = delay_for_attempt(attempt);
+                tracing::info!(
+                    target: "minos_daemon::relay_client",
+                    attempt,
+                    delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                    "relay link dropped, backing off before reconnect"
+                );
+                let _ = ctx.link_tx.send(RelayLinkState::Connecting { attempt });
+
+                tokio::select! {
+                    biased;
+                    _ = &mut shutdown_rx => {
+                        let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
+                        return;
+                    }
+                    () = tokio::time::sleep(delay) => {}
+                }
+            }
+        }
+    }
+}
+
+/// One connect + dispatch cycle. Returns `Reconnect` on any transport-level
+/// failure, `AuthFailed` on a pre-upgrade HTTP 401, and `Shutdown` when the
+/// outer `shutdown_rx` fires mid-cycle.
+async fn run_once(
+    ctx: &mut DispatchCtx,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+) -> CycleOutcome {
+    let headers = build_headers(
+        &ctx.config,
+        ctx.self_device_id,
+        ctx.secret.as_ref(),
+        &ctx.mac_name,
+    );
+    let request = match build_request(&ctx.backend_url, &headers) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(
+                target: "minos_daemon::relay_client",
+                error = %e,
+                "invalid backend URL — treating as auth-failure-equivalent"
+            );
+            return CycleOutcome::AuthFailed;
+        }
+    };
+
+    let ws = tokio::select! {
+        biased;
+        _ = &mut *shutdown_rx => return CycleOutcome::Shutdown,
+        res = tokio_tungstenite::connect_async(request) => match res {
+            Ok((stream, _resp)) => stream,
+            Err(WsError::Http(resp)) if resp.status().as_u16() == 401 => {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    "relay handshake returned HTTP 401 — auth failure, exiting task"
+                );
+                return CycleOutcome::AuthFailed;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    error = %e,
+                    "relay handshake failed; will reconnect with backoff"
+                );
+                return CycleOutcome::Reconnect;
+            }
+        }
+    };
+
+    let _ = ctx.link_tx.send(RelayLinkState::Connected);
+    tracing::info!(target: "minos_daemon::relay_client", "relay link up");
+
+    dispatch_loop(ws, ctx, shutdown_rx).await
+}
+
+/// Inbound + outbound dispatch pump over an upgraded WebSocket. Returns
+/// when the stream ends, errors, or `shutdown_rx` fires.
+async fn dispatch_loop(
+    ws: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    ctx: &mut DispatchCtx,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+) -> CycleOutcome {
+    let (mut sink, mut stream) = ws.split();
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut *shutdown_rx => {
+                let _ = sink.send(Message::Close(None)).await;
+                return CycleOutcome::Shutdown;
+            }
+            out = ctx.out_rx.recv() => {
+                let Some(envelope) = out else {
+                    // `out_tx` dropped — client handle gone. Exit quietly.
+                    return CycleOutcome::Shutdown;
+                };
+                let text = match serde_json::to_string(&envelope) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!(
+                            target: "minos_daemon::relay_client",
+                            error = %e,
+                            "failed to serialize outbound envelope"
+                        );
+                        continue;
+                    }
+                };
+                if let Err(e) = sink.send(Message::Text(text.into())).await {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        error = %e,
+                        "failed to send outbound frame; reconnecting"
+                    );
+                    return CycleOutcome::Reconnect;
+                }
+            }
+            frame = stream.next() => {
+                match frame {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Err(e) = handle_inbound_text(&text, ctx).await {
+                            tracing::warn!(
+                                target: "minos_daemon::relay_client",
+                                error = %e,
+                                "failed to handle inbound frame"
+                            );
+                        }
+                    }
+                    Some(Ok(Message::Ping(p))) => {
+                        let _ = sink.send(Message::Pong(p)).await;
+                    }
+                    Some(Ok(Message::Pong(_) | Message::Binary(_) | Message::Frame(_))) => {}
+                    Some(Ok(Message::Close(frame))) => {
+                        tracing::info!(
+                            target: "minos_daemon::relay_client",
+                            close = ?frame,
+                            "relay sent Close; reconnecting"
+                        );
+                        return CycleOutcome::Reconnect;
+                    }
+                    Some(Err(e)) => {
+                        tracing::warn!(
+                            target: "minos_daemon::relay_client",
+                            error = %e,
+                            "ws read error; reconnecting"
+                        );
+                        return CycleOutcome::Reconnect;
+                    }
+                    None => {
+                        tracing::info!(
+                            target: "minos_daemon::relay_client",
+                            "ws stream ended; reconnecting"
+                        );
+                        return CycleOutcome::Reconnect;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Parse an inbound text frame and route it. Non-fatal parse failures are
+/// logged and swallowed — the dispatch loop stays alive.
+async fn handle_inbound_text(text: &str, ctx: &DispatchCtx) -> Result<(), serde_json::Error> {
+    let envelope: Envelope = serde_json::from_str(text)?;
+    route_envelope(envelope, ctx).await;
+    Ok(())
+}
+
+/// Route a parsed envelope to the pending map (responses), watch channels
+/// (events), or the debug log (unexpected / not-yet-wired kinds).
+async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
+    match envelope {
+        Envelope::LocalRpcResponse { id, outcome, .. } => {
+            let entry = { ctx.pending.lock().await.0.remove(&id) };
+            if let Some(tx) = entry {
+                let _ = tx.send(outcome);
+            } else {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    id,
+                    "local rpc response for unknown id — dropping"
+                );
+            }
+        }
+        Envelope::Event { event, .. } => route_event(event, ctx),
+        Envelope::Forwarded { .. } => {
+            // Phase F wires this into the jsonrpsee dispatch. For now we
+            // just acknowledge at trace level so logs aren't noisy in
+            // production, but the e2e tests can still verify flow with
+            // RUST_LOG tuned up.
+            tracing::trace!(
+                target: "minos_daemon::relay_client",
+                "received Forwarded — dropping (Phase F)"
+            );
+        }
+        Envelope::LocalRpc { .. } | Envelope::Forward { .. } => {
+            // These are client → relay frames; the relay never emits them
+            // to us. A misbehaving peer is the only way we'd see one.
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                "unexpected envelope kind from relay — dropping"
+            );
+        }
+    }
+}
+
+/// Apply a server-initiated `EventKind` to the peer-state watch channel.
+fn route_event(event: EventKind, ctx: &DispatchCtx) {
+    match event {
+        EventKind::Paired {
+            peer_device_id,
+            peer_name,
+            your_device_secret: _,
+        } => {
+            let _ = ctx.peer_tx.send(PeerState::Paired {
+                peer_id: peer_device_id,
+                peer_name,
+                online: true,
+            });
+        }
+        EventKind::PeerOnline { peer_device_id } => {
+            ctx.peer_tx.send_if_modified(|s| match s {
+                PeerState::Paired {
+                    peer_id, online, ..
+                } if *peer_id == peer_device_id && !*online => {
+                    *online = true;
+                    true
+                }
+                _ => false,
+            });
+        }
+        EventKind::PeerOffline { peer_device_id } => {
+            ctx.peer_tx.send_if_modified(|s| match s {
+                PeerState::Paired {
+                    peer_id, online, ..
+                } if *peer_id == peer_device_id && *online => {
+                    *online = false;
+                    true
+                }
+                _ => false,
+            });
+        }
+        EventKind::Unpaired => {
+            let _ = ctx.peer_tx.send(PeerState::Unpaired);
+        }
+        EventKind::ServerShutdown => {
+            // The dispatch loop will observe the socket closing next and
+            // fall through to the reconnect path; nothing to do here
+            // beyond noting it for operators.
+            tracing::info!(
+                target: "minos_daemon::relay_client",
+                "relay signalled server_shutdown; awaiting socket close"
+            );
+        }
+    }
 }
 
 /// Map a relay `RpcError` code onto the closest typed `MinosError` variant.
