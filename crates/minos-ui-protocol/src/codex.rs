@@ -126,6 +126,10 @@ pub fn translate(
                 text,
             }])
         }
+        // Note: spec §12.1 (2026-04 codex app-server) canonicalises reasoning
+        // deltas on `item/reasoning/delta`. Older codex releases exposed
+        // `item/reasoning/textDelta` and `item/reasoning/summaryTextDelta`
+        // as separate notifications; those names are no longer emitted.
         "item/reasoning/delta" => {
             let text = params
                 .get("delta")
@@ -140,6 +144,11 @@ pub fn translate(
                 text,
             }])
         }
+        // `*/completed` markers are signal-absorbed per spec §12.1: the
+        // `MessageCompleted` UI event awaits `turn/completed`, not the
+        // per-item completion. Returning `vec![]` keeps these off the mobile
+        // timeline without falling through to the Raw escape hatch.
+        "item/agentMessage/completed" | "item/reasoning/completed" => Ok(vec![]),
         "item/toolCall/started" => {
             let cli_id = params
                 .get("toolCallId")

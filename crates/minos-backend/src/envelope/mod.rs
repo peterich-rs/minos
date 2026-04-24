@@ -403,7 +403,7 @@ async fn dispatch_envelope(
             ts_ms,
         } => {
             if version != 1 {
-                send_version_unsupported(ws, 0).await;
+                // Ingest is not an RPC, so no LocalRpcResponse frame here.
                 close_with(ws, CLOSE_CODE_BAD_REQUEST, "version_unsupported").await;
                 return false;
             }
@@ -413,7 +413,10 @@ async fn dispatch_envelope(
                     role = ?session.role,
                     "ingest from non-agent-host role; closing 4400"
                 );
-                send_version_unsupported(ws, 0).await;
+                // Do NOT emit a LocalRpcResponse here: Ingest is not an RPC,
+                // and a spurious `envelope_version_unsupported` frame would
+                // both mislabel the failure and leak role-gate telemetry to
+                // the caller. The close frame alone is the signal.
                 close_with(ws, CLOSE_CODE_BAD_REQUEST, "ingest_forbidden_role").await;
                 return false;
             }
