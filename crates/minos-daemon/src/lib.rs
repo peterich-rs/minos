@@ -4,6 +4,8 @@ pub mod agent;
 pub mod config;
 pub mod file_store;
 pub mod handle;
+#[cfg(target_os = "macos")]
+pub mod keychain_store;
 pub mod local_state;
 pub mod logging;
 pub mod paths;
@@ -16,6 +18,8 @@ pub use agent::AgentGlue;
 pub use config::{RelayConfig, BACKEND_URL};
 pub use file_store::*;
 pub use handle::*;
+#[cfg(target_os = "macos")]
+pub use keychain_store::KeychainTrustedDeviceStore;
 pub use local_state::LocalState;
 pub use minos_agent_runtime::AgentState;
 pub use relay_pairing::{PeerRecord, RelayQrPayload};
