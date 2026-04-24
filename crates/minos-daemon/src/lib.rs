@@ -17,8 +17,8 @@ pub use config::{RelayConfig, BACKEND_URL};
 pub use file_store::*;
 pub use handle::*;
 pub use local_state::LocalState;
-pub use relay_pairing::{PeerRecord, RelayQrPayload};
 pub use minos_agent_runtime::AgentState;
+pub use relay_pairing::{PeerRecord, RelayQrPayload};
 pub use subscription::{AgentStateObserver, ConnectionStateObserver, Subscription};
 
 /// Module-level wrapper so callers don't need `tailscale::discover_ip` —

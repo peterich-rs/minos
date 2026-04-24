@@ -16,7 +16,10 @@ pub struct RelayConfig {
 
 impl RelayConfig {
     pub fn new(cf_client_id: String, cf_client_secret: String) -> Self {
-        Self { cf_client_id, cf_client_secret }
+        Self {
+            cf_client_id,
+            cf_client_secret,
+        }
     }
 }
 
