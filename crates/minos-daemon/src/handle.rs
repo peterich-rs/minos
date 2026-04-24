@@ -1,5 +1,5 @@
 //! Public façade exposed to Swift via UniFFI, rewired for the relay-client
-//! migration (plan 05 Phase F.1).
+//! migration (plan 05 Phase F).
 //!
 //! `DaemonInner` owns the outbound [`RelayClient`] plus its two watch
 //! receivers (relay link + peer) and the non-secret local state (self
@@ -7,12 +7,6 @@
 //! Sync FFI methods dispatch onto `rt_handle` so Swift's non-runtime
 //! threads can still enter the Tokio reactor — same trick the old
 //! WS-server façade used.
-//!
-//! The old `start_autobind` / `start_on_port_range` / `start(DaemonConfig)`
-//! entry points remain as `unimplemented!()` stubs on this crate for one
-//! commit; Phase F.2 deletes them outright along with `tailscale.rs`,
-//! `file_store.rs`, and `WsServer`. Until then, the `test-support`
-//! integration tests that drive the old path are `#[ignore]`d.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,15 +21,6 @@ use crate::local_state::LocalState;
 use crate::paths;
 use crate::relay_client::RelayClient;
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
-
-/// Explicit-bind config retained for one more commit so the removed entry
-/// points (see `unimplemented!` bodies below) still typecheck against the
-/// `test-support` integration tests. F.2 deletes this alongside the stubs.
-#[allow(dead_code)]
-pub struct DaemonConfig {
-    pub mac_name: String,
-    pub bind_addr: std::net::SocketAddr,
-}
 
 struct DaemonInner {
     relay: Arc<RelayClient>,
@@ -254,58 +239,5 @@ impl DaemonHandle {
     #[must_use]
     pub fn current_agent_state(&self) -> crate::AgentState {
         self.inner.agent.current_state()
-    }
-}
-
-// ── Legacy stubs ────────────────────────────────────────────────────
-//
-// The old entry points live on as `unimplemented!()` so (a) the crate
-// still compiles, (b) the `test-support` integration tests' `use`
-// statements stay resolvable while they wear `#[ignore]`. Phase F.2
-// deletes them along with `tailscale.rs`, `file_store.rs`, and
-// `WsServer`.
-impl DaemonHandle {
-    /// Removed in Phase F.2. Use [`DaemonHandle::start`] (the new
-    /// relay-client entry point) instead.
-    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
-    pub async fn start_autobind(_mac_name: String) -> Result<Arc<Self>, MinosError> {
-        unimplemented!(
-            "replaced by DaemonHandle::start(RelayConfig, ...) in Phase F.1; old entry point removed in F.2"
-        )
-    }
-
-    /// Removed in Phase F.2. See [`DaemonHandle::start_autobind`].
-    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
-    pub async fn start_on_port_range(
-        _host: String,
-        _mac_name: String,
-        _ports: std::ops::RangeInclusive<u16>,
-    ) -> Result<Arc<Self>, MinosError> {
-        unimplemented!(
-            "replaced by DaemonHandle::start(RelayConfig, ...) in Phase F.1; old entry point removed in F.2"
-        )
-    }
-
-    /// Removed in Phase F.2. The new [`DaemonHandle::start`] takes a
-    /// `RelayConfig` rather than a bind address.
-    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
-    pub async fn start_with_config(_cfg: DaemonConfig) -> Result<Arc<Self>, MinosError> {
-        unimplemented!(
-            "replaced by DaemonHandle::start(RelayConfig, ...) in Phase F.1; old entry point removed in F.2"
-        )
-    }
-
-    /// Removed in Phase F.2. Test-support shim for the old
-    /// explicit-bind entry point; rewritten tests build their own
-    /// relay-backed fixture.
-    #[cfg(feature = "test-support")]
-    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
-    pub async fn start_with_agent_glue(
-        _cfg: DaemonConfig,
-        _agent: Arc<AgentGlue>,
-    ) -> Result<Arc<Self>, MinosError> {
-        unimplemented!(
-            "replaced by DaemonHandle::start(RelayConfig, ...) in Phase F.1; old entry point removed in F.2"
-        )
     }
 }

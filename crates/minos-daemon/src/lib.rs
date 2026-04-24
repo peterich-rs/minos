@@ -2,7 +2,6 @@
 
 pub mod agent;
 pub mod config;
-pub mod file_store;
 pub mod handle;
 #[cfg(target_os = "macos")]
 pub mod keychain_store;
@@ -13,11 +12,9 @@ pub mod relay_client;
 pub mod relay_pairing;
 pub mod rpc_server;
 pub mod subscription;
-pub mod tailscale;
 
 pub use agent::AgentGlue;
 pub use config::{RelayConfig, BACKEND_URL};
-pub use file_store::*;
 pub use handle::*;
 #[cfg(target_os = "macos")]
 pub use keychain_store::KeychainTrustedDeviceStore;
@@ -29,11 +26,6 @@ pub use subscription::{
     AgentStateObserver, ConnectionStateObserver, PeerStateObserver, RelayLinkStateObserver,
     Subscription,
 };
-
-/// Module-level wrapper so callers don't need `tailscale::discover_ip` —
-/// spec §5.1 #4 calls for this name.
-pub use tailscale::discover_ip as discover_tailscale_ip;
-pub use tailscale::discover_ip_with_reason as discover_tailscale_ip_with_reason;
 
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();

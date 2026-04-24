@@ -34,12 +34,6 @@ pub fn kind_message(kind: ErrorKind, lang: Lang) -> String {
     kind.user_message(lang).to_string()
 }
 
-/// Discover the machine's current Tailscale 100.x IPv4 without starting the daemon.
-#[uniffi::export(async_runtime = "tokio")]
-pub async fn discover_tailscale_ip() -> Option<String> {
-    minos_daemon::discover_tailscale_ip().await
-}
-
 pub use minos_agent_runtime::AgentState;
 pub use minos_daemon::{AgentStateObserver, ConnectionStateObserver, DaemonHandle, Subscription};
 pub use minos_domain::{
