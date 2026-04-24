@@ -197,4 +197,28 @@ mod tests {
         assert_eq!(back.as_str(), "token-xyz");
         assert_eq!(s, back);
     }
+
+    // Plan 05 Task A.3 contract tests: DeviceSecret already existed before
+    // the macOS relay-client migration plan landed (introduced by plan 04),
+    // so these duplicate intent with the tests above. Kept under the plan's
+    // chosen names so the plan's acceptance criteria are visible in tree.
+    #[test]
+    fn device_secret_round_trips_as_string() {
+        let s = DeviceSecret("hunter2-the-32-byte-base64-secret".into());
+        let j = serde_json::to_string(&s).unwrap();
+        assert_eq!(j, r#""hunter2-the-32-byte-base64-secret""#);
+        let back: DeviceSecret = serde_json::from_str(&j).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn device_secret_debug_redacts() {
+        let s = DeviceSecret("super-secret".into());
+        let d = format!("{s:?}");
+        assert!(
+            !d.contains("super-secret"),
+            "DeviceSecret Debug must not leak"
+        );
+        assert!(d.contains("DeviceSecret"));
+    }
 }
