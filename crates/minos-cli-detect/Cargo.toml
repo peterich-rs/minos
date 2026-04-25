@@ -17,5 +17,9 @@ which = { workspace = true }
 mockall = { workspace = true }
 tokio-test = { workspace = true }
 
+[[bin]]
+name = "minos-detect"
+path = "src/bin/minos-detect.rs"
+
 [lints]
 workspace = true
