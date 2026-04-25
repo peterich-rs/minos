@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
+import 'package:minos/infrastructure/cf_access_config.dart';
 import 'package:minos/infrastructure/minos_core.dart';
 import 'package:minos/infrastructure/secure_pairing_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -88,6 +91,45 @@ void main() {
     verify(() => secureStore.saveState(persisted)).called(1);
     verifyNever(() => client.forgetPeer());
     verifyNever(() => secureStore.clearAll());
+  });
+
+  test('pairWithQrJson injects build-time cf access credentials', () async {
+    const qrJson =
+        '{"v":2,"cf_access_client_id":"qr-id","cf_access_client_secret":"qr-secret"}';
+    const persisted = PersistedPairingState(
+      backendUrl: 'wss://example.com/devices',
+      deviceId: 'dev-123',
+      deviceSecret: 'sec-456',
+    );
+
+    when(
+      () => client.pairWithQrJson(qrJson: any(named: 'qrJson')),
+    ).thenAnswer((_) async {});
+    when(
+      () => client.persistedPairingState(),
+    ).thenAnswer((_) async => persisted);
+    when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
+
+    final core = MinosCore.forTesting(
+      client: client,
+      secureStore: secureStore,
+      cfAccessConfig: CfAccessConfig(
+        clientId: 'build-id',
+        clientSecret: 'build-secret',
+      ),
+    );
+
+    await core.pairWithQrJson(qrJson);
+
+    final captured =
+        verify(
+              () => client.pairWithQrJson(qrJson: captureAny(named: 'qrJson')),
+            ).captured.single
+            as String;
+    final injected = jsonDecode(captured) as Map<String, Object?>;
+    expect(injected['cf_access_client_id'], 'build-id');
+    expect(injected['cf_access_client_secret'], 'build-secret');
+    verify(() => secureStore.saveState(persisted)).called(1);
   });
 
   group('resolveClient', () {

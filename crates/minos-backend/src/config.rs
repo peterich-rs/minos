@@ -61,12 +61,12 @@ pub struct Config {
     #[arg(long)]
     pub exit_after_migrate: bool,
 
-    /// Cloudflare Access `CF-Access-Client-Id` for tunnelled traffic.
+    /// Optional Cloudflare Access `CF-Access-Client-Id` for QR distribution.
     ///
-    /// When `public_url` is a `wss://` origin fronted by `cloudflared`, the
-    /// mobile client must present this id on every connect. The backend
-    /// embeds the pair into the pairing QR payload so the host never sees
-    /// it — see spec §13.3 and ADR 0014 (Phase E).
+    /// Current clients normally receive Access credentials from build-time or
+    /// host env configuration. If these backend env vars are set, the backend
+    /// still embeds them into pairing QR payloads for backwards-compatible
+    /// deployments.
     #[arg(long, env = "MINOS_BACKEND_CF_ACCESS_CLIENT_ID")]
     pub cf_access_client_id: Option<String>,
 
@@ -86,10 +86,9 @@ pub struct Config {
     )]
     pub public_url: String,
 
-    /// Escape hatch: allow `wss://` `public_url` without CF Access tokens.
-    /// Intended for local tunnel experiments where TLS is present but CF
-    /// Access is not configured yet. Default off — production deploys must
-    /// set the CF tokens.
+    /// Legacy escape hatch retained for CLI compatibility. Access service
+    /// tokens are now client-side configuration, so `wss://` public URLs no
+    /// longer require backend-held CF token env vars.
     #[arg(long, env = "MINOS_BACKEND_ALLOW_DEV", default_value_t = false)]
     pub allow_dev: bool,
 }
@@ -110,18 +109,11 @@ impl Config {
         self.log_dir.clone().unwrap_or_else(default_log_dir)
     }
 
-    /// Validate CF Access configuration at startup.
+    /// Validate optional CF Access QR-distribution configuration at startup.
     ///
-    /// Contract (spec §13.3): when `public_url` begins with `wss://`, the
-    /// backend is running behind `cloudflared` and MUST hand the mobile
-    /// client an `(id, secret)` pair via the pairing QR. If the operator
-    /// forgot to set the env vars, refuse to boot so the mis-config
-    /// surfaces loud and early instead of silently handing out QR codes
-    /// that will fail at the tunnel edge.
-    ///
-    /// Escape hatch: `--allow-dev` / `MINOS_BACKEND_ALLOW_DEV=1` relaxes
-    /// the check for local TLS experiments. `ws://` origins always
-    /// validate — CF Access is meaningful only for TLS tunnels.
+    /// Access service tokens are consumed by clients, not the backend. The
+    /// backend may optionally carry a token pair only to embed it into QR
+    /// payloads for older clients. If one half is set, the other must be set.
     ///
     /// # Errors
     /// Returns a human-readable message suitable for surfacing from main
@@ -133,13 +125,6 @@ impl Config {
         if id_set != secret_set {
             return Err(
                 "MINOS_BACKEND_CF_ACCESS_CLIENT_ID and ..._SECRET must be set together or both left unset"
-                    .into(),
-            );
-        }
-        let both_missing = !id_set;
-        if self.public_url.starts_with("wss://") && both_missing && !self.allow_dev {
-            return Err(
-                "MINOS_BACKEND_CF_ACCESS_CLIENT_ID/SECRET are required when MINOS_BACKEND_PUBLIC_URL is wss://; set MINOS_BACKEND_ALLOW_DEV=1 to override"
                     .into(),
             );
         }
@@ -346,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_wss_without_cf_tokens_unless_allow_dev() {
+    fn validate_ok_for_wss_without_backend_held_cf_tokens() {
         let _g = env_scope();
         std::env::set_var(
             "MINOS_BACKEND_PUBLIC_URL",
@@ -354,14 +339,12 @@ mod tests {
         );
 
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
-        let err = cfg
-            .validate()
-            .expect_err("wss:// without CF tokens must fail");
-        assert!(err.contains("CF_ACCESS_CLIENT_ID"), "{err}");
+        cfg.validate()
+            .expect("clients carry CF tokens; backend does not require them");
     }
 
     #[test]
-    fn validate_allow_dev_waives_wss_check() {
+    fn validate_allow_dev_keeps_wss_without_cf_tokens_valid() {
         let _g = env_scope();
         std::env::set_var(
             "MINOS_BACKEND_PUBLIC_URL",
@@ -371,7 +354,7 @@ mod tests {
 
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         cfg.validate()
-            .expect("allow-dev must waive the CF token check");
+            .expect("allow-dev remains a no-op compatibility flag");
     }
 
     #[test]

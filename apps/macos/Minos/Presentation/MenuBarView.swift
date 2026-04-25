@@ -2,14 +2,12 @@ import AppKit
 import SwiftUI
 
 /// Menubar popover content. Walks the AppState.phase ladder
-/// (awaitingConfig → running → bootFailed) and within `.running`
-/// renders the dual-axis status + action items gated by canShowQr /
-/// canForgetPeer.
+/// (booting → running → bootFailed) and within `.running` renders the
+/// dual-axis status + action items gated by canShowQr / canForgetPeer.
 ///
 /// Plan 05 Phase J.2.
 struct MenuBarView: View {
     @Bindable var appState: AppState
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -18,8 +16,8 @@ struct MenuBarView: View {
             }
 
             switch appState.phase {
-            case .awaitingConfig:
-                awaitingConfigContent
+            case .booting:
+                bootingContent
             case .bootFailed:
                 bootErrorContent(appState.bootError)
             case .running:
@@ -28,40 +26,25 @@ struct MenuBarView: View {
         }
         .padding(14)
         .frame(width: 360)
-        // Onboarding + Settings are declared as App-level Window scenes,
-        // not .sheet() from here — see MinosApp.swift for the why.
     }
 
-    /// Open the onboarding / settings window. LSUIElement apps need an
-    /// explicit `NSApp.activate` so the new window becomes key and its
-    /// TextFields can receive focus; without it the window opens behind
-    /// the current frontmost app.
-    private func openAuxiliaryWindow(_ id: String) {
-        NSApp.activate(ignoringOtherApps: true)
-        openWindow(id: id)
-    }
+    // ── Phase: booting ────────────────────────────────────────────────
 
-    // ── Phase: awaiting configuration ────────────────────────────────
-
-    private var awaitingConfigContent: some View {
+    private var bootingContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "bolt.slash")
-                    .foregroundStyle(.red)
-                    .imageScale(.large)
-                Text("Minos · 等待配置")
+                ProgressView()
+                    .controlSize(.small)
+                Text("Minos · 正在启动")
                     .font(.headline)
             }
 
-            Text("尚未配置 Cloudflare Service Token，请先填入 Relay 设置后重试。")
+            Text("正在启动 agent host 并连接后端。Cloudflare Access 凭据仅从环境变量读取。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Divider()
 
-            actionButton("Relay 设置…") {
-                openAuxiliaryWindow(WindowID.onboarding)
-            }
             actionButton("退出 Minos") {
                 Task { await appState.shutdown() }
             }
@@ -93,6 +76,7 @@ struct MenuBarView: View {
                     peer: appState.peer,
                     hasBootError: false
                 )
+                .imageScale(.large)
                 Text("Minos")
                     .font(.headline)
             }
@@ -129,9 +113,6 @@ struct MenuBarView: View {
 
             AgentSegmentView(appState: appState)
 
-            actionButton("Relay 设置…") {
-                openAuxiliaryWindow(WindowID.settings)
-            }
             actionButton("在 Finder 中显示今日日志…") {
                 Task { await appState.revealTodayLog() }
             }
@@ -183,9 +164,6 @@ struct MenuBarView: View {
 
             Divider()
 
-            actionButton("Relay 设置…") {
-                openAuxiliaryWindow(WindowID.settings)
-            }
             actionButton("在 Finder 中显示今日日志…") {
                 Task { await appState.revealTodayLog() }
             }

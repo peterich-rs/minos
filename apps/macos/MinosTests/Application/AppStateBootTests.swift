@@ -47,7 +47,7 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertFalse(appState.isShowingQr)
         XCTAssertFalse(appState.canShowQr)
         XCTAssertFalse(appState.canForgetPeer)
-        XCTAssertEqual(appState.phase, .awaitingConfig)
+        XCTAssertEqual(appState.phase, .booting)
     }
 
     @MainActor
@@ -98,6 +98,28 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertEqual(appState.relayLink, .disconnected)
         XCTAssertEqual(appState.peer, .unpaired)
         XCTAssertFalse(appState.isShowingQr)
+    }
+
+    func testDaemonBootstrapEnvCredsAcceptsCompletePair() throws {
+        let creds = try XCTUnwrap(DaemonBootstrap.envCreds(from: [
+            "CF_ACCESS_CLIENT_ID": " client-id ",
+            "CF_ACCESS_CLIENT_SECRET": " client-secret "
+        ]))
+
+        XCTAssertEqual(creds.clientId, "client-id")
+        XCTAssertEqual(creds.clientSecret, "client-secret")
+    }
+
+    func testDaemonBootstrapEnvCredsRejectsPartialPair() {
+        XCTAssertThrowsError(try DaemonBootstrap.envCreds(from: [
+            "CF_ACCESS_CLIENT_ID": "client-id"
+        ])) { error in
+            guard case let .some(.CfAccessMisconfigured(reason)) = error as? MinosError else {
+                XCTFail("expected CfAccessMisconfigured, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("CF_ACCESS_CLIENT_SECRET"))
+        }
     }
 
     @MainActor

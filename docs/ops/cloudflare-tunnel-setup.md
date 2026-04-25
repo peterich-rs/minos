@@ -177,15 +177,15 @@ sudo systemctl status cloudflared
 sudo journalctl -u cloudflared -f
 ```
 
-### 7a. Set backend env vars on the LaunchDaemon / systemd unit
+### 7a. Set backend public URL on the LaunchDaemon / systemd unit
 
-Per ADR 0014, the backend itself owns the CF Access service-token pair and embeds it into pairing QR payloads. After step 9 mints the token, configure the backend service with:
+The backend advertises the public WebSocket URL in pairing QR payloads. Configure the backend service with:
 
 ```
 MINOS_BACKEND_PUBLIC_URL=wss://minos.fan-nn.top/devices
-MINOS_BACKEND_CF_ACCESS_CLIENT_ID=<CLIENT_ID>.access
-MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET=<CLIENT_SECRET>
 ```
+
+`MINOS_BACKEND_CF_ACCESS_CLIENT_ID` / `MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET` are optional compatibility knobs only. Current mobile and agent-host clients get the Cloudflare Access service token from build-time / host environment configuration.
 
 On macOS, drop these into the LaunchDaemon plist's `EnvironmentVariables` dictionary and reload:
 
@@ -200,12 +200,8 @@ On Linux (systemd), put them in a drop-in:
 sudo systemctl edit ai.minos.backend.service
 # [Service]
 # Environment="MINOS_BACKEND_PUBLIC_URL=wss://minos.fan-nn.top/devices"
-# Environment="MINOS_BACKEND_CF_ACCESS_CLIENT_ID=..."
-# Environment="MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET=..."
 sudo systemctl restart ai.minos.backend.service
 ```
-
-Without these, the backend startup validation rejects a `wss://` `PUBLIC_URL` with `MinosError::CfAccessMisconfigured` (set `MINOS_BACKEND_ALLOW_DEV=1` to override for local-loopback testing).
 
 ---
 
@@ -273,17 +269,31 @@ Expect `200 OK` from the backend. If you get `302` or a sign-in page, the header
 
 ---
 
-## 11. Distribute the Service Token to mobile (MVP)
+## 11. Distribute the Service Token to clients
 
-Per ADR 0014, the backend carries the CF service-token pair in its env vars (step 7a) and embeds it into every `PairingQrPayload` it issues. The iOS app reads `cf_access_client_id` / `cf_access_client_secret` from the scanned QR JSON and persists them to the app-scoped Keychain (`flutter_secure_storage` keys `minos.cf_access_client_id` / `minos.cf_access_client_secret`).
+Cloudflare Access is a shared edge gate, not Minos business authorization. Minos still authenticates devices with pairing tokens and per-device `device_secret`.
 
-Rotating the token therefore happens entirely on the backend:
+Agent hosts read the service token from their process environment:
 
-1. Mint a new Service Token in the dashboard.
-2. Paste the new pair into the backend env vars (step 7a) and restart the backend.
-3. Re-issue the pairing QR from the agent-host UI; previously-paired phones must scan the new QR to pick up the rotated credential.
+```bash
+CF_ACCESS_CLIENT_ID=<CLIENT_ID>.access \
+CF_ACCESS_CLIENT_SECRET=<CLIENT_SECRET> \
+minos-daemon start
+```
 
-There is no on-device manual paste step in v2 of the QR. The agent-host never holds the CF token in code or in its own keychain.
+The macOS GUI follows the same rule. If launching from `launchd`, set those keys in the app/service environment rather than asking the user to paste them into Keychain.
+
+Mobile reads the token from Flutter compile-time environment values:
+
+```bash
+flutter build ios \
+  --dart-define=CF_ACCESS_CLIENT_ID="$CF_ACCESS_CLIENT_ID" \
+  --dart-define=CF_ACCESS_CLIENT_SECRET="$CF_ACCESS_CLIENT_SECRET"
+```
+
+In CI, source those values from GitHub Secrets. The mobile app injects them into outbound REST/WSS requests at runtime and does not persist them to Keychain.
+
+Rotating the token means minting a new Service Token in Cloudflare, updating build/host env configuration, shipping/restarting clients, then revoking the old token after overlap.
 
 **Do not** commit tokens to the repository or paste them into CI configs checked into git. They are long-lived and high-privilege.
 

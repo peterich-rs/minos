@@ -135,9 +135,9 @@ impl ErrorKind {
             (Self::AgentSessionIdMismatch, Lang::En) => {
                 "Session is no longer active; please restart"
             }
-            (Self::CfAccessMisconfigured, Lang::Zh) => "后端未正确配置 Cloudflare Access 凭据",
+            (Self::CfAccessMisconfigured, Lang::Zh) => "Cloudflare Access 凭据未正确配置",
             (Self::CfAccessMisconfigured, Lang::En) => {
-                "Backend Cloudflare Access credentials are not configured"
+                "Cloudflare Access credentials are misconfigured"
             }
             (Self::IngestSeqConflict, Lang::Zh) => "事件序号冲突",
             (Self::IngestSeqConflict, Lang::En) => "Event sequence conflict",
@@ -240,7 +240,7 @@ pub enum MinosError {
     AgentSessionIdMismatch,
 
     // ── backend ingest / translation / cf-access (spec §7.4 additions) ──
-    #[error("cf access misconfigured at backend: {reason}")]
+    #[error("cf access misconfigured: {reason}")]
     CfAccessMisconfigured { reason: String },
 
     #[error("ingest seq conflict for thread {thread_id}: seq {seq} already present")]

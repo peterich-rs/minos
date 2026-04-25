@@ -1,22 +1,21 @@
 import Foundation
 import OSLog
+import Security
 
-/// Production daemon bootstrap. Resolves CF Service Token credentials in
-/// precedence order (env vars override Keychain), spawns the daemon, and
-/// wires the dual-axis observers into AppState.
-///
-/// If no credentials are found anywhere we surface the onboarding sheet
-/// rather than hard-failing — first-run users haven't configured anything
-/// yet and the menubar should walk them through it.
+/// Production daemon bootstrap. Resolves optional CF Service Token credentials
+/// from process env, spawns the daemon, and wires the dual-axis observers into
+/// AppState. CF credentials are never read from or written to the macOS
+/// Keychain; launchd/CLI env injection is the single host-side source.
 ///
 /// Plan 05 Phase I.6.
 enum DaemonBootstrap {
     private static let logger = Logger(subsystem: "ai.minos.macos", category: "bootstrap")
+    fileprivate static let keychainService = "ai.minos.macos"
 
     /// Default startDaemon factory used in production. Reads
     /// LocalState off disk and the device-secret out of Keychain;
-    /// Swift only supplies what's not on the filesystem (CF token +
-    /// display name) before handing off to the Rust ctor.
+    /// Swift only supplies what's not on the filesystem (CF token from
+    /// env + display name) before handing off to the Rust ctor.
     static let defaultStartDaemon: @Sendable (RelayConfig, String) async throws
         -> any DaemonDriving = { config, macName in
         let localStatePath = AppDirectories.localStatePath()
@@ -31,10 +30,8 @@ enum DaemonBootstrap {
         )
     }
 
-    /// Boot or reboot the daemon. Idempotent — callers from
-    /// SettingsSheet's "save & restart" path invoke this after stopping
-    /// the previous daemon, and it picks up the freshly written
-    /// Keychain creds.
+    /// Boot or reboot the daemon. Idempotent — callers can invoke this after
+    /// stopping the previous daemon, and it picks up the current process env.
     ///
     /// `startDaemon` is injected so XCTests can substitute MockDaemon
     /// and exercise the bootstrap state ladder without touching the
@@ -48,25 +45,20 @@ enum DaemonBootstrap {
         let macName = hostName()
         logger.info("Bootstrapping daemon for \(macName, privacy: .public)")
 
-        // Env vars override Keychain so dev workflows (`CF_ACCESS_*=…
-        // open Minos.app`) work without touching user creds.
-        let creds = readEnvCreds() ?? KeychainRelayConfig.read()
-        guard let creds else {
-            // No creds yet — leave the menubar on `.awaitingConfig` and
-            // let the user open the Onboarding window from there. We
-            // deliberately do NOT auto-open the window on launch; that
-            // would yank focus from whatever the user is doing, and
-            // LSUIElement apps have no Dock icon to signal the steal.
-            logger.info("No CF credentials present; staying in awaitingConfig")
-            await MainActor.run {
-                appState.phase = .awaitingConfig
-            }
+        let creds: CfAccessCreds?
+        do {
+            creds = try envCreds()
+        } catch let error as MinosError {
+            await appState.failBoot(with: error)
+            return
+        } catch {
+            await appState.failBoot(with: .BackendInternal(message: error.localizedDescription))
             return
         }
 
         let config = RelayConfig(
-            cfClientId: creds.clientId,
-            cfClientSecret: creds.clientSecret
+            cfClientId: creds?.clientId ?? "",
+            cfClientSecret: creds?.clientSecret ?? ""
         )
 
         await runStart(appState: appState, config: config, macName: macName, startDaemon: startDaemon)
@@ -173,15 +165,38 @@ enum DaemonBootstrap {
         await appState.failBoot(with: error)
     }
 
-    private static func readEnvCreds() -> KeychainRelayConfig.Creds? {
-        let env = ProcessInfo.processInfo.environment
-        guard
-            let id = env["CF_ACCESS_CLIENT_ID"], !id.isEmpty,
-            let secret = env["CF_ACCESS_CLIENT_SECRET"], !secret.isEmpty
+    struct CfAccessCreds {
+        let clientId: String
+        let clientSecret: String
+    }
+
+    static func envCreds(from env: [String: String] = ProcessInfo.processInfo.environment) throws -> CfAccessCreds? {
+        let id = blankToNil(env["CF_ACCESS_CLIENT_ID"])
+        let secret = blankToNil(env["CF_ACCESS_CLIENT_SECRET"])
+
+        switch (id, secret) {
+        case let (.some(id), .some(secret)):
+            return CfAccessCreds(clientId: id, clientSecret: secret)
+        case (nil, nil):
+            return nil
+        case (.some, nil):
+            throw MinosError.CfAccessMisconfigured(
+                reason: "CF_ACCESS_CLIENT_ID is set but CF_ACCESS_CLIENT_SECRET is missing"
+            )
+        case (nil, .some):
+            throw MinosError.CfAccessMisconfigured(
+                reason: "CF_ACCESS_CLIENT_SECRET is set but CF_ACCESS_CLIENT_ID is missing"
+            )
+        }
+    }
+
+    private static func blankToNil(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty
         else {
             return nil
         }
-        return KeychainRelayConfig.Creds(clientId: id, clientSecret: secret)
+        return trimmed
     }
 
     private static func hostName() -> String {
@@ -276,19 +291,20 @@ enum LocalStateLoader {
 
 // ── Keychain device-secret reader ──
 //
-// Symmetric to KeychainRelayConfig but for the "device-secret" account.
 // Only `read` is needed at bootstrap; the daemon owns writes (after a
 // successful Pair the relay's response carries the secret and the Rust
-// side stores it via `KeychainTrustedDeviceStore::write`).
+// side stores it via `KeychainTrustedDeviceStore::write`). The query skips
+// authentication UI so a background menu-bar launch never prompts.
 
 enum KeychainDeviceSecret {
     static func read() -> DeviceSecret? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: KeychainRelayConfig.service,
+            kSecAttrService as String: DaemonBootstrap.keychainService,
             kSecAttrAccount as String: "device-secret",
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUISkip
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)

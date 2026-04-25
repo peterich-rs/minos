@@ -4,14 +4,14 @@ import OSLog
 
 /// Top-level lifecycle phase the menubar UI ladders against. Distinct
 /// from the per-axis state (`relayLink`, `peer`) — `phase` answers "are
-/// we configured / running / broken?", the axes answer "given we're
-/// running, what's the status?".
+/// we booting / running / broken?", the axes answer "given we're running,
+/// what's the status?".
 ///
 /// Spec §6 freezes the three values and their UI ladder; bootError is
 /// a sub-state of `bootFailed` but kept on its own field so stale errors
 /// can be cleared without forcing a phase transition.
 enum Phase: Sendable {
-    case awaitingConfig
+    case booting
     case running
     case bootFailed
 }
@@ -35,7 +35,7 @@ final class AppState: @unchecked Sendable {
     var agentSubscription: (any SubscriptionHandle)?
 
     // ── Lifecycle ──
-    var phase: Phase = .awaitingConfig
+    var phase: Phase = .booting
 
     // ── Dual-axis state ──
     var relayLink: RelayLinkState = .disconnected
@@ -46,10 +46,6 @@ final class AppState: @unchecked Sendable {
     var currentQr: RelayQrPayload?
     var currentQrGeneratedAt: Date?
     var isShowingQr: Bool = false
-    // Onboarding / Settings visibility is NOT modelled on AppState — the
-    // two screens live in real top-level Window scenes and are driven by
-    // `@Environment(\.openWindow)` / `dismissWindow` with a stable
-    // `WindowID`. See `MinosApp`.
 
     // ── Agent runtime ──
     var agentState: AgentState = .idle
@@ -128,7 +124,7 @@ final class AppState: @unchecked Sendable {
         trustedDevice = nil
         relayLink = .disconnected
         peer = .unpaired
-        phase = .awaitingConfig
+        phase = .booting
         relayLinkSubscription?.cancel()
         peerSubscription?.cancel()
         agentSubscription?.cancel()
