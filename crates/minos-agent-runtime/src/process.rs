@@ -45,11 +45,19 @@ pub(crate) struct CodexProcess {
 }
 
 impl CodexProcess {
-    /// Spawn `bin` with `args`. Sets up piped stdout/stderr, null stdin, and
+    /// Spawn `bin` with `args` and the explicit `env` (parent env is
+    /// cleared so the child only sees what the daemon captured from the
+    /// user's login shell). Sets up piped stdout/stderr, null stdin, and
     /// `kill_on_drop(true)` so the child dies with us.
-    pub(crate) fn spawn(bin: &Path, args: &[&str]) -> Result<Self, MinosError> {
+    pub(crate) fn spawn(
+        bin: &Path,
+        args: &[&str],
+        env: &std::collections::HashMap<String, String>,
+    ) -> Result<Self, MinosError> {
         let mut cmd = Command::new(bin);
         cmd.args(args)
+            .env_clear()
+            .envs(env.iter())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -231,7 +239,12 @@ mod tests {
         // `echo` exits immediately; we just verify spawn doesn't error and
         // `take_child` hands back a live `Child` handle we can `wait()` on
         // without touching `stop_graceful` (which races with natural exit).
-        let mut p = CodexProcess::spawn(&PathBuf::from("/bin/echo"), &["hello"]).unwrap();
+        let mut p = CodexProcess::spawn(
+            &PathBuf::from("/bin/echo"),
+            &["hello"],
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let mut child = p.take_child().expect("child");
         let status = child.wait().await.unwrap();
         assert!(status.success());
@@ -239,9 +252,13 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_missing_binary_surfaces_codex_spawn_failed() {
-        let err = CodexProcess::spawn(&PathBuf::from("/definitely/not/a/real/binary"), &[])
-            .err()
-            .expect("spawn must fail");
+        let err = CodexProcess::spawn(
+            &PathBuf::from("/definitely/not/a/real/binary"),
+            &[],
+            &std::collections::HashMap::new(),
+        )
+        .err()
+        .expect("spawn must fail");
         match err {
             MinosError::CodexSpawnFailed { message } => {
                 assert!(message.contains("not/a/real/binary"), "{message}");
@@ -253,7 +270,12 @@ mod tests {
     #[tokio::test]
     async fn kill_on_drop_terminates_long_running_sleep() {
         // `sleep 60` will outlive the process struct — verify drop SIGKILLs it.
-        let mut p = CodexProcess::spawn(&PathBuf::from("/bin/sleep"), &["60"]).unwrap();
+        let mut p = CodexProcess::spawn(
+            &PathBuf::from("/bin/sleep"),
+            &["60"],
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         // Grab the PID before we drop, for the post-drop check.
         let pid = i32::try_from(p.child_mut().expect("child").id().expect("pid")).unwrap();
         drop(p);
@@ -270,7 +292,12 @@ mod tests {
     #[tokio::test]
     async fn stop_graceful_exits_cleanly_for_sigterm_respecting_process() {
         // `sleep 30` exits on SIGTERM without needing escalation.
-        let mut p = CodexProcess::spawn(&PathBuf::from("/bin/sleep"), &["30"]).unwrap();
+        let mut p = CodexProcess::spawn(
+            &PathBuf::from("/bin/sleep"),
+            &["30"],
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let status = p.stop_graceful().await.unwrap();
         // Killed by SIGTERM (or SIGKILL — tokio has no SIGTERM API on its
         // cross-platform Child::start_kill, so we just assert non-success).
@@ -284,6 +311,7 @@ mod tests {
         let mut p = CodexProcess::spawn(
             &PathBuf::from("/bin/bash"),
             &["-c", "trap '' TERM; sleep 30"],
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let start = std::time::Instant::now();
@@ -307,6 +335,7 @@ mod tests {
         let mut p = CodexProcess::spawn(
             &PathBuf::from("/bin/bash"),
             &["-c", "for i in 1 2 3; do echo line$i 1>&2; done; sleep 1"],
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         p.stderr_drain();

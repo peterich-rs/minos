@@ -102,8 +102,10 @@ pub struct StartAgentOutcome {
 }
 
 /// Runtime configuration — carries the workspace root, optional explicit
-/// binary path, port range, and event buffer size. The `test_ws_url` seam is
-/// gated behind `test-support` and skips subprocess spawn entirely.
+/// binary path, port range, event buffer size, and the snapshot of the
+/// user's login-shell env that the daemon captured at bootstrap. The
+/// `test_ws_url` seam is gated behind `test-support` and skips subprocess
+/// spawn entirely.
 #[derive(Debug, Clone)]
 pub struct AgentRuntimeConfig {
     pub workspace_root: PathBuf,
@@ -111,6 +113,10 @@ pub struct AgentRuntimeConfig {
     pub ws_port_range: std::ops::RangeInclusive<u16>,
     pub event_buffer: usize,
     pub handshake_call_timeout: Duration,
+    /// Env snapshot applied with `env_clear` to every spawned codex
+    /// subprocess. Defaults to an empty map (caller wiring tested with
+    /// the test_ws_url seam, which never spawns).
+    pub subprocess_env: Arc<std::collections::HashMap<String, String>>,
     /// Test-only seam: when `Some`, `start()` skips port-probing + codex
     /// spawn + workspace creation and connects directly to this URL.
     /// Production code must leave this as `None`.
@@ -130,6 +136,7 @@ impl AgentRuntimeConfig {
             ws_port_range: 7879..=7883,
             event_buffer: DEFAULT_EVENT_BUFFER,
             handshake_call_timeout: DEFAULT_HANDSHAKE_CALL_TIMEOUT,
+            subprocess_env: Arc::new(std::collections::HashMap::new()),
             #[cfg(feature = "test-support")]
             test_ws_url: None,
         }
@@ -278,7 +285,7 @@ impl AgentRuntime {
             "-c",
             "shell_environment_policy.inherit=all",
         ];
-        let mut process = CodexProcess::spawn(&bin, &args)?;
+        let mut process = CodexProcess::spawn(&bin, &args, &self.inner.cfg.subprocess_env)?;
         process.stderr_drain();
         info!(bin = %bin.display(), port, "spawned codex app-server");
 

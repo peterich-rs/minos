@@ -1,6 +1,8 @@
 //! Subprocess port. The trait exists so unit tests can inject deterministic
 //! responses without forking real binaries.
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use minos_domain::MinosError;
@@ -31,23 +33,25 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-pub struct RealCommandRunner;
+pub struct RealCommandRunner {
+    env: Arc<HashMap<String, String>>,
+}
+
+impl RealCommandRunner {
+    /// Wrap a shared env snapshot. Construct once at daemon bootstrap and
+    /// share via `Arc` between the runner and any other subprocess site.
+    #[must_use]
+    pub fn new(env: Arc<HashMap<String, String>>) -> Self {
+        Self { env }
+    }
+}
 
 #[async_trait::async_trait]
 impl CommandRunner for RealCommandRunner {
     async fn which(&self, bin: &str) -> Option<String> {
-        let out = Command::new("which")
-            .arg(bin)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .await
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        (!s.is_empty()).then_some(s)
+        let path = self.env.get("PATH")?;
+        let mut iter = which::which_in_global(bin, Some(path)).ok()?;
+        iter.next().map(|p| p.to_string_lossy().into_owned())
     }
 
     async fn run(
@@ -58,6 +62,8 @@ impl CommandRunner for RealCommandRunner {
     ) -> Result<CommandOutcome, MinosError> {
         let fut = Command::new(bin)
             .args(args)
+            .env_clear()
+            .envs(self.env.iter())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output();
