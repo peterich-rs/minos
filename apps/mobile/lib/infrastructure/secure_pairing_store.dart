@@ -1,18 +1,24 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:minos/infrastructure/cf_access_config.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 /// Keychain-backed persistence for the mobile pairing state.
 ///
 /// The Rust `minos_mobile::MobileClient` keeps this state in its own
 /// in-memory `MobilePairingStore` for the lifetime of the process. This
-/// Dart-side store is what survives an app cold-start; it mirrors the full
-/// persisted pairing snapshot so a fresh Rust client can rehydrate the same
-/// `device_id` / `device_secret` pair on launch.
+/// Dart-side store is what survives an app cold-start; it persists only the
+/// backend URL and Minos device credential. CF Access credentials come from
+/// build-time env (`--dart-define`) and are injected into the Rust snapshot
+/// on load instead of being written to Keychain.
 class SecurePairingStore {
-  SecurePairingStore({FlutterSecureStorage? storage})
-    : _storage = storage ?? const FlutterSecureStorage();
+  SecurePairingStore({
+    FlutterSecureStorage? storage,
+    CfAccessConfig? cfAccessConfig,
+  }) : _storage = storage ?? const FlutterSecureStorage(),
+       _cfAccessConfig = cfAccessConfig ?? CfAccessConfig.fromEnvironment();
 
   final FlutterSecureStorage _storage;
+  final CfAccessConfig _cfAccessConfig;
 
   static const _keyBackendUrl = 'minos.backend_url';
   static const _keyDeviceId = 'minos.device_id';
@@ -24,23 +30,18 @@ class SecurePairingStore {
     final backendUrl = await _storage.read(key: _keyBackendUrl);
     final deviceId = await _storage.read(key: _keyDeviceId);
     final deviceSecret = await _storage.read(key: _keyDeviceSecret);
-    final cfAccessClientId = await _storage.read(key: _keyCfId);
-    final cfAccessClientSecret = await _storage.read(key: _keyCfSecret);
+    await _deleteLegacyCfAccessKeys();
 
     final hasAnyValue =
-        backendUrl != null ||
-        deviceId != null ||
-        deviceSecret != null ||
-        cfAccessClientId != null ||
-        cfAccessClientSecret != null;
+        backendUrl != null || deviceId != null || deviceSecret != null;
     if (!hasAnyValue) return null;
 
-    final state = PersistedPairingState(
-      backendUrl: backendUrl,
-      deviceId: deviceId,
-      deviceSecret: deviceSecret,
-      cfAccessClientId: cfAccessClientId,
-      cfAccessClientSecret: cfAccessClientSecret,
+    final state = _cfAccessConfig.applyToState(
+      PersistedPairingState(
+        backendUrl: backendUrl,
+        deviceId: deviceId,
+        deviceSecret: deviceSecret,
+      ),
     );
 
     if (!_isResumable(state)) {
@@ -55,8 +56,7 @@ class SecurePairingStore {
     await _writeOrDelete(_keyBackendUrl, state.backendUrl);
     await _writeOrDelete(_keyDeviceId, state.deviceId);
     await _writeOrDelete(_keyDeviceSecret, state.deviceSecret);
-    await _writeOrDelete(_keyCfId, state.cfAccessClientId);
-    await _writeOrDelete(_keyCfSecret, state.cfAccessClientSecret);
+    await _deleteLegacyCfAccessKeys();
   }
 
   /// Wipe every key this store owns. Called from `forgetPeer`.
@@ -64,8 +64,7 @@ class SecurePairingStore {
     await _storage.delete(key: _keyBackendUrl);
     await _storage.delete(key: _keyDeviceId);
     await _storage.delete(key: _keyDeviceSecret);
-    await _storage.delete(key: _keyCfId);
-    await _storage.delete(key: _keyCfSecret);
+    await _deleteLegacyCfAccessKeys();
   }
 
   Future<void> _writeOrDelete(String key, String? value) {
@@ -76,12 +75,13 @@ class SecurePairingStore {
   }
 
   bool _isResumable(PersistedPairingState state) {
-    final hasRequiredFields =
-        state.backendUrl != null &&
+    return state.backendUrl != null &&
         state.deviceId != null &&
         state.deviceSecret != null;
-    final hasCfAccessId = state.cfAccessClientId != null;
-    final hasCfAccessSecret = state.cfAccessClientSecret != null;
-    return hasRequiredFields && hasCfAccessId == hasCfAccessSecret;
+  }
+
+  Future<void> _deleteLegacyCfAccessKeys() async {
+    await _storage.delete(key: _keyCfId);
+    await _storage.delete(key: _keyCfSecret);
   }
 }

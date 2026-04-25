@@ -6,6 +6,10 @@
 | Date | 2026-04-24 |
 | Deciders | fannnzhang |
 
+> Update 2026-04-25: ADR 0016 supersedes this ADR's Cloudflare Access
+> credential-distribution decision. Backend-assembled QR payloads remain, but
+> current clients get CF Access headers from build-time / host env config.
+
 ## Context
 
 Plan 04 (the relay-backend track) and ADR 0010-cloudflare-tunnel-and-access.md established that public ingress to the broker is fronted by Cloudflare Tunnel + Cloudflare Access, with the **mobile** client carrying a CF Access **service token** (`cf_access_client_id` + `cf_access_client_secret`) attached to every `/devices` WS request via `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers. That part stayed.

@@ -69,8 +69,9 @@ pub struct LocalRpcContext<'a> {
     /// Public WebSocket origin the backend advertises to mobile via the
     /// pairing QR payload (spec §6.1 `PairingQrPayload.backend_url`).
     pub public_url: &'a str,
-    /// Optional Cloudflare Access client id to embed in the QR payload.
-    /// `None` for local dev deployments without a CF tunnel.
+    /// Optional Cloudflare Access client id to embed in the QR payload for
+    /// legacy deployments. Current clients normally get Access credentials
+    /// from build-time / host env config instead.
     pub cf_access_client_id: Option<&'a str>,
     /// Optional Cloudflare Access client secret to embed in the QR payload.
     /// MUST be `Some` iff `cf_access_client_id` is `Some` (checked by
@@ -463,11 +464,11 @@ async fn handle_ping() -> LocalRpcOutcome {
 ///   - backend WebSocket URL (so mobile doesn't need DNS)
 ///   - host display name (echoed from the RPC params)
 ///   - one-shot pairing token + its expiry (unix epoch ms)
-///   - optional Cloudflare Access credentials (spec §13.3 / ADR 0014)
+///   - optional legacy Cloudflare Access credentials
 ///
-/// Spec §6.1 gates the caller's role. The CF tokens flow through the
-/// backend's env vars — the agent-host never sees them, and a rotation
-/// on the backend is immediately effective for any subsequent pairing.
+/// Spec §6.1 gates the caller's role. CF tokens are normally client-side
+/// build/host env config; backend-held values are only kept for older QR
+/// distribution flows.
 async fn handle_request_pairing_token(
     ctx: &LocalRpcContext<'_>,
     params: &serde_json::Value,

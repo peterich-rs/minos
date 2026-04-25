@@ -4,8 +4,8 @@ import XCTest
 
 /// Plan 05 Phase K.2: agent-axis tests rewritten to wire the
 /// AgentStateObserverAdapter manually rather than driving through
-/// DaemonBootstrap (which now requires CF credentials in env or
-/// Keychain — process-level side effects we don't want in unit tests).
+/// DaemonBootstrap (which touches process env, Keychain, and the Rust
+/// runtime — side effects we don't want in unit tests).
 final class AgentStateTests: XCTestCase {
     @MainActor
     func testAgentObserverPushDrivesAppState() async {

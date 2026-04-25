@@ -1,17 +1,19 @@
-# minos
+# Minos Mobile
 
-A new Flutter project.
+Flutter shell for the Minos mobile client.
 
-## Getting Started
+## Cloudflare Access
 
-This project is a starting point for a Flutter application.
+The app reads Cloudflare Access service-token headers from Flutter
+compile-time environment values. CI should pass GitHub Secrets with
+`--dart-define`; local runs can forward shell env vars:
 
-A few resources to get you started if this is your first Flutter project:
+```sh
+flutter run \
+  --dart-define=CF_ACCESS_CLIENT_ID="$CF_ACCESS_CLIENT_ID" \
+  --dart-define=CF_ACCESS_CLIENT_SECRET="$CF_ACCESS_CLIENT_SECRET"
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+These values are injected into the in-memory Rust client at startup/pairing
+time. They are not persisted to iOS Keychain; Keychain stores only the Minos
+business-layer pairing state (`backend_url`, `device_id`, `device_secret`).

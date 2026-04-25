@@ -7,7 +7,8 @@ pub const BACKEND_URL: &str = match option_env!("MINOS_BACKEND_URL") {
     None => "ws://127.0.0.1:8787/devices",
 };
 
-/// Runtime relay config (CF Service Token pair). Backend URL is BACKEND_URL (compile-time).
+/// Runtime relay config (optional CF Service Token pair). Backend URL is
+/// BACKEND_URL (compile-time).
 ///
 /// Derives `uniffi::Record` so Swift can pass it to
 /// `DaemonHandle::start`; the two String fields marshal as plain strings.

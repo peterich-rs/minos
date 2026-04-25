@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 use minos_daemon::{paths, DaemonHandle, LocalState, RelayConfig, BACKEND_URL};
+use minos_domain::MinosError;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -92,12 +93,10 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
     println!("log dir:    {}", display_path(&paths.log_dir));
     println!("relay:      {BACKEND_URL}");
 
-    // CLI reads CF creds from env; Swift's app delegate does the same in
-    // its own app-side plumbing. Empty env vars collapse to "no CF" —
-    // valid for the local dev backend (`cargo run -p minos-backend`).
-    let cf_client_id = env::var("CF_ACCESS_CLIENT_ID").unwrap_or_default();
-    let cf_client_secret = env::var("CF_ACCESS_CLIENT_SECRET").unwrap_or_default();
-    let config = RelayConfig::new(cf_client_id, cf_client_secret);
+    // CLI reads CF creds from host env. The macOS app follows the same
+    // rule; no host-side CF credentials are stored in Keychain. Empty env
+    // vars collapse to "no CF" for local/dev backends.
+    let config = cf_config_from_env()?;
 
     let local_state = LocalState::load_or_init(&LocalState::default_path())?;
 
@@ -210,6 +209,43 @@ fn display_optional(path: Option<&Path>) -> String {
     path.map_or_else(|| "<platform-defaults>".into(), display_path)
 }
 
+fn cf_config_from_env() -> Result<RelayConfig, MinosError> {
+    cf_config_from_values(
+        env::var("CF_ACCESS_CLIENT_ID").ok(),
+        env::var("CF_ACCESS_CLIENT_SECRET").ok(),
+    )
+}
+
+fn cf_config_from_values(
+    client_id: Option<String>,
+    client_secret: Option<String>,
+) -> Result<RelayConfig, MinosError> {
+    let client_id = blank_to_none(client_id);
+    let client_secret = blank_to_none(client_secret);
+
+    match (client_id, client_secret) {
+        (Some(id), Some(secret)) => Ok(RelayConfig::new(id, secret)),
+        (None, None) => Ok(RelayConfig::new(String::new(), String::new())),
+        (Some(_), None) => Err(MinosError::CfAccessMisconfigured {
+            reason: "CF_ACCESS_CLIENT_ID is set but CF_ACCESS_CLIENT_SECRET is missing".into(),
+        }),
+        (None, Some(_)) => Err(MinosError::CfAccessMisconfigured {
+            reason: "CF_ACCESS_CLIENT_SECRET is set but CF_ACCESS_CLIENT_ID is missing".into(),
+        }),
+    }
+}
+
+fn blank_to_none(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    })
+}
+
 struct ResolvedPaths {
     minos_home: Option<PathBuf>,
     data_dir: PathBuf,
@@ -240,5 +276,26 @@ mod tests {
         let home = env::var("HOME").unwrap();
         let expanded = expand_tilde(Path::new("~/minos")).unwrap();
         assert_eq!(expanded, PathBuf::from(home).join("minos"));
+    }
+
+    #[test]
+    fn cf_config_from_values_accepts_empty_pair() {
+        let config = cf_config_from_values(None, Some("  ".into())).expect("empty pair");
+        assert!(config.cf_client_id.is_empty());
+        assert!(config.cf_client_secret.is_empty());
+    }
+
+    #[test]
+    fn cf_config_from_values_accepts_complete_pair() {
+        let config =
+            cf_config_from_values(Some(" id ".into()), Some(" secret ".into())).expect("pair");
+        assert_eq!(config.cf_client_id, "id");
+        assert_eq!(config.cf_client_secret, "secret");
+    }
+
+    #[test]
+    fn cf_config_from_values_rejects_partial_pair() {
+        let err = cf_config_from_values(Some("id".into()), None).expect_err("partial pair");
+        assert!(matches!(err, MinosError::CfAccessMisconfigured { .. }));
     }
 }

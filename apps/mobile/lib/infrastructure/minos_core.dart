@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:meta/meta.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
+import 'package:minos/infrastructure/cf_access_config.dart';
 import 'package:minos/infrastructure/secure_pairing_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/src/rust/frb_generated.dart';
@@ -11,15 +12,17 @@ import 'package:minos/src/rust/frb_generated.dart';
 /// [MobileClient]. Everything above this layer depends on
 /// [MinosCoreProtocol] instead.
 class MinosCore implements MinosCoreProtocol {
-  MinosCore._(this._client, this._secure);
+  MinosCore._(this._client, this._secure, this._cfAccessConfig);
 
   factory MinosCore.forTesting({
     required MobileClient client,
     required SecurePairingStore secureStore,
-  }) => MinosCore._(client, secureStore);
+    CfAccessConfig? cfAccessConfig,
+  }) => MinosCore._(client, secureStore, cfAccessConfig ?? CfAccessConfig());
 
   final MobileClient _client;
   final SecurePairingStore _secure;
+  final CfAccessConfig _cfAccessConfig;
 
   /// Construct and initialize the core. Must be awaited before any other
   /// Riverpod provider reads it.
@@ -27,6 +30,7 @@ class MinosCore implements MinosCoreProtocol {
     required String selfName,
     required String logDir,
     SecurePairingStore? secureStore,
+    CfAccessConfig? cfAccessConfig,
   }) async {
     // On iOS the Rust pod force-loads `libminos_ffi_frb.a` into Runner, so
     // frb must resolve symbols from the current process instead of opening a
@@ -39,14 +43,16 @@ class MinosCore implements MinosCoreProtocol {
         : null;
     await RustLib.init(externalLibrary: externalLibrary);
     await initLogging(logDir: logDir);
-    final secure = secureStore ?? SecurePairingStore();
+    final accessConfig = cfAccessConfig ?? CfAccessConfig.fromEnvironment();
+    final secure =
+        secureStore ?? SecurePairingStore(cfAccessConfig: accessConfig);
     final client = await resolveClient(
       secure: secure,
       buildFresh: () => MobileClient(selfName: selfName),
       buildFromPersisted: (state) =>
           MobileClient.newWithPersistedState(selfName: selfName, state: state),
     );
-    return MinosCore._(client, secure);
+    return MinosCore._(client, secure, accessConfig);
   }
 
   /// Decide which [MobileClient] to hand back to callers at startup,
@@ -78,7 +84,7 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   Future<void> pairWithQrJson(String qrJson) async {
-    await _client.pairWithQrJson(qrJson: qrJson);
+    await _client.pairWithQrJson(qrJson: _cfAccessConfig.applyToQrJson(qrJson));
     try {
       await _secure.saveState(await _client.persistedPairingState());
     } catch (error, stackTrace) {
