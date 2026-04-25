@@ -19,7 +19,7 @@ MinosCoreProtocol minosCore(Ref ref) {
 /// Hot stream of connection-state transitions sourced from the Rust core.
 @Riverpod(keepAlive: true)
 Stream<ConnectionState> connectionState(Ref ref) {
-  return ref.watch(minosCoreProvider).states;
+  return ref.watch(minosCoreProvider).connectionStates;
 }
 
 /// Camera permission status + action helpers. The notifier is the single
@@ -49,27 +49,26 @@ class CameraPermission extends _$CameraPermission {
   Future<bool> openSettings() => openAppSettings();
 }
 
-/// Owns the pairing submission lifecycle. Exposes the latest [PairResponse]
-/// (or error) so the router can transition to [HomePage] on success.
+/// Owns the pairing submission lifecycle. The outcome is a plain
+/// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not
+/// return a typed response body to the caller.
 @riverpod
 class PairingController extends _$PairingController {
   @override
-  FutureOr<PairResponse?> build() => null;
+  FutureOr<bool> build() => false;
 
   /// Submit a raw QR JSON payload to the Rust core, updating [state] with
   /// loading / data / error as the call resolves.
   Future<void> submit(String qrJson) async {
     state = const AsyncValue.loading();
     try {
-      final response = await ref.read(minosCoreProvider).pairWithJson(qrJson);
-      state = AsyncValue.data(response);
+      await ref.read(minosCoreProvider).pairWithQrJson(qrJson);
+      state = const AsyncValue.data(true);
     } on MinosError catch (e, st) {
       state = AsyncValue.error(e, st);
     } catch (e, st) {
       // Non-MinosError (e.g. frb PanicException, raw StateError on missing
-      // RustLib.init). Keep the UI out of the stuck-loading state; the
-      // `is MinosError` guard in pairing_page's ref.listen filters toasts
-      // so the user is not shown opaque Rust text.
+      // RustLib.init). Keep the UI out of the stuck-loading state.
       state = AsyncValue.error(e, st);
     }
   }

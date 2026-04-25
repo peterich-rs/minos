@@ -2009,9 +2009,11 @@ dependencies = [
 name = "minos-agent-runtime"
 version = "0.1.0"
 dependencies = [
+ "dashmap 6.1.0",
  "futures-util",
  "minos-agent-runtime",
  "minos-domain",
+ "minos-protocol",
  "serde",
  "serde_json",
  "tempfile",
@@ -2020,6 +2022,42 @@ dependencies = [
  "tokio-tungstenite 0.29.0",
  "tracing",
  "uniffi",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "minos-backend"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "dashmap 6.1.0",
+ "futures",
+ "getrandom 0.3.4",
+ "mars-xlog",
+ "minos-domain",
+ "minos-protocol",
+ "minos-ui-protocol",
+ "pretty_assertions",
+ "proptest",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "tokio-tungstenite 0.29.0",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]
@@ -2050,11 +2088,11 @@ dependencies = [
  "jsonrpsee",
  "mars-xlog",
  "minos-agent-runtime",
+ "minos-backend",
  "minos-cli-detect",
  "minos-domain",
  "minos-pairing",
  "minos-protocol",
- "minos-relay",
  "minos-transport",
  "pretty_assertions",
  "security-framework",
@@ -2096,7 +2134,9 @@ dependencies = [
  "minos-domain",
  "minos-mobile",
  "minos-protocol",
+ "minos-ui-protocol",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2119,15 +2159,15 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "dashmap 6.1.0",
  "futures",
  "futures-util",
- "jsonrpsee",
  "mars-xlog",
- "minos-daemon",
  "minos-domain",
  "minos-pairing",
  "minos-protocol",
- "minos-transport",
+ "minos-ui-protocol",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -2136,6 +2176,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -2160,45 +2201,11 @@ version = "0.1.0"
 dependencies = [
  "jsonrpsee",
  "minos-domain",
+ "minos-ui-protocol",
  "pretty_assertions",
  "serde",
  "serde_json",
  "uniffi",
-]
-
-[[package]]
-name = "minos-relay"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "async-trait",
- "axum",
- "chrono",
- "clap",
- "dashmap 6.1.0",
- "futures",
- "getrandom 0.3.4",
- "mars-xlog",
- "minos-domain",
- "minos-protocol",
- "pretty_assertions",
- "proptest",
- "rstest",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "subtle",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "tokio-tungstenite 0.29.0",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -2217,6 +2224,20 @@ dependencies = [
  "tokio-tungstenite 0.29.0",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "minos-ui-protocol"
+version = "0.1.0"
+dependencies = [
+ "minos-domain",
+ "pretty_assertions",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

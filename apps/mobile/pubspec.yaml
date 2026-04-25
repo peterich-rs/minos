@@ -57,6 +57,10 @@ dependencies:
   permission_handler: ^12.0.1
   path_provider: ^2.1.5
 
+  # Keychain-backed persistence for the paired backend URL, CF Access
+  # service-token headers, and the long-lived `DeviceSecret`. See plan 05 §D5.
+  flutter_secure_storage: ^9.2.0
+
   # Dart-side mars-xlog writer (lives alongside Rust's mars-xlog output in
   # the same Documents/Minos/Logs/ directory, distinguished by namePrefix
   # per spec §9.4). Not on pub.dev; sourced from the peterich-rs/xlog-rs

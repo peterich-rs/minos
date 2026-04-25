@@ -22,7 +22,7 @@ extension MinosErrorDisplay on MinosError {
     MinosError_EnvelopeVersionUnsupported() =>
       ErrorKind.envelopeVersionUnsupported,
     MinosError_PeerOffline() => ErrorKind.peerOffline,
-    MinosError_RelayInternal() => ErrorKind.relayInternal,
+    MinosError_BackendInternal() => ErrorKind.backendInternal,
     MinosError_CfAuthFailed() => ErrorKind.cfAuthFailed,
     MinosError_CodexSpawnFailed() => ErrorKind.codexSpawnFailed,
     MinosError_CodexConnectFailed() => ErrorKind.codexConnectFailed,
@@ -31,6 +31,14 @@ extension MinosErrorDisplay on MinosError {
     MinosError_AgentNotRunning() => ErrorKind.agentNotRunning,
     MinosError_AgentNotSupported() => ErrorKind.agentNotSupported,
     MinosError_AgentSessionIdMismatch() => ErrorKind.agentSessionIdMismatch,
+    MinosError_CfAccessMisconfigured() => ErrorKind.cfAccessMisconfigured,
+    MinosError_IngestSeqConflict() => ErrorKind.ingestSeqConflict,
+    MinosError_ThreadNotFound() => ErrorKind.threadNotFound,
+    MinosError_TranslationNotImplemented() =>
+      ErrorKind.translationNotImplemented,
+    MinosError_TranslationFailed() => ErrorKind.translationFailed,
+    MinosError_PairingQrVersionUnsupported() =>
+      ErrorKind.pairingQrVersionUnsupported,
   };
 
   /// Localized user-facing message for this error, looked up via the Rust

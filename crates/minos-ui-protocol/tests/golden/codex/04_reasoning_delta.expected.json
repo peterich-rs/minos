@@ -1,0 +1,18 @@
+[
+  {
+    "kind":"message_started",
+    "message_id":"<uuid>",
+    "role":"assistant",
+    "started_at_ms":1714000004000
+  },
+  {
+    "kind":"reasoning_delta",
+    "message_id":"<uuid>",
+    "text":"Thinking…"
+  },
+  {
+    "kind":"message_completed",
+    "message_id":"<uuid>",
+    "finished_at_ms":1714000005000
+  }
+]

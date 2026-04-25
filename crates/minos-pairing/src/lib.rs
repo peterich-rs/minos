@@ -39,9 +39,9 @@ mod uniffi_bridges {
         try_lift: |st| Ok(st.into()),
     });
 
-    // `DeviceId` is now registered in its home crate (`minos-domain`) with
-    // blanket `impl<UT>` coverage, which already applies to this crate's
-    // tag — no local registration needed here.
+    // `DeviceId` and `DeviceSecret` are registered in their home crate
+    // (`minos-domain`) with blanket `impl<UT>` coverage, which already
+    // applies to this crate's tag — no local registration needed here.
     uniffi::custom_type!(PairingToken, String, {
         remote,
         lower: |t| t.0,

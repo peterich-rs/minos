@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState};
-use minos_domain::{AgentEvent, MinosError};
+use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState, RawIngest};
+use minos_domain::MinosError;
 use minos_protocol::{SendUserMessageRequest, StartAgentRequest, StartAgentResponse};
 use tokio::sync::{broadcast, watch};
 
@@ -62,8 +62,8 @@ impl AgentGlue {
     }
 
     #[must_use]
-    pub fn event_stream(&self) -> broadcast::Receiver<AgentEvent> {
-        self.runtime.event_stream()
+    pub fn ingest_stream(&self) -> broadcast::Receiver<RawIngest> {
+        self.runtime.ingest_stream()
     }
 
     pub async fn shutdown(&self) -> Result<(), MinosError> {

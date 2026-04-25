@@ -5,10 +5,10 @@
 //! compile against the new surface.
 //!
 //! Phase F.6 rewrites this file to run `pair` → `list_clis` through a
-//! real in-process relay (mirroring the relay_client_smoke pattern).
+//! real in-process backend (mirroring the relay_client_smoke pattern).
 //! Until then we keep a single `#[ignore]`d placeholder so the file
 //! continues to exist for `cargo build --tests`.
 
 #[tokio::test]
-#[ignore = "Phase F rewrite pending: pre-relay e2e assertions need relay-backed rewrite in F.6"]
+#[ignore = "Phase F rewrite pending: pre-relay e2e assertions need backend-backed rewrite in F.6"]
 async fn pair_and_list_clis_placeholder() {}

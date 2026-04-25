@@ -105,7 +105,7 @@ final class ConnectionStateProvider
   }
 }
 
-String _$connectionStateHash() => r'88db95b6d3107f1e3f1c4c0ccca065cdd3d07326';
+String _$connectionStateHash() => r'7e2c58fcec3f59ae8890c0d5343a75bac0330ed8';
 
 /// Camera permission status + action helpers. The notifier is the single
 /// source of truth for the permission state driving the pairing UI.
@@ -162,18 +162,21 @@ abstract class _$CameraPermission extends $AsyncNotifier<PermissionStatus> {
   }
 }
 
-/// Owns the pairing submission lifecycle. Exposes the latest [PairResponse]
-/// (or error) so the router can transition to [HomePage] on success.
+/// Owns the pairing submission lifecycle. The outcome is a plain
+/// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not
+/// return a typed response body to the caller.
 
 @ProviderFor(PairingController)
 final pairingControllerProvider = PairingControllerProvider._();
 
-/// Owns the pairing submission lifecycle. Exposes the latest [PairResponse]
-/// (or error) so the router can transition to [HomePage] on success.
+/// Owns the pairing submission lifecycle. The outcome is a plain
+/// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not
+/// return a typed response body to the caller.
 final class PairingControllerProvider
-    extends $AsyncNotifierProvider<PairingController, PairResponse?> {
-  /// Owns the pairing submission lifecycle. Exposes the latest [PairResponse]
-  /// (or error) so the router can transition to [HomePage] on success.
+    extends $AsyncNotifierProvider<PairingController, bool> {
+  /// Owns the pairing submission lifecycle. The outcome is a plain
+  /// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not
+  /// return a typed response body to the caller.
   PairingControllerProvider._()
     : super(
         from: null,
@@ -193,22 +196,23 @@ final class PairingControllerProvider
   PairingController create() => PairingController();
 }
 
-String _$pairingControllerHash() => r'6d6f02e5fa04dd84d2ada7c33d34701fead75590';
+String _$pairingControllerHash() => r'665bb5477a4fc1a0ac0c36051f789ea7063af344';
 
-/// Owns the pairing submission lifecycle. Exposes the latest [PairResponse]
-/// (or error) so the router can transition to [HomePage] on success.
+/// Owns the pairing submission lifecycle. The outcome is a plain
+/// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not
+/// return a typed response body to the caller.
 
-abstract class _$PairingController extends $AsyncNotifier<PairResponse?> {
-  FutureOr<PairResponse?> build();
+abstract class _$PairingController extends $AsyncNotifier<bool> {
+  FutureOr<bool> build();
   @$mustCallSuper
   @override
   void runBuild() {
-    final ref = this.ref as $Ref<AsyncValue<PairResponse?>, PairResponse?>;
+    final ref = this.ref as $Ref<AsyncValue<bool>, bool>;
     final element =
         ref.element
             as $ClassProviderElement<
-              AnyNotifier<AsyncValue<PairResponse?>, PairResponse?>,
-              AsyncValue<PairResponse?>,
+              AnyNotifier<AsyncValue<bool>, bool>,
+              AsyncValue<bool>,
               Object?,
               Object?
             >;

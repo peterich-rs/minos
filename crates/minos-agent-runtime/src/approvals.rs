@@ -2,9 +2,10 @@
 //!
 //! codex is started with `approval_policy=never`, so any approval server
 //! request that still lands on our WS is unexpected. Rather than crash, we
-//! reply `{"decision": "rejected"}` immediately and (in Phase C) forward the
-//! request payload as [`AgentEvent::Raw`] so the future chat-ui can surface
-//! "codex tried to run X, auto-rejected". See spec §6.4 and ADR 0010.
+//! reply `{"decision": "rejected"}` immediately and forward the request
+//! payload as a synthetic `server_request/<name>` `RawIngest` so the
+//! backend translator and the eventual chat-ui can surface "codex tried to
+//! run X, auto-rejected". See spec §6.4 and ADR 0010.
 //!
 //! This module owns both the pure payload builder and the static list of
 //! method names that count as approval prompts ([`APPROVAL_METHODS`]) —

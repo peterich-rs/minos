@@ -1,0 +1,22 @@
+[package]
+name = "minos-ui-protocol"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Unified UI event protocol: translators from each agent CLI to a single UiEventMessage shape."
+
+[dependencies]
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
+serde        = { workspace = true, features = ["derive"] }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+tracing      = { workspace = true }
+uuid         = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+rstest            = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

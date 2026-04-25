@@ -1,5 +1,5 @@
 //! `fake-peer` — dev tool that impersonates an `ios-client` role
-//! against the relay broker so the Mac app's pairing + dispatch flow
+//! against the backend broker so the Mac app's pairing + dispatch flow
 //! can be smoke-tested without an actual iPhone.
 //!
 //! Plan 05 Phase L.1 / spec §10.3.
@@ -7,8 +7,8 @@
 //! Usage:
 //!
 //! ```text
-//! # 1. Start a local relay
-//! cargo run -p minos-relay -- --listen 127.0.0.1:8787 --db /tmp/relay.db
+//! # 1. Start a local backend
+//! cargo run -p minos-backend -- --listen 127.0.0.1:8787 --db /tmp/relay.db
 //!
 //! # 2. Show the QR in the Mac app, decode it, copy the token field
 //!
@@ -19,7 +19,7 @@
 //!     --device-name "Fan's fake iPhone"
 //! ```
 //!
-//! After Pair the relay sends a Paired event back to the Mac and a
+//! After Pair the backend sends a Paired event back to the Mac and a
 //! LocalRpcResponse to the fake-peer. Subsequent inbound frames are
 //! printed verbatim to stderr so operators can eyeball Forwarded /
 //! Event traffic.

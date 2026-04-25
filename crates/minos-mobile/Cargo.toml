@@ -4,16 +4,18 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "iOS-side composition root: WS client + RPC entry surface."
+description = "iOS-side composition root: envelope WS client + FFI entry surface."
 
 [dependencies]
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
-minos-transport = { path = "../minos-transport", version = "0.1.0" }
 tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
-jsonrpsee = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -21,11 +23,13 @@ mars-xlog = { workspace = true }
 url = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+dashmap = { workspace = true }
+uuid = { workspace = true }
 # Optional CLI deps for the fake-peer dev binary (gated on the `cli` feature).
+# tokio-tungstenite and futures-util are always-on (the envelope client
+# depends on them) so the cli feature only enables the CLI-specific extras.
 anyhow = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
-tokio-tungstenite = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -34,8 +38,6 @@ default = []
 cli = [
     "anyhow",
     "clap",
-    "futures-util",
-    "tokio-tungstenite",
     "tokio/macros",
     "tokio/rt-multi-thread",
 ]
@@ -47,7 +49,6 @@ required-features = ["cli"]
 
 [dev-dependencies]
 tokio-test = { workspace = true }
-minos-daemon = { path = "../minos-daemon", version = "0.1.0" }
 tempfile = { workspace = true }
 
 [lints]

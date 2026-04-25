@@ -1,7 +1,7 @@
 //! Compile-time backend URL + runtime Relay configuration. See spec §10.1.
 
 /// Compile-time backend URL. Overridable via `MINOS_BACKEND_URL` env var at build.
-/// Fallback is the local dev relay (`cargo run -p minos-relay`).
+/// Fallback is the local dev backend (`cargo run -p minos-backend`).
 pub const BACKEND_URL: &str = match option_env!("MINOS_BACKEND_URL") {
     Some(v) => v,
     None => "ws://127.0.0.1:8787/devices",

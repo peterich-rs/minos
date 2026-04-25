@@ -45,10 +45,10 @@ security-framework = { workspace = true }
 
 [dev-dependencies]
 minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", features = ["test-support"] }
-# Relay is pulled into dev-deps only so the relay_client_smoke integration
+# Backend is pulled into dev-deps only so the relay_client_smoke integration
 # test can spin up an in-process broker without leaking a production
-# dependency cycle (daemon is the relay's client, not vice versa).
-minos-relay = { path = "../minos-relay", version = "0.1.0" }
+# dependency cycle (daemon is the backend's client, not vice versa).
+minos-backend = { path = "../minos-backend", version = "0.1.0" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 sqlx = { workspace = true }

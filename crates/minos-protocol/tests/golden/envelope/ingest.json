@@ -1,0 +1,12 @@
+{
+  "kind": "ingest",
+  "v": 1,
+  "agent": "codex",
+  "thread_id": "thr_abc",
+  "seq": 42,
+  "payload": {
+    "method": "item/agentMessage/delta",
+    "params": { "delta": "Hi" }
+  },
+  "ts_ms": 1714000000000
+}

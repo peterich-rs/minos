@@ -13,8 +13,9 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DeviceRole {
-    /// macOS host daemon (one per account at MVP).
-    MacHost,
+    /// Agent-host daemon (macOS today, platform-neutral name for future
+    /// Linux/Windows ports). One per account at MVP.
+    AgentHost,
     /// iOS client app.
     IosClient,
     /// Browser-based admin console.
@@ -24,7 +25,7 @@ pub enum DeviceRole {
 impl fmt::Display for DeviceRole {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::MacHost => "mac-host",
+            Self::AgentHost => "agent-host",
             Self::IosClient => "ios-client",
             Self::BrowserAdmin => "browser-admin",
         })
@@ -36,7 +37,7 @@ impl FromStr for DeviceRole {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "mac-host" => Ok(Self::MacHost),
+            "agent-host" => Ok(Self::AgentHost),
             "ios-client" => Ok(Self::IosClient),
             "browser-admin" => Ok(Self::BrowserAdmin),
             other => Err(format!("unknown device role: {other}")),
@@ -50,7 +51,7 @@ mod tests {
 
     #[test]
     fn display_is_kebab_case() {
-        assert_eq!(DeviceRole::MacHost.to_string(), "mac-host");
+        assert_eq!(DeviceRole::AgentHost.to_string(), "agent-host");
         assert_eq!(DeviceRole::IosClient.to_string(), "ios-client");
         assert_eq!(DeviceRole::BrowserAdmin.to_string(), "browser-admin");
     }
@@ -58,7 +59,7 @@ mod tests {
     #[test]
     fn from_str_round_trips_display() {
         for role in [
-            DeviceRole::MacHost,
+            DeviceRole::AgentHost,
             DeviceRole::IosClient,
             DeviceRole::BrowserAdmin,
         ] {
@@ -79,8 +80,8 @@ mod tests {
     fn json_is_kebab_case() {
         // serde kebab-case must agree with Display / FromStr.
         assert_eq!(
-            serde_json::to_string(&DeviceRole::MacHost).unwrap(),
-            "\"mac-host\""
+            serde_json::to_string(&DeviceRole::AgentHost).unwrap(),
+            "\"agent-host\""
         );
         assert_eq!(
             serde_json::to_string(&DeviceRole::IosClient).unwrap(),
@@ -99,7 +100,7 @@ mod tests {
     fn json_and_display_agree() {
         // Catch any drift between the serde rename and the manual Display.
         for role in [
-            DeviceRole::MacHost,
+            DeviceRole::AgentHost,
             DeviceRole::IosClient,
             DeviceRole::BrowserAdmin,
         ] {

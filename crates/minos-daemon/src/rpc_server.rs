@@ -13,10 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use jsonrpsee::core::async_trait;
-use jsonrpsee::core::server::SubscriptionMessage;
-use jsonrpsee::core::SubscriptionResult;
 use jsonrpsee::types::ErrorObjectOwned;
-use jsonrpsee::PendingSubscriptionSink;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::envelope::Envelope;
@@ -25,7 +22,6 @@ use minos_protocol::{
     SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
 use serde_json::{json, Map, Value};
-use tokio::sync::broadcast;
 
 use crate::agent::AgentGlue;
 
@@ -38,13 +34,13 @@ pub struct RpcServerImpl {
 #[async_trait]
 impl MinosRpcServer for RpcServerImpl {
     async fn pair(&self, _req: PairRequest) -> jsonrpsee::core::RpcResult<PairResponse> {
-        // Pairing is owned end-to-end by the relay broker (plan 05 Phase F.3).
-        // The Mac receives a Paired event from the relay's `Pair` LocalRpc
+        // Pairing is owned end-to-end by the backend broker (plan 05 Phase F.3).
+        // The Mac receives a Paired event from the backend's `Pair` LocalRpc
         // handler — it never sees a peer-originated `pair` JSON-RPC. If a
         // forwarded JSON-RPC frame somehow reaches here, the right answer is
         // that the host explicitly does not trust this surface for pairing.
         Err(rpc_err(MinosError::Unauthorized {
-            reason: "pair handled by relay, not host".into(),
+            reason: "pair handled by backend, not host".into(),
         }))
     }
 
@@ -75,28 +71,6 @@ impl MinosRpcServer for RpcServerImpl {
 
     async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()> {
         self.agent.stop_agent().await.map_err(rpc_err)
-    }
-
-    async fn subscribe_events(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        let mut rx = self.agent.event_stream();
-        let sink = pending.accept().await?;
-
-        loop {
-            match rx.recv().await {
-                Ok(evt) => {
-                    let message = SubscriptionMessage::from_json(&evt)?;
-                    if sink.send(message).await.is_err() {
-                        break;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped = n, "subscribe_events subscriber lagged");
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -301,8 +275,8 @@ mod tests {
         assert!(err.is_object(), "expected error object, got {resp}");
         let msg = err["message"].as_str().unwrap_or_default();
         assert!(
-            msg.contains("relay"),
-            "expected 'relay'-mentioning message, got {msg}"
+            msg.contains("backend"),
+            "expected 'backend'-mentioning message, got {msg}"
         );
     }
 

@@ -1,7 +1,7 @@
 //! Integration smoke-tests for `minos_daemon::relay_client::RelayClient`.
 //!
-//! Each test boots a real in-process relay (axum + sqlx over a temp-file
-//! SQLite DB, copied from `crates/minos-relay/tests/e2e.rs`'s harness) on
+//! Each test boots a real in-process backend (axum + sqlx over a temp-file
+//! SQLite DB, copied from `crates/minos-backend/tests/e2e.rs`'s harness) on
 //! `127.0.0.1:0`, spawns a `RelayClient` targeting it, and drives the
 //! flow end-to-end. The assertions freeze the contract Phase F will wire
 //! into `DaemonHandle`:
@@ -15,23 +15,24 @@
 //!    the backend URL and mac display name.
 //!
 //! The harness lives inline here (rather than a shared crate) so the
-//! daemon's test tree does not take a production dep on the relay; the
+//! daemon's test tree does not take a production dep on the backend; the
 //! dev-dep is scoped to this file.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use minos_daemon::config::RelayConfig;
-use minos_daemon::relay_client::{PersistenceCtx, RelayClient};
-use minos_domain::{DeviceId, MinosError, RelayLinkState};
-use minos_protocol::envelope::LocalRpcMethod;
-use minos_relay::{
-    http::{router, RelayState},
+use minos_backend::{
+    http::{router, BackendPublicConfig, BackendState},
+    ingest::translate::ThreadTranslators,
     pairing::PairingService,
     session::SessionRegistry,
     store,
 };
+use minos_daemon::config::RelayConfig;
+use minos_daemon::relay_client::{PersistenceCtx, RelayClient};
+use minos_domain::{DeviceId, MinosError, RelayLinkState};
+use minos_protocol::envelope::LocalRpcMethod;
 use pretty_assertions::assert_eq;
 use sqlx::SqlitePool;
 use tempfile::{NamedTempFile, TempDir};
@@ -46,9 +47,9 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 /// not expiry, so a generous value is fine.
 const TOKEN_TTL: Duration = Duration::from_mins(5);
 
-/// In-process relay harness. Holds the axum serve task and the temp-file
+/// In-process backend harness. Holds the axum serve task and the temp-file
 /// SQLite pool. Drop aborts the task so parallel tests don't leak tokio
-/// resources (matches the pattern used in `minos-relay/tests/e2e.rs`).
+/// resources (matches the pattern used in `minos-backend/tests/e2e.rs`).
 struct Relay {
     addr: SocketAddr,
     _pool: SqlitePool,
@@ -62,25 +63,38 @@ impl Drop for Relay {
     }
 }
 
-/// Boot a fresh relay on `127.0.0.1:0` backed by a tempfile DB. Mirrors
-/// `minos-relay/tests/e2e.rs::spawn_relay_with_token_ttl`.
+/// Boot a fresh backend on `127.0.0.1:0` backed by a tempfile DB. Mirrors
+/// `minos-backend/tests/e2e.rs::spawn_relay_with_token_ttl`.
+///
+/// The listener is bound BEFORE the `BackendState` is constructed so the
+/// `BackendPublicConfig.public_url` carries the real `ws://HOST:PORT/devices`
+/// address — the QR-assembly path in `RequestPairingQr` echoes that URL back
+/// in the payload, and the smoke test asserts it matches what the client dialed.
 async fn spawn_relay() -> anyhow::Result<Relay> {
     let tmp = NamedTempFile::new()?;
     let tmp_path = tmp.path().to_path_buf();
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
 
-    let state = RelayState {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let public_url = format!("ws://{addr}/devices");
+
+    let state = BackendState {
         registry: Arc::new(SessionRegistry::new()),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
         token_ttl: TOKEN_TTL,
+        translators: ThreadTranslators::new(),
+        public_cfg: Arc::new(BackendPublicConfig {
+            public_url,
+            cf_access_client_id: None,
+            cf_access_client_secret: None,
+        }),
         version: "daemon-smoke-test",
     };
     let app = router(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -99,7 +113,7 @@ fn relay_url(relay: &Relay) -> String {
     format!("ws://{}/devices", relay.addr)
 }
 
-/// Default empty-CF config — the in-process relay is not behind CF Access.
+/// Default empty-CF config — the in-process backend is not behind CF Access.
 fn test_config() -> RelayConfig {
     RelayConfig::new(String::new(), String::new())
 }
@@ -238,7 +252,9 @@ async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> 
         .await
         .expect("request_pairing_token did not complete within timeout")?;
 
-    assert_eq!(qr.v, 1);
+    // QR payload v2: backend assembles the full payload (ADR 0014). v=1 was
+    // the legacy host-assembled shape; the new flow returns v=2.
+    assert_eq!(qr.v, 2);
     assert_eq!(qr.backend_url, backend_url);
     assert_eq!(qr.mac_display_name, mac_name);
     assert!(

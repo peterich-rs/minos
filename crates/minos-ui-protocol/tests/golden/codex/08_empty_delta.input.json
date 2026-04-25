@@ -1,0 +1,4 @@
+[
+  {"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1714000008000}},
+  {"method":"item/agentMessage/delta","params":{"itemId":"i1","delta":""}}
+]

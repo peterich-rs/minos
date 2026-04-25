@@ -98,6 +98,18 @@ pub enum Envelope {
         #[serde(flatten)]
         event: EventKind,
     },
+    /// Agent-host → Backend. Raw native event from a CLI for persistence
+    /// and fan-out. No response expected. (seq, thread_id) must be unique
+    /// server-side; the host treats conflicts as a no-op.
+    Ingest {
+        #[serde(rename = "v")]
+        version: u8,
+        agent: minos_domain::AgentName,
+        thread_id: String,
+        seq: u64,
+        payload: serde_json::Value,
+        ts_ms: i64,
+    },
 }
 
 /// Discriminator for `LocalRpc` requests.
@@ -111,10 +123,10 @@ pub enum Envelope {
 pub enum LocalRpcMethod {
     /// Cheap liveness check. Params: `{}`. Result: `{"ok": true}`.
     Ping,
-    /// Mac-host role only. Mints a fresh one-shot pairing token
-    /// (spec §6.1). Params: `{}`. Result carries the token and its
-    /// RFC-3339 expiry.
-    RequestPairingToken,
+    /// Agent-host role only. Mints a fresh one-shot pairing token and
+    /// returns a `PairingQrPayload` for the agent-host to render as a QR
+    /// code (spec §6.1). Params: `{"host_display_name": "..."}`.
+    RequestPairingQr,
     /// iOS-client role only. Consumes a pairing token and, on success,
     /// the relay emits [`EventKind::Paired`] to the Mac (spec §7.1).
     /// Params: `{"token": "...", "device_name": "..."}`.
@@ -122,6 +134,20 @@ pub enum LocalRpcMethod {
     /// Either role. Tears down the pairing for both devices and emits
     /// [`EventKind::Unpaired`] to the peer (spec §7.4).
     ForgetPeer,
+    /// Mobile → Backend. List thread summaries for the paired agent-host.
+    /// Params: [`messages::ListThreadsParams`]. Result:
+    /// [`messages::ListThreadsResponse`].
+    ListThreads,
+    /// Mobile → Backend. Read a window of translated UI events for one
+    /// thread. Params: [`messages::ReadThreadParams`]. Result:
+    /// [`messages::ReadThreadResponse`].
+    ReadThread,
+    /// Host-only helper. Agent-host asks the backend for the last seq it
+    /// persisted on a given thread, so the host can decide whether to
+    /// re-ingest on startup. Params:
+    /// [`messages::GetThreadLastSeqParams`]. Result:
+    /// [`messages::GetThreadLastSeqResponse`].
+    GetThreadLastSeq,
 }
 
 /// Success or failure body for [`Envelope::LocalRpcResponse`].
@@ -194,6 +220,15 @@ pub enum EventKind {
     Unpaired,
     /// Relay is shutting down; clients should reconnect with backoff.
     ServerShutdown,
+    /// Backend → Mobile. One translated UI event from backend's live
+    /// fan-out. `seq` matches the underlying `raw_events` row so mobile
+    /// can dedupe against its per-thread watermark.
+    UiEventMessage {
+        thread_id: String,
+        seq: u64,
+        ui: minos_ui_protocol::UiEventMessage,
+        ts_ms: i64,
+    },
 }
 
 /// Error body carried inside [`LocalRpcOutcome::Err`].
@@ -393,5 +428,43 @@ mod tests {
         };
         let json = serde_json::to_string(&e).unwrap();
         assert_eq!(json, r#"{"code":"nope","message":"because"}"#);
+    }
+
+    #[test]
+    fn envelope_ingest_round_trip() {
+        let e = Envelope::Ingest {
+            version: 1,
+            agent: minos_domain::AgentName::Codex,
+            thread_id: "thr_1".into(),
+            seq: 42,
+            payload: serde_json::json!({"method":"item/agentMessage/delta","params":{"delta":"Hi"}}),
+            ts_ms: 1_714_000_000_000,
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains(r#""kind":"ingest""#));
+        assert!(s.contains(r#""agent":"codex""#));
+        let back: Envelope = serde_json::from_str(&s).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn envelope_event_ui_event_message_round_trip() {
+        let e = Envelope::Event {
+            version: 1,
+            event: EventKind::UiEventMessage {
+                thread_id: "thr_1".into(),
+                seq: 42,
+                ui: minos_ui_protocol::UiEventMessage::TextDelta {
+                    message_id: "msg_1".into(),
+                    text: "Hi".into(),
+                },
+                ts_ms: 1_714_000_000_000,
+            },
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains(r#""type":"ui_event_message""#));
+        assert!(s.contains(r#""kind":"text_delta""#));
+        let back: Envelope = serde_json::from_str(&s).unwrap();
+        assert_eq!(e, back);
     }
 }

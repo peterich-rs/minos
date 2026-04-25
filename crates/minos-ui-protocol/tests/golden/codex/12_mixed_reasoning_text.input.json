@@ -1,0 +1,6 @@
+[
+  {"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1714000012000}},
+  {"method":"item/reasoning/delta","params":{"itemId":"i1","delta":"planning…"}},
+  {"method":"item/agentMessage/delta","params":{"itemId":"i1","delta":"Here it is."}},
+  {"method":"turn/completed","params":{"finishedAtMs":1714000013000}}
+]

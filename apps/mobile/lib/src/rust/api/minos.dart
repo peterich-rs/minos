@@ -9,6 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `spawn_state_forwarder`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -28,20 +29,52 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// synchronous.
   ConnectionState currentState();
 
+  /// Forget the paired backend; clears secure storage and tears down the
+  /// WS. Idempotent.
+  Future<void> forgetPeer();
+
+  /// Request a page of thread summaries.
+  Future<ListThreadsResponse> listThreads({required ListThreadsParams req});
+
   /// Construct a client backed by the built-in in-memory pairing store.
   /// Synchronous — no I/O happens until a pairing method is called.
   factory MobileClient({required String selfName}) =>
       RustLib.instance.api.crateApiMinosMobileClientNew(selfName: selfName);
 
-  /// Pair using the raw JSON payload extracted from the scanned QR code.
-  /// Delegates to `MobileClient::pair_with_json`; see that method for the
-  /// full error surface.
-  Future<PairResponse> pairWithJson({required String qrJson});
+  /// Construct a client preloaded with a durable pairing snapshot from the
+  /// Dart-side secure store.
+  static MobileClient newWithPersistedState({
+    required String selfName,
+    required PersistedPairingState state,
+  }) => RustLib.instance.api.crateApiMinosMobileClientNewWithPersistedState(
+    selfName: selfName,
+    state: state,
+  );
+
+  /// Pair using the raw JSON payload extracted from the scanned QR v2
+  /// code. Delegates to `MobileClient::pair_with_qr_json`.
+  Future<void> pairWithQrJson({required String qrJson});
+
+  /// Export the current pairing snapshot so Dart can mirror it into secure
+  /// storage after pairing succeeds.
+  Future<PersistedPairingState> persistedPairingState();
+
+  /// Read a window of translated UI events for one thread.
+  Future<ReadThreadResponse> readThread({required ReadThreadParams req});
+
+  /// Reconnect using the durable pairing snapshot already loaded from the
+  /// Dart-side secure store.
+  Future<void> resumePersistedSession();
 
   /// Subscribe to connection-state transitions. Emits the current value
   /// immediately, then every subsequent change. The spawned task exits once
   /// the Dart side drops the stream (detected via `sink.add(...).is_err()`).
   Stream<ConnectionState> subscribeState();
+
+  /// Subscribe to live `UiEventFrame`s fanned out from the backend.
+  /// Every frb stream sink gets its own broadcast receiver; lagging
+  /// subscribers lose old frames rather than blocking the producer.
+  Stream<UiEventFrame> subscribeUiEvents();
 }
 
 enum AgentName { codex, claude, gemini }
@@ -73,7 +106,7 @@ enum ErrorKind {
   connectionStateMismatch,
   envelopeVersionUnsupported,
   peerOffline,
-  relayInternal,
+  backendInternal,
   cfAuthFailed,
   codexSpawnFailed,
   codexConnectFailed,
@@ -82,9 +115,55 @@ enum ErrorKind {
   agentNotRunning,
   agentNotSupported,
   agentSessionIdMismatch,
+  cfAccessMisconfigured,
+  ingestSeqConflict,
+  threadNotFound,
+  translationNotImplemented,
+  translationFailed,
+  pairingQrVersionUnsupported,
 }
 
 enum Lang { zh, en }
+
+class ListThreadsParams {
+  final int limit;
+  final PlatformInt64? beforeTsMs;
+  final AgentName? agent;
+
+  const ListThreadsParams({required this.limit, this.beforeTsMs, this.agent});
+
+  @override
+  int get hashCode => limit.hashCode ^ beforeTsMs.hashCode ^ agent.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListThreadsParams &&
+          runtimeType == other.runtimeType &&
+          limit == other.limit &&
+          beforeTsMs == other.beforeTsMs &&
+          agent == other.agent;
+}
+
+class ListThreadsResponse {
+  final List<ThreadSummary> threads;
+  final PlatformInt64? nextBeforeTsMs;
+
+  const ListThreadsResponse({required this.threads, this.nextBeforeTsMs});
+
+  @override
+  int get hashCode => threads.hashCode ^ nextBeforeTsMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListThreadsResponse &&
+          runtimeType == other.runtimeType &&
+          threads == other.threads &&
+          nextBeforeTsMs == other.nextBeforeTsMs;
+}
+
+enum MessageRole { user, assistant, system }
 
 @freezed
 sealed class MinosError with _$MinosError implements FrbException {
@@ -137,8 +216,8 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_EnvelopeVersionUnsupported;
   const factory MinosError.peerOffline({required String peerDeviceId}) =
       MinosError_PeerOffline;
-  const factory MinosError.relayInternal({required String message}) =
-      MinosError_RelayInternal;
+  const factory MinosError.backendInternal({required String message}) =
+      MinosError_BackendInternal;
   const factory MinosError.cfAuthFailed({required String message}) =
       MinosError_CfAuthFailed;
   const factory MinosError.codexSpawnFailed({required String message}) =
@@ -158,24 +237,257 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_AgentNotSupported;
   const factory MinosError.agentSessionIdMismatch() =
       MinosError_AgentSessionIdMismatch;
+  const factory MinosError.cfAccessMisconfigured({required String reason}) =
+      MinosError_CfAccessMisconfigured;
+  const factory MinosError.ingestSeqConflict({
+    required String threadId,
+    required BigInt seq,
+  }) = MinosError_IngestSeqConflict;
+  const factory MinosError.threadNotFound({required String threadId}) =
+      MinosError_ThreadNotFound;
+  const factory MinosError.translationNotImplemented({
+    required AgentName agent,
+  }) = MinosError_TranslationNotImplemented;
+  const factory MinosError.translationFailed({
+    required AgentName agent,
+    required String message,
+  }) = MinosError_TranslationFailed;
+  const factory MinosError.pairingQrVersionUnsupported({required int version}) =
+      MinosError_PairingQrVersionUnsupported;
 }
 
-class PairResponse {
-  final bool ok;
-  final String macName;
+enum PairingState { unpaired, awaitingPeer, paired }
 
-  const PairResponse({required this.ok, required this.macName});
+/// Durable mobile pairing snapshot mirrored into the iOS keychain.
+class PersistedPairingState {
+  final String? backendUrl;
+  final String? deviceId;
+  final String? deviceSecret;
+  final String? cfAccessClientId;
+  final String? cfAccessClientSecret;
+
+  const PersistedPairingState({
+    this.backendUrl,
+    this.deviceId,
+    this.deviceSecret,
+    this.cfAccessClientId,
+    this.cfAccessClientSecret,
+  });
 
   @override
-  int get hashCode => ok.hashCode ^ macName.hashCode;
+  int get hashCode =>
+      backendUrl.hashCode ^
+      deviceId.hashCode ^
+      deviceSecret.hashCode ^
+      cfAccessClientId.hashCode ^
+      cfAccessClientSecret.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is PairResponse &&
+      other is PersistedPairingState &&
           runtimeType == other.runtimeType &&
-          ok == other.ok &&
-          macName == other.macName;
+          backendUrl == other.backendUrl &&
+          deviceId == other.deviceId &&
+          deviceSecret == other.deviceSecret &&
+          cfAccessClientId == other.cfAccessClientId &&
+          cfAccessClientSecret == other.cfAccessClientSecret;
 }
 
-enum PairingState { unpaired, awaitingPeer, paired }
+class ReadThreadParams {
+  final String threadId;
+  final BigInt? fromSeq;
+  final int limit;
+
+  const ReadThreadParams({
+    required this.threadId,
+    this.fromSeq,
+    required this.limit,
+  });
+
+  @override
+  int get hashCode => threadId.hashCode ^ fromSeq.hashCode ^ limit.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReadThreadParams &&
+          runtimeType == other.runtimeType &&
+          threadId == other.threadId &&
+          fromSeq == other.fromSeq &&
+          limit == other.limit;
+}
+
+class ReadThreadResponse {
+  final List<UiEventMessage> uiEvents;
+  final BigInt? nextSeq;
+  final ThreadEndReason? threadEndReason;
+
+  const ReadThreadResponse({
+    required this.uiEvents,
+    this.nextSeq,
+    this.threadEndReason,
+  });
+
+  @override
+  int get hashCode =>
+      uiEvents.hashCode ^ nextSeq.hashCode ^ threadEndReason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReadThreadResponse &&
+          runtimeType == other.runtimeType &&
+          uiEvents == other.uiEvents &&
+          nextSeq == other.nextSeq &&
+          threadEndReason == other.threadEndReason;
+}
+
+@freezed
+sealed class ThreadEndReason with _$ThreadEndReason {
+  const ThreadEndReason._();
+
+  const factory ThreadEndReason.userStopped() = ThreadEndReason_UserStopped;
+  const factory ThreadEndReason.agentDone() = ThreadEndReason_AgentDone;
+  const factory ThreadEndReason.crashed({required String message}) =
+      ThreadEndReason_Crashed;
+  const factory ThreadEndReason.timeout() = ThreadEndReason_Timeout;
+  const factory ThreadEndReason.hostDisconnected() =
+      ThreadEndReason_HostDisconnected;
+}
+
+class ThreadSummary {
+  final String threadId;
+  final AgentName agent;
+  final String? title;
+  final PlatformInt64 firstTsMs;
+  final PlatformInt64 lastTsMs;
+  final int messageCount;
+  final PlatformInt64? endedAtMs;
+  final ThreadEndReason? endReason;
+
+  const ThreadSummary({
+    required this.threadId,
+    required this.agent,
+    this.title,
+    required this.firstTsMs,
+    required this.lastTsMs,
+    required this.messageCount,
+    this.endedAtMs,
+    this.endReason,
+  });
+
+  @override
+  int get hashCode =>
+      threadId.hashCode ^
+      agent.hashCode ^
+      title.hashCode ^
+      firstTsMs.hashCode ^
+      lastTsMs.hashCode ^
+      messageCount.hashCode ^
+      endedAtMs.hashCode ^
+      endReason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ThreadSummary &&
+          runtimeType == other.runtimeType &&
+          threadId == other.threadId &&
+          agent == other.agent &&
+          title == other.title &&
+          firstTsMs == other.firstTsMs &&
+          lastTsMs == other.lastTsMs &&
+          messageCount == other.messageCount &&
+          endedAtMs == other.endedAtMs &&
+          endReason == other.endReason;
+}
+
+/// Dart-visible shape of `minos_mobile::UiEventFrame`. Held as a separate
+/// type (rather than mirrored) so the `ui` field lands as the mirrored
+/// `UiEventMessage` variant on the Dart side.
+class UiEventFrame {
+  final String threadId;
+  final BigInt seq;
+  final UiEventMessage ui;
+  final PlatformInt64 tsMs;
+
+  const UiEventFrame({
+    required this.threadId,
+    required this.seq,
+    required this.ui,
+    required this.tsMs,
+  });
+
+  @override
+  int get hashCode =>
+      threadId.hashCode ^ seq.hashCode ^ ui.hashCode ^ tsMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UiEventFrame &&
+          runtimeType == other.runtimeType &&
+          threadId == other.threadId &&
+          seq == other.seq &&
+          ui == other.ui &&
+          tsMs == other.tsMs;
+}
+
+@freezed
+sealed class UiEventMessage with _$UiEventMessage {
+  const UiEventMessage._();
+
+  const factory UiEventMessage.threadOpened({
+    required String threadId,
+    required AgentName agent,
+    String? title,
+    required PlatformInt64 openedAtMs,
+  }) = UiEventMessage_ThreadOpened;
+  const factory UiEventMessage.threadTitleUpdated({
+    required String threadId,
+    required String title,
+  }) = UiEventMessage_ThreadTitleUpdated;
+  const factory UiEventMessage.threadClosed({
+    required String threadId,
+    required ThreadEndReason reason,
+    required PlatformInt64 closedAtMs,
+  }) = UiEventMessage_ThreadClosed;
+  const factory UiEventMessage.messageStarted({
+    required String messageId,
+    required MessageRole role,
+    required PlatformInt64 startedAtMs,
+  }) = UiEventMessage_MessageStarted;
+  const factory UiEventMessage.messageCompleted({
+    required String messageId,
+    required PlatformInt64 finishedAtMs,
+  }) = UiEventMessage_MessageCompleted;
+  const factory UiEventMessage.textDelta({
+    required String messageId,
+    required String text,
+  }) = UiEventMessage_TextDelta;
+  const factory UiEventMessage.reasoningDelta({
+    required String messageId,
+    required String text,
+  }) = UiEventMessage_ReasoningDelta;
+  const factory UiEventMessage.toolCallPlaced({
+    required String messageId,
+    required String toolCallId,
+    required String name,
+    required String argsJson,
+  }) = UiEventMessage_ToolCallPlaced;
+  const factory UiEventMessage.toolCallCompleted({
+    required String toolCallId,
+    required String output,
+    required bool isError,
+  }) = UiEventMessage_ToolCallCompleted;
+  const factory UiEventMessage.error({
+    required String code,
+    required String message,
+    String? messageId,
+  }) = UiEventMessage_Error;
+  const factory UiEventMessage.raw({
+    required String kind,
+    required String payloadJson,
+  }) = UiEventMessage_Raw;
+}

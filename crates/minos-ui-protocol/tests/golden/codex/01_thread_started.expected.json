@@ -1,0 +1,9 @@
+[
+  {
+    "kind":"thread_opened",
+    "thread_id":"thr_fixture",
+    "agent":"codex",
+    "title":null,
+    "opened_at_ms":1714000000000
+  }
+]

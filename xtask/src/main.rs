@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig};
-use minos_domain::{AgentEvent, AgentName};
+use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, RawIngest};
+use minos_domain::AgentName;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
 use tokio::sync::broadcast::error::RecvError;
@@ -41,10 +41,10 @@ enum Cmd {
     BuildIos,
     /// Generate apps/macos/Minos.xcodeproj from apps/macos/project.yml.
     GenXcode,
-    /// Wipe and recreate the relay SQLite DB at ./minos-relay.db.
-    RelayDbReset,
-    /// Run the relay binary with dev-friendly defaults.
-    RelayRun,
+    /// Wipe and recreate the backend SQLite DB at ./minos-backend.db.
+    BackendDbReset,
+    /// Run the backend binary with dev-friendly defaults.
+    BackendRun,
 }
 
 fn main() -> Result<()> {
@@ -58,8 +58,8 @@ fn main() -> Result<()> {
         Cmd::BuildMacos => build_macos(),
         Cmd::BuildIos => build_ios(),
         Cmd::GenXcode => gen_xcode(),
-        Cmd::RelayDbReset => relay_db_reset(),
-        Cmd::RelayRun => relay_run(),
+        Cmd::BackendDbReset => backend_db_reset(),
+        Cmd::BackendRun => backend_run(),
     }
 }
 
@@ -210,7 +210,7 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
         .await
         .context("codex smoke: start_agent failed")?;
     let session_id = outcome.session_id;
-    let watcher = tokio::spawn(wait_for_codex_ok_token(runtime.event_stream()));
+    let watcher = tokio::spawn(wait_for_codex_ok_token(runtime.ingest_stream()));
 
     let result = async {
         runtime
@@ -240,22 +240,28 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
 }
 
 async fn wait_for_codex_ok_token(
-    mut events: tokio::sync::broadcast::Receiver<AgentEvent>,
+    mut events: tokio::sync::broadcast::Receiver<RawIngest>,
 ) -> Result<()> {
     tokio::time::timeout(Duration::from_mins(1), async move {
         loop {
             match events.recv().await {
-                Ok(AgentEvent::TokenChunk { text }) => {
-                    if text.to_ascii_lowercase().contains("ok") {
-                        return Ok(());
+                Ok(RawIngest { payload, .. }) => {
+                    let method = payload.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                    if method == "item/agentMessage/delta" {
+                        let delta = payload
+                            .get("params")
+                            .and_then(|p| p.get("delta"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if delta.to_ascii_lowercase().contains("ok") {
+                            return Ok(());
+                        }
+                    } else if method == "thread/archived" {
+                        bail!(
+                            "codex smoke: thread archived before emitting an `ok` agent-message delta"
+                        );
                     }
                 }
-                Ok(AgentEvent::Done { exit_code }) => {
-                    bail!(
-                        "codex smoke: session finished before emitting an `ok` token (exit_code={exit_code})"
-                    );
-                }
-                Ok(_) => {}
                 Err(RecvError::Lagged(skipped)) => {
                     eprintln!(
                         "    codex smoke: event subscriber lagged by {skipped} messages; continuing"
@@ -268,7 +274,7 @@ async fn wait_for_codex_ok_token(
         }
     })
     .await
-    .context("codex smoke: timed out waiting up to 60s for a TokenChunk containing `ok`")?
+    .context("codex smoke: timed out waiting up to 60s for an `ok` agent-message delta")?
 }
 
 /// Regenerate the Dart/Rust bridge and fail on any drift — tracked diffs OR
@@ -693,6 +699,7 @@ fn prune_unexpected_uniffi_outputs(out_dir: &Path) {
     let _ = out_dir;
 }
 
+#[allow(clippy::too_many_lines)] // Sequential drift guards; splitting them would obscure the per-needle context.
 fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     // All `.replace()` calls here rewrite `uniffi-bindgen-swift`'s exact output
     // text. If upstream tweaks whitespace, naming, or pragma layout, a replacement
@@ -706,7 +713,19 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     const MODULEMAP_DECL: &str = "framework module MinosCore {";
     const MODULEMAP_DECL_NORMALIZED: &str = "module MinosCoreFFI {";
     const MODULEMAP_DECL_ALREADY_NORMALIZED: &str = "framework module MinosCoreFFI {";
-    const DUPLICATE_DAEMON_NEWTYPE_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias DeviceId = Uuid\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeDeviceId: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceId {\n        return try FfiConverterTypeUuid.read(from: &buf)\n    }\n\n    public static func write(_ value: DeviceId, into buf: inout [UInt8]) {\n        return FfiConverterTypeUuid.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> DeviceId {\n        return try FfiConverterTypeUuid_lift(value)\n    }\n\n    public static func lower(_ value: DeviceId) -> RustBuffer {\n        return FfiConverterTypeUuid_lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lift(_ value: RustBuffer) throws -> DeviceId {\n    return try FfiConverterTypeDeviceId.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lower(_ value: DeviceId) -> RustBuffer {\n    return FfiConverterTypeDeviceId.lower(value)\n}\n\n\n\n/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias Uuid = String\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeUuid: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Uuid {\n        return try FfiConverterString.read(from: &buf)\n    }\n\n    public static func write(_ value: Uuid, into buf: inout [UInt8]) {\n        return FfiConverterString.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> Uuid {\n        return try FfiConverterString.lift(value)\n    }\n\n    public static func lower(_ value: Uuid) -> RustBuffer {\n        return FfiConverterString.lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lift(_ value: RustBuffer) throws -> Uuid {\n    return try FfiConverterTypeUuid.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lower(_ value: Uuid) -> RustBuffer {\n    return FfiConverterTypeUuid.lower(value)\n}\n";
+    // Each cross-crate newtype that minos-daemon and minos-pairing both
+    // register as a `remote` UniFFI custom_type emits an identical typealias
+    // + FfiConverter block in `minos_daemon.swift` and `minos_pairing.swift`.
+    // The two files share a Swift module, so we strip the daemon copy and
+    // let pairing's stay as the canonical definition.
+    //
+    // Three independent strips (one per type) are intentional: uniffi-bindgen
+    // -swift sorts these blocks alphabetically, so a future `remote` newtype
+    // landing between two existing ones (e.g. between `DeviceSecret` and
+    // `Uuid`) would silently break a single monolithic needle.
+    const DUPLICATE_DAEMON_DEVICE_ID_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias DeviceId = Uuid\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeDeviceId: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceId {\n        return try FfiConverterTypeUuid.read(from: &buf)\n    }\n\n    public static func write(_ value: DeviceId, into buf: inout [UInt8]) {\n        return FfiConverterTypeUuid.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> DeviceId {\n        return try FfiConverterTypeUuid_lift(value)\n    }\n\n    public static func lower(_ value: DeviceId) -> RustBuffer {\n        return FfiConverterTypeUuid_lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lift(_ value: RustBuffer) throws -> DeviceId {\n    return try FfiConverterTypeDeviceId.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lower(_ value: DeviceId) -> RustBuffer {\n    return FfiConverterTypeDeviceId.lower(value)\n}\n";
+    const DUPLICATE_DAEMON_DEVICE_SECRET_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias DeviceSecret = String\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeDeviceSecret: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceSecret {\n        return try FfiConverterString.read(from: &buf)\n    }\n\n    public static func write(_ value: DeviceSecret, into buf: inout [UInt8]) {\n        return FfiConverterString.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> DeviceSecret {\n        return try FfiConverterString.lift(value)\n    }\n\n    public static func lower(_ value: DeviceSecret) -> RustBuffer {\n        return FfiConverterString.lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceSecret_lift(_ value: RustBuffer) throws -> DeviceSecret {\n    return try FfiConverterTypeDeviceSecret.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceSecret_lower(_ value: DeviceSecret) -> RustBuffer {\n    return FfiConverterTypeDeviceSecret.lower(value)\n}\n";
+    const DUPLICATE_DAEMON_UUID_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias Uuid = String\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeUuid: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Uuid {\n        return try FfiConverterString.read(from: &buf)\n    }\n\n    public static func write(_ value: Uuid, into buf: inout [UInt8]) {\n        return FfiConverterString.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> Uuid {\n        return try FfiConverterString.lift(value)\n    }\n\n    public static func lower(_ value: Uuid) -> RustBuffer {\n        return FfiConverterString.lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lift(_ value: RustBuffer) throws -> Uuid {\n    return try FfiConverterTypeUuid.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lower(_ value: Uuid) -> RustBuffer {\n    return FfiConverterTypeUuid.lower(value)\n}\n";
     const VTABLE_DECL_OLD: &str =
         "    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceConnectionStateObserver> = {";
     const VTABLE_DECL_NEW: &str =
@@ -788,15 +807,20 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
         }
 
         if file_name == "minos_daemon.swift" {
-            // `DeviceId`/`Uuid` used to be registered in both minos-domain and
-            // minos-daemon, so both Swift files emitted the typealias block
-            // and we had to strip one copy. After the plan-05 refactor,
-            // `DeviceId` is registered only in its home crate `minos-domain`
-            // (see minos-domain::ids::uniffi_bridges), so the block already
-            // appears exactly once. Stripping is therefore a no-op in the
-            // current world; `replace_optional` still scrubs the block if a
-            // future upstream uniffi-bindgen-swift release reintroduces it.
-            updated = replace_optional(updated, DUPLICATE_DAEMON_NEWTYPE_BLOCK, "");
+            // After the plan-05 refactor, `DeviceId` / `DeviceSecret` are
+            // registered only in their home crate `minos-domain` (see
+            // minos-domain::ids::uniffi_bridges), so the per-newtype
+            // typealias blocks should appear exactly once across all
+            // bindgen outputs. The per-type scrubs are split (rather
+            // than one monolithic needle) so a future remote-newtype
+            // landing between existing entries surfaces as targeted
+            // drift rather than a silently-failed monolithic match;
+            // each is `optional` because the canonical world has them
+            // already absent — they only need scrubbing if a future
+            // uniffi-bindgen-swift release reintroduces them.
+            updated = replace_optional(updated, DUPLICATE_DAEMON_DEVICE_ID_BLOCK, "");
+            updated = replace_optional(updated, DUPLICATE_DAEMON_DEVICE_SECRET_BLOCK, "");
+            updated = replace_optional(updated, DUPLICATE_DAEMON_UUID_BLOCK, "");
             updated = replace_required(
                 updated,
                 VTABLE_DECL_OLD,
@@ -1032,25 +1056,25 @@ fn ensure_uniffi_bindgen_swift_wrapper() -> Result<()> {
     Ok(())
 }
 
-/// Run the relay binary with dev-friendly defaults.
+/// Run the backend binary with dev-friendly defaults.
 ///
-/// Convenience wrapper for `cargo run -p minos-relay -- --listen 127.0.0.1:8787
-/// --db ./minos-relay.db --log-level debug`. Used by plan §11 acceptance for
-/// booting the relay during iteration.
-fn relay_run() -> Result<()> {
+/// Convenience wrapper for `cargo run -p minos-backend -- --listen 127.0.0.1:8787
+/// --db ./minos-backend.db --log-level debug`. Used by plan §11 acceptance for
+/// booting the backend during iteration.
+fn backend_run() -> Result<()> {
     let root = workspace_root()?;
-    eprintln!("==> cargo run -p minos-relay (dev listen 127.0.0.1:8787)");
+    eprintln!("==> cargo run -p minos-backend (dev listen 127.0.0.1:8787)");
     run(
         "cargo",
         &[
             "run",
             "-p",
-            "minos-relay",
+            "minos-backend",
             "--",
             "--listen",
             "127.0.0.1:8787",
             "--db",
-            "./minos-relay.db",
+            "./minos-backend.db",
             "--log-level",
             "debug",
         ],
@@ -1058,32 +1082,32 @@ fn relay_run() -> Result<()> {
     )
 }
 
-/// Wipe and recreate the relay SQLite DB at ./minos-relay.db.
+/// Wipe and recreate the backend SQLite DB at ./minos-backend.db.
 ///
 /// Removes the db file (plus `-shm` / `-wal` sidecars if SQLite is in WAL mode)
 /// and then re-runs migrations via `--exit-after-migrate`. Idempotent — missing
 /// files are ignored.
-fn relay_db_reset() -> Result<()> {
+fn backend_db_reset() -> Result<()> {
     let root = workspace_root()?;
 
     for suffix in ["", "-shm", "-wal"] {
-        let path = root.join(format!("minos-relay.db{suffix}"));
+        let path = root.join(format!("minos-backend.db{suffix}"));
         if path.exists() {
             eprintln!("==> rm {}", path.display());
             fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
         }
     }
 
-    eprintln!("==> cargo run -p minos-relay -- --db ./minos-relay.db --exit-after-migrate");
+    eprintln!("==> cargo run -p minos-backend -- --db ./minos-backend.db --exit-after-migrate");
     run(
         "cargo",
         &[
             "run",
             "-p",
-            "minos-relay",
+            "minos-backend",
             "--",
             "--db",
-            "./minos-relay.db",
+            "./minos-backend.db",
             "--exit-after-migrate",
         ],
         &root,

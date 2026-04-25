@@ -47,11 +47,11 @@ jobs:
       - name: Verify sqlx offline metadata
         # Catches stale `.sqlx/` cache entries before they surface as opaque
         # `cargo test` failures inside `cargo xtask check-all`. The
-        # `-- -p minos-relay --all-targets` forwarding is required because the
+        # `-- -p minos-backend --all-targets` forwarding is required because the
         # workspace manifest sets `default-members = []`; without it,
         # `cargo sqlx prepare` errors with "no crates to check". The `.sqlx/`
         # directory was committed in a297e28 (relay store CRUD).
-        run: cargo sqlx prepare --check --workspace -- -p minos-relay --all-targets
+        run: cargo sqlx prepare --check --workspace -- -p minos-backend --all-targets
 
       - name: cargo xtask check-all
         # Single source of truth — same command developers run locally.

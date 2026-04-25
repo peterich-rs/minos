@@ -106,6 +106,10 @@ void main() {
       error: const MinosError.rpcCallFailed(method: 'foo', message: 'err'),
       kind: ErrorKind.rpcCallFailed,
     ),
+    (
+      error: const MinosError.backendInternal(message: 'boom'),
+      kind: ErrorKind.backendInternal,
+    ),
   ];
 
   for (final c in cases) {

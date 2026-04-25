@@ -94,7 +94,7 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
 
     // CLI reads CF creds from env; Swift's app delegate does the same in
     // its own app-side plumbing. Empty env vars collapse to "no CF" —
-    // valid for the local dev relay (`cargo run -p minos-relay`).
+    // valid for the local dev backend (`cargo run -p minos-backend`).
     let cf_client_id = env::var("CF_ACCESS_CLIENT_ID").unwrap_or_default();
     let cf_client_secret = env::var("CF_ACCESS_CLIENT_SECRET").unwrap_or_default();
     let config = RelayConfig::new(cf_client_id, cf_client_secret);

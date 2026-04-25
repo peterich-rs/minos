@@ -1,0 +1,3 @@
+[
+  {"method":"thread/started","params":{"threadId":"thr_fixture","createdAtMs":1714000000000}}
+]

@@ -1,11 +1,11 @@
 //! The shared service trait. `jsonrpsee` macros generate a server stub
-//! (implemented by `minos-daemon`) and a typed client (used by `minos-mobile`).
+//! (implemented by `minos-daemon`) plus a typed client retained for Rust-side
+//! callers and tests; `minos-mobile` now uses the envelope/local-RPC path.
 
 use crate::{
-    AgentEvent, HealthResponse, ListClisResponse, PairRequest, PairResponse,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    HealthResponse, ListClisResponse, PairRequest, PairResponse, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse,
 };
-use jsonrpsee::core::SubscriptionResult;
 use jsonrpsee::proc_macros::rpc;
 
 #[rpc(server, client, namespace = "minos")]
@@ -33,8 +33,8 @@ pub trait MinosRpc {
     ) -> jsonrpsee::core::RpcResult<StartAgentResponse>;
 
     /// Send user text into the active session. Fire-and-observe: streaming
-    /// output arrives via `subscribe_events`, not as this RPC's response.
-    /// See spec §5.2.
+    /// output arrives via the backend's ingest pipeline (plan §B6), not as
+    /// this RPC's response. See spec §5.2.
     #[method(name = "send_user_message")]
     async fn send_user_message(
         &self,
@@ -45,9 +45,4 @@ pub trait MinosRpc {
     /// See spec §5.2.
     #[method(name = "stop_agent")]
     async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()>;
-
-    /// Streaming agent events. **MVP**: server returns "not implemented";
-    /// shape and naming are pinned now so plan P1 only fills in the producer.
-    #[subscription(name = "subscribe_events" => "agent_event", item = AgentEvent)]
-    async fn subscribe_events(&self) -> SubscriptionResult;
 }

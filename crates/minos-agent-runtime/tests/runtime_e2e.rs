@@ -9,8 +9,8 @@
 use std::time::Duration;
 
 use minos_agent_runtime::test_support::{FakeCodexServer, Step};
-use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState};
-use minos_domain::{AgentEvent, AgentName, MinosError};
+use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState, RawIngest};
+use minos_domain::{AgentName, MinosError};
 use serde_json::json;
 use tempfile::TempDir;
 use url::Url;
@@ -72,8 +72,8 @@ async fn happy_path_start_send_stream_stop() {
     let mut state_rx = rt.state_stream();
     assert_eq!(rt.current_state(), AgentState::Idle);
 
-    // Subscribe for token-level events before starting, so we don't miss anything.
-    let mut event_rx = rt.event_stream();
+    // Subscribe for raw notifications before starting, so we don't miss anything.
+    let mut ingest_rx = rt.ingest_stream();
 
     let outcome = rt.start(AgentName::Codex).await.unwrap();
     assert_eq!(outcome.session_id, "thr-abc");
@@ -101,16 +101,16 @@ async fn happy_path_start_send_stream_stop() {
     // Send a user message.
     rt.send_user_message("thr-abc", "ping").await.unwrap();
 
-    // The fake will emit an `item/agentMessage/delta` notification; we should
-    // receive a translated TokenChunk event.
-    let evt = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+    // The fake emits an `item/agentMessage/delta` notification; we should
+    // receive the raw JSON-RPC frame verbatim on the ingest stream.
+    let ingest = tokio::time::timeout(Duration::from_secs(2), ingest_rx.recv())
         .await
-        .expect("did not receive token chunk")
+        .expect("did not receive ingest event")
         .expect("broadcast receive error");
-    match evt {
-        AgentEvent::TokenChunk { text } => assert_eq!(text, "Hello"),
-        other => panic!("expected TokenChunk, got {other:?}"),
-    }
+    assert_eq!(ingest.agent, AgentName::Codex);
+    assert_eq!(ingest.thread_id, "thr-abc");
+    assert_eq!(ingest.payload["method"], "item/agentMessage/delta");
+    assert_eq!(ingest.payload["params"]["delta"], "Hello");
 
     // Stop — script drains through the polite-goodbye pair and then WS closes.
     rt.stop().await.unwrap();
@@ -163,31 +163,32 @@ async fn approval_server_request_is_auto_rejected_and_broadcast() {
     ];
     let (fake, port) = FakeCodexServer::bind(script).await;
     let rt = AgentRuntime::new(make_cfg(ws_url_for(port)));
-    let mut event_rx = rt.event_stream();
+    let mut ingest_rx = rt.ingest_stream();
 
     let outcome = rt.start(AgentName::Codex).await.unwrap();
     assert_eq!(outcome.session_id, "thr-approval");
 
-    // Drain at least one event — the Raw broadcast for the server request.
+    // Drain at least one ingest frame — the synthetic notification for the
+    // server request that the runtime surfaces after auto-rejecting.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let mut saw_raw = false;
+    let mut saw_server_req = false;
     while std::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(200), event_rx.recv()).await {
-            Ok(Ok(AgentEvent::Raw { kind, payload_json })) => {
-                if kind == "server_request/ExecCommandApproval" {
-                    assert!(payload_json.contains("\"ls\""), "{payload_json}");
-                    saw_raw = true;
+        match tokio::time::timeout(Duration::from_millis(200), ingest_rx.recv()).await {
+            Ok(Ok(RawIngest { payload, .. })) => {
+                if payload["method"] == "server_request/ExecCommandApproval" {
+                    let params_s = serde_json::to_string(&payload["params"]).unwrap_or_default();
+                    assert!(params_s.contains("\"ls\""), "{params_s}");
+                    saw_server_req = true;
                     break;
                 }
             }
-            Ok(Ok(_other)) => {}
             Ok(Err(_)) => break,
             Err(_) => {}
         }
     }
     assert!(
-        saw_raw,
-        "did not observe Raw broadcast for approval server request"
+        saw_server_req,
+        "did not observe synthetic server_request ingest frame"
     );
 
     // The fake records the ids it generated for server requests; we only
@@ -334,8 +335,8 @@ async fn multiple_subscribers_receive_same_event() {
     let (fake, port) = FakeCodexServer::bind(script).await;
     let rt = AgentRuntime::new(make_cfg(ws_url_for(port)));
 
-    let mut rx1 = rt.event_stream();
-    let mut rx2 = rt.event_stream();
+    let mut rx1 = rt.ingest_stream();
+    let mut rx2 = rt.ingest_stream();
 
     let _ = rt.start(AgentName::Codex).await.unwrap();
 
@@ -347,11 +348,14 @@ async fn multiple_subscribers_receive_same_event() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(e1, e2);
-    match e1 {
-        AgentEvent::TokenChunk { text } => assert_eq!(text, "broadcast-test"),
-        other => panic!("expected TokenChunk, got {other:?}"),
-    }
+    // Broadcast fan-out should deliver payload-equal frames to both subscribers.
+    // RawIngest isn't PartialEq (it carries `Value`, timestamps differ), so we
+    // compare the fields individually.
+    assert_eq!(e1.agent, e2.agent);
+    assert_eq!(e1.thread_id, e2.thread_id);
+    assert_eq!(e1.payload, e2.payload);
+    assert_eq!(e1.payload["method"], "item/agentMessage/delta");
+    assert_eq!(e1.payload["params"]["delta"], "broadcast-test");
 
     fake.stop().await;
 }

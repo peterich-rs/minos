@@ -1,0 +1,8 @@
+[
+  {
+    "kind":"message_started",
+    "message_id":"<uuid>",
+    "role":"user",
+    "started_at_ms":1714000001000
+  }
+]

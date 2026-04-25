@@ -1,0 +1,4 @@
+[
+  {"method":"thread/started","params":{"threadId":"thr_fixture","createdAtMs":1714000010000}},
+  {"method":"thread/archived","params":{"archivedAtMs":1714000011000}}
+]

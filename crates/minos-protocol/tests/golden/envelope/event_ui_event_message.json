@@ -1,0 +1,13 @@
+{
+  "kind": "event",
+  "v": 1,
+  "type": "ui_event_message",
+  "thread_id": "thr_abc",
+  "seq": 42,
+  "ui": {
+    "kind": "text_delta",
+    "message_id": "msg_def",
+    "text": "Hi"
+  },
+  "ts_ms": 1714000000000
+}

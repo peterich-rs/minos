@@ -1,7 +1,8 @@
 //! `minos-agent-runtime` — owns the codex (and later claude / gemini) child
-//! process, speaks its native JSON-RPC, translates notifications into
-//! [`minos_domain::AgentEvent`], and exposes an `AgentRuntime` handle the
-//! daemon wires up.
+//! process, speaks its native JSON-RPC, and exposes an `AgentRuntime` handle
+//! the daemon wires up. Raw notifications are forwarded verbatim as
+//! [`runtime::RawIngest`]; translation to `UiEventMessage` is the backend's
+//! responsibility (plan §B6).
 //!
 //! ## Phase C scope
 //!
@@ -14,9 +15,9 @@
 //!
 //! ## Dependency rule
 //!
-//! This crate does **not** depend on `minos-protocol`. `AgentEvent` lives in
-//! `minos-domain::events`; `minos-protocol` re-exports it for backward
-//! compatibility with existing downstream imports. See spec §5.1 / §5.2.
+//! This crate does **not** depend on `minos-protocol`. It also deliberately
+//! does NOT depend on `minos-ui-protocol` — the `UiEventMessage` translator
+//! lives in the backend so the host daemon stays a thin ingest pipe.
 
 #![forbid(unsafe_code)]
 
@@ -25,15 +26,14 @@ uniffi::setup_scaffolding!();
 
 pub mod approvals;
 pub(crate) mod codex_client;
+pub mod ingest;
 pub(crate) mod process;
 pub mod runtime;
 pub mod state;
-pub mod translate;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
 pub use approvals::build_auto_reject;
-pub use runtime::{AgentRuntime, AgentRuntimeConfig, StartAgentOutcome};
+pub use runtime::{AgentRuntime, AgentRuntimeConfig, RawIngest, StartAgentOutcome};
 pub use state::AgentState;
-pub use translate::translate_notification;

@@ -37,7 +37,7 @@ pub enum ErrorKind {
     ConnectionStateMismatch,
     EnvelopeVersionUnsupported,
     PeerOffline,
-    RelayInternal,
+    BackendInternal,
     CfAuthFailed,
     CodexSpawnFailed,
     CodexConnectFailed,
@@ -46,6 +46,12 @@ pub enum ErrorKind {
     AgentNotRunning,
     AgentNotSupported,
     AgentSessionIdMismatch,
+    CfAccessMisconfigured,
+    IngestSeqConflict,
+    ThreadNotFound,
+    TranslationNotImplemented,
+    TranslationFailed,
+    PairingQrVersionUnsupported,
 }
 
 impl ErrorKind {
@@ -61,15 +67,17 @@ impl ErrorKind {
     #[must_use]
     pub fn user_message(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Self::BindFailed, Lang::Zh) => "无法绑定中继监听地址；请检查 MINOS_RELAY_LISTEN 配置",
+            (Self::BindFailed, Lang::Zh) => {
+                "无法绑定后端监听地址；请检查 MINOS_BACKEND_LISTEN 配置"
+            }
             (Self::BindFailed, Lang::En) => {
-                "Cannot bind relay listen address; check MINOS_RELAY_LISTEN"
+                "Cannot bind backend listen address; check MINOS_BACKEND_LISTEN"
             }
             (Self::ConnectFailed, Lang::Zh) => {
-                "无法连接中继服务；请检查网络与 Cloudflare Access 令牌"
+                "无法连接后端服务；请检查网络与 Cloudflare Access 令牌"
             }
             (Self::ConnectFailed, Lang::En) => {
-                "Cannot reach relay; check network and Cloudflare Access token"
+                "Cannot reach backend; check network and Cloudflare Access token"
             }
             (Self::Disconnected, Lang::Zh) => "连接已断开，正在重试",
             (Self::Disconnected, Lang::En) => "Disconnected; reconnecting",
@@ -105,8 +113,8 @@ impl ErrorKind {
             }
             (Self::PeerOffline, Lang::Zh) => "对端设备离线，请检查配对设备",
             (Self::PeerOffline, Lang::En) => "Paired device offline; please check status",
-            (Self::RelayInternal, Lang::Zh) => "中继服务异常，请稍后重试",
-            (Self::RelayInternal, Lang::En) => "Relay service error; please retry later",
+            (Self::BackendInternal, Lang::Zh) => "后端服务异常，请稍后重试",
+            (Self::BackendInternal, Lang::En) => "Backend service error; please retry later",
             (Self::CfAuthFailed, Lang::Zh) => "Cloudflare Access 认证失败，请检查 Service Token",
             (Self::CfAuthFailed, Lang::En) => {
                 "Cloudflare Access authentication failed; please check the Service Token"
@@ -126,6 +134,24 @@ impl ErrorKind {
             (Self::AgentSessionIdMismatch, Lang::Zh) => "会话已失效，请重新启动",
             (Self::AgentSessionIdMismatch, Lang::En) => {
                 "Session is no longer active; please restart"
+            }
+            (Self::CfAccessMisconfigured, Lang::Zh) => "后端未正确配置 Cloudflare Access 凭据",
+            (Self::CfAccessMisconfigured, Lang::En) => {
+                "Backend Cloudflare Access credentials are not configured"
+            }
+            (Self::IngestSeqConflict, Lang::Zh) => "事件序号冲突",
+            (Self::IngestSeqConflict, Lang::En) => "Event sequence conflict",
+            (Self::ThreadNotFound, Lang::Zh) => "找不到该线程",
+            (Self::ThreadNotFound, Lang::En) => "Thread not found",
+            (Self::TranslationNotImplemented, Lang::Zh) => "该 CLI 尚未接入协议翻译",
+            (Self::TranslationNotImplemented, Lang::En) => {
+                "Translator not implemented for this CLI"
+            }
+            (Self::TranslationFailed, Lang::Zh) => "事件翻译失败",
+            (Self::TranslationFailed, Lang::En) => "Event translation failed",
+            (Self::PairingQrVersionUnsupported, Lang::Zh) => "二维码版本过旧，请升级应用",
+            (Self::PairingQrVersionUnsupported, Lang::En) => {
+                "QR code version not supported; please update the app"
             }
         }
     }
@@ -172,11 +198,11 @@ pub enum MinosError {
     #[error("rpc call failed: {method}: {message}")]
     RpcCallFailed { method: String, message: String },
 
-    // ── relay layer (spec §10.1) ──
+    // ── backend layer (spec §10.1) ──
     #[error("unauthorized for this operation: {reason}")]
     Unauthorized { reason: String },
 
-    #[error("relay connection state not suitable: expected {expected}, got {actual}")]
+    #[error("backend connection state not suitable: expected {expected}, got {actual}")]
     ConnectionStateMismatch { expected: String, actual: String },
 
     #[error("envelope version unsupported: {version}")]
@@ -185,8 +211,8 @@ pub enum MinosError {
     #[error("peer offline: {peer_device_id}")]
     PeerOffline { peer_device_id: String },
 
-    #[error("relay internal error: {message}")]
-    RelayInternal { message: String },
+    #[error("backend internal error: {message}")]
+    BackendInternal { message: String },
 
     #[error("cloudflare access authentication failed: {message}")]
     CfAuthFailed { message: String },
@@ -212,6 +238,28 @@ pub enum MinosError {
 
     #[error("session id does not match the active session")]
     AgentSessionIdMismatch,
+
+    // ── backend ingest / translation / cf-access (spec §7.4 additions) ──
+    #[error("cf access misconfigured at backend: {reason}")]
+    CfAccessMisconfigured { reason: String },
+
+    #[error("ingest seq conflict for thread {thread_id}: seq {seq} already present")]
+    IngestSeqConflict { thread_id: String, seq: u64 },
+
+    #[error("thread not found: {thread_id}")]
+    ThreadNotFound { thread_id: String },
+
+    #[error("translation not implemented for agent {agent:?}")]
+    TranslationNotImplemented { agent: crate::AgentName },
+
+    #[error("translation failed for agent {agent:?}: {message}")]
+    TranslationFailed {
+        agent: crate::AgentName,
+        message: String,
+    },
+
+    #[error("pairing QR payload version unsupported: {version}")]
+    PairingQrVersionUnsupported { version: u8 },
 }
 
 impl MinosError {
@@ -234,7 +282,7 @@ impl MinosError {
             Self::ConnectionStateMismatch { .. } => ErrorKind::ConnectionStateMismatch,
             Self::EnvelopeVersionUnsupported { .. } => ErrorKind::EnvelopeVersionUnsupported,
             Self::PeerOffline { .. } => ErrorKind::PeerOffline,
-            Self::RelayInternal { .. } => ErrorKind::RelayInternal,
+            Self::BackendInternal { .. } => ErrorKind::BackendInternal,
             Self::CfAuthFailed { .. } => ErrorKind::CfAuthFailed,
             Self::CodexSpawnFailed { .. } => ErrorKind::CodexSpawnFailed,
             Self::CodexConnectFailed { .. } => ErrorKind::CodexConnectFailed,
@@ -243,6 +291,12 @@ impl MinosError {
             Self::AgentNotRunning => ErrorKind::AgentNotRunning,
             Self::AgentNotSupported { .. } => ErrorKind::AgentNotSupported,
             Self::AgentSessionIdMismatch => ErrorKind::AgentSessionIdMismatch,
+            Self::CfAccessMisconfigured { .. } => ErrorKind::CfAccessMisconfigured,
+            Self::IngestSeqConflict { .. } => ErrorKind::IngestSeqConflict,
+            Self::ThreadNotFound { .. } => ErrorKind::ThreadNotFound,
+            Self::TranslationNotImplemented { .. } => ErrorKind::TranslationNotImplemented,
+            Self::TranslationFailed { .. } => ErrorKind::TranslationFailed,
+            Self::PairingQrVersionUnsupported { .. } => ErrorKind::PairingQrVersionUnsupported,
         }
     }
 
@@ -375,10 +429,10 @@ mod tests {
                 ErrorKind::PeerOffline,
             ),
             (
-                MinosError::RelayInternal {
+                MinosError::BackendInternal {
                     message: String::new(),
                 },
-                ErrorKind::RelayInternal,
+                ErrorKind::BackendInternal,
             ),
             (
                 MinosError::CfAuthFailed {
@@ -421,10 +475,46 @@ mod tests {
                 MinosError::AgentSessionIdMismatch,
                 ErrorKind::AgentSessionIdMismatch,
             ),
+            (
+                MinosError::CfAccessMisconfigured {
+                    reason: String::new(),
+                },
+                ErrorKind::CfAccessMisconfigured,
+            ),
+            (
+                MinosError::IngestSeqConflict {
+                    thread_id: String::new(),
+                    seq: 0,
+                },
+                ErrorKind::IngestSeqConflict,
+            ),
+            (
+                MinosError::ThreadNotFound {
+                    thread_id: String::new(),
+                },
+                ErrorKind::ThreadNotFound,
+            ),
+            (
+                MinosError::TranslationNotImplemented {
+                    agent: crate::AgentName::Codex,
+                },
+                ErrorKind::TranslationNotImplemented,
+            ),
+            (
+                MinosError::TranslationFailed {
+                    agent: crate::AgentName::Codex,
+                    message: String::new(),
+                },
+                ErrorKind::TranslationFailed,
+            ),
+            (
+                MinosError::PairingQrVersionUnsupported { version: 1 },
+                ErrorKind::PairingQrVersionUnsupported,
+            ),
         ];
         assert_eq!(
             cases.len(),
-            24,
+            30,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -450,7 +540,7 @@ mod tests {
         ErrorKind::ConnectionStateMismatch,
         ErrorKind::EnvelopeVersionUnsupported,
         ErrorKind::PeerOffline,
-        ErrorKind::RelayInternal,
+        ErrorKind::BackendInternal,
         ErrorKind::CfAuthFailed,
         ErrorKind::CodexSpawnFailed,
         ErrorKind::CodexConnectFailed,
@@ -459,13 +549,19 @@ mod tests {
         ErrorKind::AgentNotRunning,
         ErrorKind::AgentNotSupported,
         ErrorKind::AgentSessionIdMismatch,
+        ErrorKind::CfAccessMisconfigured,
+        ErrorKind::IngestSeqConflict,
+        ErrorKind::ThreadNotFound,
+        ErrorKind::TranslationNotImplemented,
+        ErrorKind::TranslationFailed,
+        ErrorKind::PairingQrVersionUnsupported,
     ];
 
     #[test]
     fn every_error_kind_has_user_message_in_both_langs() {
         assert_eq!(
             ALL_KINDS.len(),
-            24,
+            30,
             "add a kind when you add an ErrorKind variant"
         );
         for k in ALL_KINDS {
@@ -496,6 +592,55 @@ mod tests {
     }
 
     #[test]
+    fn every_new_kind_has_messages_in_both_langs() {
+        for kind in [
+            ErrorKind::CfAccessMisconfigured,
+            ErrorKind::IngestSeqConflict,
+            ErrorKind::ThreadNotFound,
+            ErrorKind::TranslationNotImplemented,
+            ErrorKind::TranslationFailed,
+            ErrorKind::PairingQrVersionUnsupported,
+        ] {
+            assert!(
+                !kind.user_message(Lang::Zh).is_empty(),
+                "zh missing for {kind:?}"
+            );
+            assert!(
+                !kind.user_message(Lang::En).is_empty(),
+                "en missing for {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ingest_seq_conflict_display() {
+        let e = MinosError::IngestSeqConflict {
+            thread_id: "t".into(),
+            seq: 42,
+        };
+        assert_eq!(
+            format!("{e}"),
+            "ingest seq conflict for thread t: seq 42 already present"
+        );
+    }
+
+    #[test]
+    fn translation_not_implemented_carries_agent_in_display() {
+        let e = MinosError::TranslationNotImplemented {
+            agent: crate::AgentName::Claude,
+        };
+        assert!(format!("{e}").contains("Claude"));
+    }
+
+    #[test]
+    fn cf_access_misconfigured_display_contains_reason() {
+        let e = MinosError::CfAccessMisconfigured {
+            reason: "missing MINOS_BACKEND_CF_ACCESS_CLIENT_ID".into(),
+        };
+        assert!(format!("{e}").contains("missing MINOS_BACKEND_CF_ACCESS_CLIENT_ID"));
+    }
+
+    #[test]
     fn cf_auth_failed_display_and_kind() {
         let err = MinosError::CfAuthFailed {
             message: "Cloudflare denied".into(),
@@ -514,16 +659,16 @@ mod tests {
     }
 
     #[test]
-    fn relay_error_variants_user_messages_match_spec() {
-        // Spot-check the new relay copy so edits to the translation table
+    fn backend_error_variants_user_messages_match_spec() {
+        // Spot-check the backend-facing copy so edits to the translation table
         // show up as failing asserts rather than silent drift.
         assert_eq!(
             ErrorKind::BindFailed.user_message(Lang::En),
-            "Cannot bind relay listen address; check MINOS_RELAY_LISTEN"
+            "Cannot bind backend listen address; check MINOS_BACKEND_LISTEN"
         );
         assert_eq!(
             ErrorKind::ConnectFailed.user_message(Lang::En),
-            "Cannot reach relay; check network and Cloudflare Access token"
+            "Cannot reach backend; check network and Cloudflare Access token"
         );
         assert_eq!(
             ErrorKind::Unauthorized.user_message(Lang::En),
@@ -538,8 +683,8 @@ mod tests {
             "Paired device offline; please check status"
         );
         assert_eq!(
-            ErrorKind::RelayInternal.user_message(Lang::En),
-            "Relay service error; please retry later"
+            ErrorKind::BackendInternal.user_message(Lang::En),
+            "Backend service error; please retry later"
         );
         assert_eq!(
             ErrorKind::ConnectionStateMismatch.user_message(Lang::En),

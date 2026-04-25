@@ -33,8 +33,8 @@ extension MinosError {
             return .envelopeVersionUnsupported
         case .PeerOffline:
             return .peerOffline
-        case .RelayInternal:
-            return .relayInternal
+        case .BackendInternal:
+            return .backendInternal
         case .CfAuthFailed:
             return .cfAuthFailed
         case .CodexSpawnFailed:
@@ -51,6 +51,18 @@ extension MinosError {
             return .agentNotSupported
         case .AgentSessionIdMismatch:
             return .agentSessionIdMismatch
+        case .CfAccessMisconfigured:
+            return .cfAccessMisconfigured
+        case .IngestSeqConflict:
+            return .ingestSeqConflict
+        case .ThreadNotFound:
+            return .threadNotFound
+        case .TranslationNotImplemented:
+            return .translationNotImplemented
+        case .TranslationFailed:
+            return .translationFailed
+        case .PairingQrVersionUnsupported:
+            return .pairingQrVersionUnsupported
         }
     }
 

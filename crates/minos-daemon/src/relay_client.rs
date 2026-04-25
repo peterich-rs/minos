@@ -1,4 +1,4 @@
-//! Outbound WebSocket client of the `minos-relay` broker.
+//! Outbound WebSocket client of the `minos-backend` broker.
 //!
 //! The Mac daemon runs exactly one `RelayClient` in steady state. It owns
 //! a single background task that:
@@ -35,7 +35,7 @@
 //!   (1s → 2s → 4s → 8s → 16s → 30s cap, no max attempts).
 //! - `send_local_rpc` has a 10-second timeout. On timeout or on a dropped
 //!   dispatch task the entry is cleaned out of the pending map and
-//!   `MinosError::RelayInternal { message: "local rpc timeout" }` is
+//!   `MinosError::BackendInternal { message: "local rpc timeout" }` is
 //!   returned.
 //!
 //! # Persistence on `EventKind::Paired`
@@ -104,11 +104,9 @@ struct Inner {
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     /// The dispatch task join handle; taken on `stop()`.
     task: Mutex<Option<JoinHandle<()>>>,
-    /// The Mac's display name — embedded in every `RelayQrPayload` we mint.
+    /// The Mac's display name — sent to the backend in `RequestPairingQr`
+    /// so the assembled QR carries it through to the iPhone.
     mac_name: String,
-    /// The relay's backend URL — embedded in every `RelayQrPayload` we mint
-    /// so the iPhone learns where to dial.
-    backend_url: String,
 }
 
 pub struct RelayClient {
@@ -181,7 +179,6 @@ impl RelayClient {
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             task: Mutex::new(Some(task)),
             mac_name,
-            backend_url,
         });
 
         (Arc::new(Self { inner }), link_rx, peer_rx)
@@ -197,7 +194,7 @@ impl RelayClient {
     /// Send a `LocalRpc` envelope and await its correlated response.
     ///
     /// Maps a `LocalRpcOutcome::Err` whose code is otherwise unknown to
-    /// `MinosError::RelayInternal`. See [`rpc_error_to_minos`].
+    /// `MinosError::BackendInternal`. See [`rpc_error_to_minos`].
     pub async fn send_local_rpc(
         &self,
         method: LocalRpcMethod,
@@ -222,7 +219,7 @@ impl RelayClient {
 
         if let Err(e) = self.inner.out_tx.send(envelope).await {
             self.pending_map().lock().await.remove(&id);
-            return Err(MinosError::RelayInternal {
+            return Err(MinosError::BackendInternal {
                 message: format!("relay dispatch task stopped: {e}"),
             });
         }
@@ -232,40 +229,42 @@ impl RelayClient {
             Ok(Ok(LocalRpcOutcome::Err { error })) => Err(rpc_error_to_minos(&error)),
             Ok(Err(_dropped)) => {
                 self.pending_map().lock().await.remove(&id);
-                Err(MinosError::RelayInternal {
+                Err(MinosError::BackendInternal {
                     message: "local rpc timeout".into(),
                 })
             }
             Err(_elapsed) => {
                 self.pending_map().lock().await.remove(&id);
-                Err(MinosError::RelayInternal {
+                Err(MinosError::BackendInternal {
                     message: "local rpc timeout".into(),
                 })
             }
         }
     }
 
-    /// Issue `RequestPairingToken` and wrap the response into the Mac-side
-    /// QR payload shape. The relay returns `{token, expires_at}`; we embed
-    /// the token plus the Mac's display name and the backend URL the
-    /// iPhone should dial.
+    /// Issue `RequestPairingQr` and wrap the response into the Mac-side
+    /// QR payload shape. Per ADR 0014 the backend assembles the full QR
+    /// payload (backend URL + token + CF Access tokens); we receive a
+    /// `PairingQrPayload` and translate it to the Mac-side `RelayQrPayload`
+    /// the UI already binds to.
     pub async fn request_pairing_token(&self) -> Result<RelayQrPayload, MinosError> {
+        let params = serde_json::json!({
+            "host_display_name": self.inner.mac_name.clone(),
+        });
         let result = self
-            .send_local_rpc(LocalRpcMethod::RequestPairingToken, serde_json::json!({}))
+            .send_local_rpc(LocalRpcMethod::RequestPairingQr, params)
             .await?;
-        let token = result
-            .get("token")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| MinosError::RelayInternal {
-                message: "request_pairing_token response missing 'token'".into(),
-            })?
-            .to_owned();
+        let response: minos_protocol::RequestPairingQrResponse = serde_json::from_value(result)
+            .map_err(|e| MinosError::BackendInternal {
+                message: format!("request_pairing_qr response decode failed: {e}"),
+            })?;
+        let qr = response.qr_payload;
 
         Ok(RelayQrPayload {
-            v: 1,
-            backend_url: self.inner.backend_url.clone(),
-            token: minos_domain::PairingToken(token),
-            mac_display_name: self.inner.mac_name.clone(),
+            v: qr.v,
+            backend_url: qr.backend_url,
+            token: minos_domain::PairingToken(qr.pairing_token),
+            mac_display_name: qr.host_display_name,
         })
     }
 
@@ -608,7 +607,7 @@ async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
                 );
             }
         }
-        Envelope::LocalRpc { .. } | Envelope::Forward { .. } => {
+        Envelope::LocalRpc { .. } | Envelope::Forward { .. } | Envelope::Ingest { .. } => {
             // These are client → relay frames; the relay never emits them
             // to us. A misbehaving peer is the only way we'd see one.
             tracing::warn!(
@@ -677,6 +676,18 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
             tracing::info!(
                 target: "minos_daemon::relay_client",
                 "relay signalled server_shutdown; awaiting socket close"
+            );
+        }
+        EventKind::UiEventMessage { thread_id, seq, .. } => {
+            // Mobile-only fan-out frame. The host receives these only when
+            // the backend relays a translated event to the paired iPhone,
+            // and the host's role here is observational. Log + drop so
+            // the dispatch loop stays cheap.
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                thread_id = %thread_id,
+                seq,
+                "ignoring UiEventMessage on the host side"
             );
         }
     }
@@ -812,20 +823,20 @@ fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
 }
 
 /// Map a relay `RpcError` code onto the closest typed `MinosError` variant.
-/// Unknown codes collapse to `RelayInternal`.
+/// Unknown codes collapse to `BackendInternal`.
 fn rpc_error_to_minos(error: &RpcError) -> MinosError {
     match error.code.as_str() {
         "pairing_token_invalid" => MinosError::PairingTokenInvalid,
         "unauthorized" => MinosError::Unauthorized {
             reason: error.message.clone(),
         },
-        _ => MinosError::RelayInternal {
+        _ => MinosError::BackendInternal {
             message: format!("{}: {}", error.code, error.message),
         },
     }
 }
 
-/// Build the outbound auth-header bundle. Role is always `MacHost` here —
+/// Build the outbound auth-header bundle. Role is always `AgentHost` here —
 /// this module is the Mac-side client by construction.
 fn build_headers(
     config: &RelayConfig,
@@ -833,7 +844,7 @@ fn build_headers(
     secret: Option<&DeviceSecret>,
     mac_name: &str,
 ) -> AuthHeaders {
-    let mut headers = AuthHeaders::new(device_id, DeviceRole::MacHost).with_name(mac_name);
+    let mut headers = AuthHeaders::new(device_id, DeviceRole::AgentHost).with_name(mac_name);
     if let Some(s) = secret {
         headers = headers.with_secret(s.clone());
     }
@@ -898,13 +909,13 @@ mod tests {
             message: "reason".into(),
         };
         match rpc_error_to_minos(&e) {
-            MinosError::RelayInternal { message } => {
+            MinosError::BackendInternal { message } => {
                 assert!(
                     message.contains("bogus_new_code") && message.contains("reason"),
                     "expected code+message in message, got {message}"
                 );
             }
-            other => panic!("expected RelayInternal, got {other:?}"),
+            other => panic!("expected BackendInternal, got {other:?}"),
         }
     }
 

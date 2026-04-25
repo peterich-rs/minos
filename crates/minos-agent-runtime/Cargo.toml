@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Agent runtime: spawns/supervises CLI agents (codex today), speaks their JSON-RPC, translates to AgentEvent."
+description = "Agent runtime: spawns/supervises CLI agents (codex today), speaks their JSON-RPC, and forwards raw notifications to the backend's ingest pipeline."
 
 [features]
 # Enables `pub mod test_support` which exposes `FakeCodexServer` — a scripted
@@ -16,6 +16,7 @@ uniffi = ["dep:uniffi", "minos-domain/uniffi"]
 
 [dependencies]
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
+minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -25,6 +26,7 @@ tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
 futures-util = { workspace = true }
+dashmap = { workspace = true }
 uniffi = { workspace = true, optional = true }
 
 [dev-dependencies]

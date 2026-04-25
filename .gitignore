@@ -3,6 +3,13 @@ target/
 **/*.rs.bk
 Cargo.lock.bak
 
+# Backend runtime data — created by `cargo run -p minos-backend` or
+# `MINOS_BACKEND_DB=sqlite://./minos-backend.db` against the dev defaults.
+minos-backend.db
+minos-backend.db-journal
+minos-backend.db-wal
+minos-backend.db-shm
+
 # IDE
 .idea/
 .vscode/

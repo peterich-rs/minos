@@ -5,7 +5,7 @@
 //! - `agent`       AgentName / AgentStatus / AgentDescriptor
 //! - `connection`  ConnectionState
 //! - `pairing_state`  PairingState (used inside MinosError)
-//! - `role`        DeviceRole (MacHost / IosClient / BrowserAdmin)
+//! - `role`        DeviceRole (AgentHost / IosClient / BrowserAdmin)
 //! - `error`       Lang, ErrorKind, MinosError + user_message
 
 #![forbid(unsafe_code)]
@@ -13,7 +13,6 @@
 pub mod agent;
 pub mod connection;
 pub mod error;
-pub mod events;
 pub mod ids;
 pub mod pairing_state;
 pub mod relay_state;
@@ -22,7 +21,6 @@ pub mod role;
 pub use agent::*;
 pub use connection::*;
 pub use error::*;
-pub use events::*;
 pub use ids::*;
 pub use pairing_state::*;
 pub use relay_state::{PeerState, RelayLinkState};

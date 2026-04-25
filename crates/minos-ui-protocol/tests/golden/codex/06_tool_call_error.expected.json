@@ -1,0 +1,21 @@
+[
+  {
+    "kind":"message_started",
+    "message_id":"<uuid>",
+    "role":"assistant",
+    "started_at_ms":1714000007000
+  },
+  {
+    "kind":"tool_call_placed",
+    "message_id":"<uuid>",
+    "tool_call_id":"<uuid>",
+    "name":"run_command",
+    "args_json":"{\"cmd\":\"false\"}"
+  },
+  {
+    "kind":"tool_call_completed",
+    "tool_call_id":"<uuid>",
+    "output":"exit 1",
+    "is_error":true
+  }
+]
