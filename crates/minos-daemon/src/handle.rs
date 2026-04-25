@@ -84,7 +84,9 @@ impl DaemonHandle {
         // now there is exactly one shared instance threaded through.
         let rpc_server = Arc::new(crate::rpc_server::RpcServerImpl {
             started_at: std::time::Instant::now(),
-            runner: Arc::new(minos_cli_detect::RealCommandRunner),
+            runner: Arc::new(minos_cli_detect::RealCommandRunner::new(Arc::new(
+                std::collections::HashMap::new(),
+            ))),
             agent: agent.clone(),
         });
 
