@@ -56,6 +56,7 @@ dashmap = "6"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 subtle = "2"
+which = "6"
 
 # ffi (consumed only by shim crates)
 uniffi = { version = "0.31", features = ["build"] }
