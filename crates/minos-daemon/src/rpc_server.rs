@@ -235,7 +235,10 @@ mod tests {
         Arc::new(RpcServerImpl {
             started_at: Instant::now(),
             runner: Arc::new(NoopRunner),
-            agent: Arc::new(AgentGlue::new(std::env::temp_dir().join("minos-rpc-test"))),
+            agent: Arc::new(AgentGlue::new(
+                std::env::temp_dir().join("minos-rpc-test"),
+                Arc::new(std::collections::HashMap::new()),
+            )),
         })
     }
 

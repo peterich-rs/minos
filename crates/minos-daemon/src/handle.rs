@@ -77,7 +77,10 @@ impl DaemonHandle {
     ) -> Result<Arc<Self>, MinosError> {
         let local_state_path = LocalState::default_path();
 
-        let agent = Arc::new(AgentGlue::new(paths::minos_home()?.join("workspaces")));
+        let agent = Arc::new(AgentGlue::new(
+            paths::minos_home()?.join("workspaces"),
+            Arc::new(std::collections::HashMap::new()),
+        ));
 
         // The relay-client dispatches forwarded peer JSON-RPC into this
         // server impl. Pre-relay it lived behind a jsonrpsee WS server;

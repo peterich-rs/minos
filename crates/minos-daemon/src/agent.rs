@@ -15,8 +15,13 @@ pub struct AgentGlue {
 
 impl AgentGlue {
     #[must_use]
-    pub fn new(workspace_root: PathBuf) -> Self {
-        Self::new_with_runtime(AgentRuntime::new(AgentRuntimeConfig::new(workspace_root)))
+    pub fn new(
+        workspace_root: PathBuf,
+        subprocess_env: Arc<std::collections::HashMap<String, String>>,
+    ) -> Self {
+        let mut cfg = AgentRuntimeConfig::new(workspace_root);
+        cfg.subprocess_env = subprocess_env;
+        Self::new_with_runtime(AgentRuntime::new(cfg))
     }
 
     #[must_use]
