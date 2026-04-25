@@ -23,6 +23,7 @@ extension MinosErrorDisplay on MinosError {
       ErrorKind.envelopeVersionUnsupported,
     MinosError_PeerOffline() => ErrorKind.peerOffline,
     MinosError_BackendInternal() => ErrorKind.backendInternal,
+    MinosError_CfAuthFailed() => ErrorKind.cfAuthFailed,
     MinosError_CodexSpawnFailed() => ErrorKind.codexSpawnFailed,
     MinosError_CodexConnectFailed() => ErrorKind.codexConnectFailed,
     MinosError_CodexProtocolError() => ErrorKind.codexProtocolError,

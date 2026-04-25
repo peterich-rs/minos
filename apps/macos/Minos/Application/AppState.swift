@@ -2,61 +2,116 @@ import AppKit
 import Observation
 import OSLog
 
+/// Top-level lifecycle phase the menubar UI ladders against. Distinct
+/// from the per-axis state (`relayLink`, `peer`) — `phase` answers "are
+/// we configured / running / broken?", the axes answer "given we're
+/// running, what's the status?".
+///
+/// Spec §6 freezes the three values and their UI ladder; bootError is
+/// a sub-state of `bootFailed` but kept on its own field so stale errors
+/// can be cleared without forcing a phase transition.
+enum Phase: Sendable {
+    case awaitingConfig
+    case running
+    case bootFailed
+}
+
 @Observable
 final class AppState: @unchecked Sendable {
+    /// Snapshot of the four observable values DaemonBootstrap reads off
+    /// a freshly started daemon. Bundling them into one type keeps
+    /// `finishBoot` under the swiftlint parameter-count cap.
+    struct BootSnapshot {
+        let relayLink: RelayLinkState
+        let peer: PeerState
+        let trustedDevice: PeerRecord?
+        let agentState: AgentState
+    }
+
+    // ── Daemon + subscriptions ──
     var daemon: (any DaemonDriving)?
-    var subscription: (any SubscriptionHandle)?
+    var relayLinkSubscription: (any SubscriptionHandle)?
+    var peerSubscription: (any SubscriptionHandle)?
     var agentSubscription: (any SubscriptionHandle)?
-    var connectionState: ConnectionState?
-    var agentState: AgentState = .idle
-    var currentQr: QrPayload?
+
+    // ── Lifecycle ──
+    var phase: Phase = .awaitingConfig
+
+    // ── Dual-axis state ──
+    var relayLink: RelayLinkState = .disconnected
+    var peer: PeerState = .unpaired
+    var trustedDevice: PeerRecord?
+
+    // ── Pairing UX ──
+    var currentQr: RelayQrPayload?
     var currentQrGeneratedAt: Date?
+    var isShowingQr: Bool = false
+    // Onboarding / Settings visibility is NOT modelled on AppState — the
+    // two screens live in real top-level Window scenes and are driven by
+    // `@Environment(\.openWindow)` / `dismissWindow` with a stable
+    // `WindowID`. See `MinosApp`.
+
+    // ── Agent runtime ──
+    var agentState: AgentState = .idle
     var currentSession: StartAgentResponse?
-    var trustedDevice: TrustedDevice?
     var agentError: MinosError?
+
+    // ── Errors ──
     var bootError: MinosError?
     var displayError: MinosError?
-    var isShowingQr = false
 
     @ObservationIgnored
-    private let logger = Logger(subsystem: "ai.minos.macos", category: "appState")
+    let logger = Logger(subsystem: "ai.minos.macos", category: "appState")
+
+    // Internal access (not private) so AppState+Agent.swift can reach
+    // them — the agent error is parented on the same task lifecycle.
+    @ObservationIgnored
+    var displayErrorTask: Task<Void, Never>?
 
     @ObservationIgnored
-    private var displayErrorTask: Task<Void, Never>?
+    var agentErrorTask: Task<Void, Never>?
 
     @ObservationIgnored
-    private var agentErrorTask: Task<Void, Never>?
+    let forgetConfirmation: @MainActor @Sendable (PeerRecord) -> Bool
 
     @ObservationIgnored
-    private let forgetConfirmation: @MainActor @Sendable (TrustedDevice) -> Bool
-
-    @ObservationIgnored
-    private let terminator: @MainActor @Sendable () -> Void
+    let terminator: @MainActor @Sendable () -> Void
 
     init(
-        forgetConfirmation: (@MainActor @Sendable (TrustedDevice) -> Bool)? = nil,
+        forgetConfirmation: (@MainActor @Sendable (PeerRecord) -> Bool)? = nil,
         terminator: (@MainActor @Sendable () -> Void)? = nil
     ) {
-        self.forgetConfirmation = forgetConfirmation ?? { trustedDevice in
-            AppState.defaultForgetConfirmation(trustedDevice)
+        self.forgetConfirmation = forgetConfirmation ?? { peer in
+            AppState.defaultForgetConfirmation(peer)
         }
         self.terminator = terminator ?? { NSApp.terminate(nil) }
     }
 
+    // ── Computed gates for menu items ──
+
+    /// Show the "显示配对二维码…" item only when:
+    /// - the daemon is running (so we have someone to ask),
+    /// - the relay link is up (so the QR token can actually be minted),
+    /// - and there is no peer already paired (a second peer would be a
+    ///   second pairing, not currently supported).
     var canShowQr: Bool {
-        bootError == nil && trustedDevice == nil && daemon != nil
+        guard phase == .running, daemon != nil else { return false }
+        if case .connected = relayLink, case .unpaired = peer { return true }
+        return false
     }
 
-    var canForgetDevice: Bool {
-        bootError == nil && trustedDevice != nil && daemon != nil
+    /// Show the "忘记已配对设备" item only when:
+    /// - the daemon is running,
+    /// - the relay link is up (so the host can issue ForgetPeer),
+    /// - and a peer is currently paired.
+    var canForgetPeer: Bool {
+        guard phase == .running, daemon != nil else { return false }
+        guard case .connected = relayLink else { return false }
+        if case .paired = peer { return true }
+        return false
     }
 
-    var endpointDisplay: String? {
-        guard bootError == nil, trustedDevice == nil, let daemon else {
-            return nil
-        }
-        return "\(daemon.host()):\(daemon.port())"
-    }
+    // ── Phase transitions ──
 
     @MainActor
     func beginBoot() {
@@ -71,20 +126,50 @@ final class AppState: @unchecked Sendable {
         currentQrGeneratedAt = nil
         isShowingQr = false
         trustedDevice = nil
-        connectionState = nil
-        subscription?.cancel()
+        relayLink = .disconnected
+        peer = .unpaired
+        phase = .awaitingConfig
+        relayLinkSubscription?.cancel()
+        peerSubscription?.cancel()
         agentSubscription?.cancel()
-        subscription = nil
+        relayLinkSubscription = nil
+        peerSubscription = nil
         agentSubscription = nil
         daemon = nil
     }
 
+    /// Snapshot-based finishBoot used by DaemonBootstrap. Same effect
+    /// as the longer overload below — kept distinct so callers can
+    /// stay under the swiftlint parameter-count cap.
     @MainActor
     func finishBoot(
+        with snapshot: BootSnapshot,
         daemon: any DaemonDriving,
-        subscription: any SubscriptionHandle,
-        connectionState: ConnectionState,
-        trustedDevice: TrustedDevice?,
+        relayLinkSubscription: any SubscriptionHandle,
+        peerSubscription: any SubscriptionHandle,
+        agentSubscription: any SubscriptionHandle
+    ) {
+        finishBoot(
+            daemon: daemon,
+            relayLinkSubscription: relayLinkSubscription,
+            peerSubscription: peerSubscription,
+            relayLink: snapshot.relayLink,
+            peer: snapshot.peer,
+            trustedDevice: snapshot.trustedDevice,
+            agentSubscription: agentSubscription,
+            agentState: snapshot.agentState
+        )
+    }
+
+    @MainActor
+    // swiftlint:disable:next function_parameter_count
+    func finishBoot(
+        daemon: any DaemonDriving,
+        relayLinkSubscription: any SubscriptionHandle,
+        peerSubscription: any SubscriptionHandle,
+        relayLink: RelayLinkState,
+        peer: PeerState,
+        trustedDevice: PeerRecord?,
         agentSubscription: (any SubscriptionHandle)? = nil,
         agentState: AgentState = .idle
     ) {
@@ -94,12 +179,15 @@ final class AppState: @unchecked Sendable {
         agentError = nil
         bootError = nil
         self.daemon = daemon
-        self.subscription = subscription
+        self.relayLinkSubscription = relayLinkSubscription
+        self.peerSubscription = peerSubscription
         self.agentSubscription = agentSubscription
-        self.connectionState = connectionState
+        self.relayLink = relayLink
+        self.peer = peer
         self.agentState = agentState
-        currentSession = nil
+        self.currentSession = nil
         self.trustedDevice = trustedDevice
+        self.phase = .running
     }
 
     @MainActor
@@ -107,12 +195,15 @@ final class AppState: @unchecked Sendable {
         logger.error("Boot failed: \(error.technicalDetails, privacy: .public)")
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()
-        subscription?.cancel()
+        relayLinkSubscription?.cancel()
+        peerSubscription?.cancel()
         agentSubscription?.cancel()
-        subscription = nil
+        relayLinkSubscription = nil
+        peerSubscription = nil
         agentSubscription = nil
         daemon = nil
-        connectionState = nil
+        relayLink = .disconnected
+        peer = .unpaired
         agentState = .idle
         currentSession = nil
         trustedDevice = nil
@@ -121,240 +212,48 @@ final class AppState: @unchecked Sendable {
         isShowingQr = false
         agentError = nil
         bootError = error
+        phase = .bootFailed
     }
 
+    /// Push from the relay-link observer. Pure assignment — gate logic
+    /// reads from the property, not the call site.
     @MainActor
-    func applyConnectionState(_ state: ConnectionState) {
-        connectionState = state
+    func applyRelayLink(_ state: RelayLinkState) {
+        relayLink = state
     }
 
+    /// Push from the peer observer. Mirror the trustedDevice cache so
+    /// pairing-aware UI doesn't have to wait for `current_trusted_device`
+    /// to round-trip the daemon.
+    ///
+    /// `PeerState::Paired` is ephemeral — it carries `(id, name, online)`
+    /// but no `pairedAt`, because the relay re-emits Paired/PeerOnline on
+    /// every reconnect. `PeerRecord` is the persisted shape and owns the
+    /// real `pairedAt` that was captured at first-pair time. So we only
+    /// synthesize a new `PeerRecord` when the deviceId has genuinely
+    /// changed (first pair, or pair-after-forget). For the steady-state
+    /// reconnect case where we already hold a record for this peer, we
+    /// leave `trustedDevice` untouched rather than stamp a fresh `Date()`
+    /// over the original timestamp.
     @MainActor
-    func showQr() async {
-        await loadQr(showing: true)
-    }
-
-    @MainActor
-    func regenerateQr() async {
-        await loadQr(showing: true)
-    }
-
-    @MainActor
-    func dismissQr() {
-        isShowingQr = false
-    }
-
-    @MainActor
-    func revealTodayLog() async {
-        do {
-            try await DiagnosticsReveal.revealTodayLog()
-        } catch let error as MinosError {
-            presentTransientError(error)
-        } catch {
-            logger.error("Unexpected reveal error: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    @MainActor
-    func forgetDevice() async {
-        guard bootError == nil, let daemon, let trustedDevice else {
-            return
-        }
-        guard forgetConfirmation(trustedDevice) else {
-            return
-        }
-
-        do {
-            try await daemon.forgetDevice(id: trustedDevice.deviceId)
-            self.trustedDevice = nil
+    func applyPeer(_ state: PeerState) {
+        peer = state
+        switch state {
+        case let .paired(id, name, _):
+            if trustedDevice?.deviceId != id {
+                trustedDevice = PeerRecord(deviceId: id, name: name, pairedAt: Date())
+            }
+        case .unpaired:
+            trustedDevice = nil
             currentQr = nil
             currentQrGeneratedAt = nil
             isShowingQr = false
-        } catch let error as MinosError {
-            presentTransientError(error)
-        } catch {
-            logger.error("Unexpected forget error: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    @MainActor
-    func shutdown() async {
-        displayErrorTask?.cancel()
-        agentErrorTask?.cancel()
-
-        let currentDaemon = daemon
-        let currentSubscription = subscription
-        let currentAgentSubscription = agentSubscription
-
-        daemon = nil
-        subscription = nil
-        agentSubscription = nil
-        agentState = .idle
-        currentSession = nil
-        currentQr = nil
-        currentQrGeneratedAt = nil
-        isShowingQr = false
-        agentError = nil
-
-        currentSubscription?.cancel()
-        currentAgentSubscription?.cancel()
-
-        do {
-            try await currentDaemon?.stop()
-        } catch let error as MinosError {
-            logger.error("Shutdown stop failed: \(error.technicalDetails, privacy: .public)")
-        } catch {
-            logger.error("Unexpected shutdown error: \(String(describing: error), privacy: .public)")
-        }
-
-        terminator()
-    }
-
-    private static let qrLifetimeSeconds: TimeInterval = 300
-
-    @MainActor
-    private func loadQr(showing: Bool) async {
-        guard canShowQr, let daemon else {
-            return
-        }
-
-        do {
-            let pairingPayload = try daemon.pairingQr()
-            currentQr = pairingPayload
-            currentQrGeneratedAt = Date()
-            isShowingQr = showing
-            displayErrorTask?.cancel()
-            displayError = nil
-        } catch let error as MinosError {
-            presentTransientError(error)
-        } catch {
-            logger.error("Unexpected QR error: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    @MainActor
-    private func presentTransientError(_ error: MinosError) {
-        logger.error("Presenting transient error: \(error.technicalDetails, privacy: .public)")
-        displayErrorTask?.cancel()
-        displayError = error
-        displayErrorTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            await MainActor.run {
-                self?.displayError = nil
-            }
-        }
-    }
-
-    @MainActor
-    static func defaultForgetConfirmation(_ trustedDevice: TrustedDevice) -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "忘记已配对设备"
-        alert.informativeText = "忘记 \(trustedDevice.name) 后需要重新扫码才能再次配对。继续吗？"
-        alert.addButton(withTitle: "取消")
-        alert.addButton(withTitle: "忘记")
-        return alert.runModal() == .alertSecondButtonReturn
-    }
-
-    var currentQrExpiresAt: Date? {
-        currentQrGeneratedAt?.addingTimeInterval(Self.qrLifetimeSeconds)
-    }
-}
-
-extension AppState {
-    @MainActor
-    func applyAgentState(_ state: AgentState) {
-        agentState = state
-
-        switch state {
-        case .idle, .crashed:
-            currentSession = nil
-        case .starting, .running, .stopping:
+        case .pairing:
             break
         }
     }
 
-    @MainActor
-    func startAgent() async {
-        guard bootError == nil, let daemon else {
-            return
-        }
-
-        clearAgentError()
-        currentSession = nil
-
-        do {
-            currentSession = try await daemon.startAgent(.init(agent: .codex))
-        } catch let error as MinosError {
-            currentSession = nil
-            agentState = .idle
-            presentAgentError(error)
-        } catch {
-            logger.error("Unexpected start-agent error: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    @MainActor
-    func sendAgentPing() async {
-        guard bootError == nil, let daemon, let currentSession else {
-            return
-        }
-
-        clearAgentError()
-
-        do {
-            try await daemon.sendUserMessage(.init(sessionId: currentSession.sessionId, text: "ping"))
-        } catch let error as MinosError {
-            self.currentSession = nil
-            agentState = .idle
-            presentAgentError(error)
-        } catch {
-            logger.error("Unexpected agent ping error: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    @MainActor
-    func stopAgent() async {
-        guard bootError == nil, let daemon else {
-            return
-        }
-
-        clearAgentError()
-
-        do {
-            try await daemon.stopAgent()
-            currentSession = nil
-        } catch let error as MinosError {
-            currentSession = nil
-            agentState = .idle
-            presentAgentError(error)
-        } catch {
-            logger.error("Unexpected stop-agent error: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    @MainActor
-    func dismissAgentCrash() {
-        clearAgentError()
-    }
-}
-
-private extension AppState {
-    @MainActor
-    func clearAgentError() {
-        agentErrorTask?.cancel()
-        agentError = nil
-    }
-
-    @MainActor
-    func presentAgentError(_ error: MinosError) {
-        logger.error("Presenting agent error: \(error.technicalDetails, privacy: .public)")
-        agentErrorTask?.cancel()
-        agentError = error
-        agentErrorTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            await MainActor.run {
-                self?.agentError = nil
-            }
-        }
-    }
+    // QR / forget / shutdown / reveal / presentTransientError live in
+    // AppState+Actions.swift so the core type body stays under the
+    // swiftlint type-body-length cap.
 }

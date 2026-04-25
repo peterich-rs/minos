@@ -24,9 +24,15 @@ pub struct TrustedDevice {
 }
 
 /// Persistence trait. Implementations:
-/// - `minos-daemon::FilePairingStore` (JSON file)
 /// - `minos-mobile::KeychainPairingStore` (FFI callback into iOS Keychain)
 /// - test-only in-memory impls
+///
+/// The Mac daemon used to ship a `FilePairingStore` against a JSON file;
+/// plan 05 removed it along with the rest of the Tailscale stack. The
+/// Mac now persists `device-secret` to the Keychain and `PeerRecord` to
+/// `local-state.json` directly inside `minos-daemon` without going
+/// through this trait. iOS still uses the trait until plan 06 ports it
+/// onto the relay.
 pub trait PairingStore: Send + Sync + 'static {
     fn load(&self) -> Result<Vec<TrustedDevice>, MinosError>;
     fn save(&self, devices: &[TrustedDevice]) -> Result<(), MinosError>;

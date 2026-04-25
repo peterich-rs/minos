@@ -15,6 +15,7 @@ pub mod connection;
 pub mod error;
 pub mod ids;
 pub mod pairing_state;
+pub mod relay_state;
 pub mod role;
 
 pub use agent::*;
@@ -22,6 +23,7 @@ pub use connection::*;
 pub use error::*;
 pub use ids::*;
 pub use pairing_state::*;
+pub use relay_state::{PeerState, RelayLinkState};
 pub use role::*;
 
 // UniFFI 0.31 per-crate scaffolding: every crate that carries `uniffi::*`

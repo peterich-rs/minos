@@ -10,92 +10,93 @@ final class MockSubscription: SubscriptionHandle, @unchecked Sendable {
     }
 }
 
+/// Test double conforming to the Phase F.1 dual-axis `DaemonDriving`
+/// protocol. Replaces the legacy single-axis MockDaemon — both axes are
+/// now exposed independently and observers can be fired from either
+/// channel without affecting the other.
+///
+/// Plan 05 Phase K.1.
 final class MockDaemon: DaemonDriving, @unchecked Sendable {
-    var currentStateValue: ConnectionState
+    // ── Public mutable state ──
+    var currentRelayLinkValue: RelayLinkState
+    var currentPeerValue: PeerState
     var currentAgentStateValue: AgentState
-    var currentTrustedDeviceValue: TrustedDevice?
+    var currentTrustedDeviceValue: PeerRecord?
     var currentTrustedDeviceError: MinosError?
-    var hostValue: String
-    var pairingQrResult: Result<QrPayload, MinosError>
-    var portValue: UInt16
-    var forgetDeviceError: MinosError?
+    var pairingQrResult: Result<RelayQrPayload, MinosError>
+    var forgetPeerError: MinosError?
     var startAgentResult: Result<StartAgentResponse, MinosError>
     var sendUserMessageError: MinosError?
     var stopAgentError: MinosError?
     var stopError: MinosError?
 
-    let subscription: MockSubscription
+    let relayLinkSubscription: MockSubscription
+    let peerSubscription: MockSubscription
     let agentSubscription: MockSubscription
 
-    private(set) var forgetDeviceCalls: [DeviceId] = []
+    private(set) var forgetPeerCallCount = 0
     private(set) var pairingQrCallCount = 0
     private(set) var startAgentCalls: [StartAgentRequest] = []
     private(set) var sendUserMessageCalls: [SendUserMessageRequest] = []
     private(set) var stopAgentCallCount = 0
     private(set) var stopCallCount = 0
-    private(set) var subscribeCallCount = 0
+    private(set) var subscribeRelayLinkCallCount = 0
+    private(set) var subscribePeerCallCount = 0
     private(set) var subscribeAgentStateCallCount = 0
-    private(set) var observers: [ConnectionStateObserver] = []
+    private(set) var relayLinkObservers: [RelayLinkStateObserver] = []
+    private(set) var peerObservers: [PeerStateObserver] = []
     private(set) var agentObservers: [AgentStateObserver] = []
 
     init(
-        currentState: ConnectionState = .disconnected,
+        currentRelayLink: RelayLinkState = .disconnected,
+        currentPeer: PeerState = .unpaired,
         currentAgentState: AgentState = .idle,
-        currentTrustedDevice: TrustedDevice? = nil,
-        host: String = "100.64.0.10",
-        port: UInt16 = 7878,
-        pairingQrResult: Result<QrPayload, MinosError> = .success(MockDaemon.makeQrPayload()),
+        currentTrustedDevice: PeerRecord? = nil,
+        pairingQrResult: Result<RelayQrPayload, MinosError> = .success(MockDaemon.makeQrPayload()),
         startAgentResult: Result<StartAgentResponse, MinosError> = .success(
             MockDaemon.makeStartAgentResponse()
         ),
-        subscription: MockSubscription = MockSubscription(),
+        relayLinkSubscription: MockSubscription = MockSubscription(),
+        peerSubscription: MockSubscription = MockSubscription(),
         agentSubscription: MockSubscription = MockSubscription()
     ) {
-        currentStateValue = currentState
+        currentRelayLinkValue = currentRelayLink
+        currentPeerValue = currentPeer
         currentAgentStateValue = currentAgentState
         currentTrustedDeviceValue = currentTrustedDevice
-        hostValue = host
         self.pairingQrResult = pairingQrResult
-        portValue = port
         self.startAgentResult = startAgentResult
-        self.subscription = subscription
+        self.relayLinkSubscription = relayLinkSubscription
+        self.peerSubscription = peerSubscription
         self.agentSubscription = agentSubscription
     }
 
-    func currentState() -> ConnectionState {
-        currentStateValue
-    }
+    // ── DaemonDriving ──
 
-    func currentAgentState() -> AgentState {
-        currentAgentStateValue
-    }
+    func currentRelayLink() -> RelayLinkState { currentRelayLinkValue }
+    func currentPeer() -> PeerState { currentPeerValue }
+    func currentAgentState() -> AgentState { currentAgentStateValue }
 
-    func currentTrustedDevice() throws -> TrustedDevice? {
+    func currentTrustedDevice() async throws -> PeerRecord? {
         if let currentTrustedDeviceError {
             throw currentTrustedDeviceError
         }
-
         return currentTrustedDeviceValue
     }
 
-    func forgetDevice(id: DeviceId) async throws {
-        forgetDeviceCalls.append(id)
-        if let forgetDeviceError {
-            throw forgetDeviceError
-        }
-    }
-
-    func host() -> String {
-        hostValue
-    }
-
-    func pairingQr() throws -> QrPayload {
+    func pairingQr() async throws -> RelayQrPayload {
         pairingQrCallCount += 1
         return try pairingQrResult.get()
     }
 
-    func port() -> UInt16 {
-        portValue
+    func forgetPeer() async throws {
+        forgetPeerCallCount += 1
+        if let forgetPeerError {
+            throw forgetPeerError
+        }
+        // Mirror the relay's behaviour: a successful ForgetPeer pushes an
+        // Unpaired event to the peer observer shortly after. Tests can
+        // pre-empt this by setting `currentPeerValue = .unpaired` directly.
     }
 
     func stop() async throws {
@@ -124,10 +125,16 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         }
     }
 
-    func subscribeObserver(_ observer: ConnectionStateObserver) -> any SubscriptionHandle {
-        subscribeCallCount += 1
-        observers.append(observer)
-        return subscription
+    func subscribeRelayLink(_ observer: RelayLinkStateObserver) -> any SubscriptionHandle {
+        subscribeRelayLinkCallCount += 1
+        relayLinkObservers.append(observer)
+        return relayLinkSubscription
+    }
+
+    func subscribePeer(_ observer: PeerStateObserver) -> any SubscriptionHandle {
+        subscribePeerCallCount += 1
+        peerObservers.append(observer)
+        return peerSubscription
     }
 
     func subscribeAgentState(_ observer: AgentStateObserver) -> any SubscriptionHandle {
@@ -136,9 +143,22 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         return agentSubscription
     }
 
-    func emit(_ state: ConnectionState) {
-        currentStateValue = state
-        for observer in observers {
+    // ── Test helpers ──
+
+    /// Push a fresh relay-link state to all subscribed observers and
+    /// update the snapshot value.
+    func emitRelayLink(_ state: RelayLinkState) {
+        currentRelayLinkValue = state
+        for observer in relayLinkObservers {
+            observer.onState(state: state)
+        }
+    }
+
+    /// Push a fresh peer state to all subscribed observers and update the
+    /// snapshot value.
+    func emitPeer(_ state: PeerState) {
+        currentPeerValue = state
+        for observer in peerObservers {
             observer.onState(state: state)
         }
     }
@@ -150,13 +170,19 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         }
     }
 
+    // ── Convenience factories ──
+
     static func makeQrPayload(
-        host: String = "100.64.0.10",
-        port: UInt16 = 7878,
+        backendUrl: String = "ws://127.0.0.1:8787/devices",
         token: PairingToken = "pairing-token",
-        name: String = "Minos Mac"
-    ) -> QrPayload {
-        QrPayload(v: 1, host: host, port: port, token: token, name: name)
+        macDisplayName: String = "Minos Mac"
+    ) -> RelayQrPayload {
+        RelayQrPayload(
+            v: 1,
+            backendUrl: backendUrl,
+            token: token,
+            macDisplayName: macDisplayName
+        )
     }
 
     static func makeStartAgentResponse(
@@ -167,22 +193,10 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     }
 
     static func makeTrustedDevice(
-        deviceId: DeviceId = UUID().uuidString,
+        deviceId: DeviceId = UUID().uuidString.lowercased(),
         name: String = "Alice's iPhone",
-        hostDeviceId: DeviceId? = nil,
-        host: String = "100.64.0.20",
-        port: UInt16 = 7878,
-        assignedDeviceSecret: DeviceSecret? = nil,
         pairedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
-    ) -> TrustedDevice {
-        TrustedDevice(
-            deviceId: deviceId,
-            name: name,
-            hostDeviceId: hostDeviceId,
-            host: host,
-            port: port,
-            assignedDeviceSecret: assignedDeviceSecret,
-            pairedAt: pairedAt
-        )
+    ) -> PeerRecord {
+        PeerRecord(deviceId: deviceId, name: name, pairedAt: pairedAt)
     }
 }

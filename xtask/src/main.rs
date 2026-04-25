@@ -807,30 +807,20 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
         }
 
         if file_name == "minos_daemon.swift" {
-            updated = replace_required(
-                updated,
-                DUPLICATE_DAEMON_DEVICE_ID_BLOCK,
-                "",
-                "minos_daemon.swift: DeviceId duplicate typealias block (canonical \
-                 copy lives in minos_pairing.swift; both files compile into the same \
-                 Swift module so daemon's must be removed)",
-            )?;
-            updated = replace_required(
-                updated,
-                DUPLICATE_DAEMON_DEVICE_SECRET_BLOCK,
-                "",
-                "minos_daemon.swift: DeviceSecret duplicate typealias block (canonical \
-                 copy lives in minos_pairing.swift; both files compile into the same \
-                 Swift module so daemon's must be removed)",
-            )?;
-            updated = replace_required(
-                updated,
-                DUPLICATE_DAEMON_UUID_BLOCK,
-                "",
-                "minos_daemon.swift: Uuid duplicate typealias block (canonical copy \
-                 lives in minos_pairing.swift; both files compile into the same Swift \
-                 module so daemon's must be removed)",
-            )?;
+            // After the plan-05 refactor, `DeviceId` / `DeviceSecret` are
+            // registered only in their home crate `minos-domain` (see
+            // minos-domain::ids::uniffi_bridges), so the per-newtype
+            // typealias blocks should appear exactly once across all
+            // bindgen outputs. The per-type scrubs are split (rather
+            // than one monolithic needle) so a future remote-newtype
+            // landing between existing entries surfaces as targeted
+            // drift rather than a silently-failed monolithic match;
+            // each is `optional` because the canonical world has them
+            // already absent — they only need scrubbing if a future
+            // uniffi-bindgen-swift release reintroduces them.
+            updated = replace_optional(updated, DUPLICATE_DAEMON_DEVICE_ID_BLOCK, "");
+            updated = replace_optional(updated, DUPLICATE_DAEMON_DEVICE_SECRET_BLOCK, "");
+            updated = replace_optional(updated, DUPLICATE_DAEMON_UUID_BLOCK, "");
             updated = replace_required(
                 updated,
                 VTABLE_DECL_OLD,
@@ -846,6 +836,19 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Replace `needle` with `replacement` in `buf` if present. Unlike
+/// `replace_required`, silently no-ops when the needle is absent. Use when
+/// the fixup is conditional — e.g. stripping a duplicate block that may or
+/// may not have been emitted depending on how the Rust side registered its
+/// UniFFI bridges.
+fn replace_optional(buf: String, needle: &str, replacement: &str) -> String {
+    if buf.contains(needle) {
+        buf.replace(needle, replacement)
+    } else {
+        buf
+    }
 }
 
 /// Replace `needle` with `replacement` in `buf` and bail if `needle` is not
@@ -1173,5 +1176,17 @@ mod tests {
             msg.contains("vtable decl"),
             "error should include caller-supplied context: {msg}"
         );
+    }
+
+    #[test]
+    fn replace_optional_replaces_when_needle_present() {
+        let result = replace_optional("hello world".into(), "world", "there");
+        assert_eq!(result, "hello there");
+    }
+
+    #[test]
+    fn replace_optional_returns_buf_unchanged_when_needle_missing() {
+        let result = replace_optional("hello world".into(), "MISSING", "x");
+        assert_eq!(result, "hello world");
     }
 }

@@ -1,53 +1,54 @@
-//! Public façade exposed to Swift via UniFFI in plan 02.
+//! Public façade exposed to Swift via UniFFI, rewired for the relay-client
+//! migration (plan 05 Phase F).
 //!
-//! Plan 02 Phase 0 refactor: all fields live inside `DaemonInner` owned by
-//! an `Arc`, so every `DaemonHandle` method takes `&self` — a requirement
-//! for UniFFI `#[uniffi::Object]` exports. `WsServer` uses interior
-//! mutability via `Mutex<Option<_>>` so `stop(&self)` can take it out
-//! without consuming the handle.
+//! `DaemonInner` owns the outbound [`RelayClient`] plus its two watch
+//! receivers (relay link + peer) and the non-secret local state (self
+//! `DeviceId`, optional `PeerRecord`, on-disk `local-state.json` path).
+//! Sync FFI methods dispatch onto `rt_handle` so Swift's non-runtime
+//! threads can still enter the Tokio reactor — same trick the old
+//! WS-server façade used.
 
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex as StdMutex};
 
-use jsonrpsee::server::RpcModule;
-use minos_cli_detect::{CommandRunner, RealCommandRunner};
-use minos_domain::{ConnectionState, DeviceId, MinosError, PairingState};
-use minos_pairing::{
-    generate_qr_payload, ActiveToken, Pairing, PairingStore, QrPayload, TrustedDevice,
-};
-use minos_protocol::{
-    MinosRpcServer, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
-};
-use minos_transport::WsServer;
+use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
 use crate::agent::AgentGlue;
-use crate::file_store::FilePairingStore;
+use crate::config::{RelayConfig, BACKEND_URL};
+use crate::local_state::LocalState;
 use crate::paths;
-use crate::rpc_server::RpcServerImpl;
-
-pub struct DaemonConfig {
-    pub mac_name: String,
-    pub bind_addr: SocketAddr,
-}
+use crate::relay_client::{PersistenceCtx, RelayClient};
+use crate::relay_pairing::{PeerRecord, RelayQrPayload};
 
 struct DaemonInner {
-    agent: Arc<AgentGlue>,
-    server: Mutex<Option<WsServer>>,
-    state_rx: watch::Receiver<ConnectionState>,
-    state_tx: Arc<watch::Sender<ConnectionState>>,
-    pairing: Arc<Mutex<Pairing>>,
-    store: Arc<dyn PairingStore>,
-    active_token: Arc<Mutex<Option<ActiveToken>>>,
-    addr: SocketAddr,
+    relay: Arc<RelayClient>,
+    link_rx: watch::Receiver<minos_domain::RelayLinkState>,
+    peer_rx: watch::Receiver<minos_domain::PeerState>,
+    self_device_id: DeviceId,
+    /// In-memory mirror of the trusted peer. Shared `Arc` with the
+    /// relay-client dispatch task, which updates it on every
+    /// `EventKind::Paired` / `Unpaired` so warm reads via
+    /// `current_trusted_device` always see the newest record.
+    peer: Arc<StdMutex<Option<PeerRecord>>>,
+    local_state_path: PathBuf,
+    /// Kept on the inner — future trace logging and eventual UniFFI
+    /// getters need the display name that was minted into the relay
+    /// handshake.
+    #[allow(dead_code)]
     mac_name: String,
-    // Captured inside `start` (which runs under a Tokio runtime — either the
-    // CLI's `#[tokio::main]` or UniFFI's tokio runtime) so sync FFI methods
-    // like `subscribe` can spawn onto it from threads that lack a current
-    // runtime, as happens when Swift calls into the FFI surface directly.
+    /// Populated by the relay-client task on fatal exit paths (pre-upgrade
+    /// HTTP 401 → `CfAuthFailed`; post-upgrade WS close 4401 →
+    /// `DeviceNotTrusted`; close 4400 → `EnvelopeVersionUnsupported`).
+    /// Drained on read so the UI sees each failure at most once per
+    /// occurrence.
+    last_error: Arc<StdMutex<Option<MinosError>>>,
+    agent: Arc<AgentGlue>,
+    /// Captured under `DaemonHandle::start` (which always runs inside a
+    /// Tokio runtime — either the CLI's `#[tokio::main]` or UniFFI's
+    /// tokio runtime) so sync FFI methods can spawn onto it from Swift
+    /// threads that lack a current runtime.
     rt_handle: Handle,
 }
 
@@ -58,139 +59,201 @@ pub struct DaemonHandle {
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl DaemonHandle {
-    /// Production entry point for Swift. Discovers the device's current
-    /// Tailscale CGNAT IPv4, tries ports 7878..=7882 in order, and returns
-    /// the first successful bind.
+    /// Production entry point. Spawns a single `RelayClient` that dials
+    /// the compile-time [`BACKEND_URL`] over WSS and publishes two
+    /// independent watch channels: relay-link and peer-pairing.
     ///
-    /// Errors:
-    /// - `BindFailed { addr: "tailscale", ... }` if no 100.x IP found.
-    /// - `BindFailed { addr: "<ip>:7878-7882", message: "all ports occupied" }`
-    ///   if every port fails to bind.
+    /// `peer` and `secret` are the persisted parts of a prior pairing —
+    /// callers pass `None` for a first run, or the loaded `LocalState`
+    /// + Keychain lookup on warm start.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    #[allow(clippy::missing_errors_doc)]
-    pub async fn start_autobind(mac_name: String) -> Result<Arc<Self>, MinosError> {
-        const PORTS: std::ops::RangeInclusive<u16> = 7878..=7882;
-
-        let host = crate::tailscale::discover_ip_with_reason()
-            .await
-            .map_err(|message| MinosError::BindFailed {
-                addr: "tailscale".into(),
-                message,
-            })?;
-
-        Self::start_on_port_range(host, mac_name, PORTS).await
-    }
-
-    /// Generate (or refresh) the pairing QR.
-    #[allow(clippy::missing_errors_doc)]
-    pub fn pairing_qr(&self) -> Result<QrPayload, MinosError> {
-        let mut p = self.inner.pairing.lock().unwrap();
-        if p.state() == PairingState::Paired {
-            p.replace()?;
-        } else if p.state() == PairingState::Unpaired {
-            p.begin_awaiting()?;
-        }
-        let (payload, active) = generate_qr_payload(
-            self.inner.addr.ip().to_string(),
-            self.inner.addr.port(),
-            self.inner.mac_name.clone(),
-        );
-        *self.inner.active_token.lock().unwrap() = Some(active);
-        let _ = self.inner.state_tx.send(ConnectionState::Pairing);
-        Ok(payload)
-    }
-
-    #[must_use]
-    pub fn current_state(&self) -> ConnectionState {
-        *self.inner.state_rx.borrow()
-    }
-
-    /// Bound host as a string (Tailscale 100.x or the loopback 127.0.0.1
-    /// used by tests). Exported to Swift via UniFFI.
-    #[must_use]
-    pub fn host(&self) -> String {
-        self.inner.addr.ip().to_string()
-    }
-
-    /// Bound TCP port after auto-retry. Exported to Swift via UniFFI.
-    #[must_use]
-    pub fn port(&self) -> u16 {
-        self.inner.addr.port()
-    }
-
-    /// Return the currently trusted device if one exists. MVP cap is one
-    /// (spec §6.4 single-pair), so the first entry in the store suffices.
-    /// Returns `Ok(None)` for an empty / missing `devices.json`.
-    #[allow(clippy::missing_errors_doc)]
-    pub fn current_trusted_device(&self) -> Result<Option<TrustedDevice>, MinosError> {
-        let mut devices = self.inner.store.load()?;
-        if devices.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(devices.remove(0)))
-        }
-    }
-
-    /// Forget a previously trusted device.
     #[allow(clippy::missing_errors_doc, clippy::unused_async)]
-    pub async fn forget_device(&self, id: DeviceId) -> Result<(), MinosError> {
-        let mut current = self.inner.store.load()?;
-        current.retain(|d| d.device_id != id);
-        self.inner.store.save(&current)?;
-        self.inner.pairing.lock().unwrap().forget();
-        // Drop any outstanding pairing answer that was issued against the now-forgotten
-        // device, so the RPC server stops accepting it on subsequent pair_answer calls.
-        *self.inner.active_token.lock().unwrap() = None;
-        let _ = self.inner.state_tx.send(ConnectionState::Disconnected);
+    pub async fn start(
+        config: RelayConfig,
+        self_device_id: DeviceId,
+        peer: Option<PeerRecord>,
+        secret: Option<DeviceSecret>,
+        mac_name: String,
+    ) -> Result<Arc<Self>, MinosError> {
+        let local_state_path = LocalState::default_path();
+
+        let agent = Arc::new(AgentGlue::new(paths::minos_home()?.join("workspaces")));
+
+        // The relay-client dispatches forwarded peer JSON-RPC into this
+        // server impl. Pre-relay it lived behind a jsonrpsee WS server;
+        // now there is exactly one shared instance threaded through.
+        let rpc_server = Arc::new(crate::rpc_server::RpcServerImpl {
+            started_at: std::time::Instant::now(),
+            runner: Arc::new(minos_cli_detect::RealCommandRunner),
+            agent: agent.clone(),
+        });
+
+        // Shared between `DaemonInner` and the relay dispatch task — the
+        // latter writes on every Paired/Unpaired event so warm reads here
+        // always see the freshest record without round-tripping the
+        // watch channel.
+        let peer_store: Arc<StdMutex<Option<PeerRecord>>> = Arc::new(StdMutex::new(peer.clone()));
+        let last_error: Arc<StdMutex<Option<MinosError>>> = Arc::new(StdMutex::new(None));
+
+        let (relay, link_rx, peer_rx) = RelayClient::spawn(
+            config,
+            self_device_id,
+            peer.clone(),
+            secret,
+            mac_name.clone(),
+            BACKEND_URL.to_owned(),
+            Some(rpc_server),
+            PersistenceCtx {
+                peer_store: peer_store.clone(),
+                local_state_path: local_state_path.clone(),
+                last_error: last_error.clone(),
+            },
+        );
+
+        Ok(Arc::new(Self {
+            inner: Arc::new(DaemonInner {
+                relay,
+                link_rx,
+                peer_rx,
+                self_device_id,
+                peer: peer_store,
+                local_state_path,
+                mac_name,
+                last_error,
+                agent,
+                rt_handle: Handle::current(),
+            }),
+        }))
+    }
+
+    /// Snapshot the current relay-link state. Cheap — just a `watch`
+    /// borrow.
+    #[must_use]
+    pub fn current_relay_link(&self) -> minos_domain::RelayLinkState {
+        *self.inner.link_rx.borrow()
+    }
+
+    /// Snapshot the current peer-pairing state. Cloned because
+    /// `PeerState::Paired` carries a String.
+    #[must_use]
+    pub fn current_peer(&self) -> minos_domain::PeerState {
+        self.inner.peer_rx.borrow().clone()
+    }
+
+    /// Return the currently trusted peer record (from our in-memory
+    /// mirror). Returns `Ok(None)` if we have no paired peer yet.
+    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
+    pub async fn current_trusted_device(&self) -> Result<Option<PeerRecord>, MinosError> {
+        // `async fn` kept for UniFFI parity with the other getters — the
+        // underlying lock is sync and never held across an await point.
+        Ok(self.inner.peer.lock().unwrap().clone())
+    }
+
+    /// Mint a pairing QR by round-tripping `request_pairing_token` to
+    /// the relay and packaging the token with the baked-in mac name and
+    /// backend URL.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn pairing_qr(&self) -> Result<RelayQrPayload, MinosError> {
+        self.inner.relay.request_pairing_token().await
+    }
+
+    /// Forget the currently paired peer. Calls the relay first; on
+    /// success, clears the in-memory mirror, persists an empty
+    /// `local-state.json`, and — on macOS — wipes the Keychain entry.
+    ///
+    /// The relay echoes an `Event::Unpaired` back to us when it finalises,
+    /// and the dispatch task runs its own mirror of this cleanup
+    /// (keychain delete + local-state save). The writes are idempotent,
+    /// so the race between "we wrote it first" and "the echo re-applies"
+    /// is benign.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn forget_peer(&self) -> Result<(), MinosError> {
+        self.inner.relay.forget_peer().await?;
+        *self.inner.peer.lock().unwrap() = None;
+        let ls = LocalState {
+            self_device_id: self.inner.self_device_id,
+            peer: None,
+        };
+        ls.save(&self.inner.local_state_path)?;
+        #[cfg(target_os = "macos")]
+        {
+            let _ = crate::KeychainTrustedDeviceStore.delete();
+        }
         Ok(())
     }
 
-    /// Stop the WS server and transition to `Disconnected`. Idempotent —
-    /// calling twice is a no-op after the first success.
+    /// Stop the relay client + the embedded agent runtime. Idempotent —
+    /// calling twice is a benign no-op after the first success.
     #[allow(clippy::missing_errors_doc)]
     pub async fn stop(&self) -> Result<(), MinosError> {
         match self.inner.agent.shutdown().await {
             Ok(()) | Err(MinosError::AgentNotRunning) => {}
             Err(err) => return Err(err),
         }
-        let server = self.inner.server.lock().unwrap().take();
-        if let Some(s) = server {
-            s.stop().await?;
-        }
-        let _ = self.inner.state_tx.send(ConnectionState::Disconnected);
+        self.inner.relay.stop().await;
         Ok(())
     }
 
-    /// Push-model subscription for Swift/UniFFI. Internally bridges
-    /// `events_stream()` (the Tokio `watch::Receiver`) to the given observer
-    /// callback. Returns a `Subscription` whose `cancel` terminates the
-    /// forwarding task.
+    /// Drain the last fatal relay-side error, if any. Consuming on read
+    /// avoids repeatedly flagging the same failure in the UI.
+    ///
+    /// Populated by the relay-client dispatch task on three paths:
+    /// - pre-upgrade HTTP 401 → `CfAuthFailed { message: <resp body> }`
+    /// - WS close 4401 → `DeviceNotTrusted { device_id: self_device_id }`
+    /// - WS close 4400 → `EnvelopeVersionUnsupported { version: 1 }`
+    ///
+    /// Swift reads this after observing a `RelayLinkState::Disconnected`
+    /// and promotes the value into `AppState.bootError` / `displayError`
+    /// so the onboarding or settings sheet can explain *why* the link
+    /// went down.
     #[must_use]
-    pub fn subscribe(
+    pub fn last_error(&self) -> Option<MinosError> {
+        self.inner.last_error.lock().unwrap().take()
+    }
+
+    /// Push-model relay-link subscription for UniFFI. Delivers the
+    /// current snapshot synchronously, then one callback per transition
+    /// until the `Subscription` is cancelled.
+    #[must_use]
+    pub fn subscribe_relay_link(
         &self,
-        observer: Arc<dyn crate::subscription::ConnectionStateObserver>,
+        observer: Arc<dyn crate::subscription::RelayLinkStateObserver>,
     ) -> Arc<crate::subscription::Subscription> {
-        // Swift invokes this on a plain thread with no current runtime;
-        // entering the handle captured at `start` time gives `tokio::spawn`
-        // inside `spawn_observer` a valid reactor. The spawned task keeps
-        // running on that runtime after the guard drops.
+        // Match `subscribe_agent_state`: enter the captured runtime so
+        // Swift's "no current reactor" threads still land a `spawn`.
         let _guard = self.inner.rt_handle.enter();
-        crate::subscription::spawn_observer(self.events_stream(), observer)
+        crate::subscription::spawn_relay_link_observer(self.inner.link_rx.clone(), observer)
+    }
+
+    /// Push-model peer-pairing subscription. Symmetric to
+    /// `subscribe_relay_link` — see that method's doc for the runtime
+    /// contract.
+    #[must_use]
+    pub fn subscribe_peer(
+        &self,
+        observer: Arc<dyn crate::subscription::PeerStateObserver>,
+    ) -> Arc<crate::subscription::Subscription> {
+        let _guard = self.inner.rt_handle.enter();
+        crate::subscription::spawn_peer_observer(self.inner.peer_rx.clone(), observer)
     }
 }
 
+// ── Agent-runtime methods (unchanged from the pre-relay surface) ──
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl DaemonHandle {
     #[allow(clippy::missing_errors_doc)]
     pub async fn start_agent(
         &self,
-        req: StartAgentRequest,
-    ) -> Result<StartAgentResponse, MinosError> {
+        req: minos_protocol::StartAgentRequest,
+    ) -> Result<minos_protocol::StartAgentResponse, MinosError> {
         self.inner.agent.start_agent(req).await
     }
 
     #[allow(clippy::missing_errors_doc)]
-    pub async fn send_user_message(&self, req: SendUserMessageRequest) -> Result<(), MinosError> {
+    pub async fn send_user_message(
+        &self,
+        req: minos_protocol::SendUserMessageRequest,
+    ) -> Result<(), MinosError> {
         self.inner.agent.send_user_message(req).await
     }
 
@@ -211,154 +274,5 @@ impl DaemonHandle {
     #[must_use]
     pub fn current_agent_state(&self) -> crate::AgentState {
         self.inner.agent.current_state()
-    }
-}
-
-/// Iterate `ports` in order on `host`, returning the first successful
-/// bind. Port-busy errors are swallowed and retried; any non-bind error
-/// short-circuits. When every port fails, returns
-/// `BindFailed { addr: "<host>:<first>-<last>", message: "all ports occupied" }`.
-///
-/// Internal helper extracted from `start_autobind` so tests can exercise
-/// the port-retry loop without going through Tailscale discovery.
-impl DaemonHandle {
-    #[allow(clippy::missing_errors_doc)]
-    pub async fn start_on_port_range(
-        host: String,
-        mac_name: String,
-        ports: std::ops::RangeInclusive<u16>,
-    ) -> Result<Arc<Self>, MinosError> {
-        let (first, last) = (*ports.start(), *ports.end());
-        let mut last_err: Option<MinosError> = None;
-        for port in ports {
-            let bind_addr: SocketAddr =
-                format!("{host}:{port}")
-                    .parse()
-                    .map_err(|e: std::net::AddrParseError| MinosError::BindFailed {
-                        addr: format!("{host}:{port}"),
-                        message: e.to_string(),
-                    })?;
-            let cfg = DaemonConfig {
-                mac_name: mac_name.clone(),
-                bind_addr,
-            };
-            match Self::start(cfg).await {
-                Ok(h) => return Ok(h),
-                Err(e @ MinosError::BindFailed { .. }) => {
-                    tracing::warn!(port, err = %e, "port busy, trying next");
-                    last_err = Some(e);
-                }
-                Err(other) => return Err(other),
-            }
-        }
-
-        Err(MinosError::BindFailed {
-            addr: format!("{host}:{first}-{last}"),
-            message: last_err.map_or_else(|| "all ports occupied".into(), |e| e.to_string()),
-        })
-    }
-
-    /// Start the daemon on an explicit bind address. Tests use this path;
-    /// production code uses `start_autobind` (Task 8).
-    #[allow(clippy::missing_errors_doc)]
-    pub async fn start(cfg: DaemonConfig) -> Result<Arc<Self>, MinosError> {
-        let store: Arc<dyn PairingStore> =
-            Arc::new(FilePairingStore::new(FilePairingStore::default_path()));
-        let runner: Arc<dyn CommandRunner> = Arc::new(RealCommandRunner);
-        let agent = Arc::new(AgentGlue::new(paths::minos_home()?.join("workspaces")));
-
-        Self::start_with_components(cfg, store, runner, agent).await
-    }
-
-    #[cfg(feature = "test-support")]
-    #[allow(clippy::missing_errors_doc)]
-    pub async fn start_with_agent_glue(
-        cfg: DaemonConfig,
-        agent: Arc<AgentGlue>,
-    ) -> Result<Arc<Self>, MinosError> {
-        let store: Arc<dyn PairingStore> =
-            Arc::new(FilePairingStore::new(FilePairingStore::default_path()));
-        let runner: Arc<dyn CommandRunner> = Arc::new(RealCommandRunner);
-
-        Self::start_with_components(cfg, store, runner, agent).await
-    }
-
-    async fn start_with_components(
-        cfg: DaemonConfig,
-        store: Arc<dyn PairingStore>,
-        runner: Arc<dyn CommandRunner>,
-        agent: Arc<AgentGlue>,
-    ) -> Result<Arc<Self>, MinosError> {
-        let trusted_devices = store.load()?;
-        let initial_state = if trusted_devices.is_empty() {
-            PairingState::Unpaired
-        } else {
-            PairingState::Paired
-        };
-        let pairing = Arc::new(Mutex::new(Pairing::new(initial_state)));
-
-        let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
-        let state_tx = Arc::new(state_tx);
-        let active_token: Arc<Mutex<Option<ActiveToken>>> = Arc::new(Mutex::new(None));
-        let bound_port = Arc::new(AtomicU16::new(cfg.bind_addr.port()));
-        let host_device_id = trusted_devices
-            .iter()
-            .find_map(|device| device.host_device_id)
-            .unwrap_or_else(DeviceId::new);
-
-        let impl_ = RpcServerImpl {
-            started_at: Instant::now(),
-            pairing: pairing.clone(),
-            store: store.clone(),
-            runner,
-            mac_name: cfg.mac_name.clone(),
-            host_device_id,
-            host: cfg.bind_addr.ip().to_string(),
-            port: bound_port.clone(),
-            active_token: active_token.clone(),
-            conn_state_tx: state_tx.clone(),
-            agent: agent.clone(),
-        };
-
-        let mut module = RpcModule::new(());
-        module
-            .merge(impl_.into_rpc())
-            .map_err(|e| MinosError::BindFailed {
-                addr: cfg.bind_addr.to_string(),
-                message: e.to_string(),
-            })?;
-
-        let server = WsServer::bind(cfg.bind_addr, module).await?;
-        let addr = server.addr();
-        bound_port.store(addr.port(), Ordering::Relaxed);
-
-        let _ = state_tx.send(ConnectionState::Disconnected);
-
-        Ok(Arc::new(Self {
-            inner: Arc::new(DaemonInner {
-                agent,
-                server: Mutex::new(Some(server)),
-                state_rx,
-                state_tx,
-                pairing,
-                store,
-                active_token,
-                addr,
-                mac_name: cfg.mac_name,
-                rt_handle: Handle::current(),
-            }),
-        }))
-    }
-
-    /// Subscribe to connection-state transitions (Rust-only — UniFFI callers
-    /// use the callback-interface `subscribe` added in Task 9).
-    #[must_use]
-    pub fn events_stream(&self) -> watch::Receiver<ConnectionState> {
-        self.inner.state_rx.clone()
-    }
-
-    #[must_use]
-    pub fn addr(&self) -> SocketAddr {
-        self.inner.addr
     }
 }

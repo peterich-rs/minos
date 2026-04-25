@@ -18,7 +18,7 @@ uniffi::setup_scaffolding!();
 #[cfg(feature = "uniffi")]
 mod uniffi_bridges {
     use chrono::{DateTime, Utc};
-    use minos_domain::{DeviceId, DeviceSecret, PairingToken};
+    use minos_domain::PairingToken;
     use std::time::SystemTime;
     use uuid::Uuid;
 
@@ -39,19 +39,9 @@ mod uniffi_bridges {
         try_lift: |st| Ok(st.into()),
     });
 
-    // Hand-rolled remote custom_type! for cross-crate newtypes (custom_newtype!
-    // has no `remote` variant). `lower`/`try_lift` need pub field access on
-    // DeviceId.0 and PairingToken.0 — Step 3 covers PairingToken.
-    uniffi::custom_type!(DeviceId, Uuid, {
-        remote,
-        lower: |d| d.0,
-        try_lift: |u| Ok(DeviceId(u)),
-    });
-    uniffi::custom_type!(DeviceSecret, String, {
-        remote,
-        lower: |secret| secret.0,
-        try_lift: |value| Ok(DeviceSecret(value)),
-    });
+    // `DeviceId` and `DeviceSecret` are registered in their home crate
+    // (`minos-domain`) with blanket `impl<UT>` coverage, which already
+    // applies to this crate's tag — no local registration needed here.
     uniffi::custom_type!(PairingToken, String, {
         remote,
         lower: |t| t.0,

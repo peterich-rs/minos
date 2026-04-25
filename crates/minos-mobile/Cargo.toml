@@ -25,6 +25,27 @@ chrono = { workspace = true }
 async-trait = { workspace = true }
 dashmap = { workspace = true }
 uuid = { workspace = true }
+# Optional CLI deps for the fake-peer dev binary (gated on the `cli` feature).
+# tokio-tungstenite and futures-util are always-on (the envelope client
+# depends on them) so the cli feature only enables the CLI-specific extras.
+anyhow = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enables the fake-peer binary. Off by default so iOS shrinks with no
+# extra deps; turn on for `cargo run -p minos-mobile --bin fake-peer`.
+cli = [
+    "anyhow",
+    "clap",
+    "tokio/macros",
+    "tokio/rt-multi-thread",
+]
+
+[[bin]]
+name = "fake-peer"
+path = "src/bin/fake-peer.rs"
+required-features = ["cli"]
 
 [dev-dependencies]
 tokio-test = { workspace = true }

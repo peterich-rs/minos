@@ -870,48 +870,50 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 15:
         return MinosError_BackendInternal(message: dco_decode_String(raw[1]));
       case 16:
-        return MinosError_CodexSpawnFailed(message: dco_decode_String(raw[1]));
+        return MinosError_CfAuthFailed(message: dco_decode_String(raw[1]));
       case 17:
+        return MinosError_CodexSpawnFailed(message: dco_decode_String(raw[1]));
+      case 18:
         return MinosError_CodexConnectFailed(
           url: dco_decode_String(raw[1]),
           message: dco_decode_String(raw[2]),
         );
-      case 18:
+      case 19:
         return MinosError_CodexProtocolError(
           method: dco_decode_String(raw[1]),
           message: dco_decode_String(raw[2]),
         );
-      case 19:
-        return MinosError_AgentAlreadyRunning();
       case 20:
-        return MinosError_AgentNotRunning();
+        return MinosError_AgentAlreadyRunning();
       case 21:
+        return MinosError_AgentNotRunning();
+      case 22:
         return MinosError_AgentNotSupported(
           agent: dco_decode_agent_name(raw[1]),
         );
-      case 22:
-        return MinosError_AgentSessionIdMismatch();
       case 23:
+        return MinosError_AgentSessionIdMismatch();
+      case 24:
         return MinosError_CfAccessMisconfigured(
           reason: dco_decode_String(raw[1]),
         );
-      case 24:
+      case 25:
         return MinosError_IngestSeqConflict(
           threadId: dco_decode_String(raw[1]),
           seq: dco_decode_u_64(raw[2]),
         );
-      case 25:
-        return MinosError_ThreadNotFound(threadId: dco_decode_String(raw[1]));
       case 26:
+        return MinosError_ThreadNotFound(threadId: dco_decode_String(raw[1]));
+      case 27:
         return MinosError_TranslationNotImplemented(
           agent: dco_decode_agent_name(raw[1]),
         );
-      case 27:
+      case 28:
         return MinosError_TranslationFailed(
           agent: dco_decode_agent_name(raw[1]),
           message: dco_decode_String(raw[2]),
         );
-      case 28:
+      case 29:
         return MinosError_PairingQrVersionUnsupported(
           version: dco_decode_u_8(raw[1]),
         );
@@ -1467,54 +1469,57 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return MinosError_BackendInternal(message: var_message);
       case 16:
         var var_message = sse_decode_String(deserializer);
-        return MinosError_CodexSpawnFailed(message: var_message);
+        return MinosError_CfAuthFailed(message: var_message);
       case 17:
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_CodexSpawnFailed(message: var_message);
+      case 18:
         var var_url = sse_decode_String(deserializer);
         var var_message = sse_decode_String(deserializer);
         return MinosError_CodexConnectFailed(
           url: var_url,
           message: var_message,
         );
-      case 18:
+      case 19:
         var var_method = sse_decode_String(deserializer);
         var var_message = sse_decode_String(deserializer);
         return MinosError_CodexProtocolError(
           method: var_method,
           message: var_message,
         );
-      case 19:
-        return MinosError_AgentAlreadyRunning();
       case 20:
-        return MinosError_AgentNotRunning();
+        return MinosError_AgentAlreadyRunning();
       case 21:
+        return MinosError_AgentNotRunning();
+      case 22:
         var var_agent = sse_decode_agent_name(deserializer);
         return MinosError_AgentNotSupported(agent: var_agent);
-      case 22:
-        return MinosError_AgentSessionIdMismatch();
       case 23:
+        return MinosError_AgentSessionIdMismatch();
+      case 24:
         var var_reason = sse_decode_String(deserializer);
         return MinosError_CfAccessMisconfigured(reason: var_reason);
-      case 24:
+      case 25:
         var var_threadId = sse_decode_String(deserializer);
         var var_seq = sse_decode_u_64(deserializer);
         return MinosError_IngestSeqConflict(
           threadId: var_threadId,
           seq: var_seq,
         );
-      case 25:
+      case 26:
         var var_threadId = sse_decode_String(deserializer);
         return MinosError_ThreadNotFound(threadId: var_threadId);
-      case 26:
+      case 27:
         var var_agent = sse_decode_agent_name(deserializer);
         return MinosError_TranslationNotImplemented(agent: var_agent);
-      case 27:
+      case 28:
         var var_agent = sse_decode_agent_name(deserializer);
         var var_message = sse_decode_String(deserializer);
         return MinosError_TranslationFailed(
           agent: var_agent,
           message: var_message,
         );
-      case 28:
+      case 29:
         var var_version = sse_decode_u_8(deserializer);
         return MinosError_PairingQrVersionUnsupported(version: var_version);
       default:
@@ -2161,57 +2166,60 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case MinosError_BackendInternal(message: final message):
         sse_encode_i_32(15, serializer);
         sse_encode_String(message, serializer);
-      case MinosError_CodexSpawnFailed(message: final message):
+      case MinosError_CfAuthFailed(message: final message):
         sse_encode_i_32(16, serializer);
+        sse_encode_String(message, serializer);
+      case MinosError_CodexSpawnFailed(message: final message):
+        sse_encode_i_32(17, serializer);
         sse_encode_String(message, serializer);
       case MinosError_CodexConnectFailed(
         url: final url,
         message: final message,
       ):
-        sse_encode_i_32(17, serializer);
+        sse_encode_i_32(18, serializer);
         sse_encode_String(url, serializer);
         sse_encode_String(message, serializer);
       case MinosError_CodexProtocolError(
         method: final method,
         message: final message,
       ):
-        sse_encode_i_32(18, serializer);
+        sse_encode_i_32(19, serializer);
         sse_encode_String(method, serializer);
         sse_encode_String(message, serializer);
       case MinosError_AgentAlreadyRunning():
-        sse_encode_i_32(19, serializer);
-      case MinosError_AgentNotRunning():
         sse_encode_i_32(20, serializer);
-      case MinosError_AgentNotSupported(agent: final agent):
+      case MinosError_AgentNotRunning():
         sse_encode_i_32(21, serializer);
+      case MinosError_AgentNotSupported(agent: final agent):
+        sse_encode_i_32(22, serializer);
         sse_encode_agent_name(agent, serializer);
       case MinosError_AgentSessionIdMismatch():
-        sse_encode_i_32(22, serializer);
-      case MinosError_CfAccessMisconfigured(reason: final reason):
         sse_encode_i_32(23, serializer);
+      case MinosError_CfAccessMisconfigured(reason: final reason):
+        sse_encode_i_32(24, serializer);
         sse_encode_String(reason, serializer);
       case MinosError_IngestSeqConflict(
         threadId: final threadId,
         seq: final seq,
       ):
-        sse_encode_i_32(24, serializer);
+        sse_encode_i_32(25, serializer);
         sse_encode_String(threadId, serializer);
         sse_encode_u_64(seq, serializer);
       case MinosError_ThreadNotFound(threadId: final threadId):
-        sse_encode_i_32(25, serializer);
+        sse_encode_i_32(26, serializer);
         sse_encode_String(threadId, serializer);
       case MinosError_TranslationNotImplemented(agent: final agent):
-        sse_encode_i_32(26, serializer);
+        sse_encode_i_32(27, serializer);
         sse_encode_agent_name(agent, serializer);
       case MinosError_TranslationFailed(
         agent: final agent,
         message: final message,
       ):
-        sse_encode_i_32(27, serializer);
+        sse_encode_i_32(28, serializer);
         sse_encode_agent_name(agent, serializer);
         sse_encode_String(message, serializer);
       case MinosError_PairingQrVersionUnsupported(version: final version):
-        sse_encode_i_32(28, serializer);
+        sse_encode_i_32(29, serializer);
         sse_encode_u_8(version, serializer);
     }
   }

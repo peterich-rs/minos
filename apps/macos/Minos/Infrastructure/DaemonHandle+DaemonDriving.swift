@@ -3,6 +3,11 @@ import Foundation
 extension Subscription: SubscriptionHandle {}
 
 extension DaemonHandle: DaemonDriving {
+    // The UniFFI-generated methods take `observer:` and `req:` argument
+    // labels because they originate from Rust impl blocks; the protocol
+    // uses positional names for ergonomics. These thin shims bridge the
+    // two without losing the trailing-closure-style call sites in
+    // SwiftUI views.
     func startAgent(_ req: StartAgentRequest) async throws -> StartAgentResponse {
         try await startAgent(req: req)
     }
@@ -11,8 +16,12 @@ extension DaemonHandle: DaemonDriving {
         try await sendUserMessage(req: req)
     }
 
-    func subscribeObserver(_ observer: ConnectionStateObserver) -> any SubscriptionHandle {
-        subscribe(observer: observer)
+    func subscribeRelayLink(_ observer: RelayLinkStateObserver) -> any SubscriptionHandle {
+        subscribeRelayLink(observer: observer)
+    }
+
+    func subscribePeer(_ observer: PeerStateObserver) -> any SubscriptionHandle {
+        subscribePeer(observer: observer)
     }
 
     func subscribeAgentState(_ observer: AgentStateObserver) -> any SubscriptionHandle {

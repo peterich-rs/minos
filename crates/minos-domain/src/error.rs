@@ -38,6 +38,7 @@ pub enum ErrorKind {
     EnvelopeVersionUnsupported,
     PeerOffline,
     BackendInternal,
+    CfAuthFailed,
     CodexSpawnFailed,
     CodexConnectFailed,
     CodexProtocolError,
@@ -114,6 +115,10 @@ impl ErrorKind {
             (Self::PeerOffline, Lang::En) => "Paired device offline; please check status",
             (Self::BackendInternal, Lang::Zh) => "后端服务异常，请稍后重试",
             (Self::BackendInternal, Lang::En) => "Backend service error; please retry later",
+            (Self::CfAuthFailed, Lang::Zh) => "Cloudflare Access 认证失败，请检查 Service Token",
+            (Self::CfAuthFailed, Lang::En) => {
+                "Cloudflare Access authentication failed; please check the Service Token"
+            }
             (Self::CodexSpawnFailed, Lang::Zh) => "无法启动 Codex CLI；请确认已安装 `codex`",
             (Self::CodexSpawnFailed, Lang::En) => "Failed to launch codex CLI; is codex installed?",
             (Self::CodexConnectFailed, Lang::Zh) => "无法连接 Codex 服务",
@@ -209,6 +214,9 @@ pub enum MinosError {
     #[error("backend internal error: {message}")]
     BackendInternal { message: String },
 
+    #[error("cloudflare access authentication failed: {message}")]
+    CfAuthFailed { message: String },
+
     // ── agent runtime layer (spec §5.3) ──
     #[error("failed to spawn codex: {message}")]
     CodexSpawnFailed { message: String },
@@ -275,6 +283,7 @@ impl MinosError {
             Self::EnvelopeVersionUnsupported { .. } => ErrorKind::EnvelopeVersionUnsupported,
             Self::PeerOffline { .. } => ErrorKind::PeerOffline,
             Self::BackendInternal { .. } => ErrorKind::BackendInternal,
+            Self::CfAuthFailed { .. } => ErrorKind::CfAuthFailed,
             Self::CodexSpawnFailed { .. } => ErrorKind::CodexSpawnFailed,
             Self::CodexConnectFailed { .. } => ErrorKind::CodexConnectFailed,
             Self::CodexProtocolError { .. } => ErrorKind::CodexProtocolError,
@@ -426,6 +435,12 @@ mod tests {
                 ErrorKind::BackendInternal,
             ),
             (
+                MinosError::CfAuthFailed {
+                    message: String::new(),
+                },
+                ErrorKind::CfAuthFailed,
+            ),
+            (
                 MinosError::CodexSpawnFailed {
                     message: String::new(),
                 },
@@ -499,7 +514,7 @@ mod tests {
         ];
         assert_eq!(
             cases.len(),
-            29,
+            30,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -526,6 +541,7 @@ mod tests {
         ErrorKind::EnvelopeVersionUnsupported,
         ErrorKind::PeerOffline,
         ErrorKind::BackendInternal,
+        ErrorKind::CfAuthFailed,
         ErrorKind::CodexSpawnFailed,
         ErrorKind::CodexConnectFailed,
         ErrorKind::CodexProtocolError,
@@ -545,7 +561,7 @@ mod tests {
     fn every_error_kind_has_user_message_in_both_langs() {
         assert_eq!(
             ALL_KINDS.len(),
-            29,
+            30,
             "add a kind when you add an ErrorKind variant"
         );
         for k in ALL_KINDS {
@@ -622,6 +638,24 @@ mod tests {
             reason: "missing MINOS_BACKEND_CF_ACCESS_CLIENT_ID".into(),
         };
         assert!(format!("{e}").contains("missing MINOS_BACKEND_CF_ACCESS_CLIENT_ID"));
+    }
+
+    #[test]
+    fn cf_auth_failed_display_and_kind() {
+        let err = MinosError::CfAuthFailed {
+            message: "Cloudflare denied".into(),
+        };
+        assert_eq!(err.kind(), ErrorKind::CfAuthFailed);
+        let s = err.to_string();
+        assert!(s.contains("cloudflare"));
+        assert!(s.contains("Cloudflare denied"));
+    }
+
+    #[test]
+    fn cf_auth_failed_user_message_zh_no_tailscale_wording() {
+        let m = ErrorKind::CfAuthFailed.user_message(Lang::Zh);
+        assert!(m.contains("Cloudflare"));
+        assert!(!m.to_lowercase().contains("tailscale"));
     }
 
     #[test]

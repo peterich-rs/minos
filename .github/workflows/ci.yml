@@ -220,3 +220,12 @@ jobs:
         # tests, swiftlint, Flutter (pub get + dart format + analyze +
         # test), and frb codegen drift.
         run: cargo xtask check-all
+
+# TODO (plan 05 follow-up P1.5): release job. Inject
+# `secrets.MINOS_BACKEND_URL` as the `MINOS_BACKEND_URL` env var at
+# `cargo build -p minos-ffi-uniffi --release` time so the staticlib
+# embeds the production wss:// URL via `option_env!`. Then run
+# `cargo xtask gen-uniffi`, `cargo xtask gen-xcode`, `xcodebuild
+# -configuration Release archive`, sign + notarize the .app, and
+# upload to the GitHub release. Tracked in
+# `docs/superpowers/specs/macos-relay-client-migration-design.md` §2.2.
