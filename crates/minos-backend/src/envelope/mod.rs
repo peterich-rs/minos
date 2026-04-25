@@ -1,7 +1,7 @@
 //! Envelope dispatcher: the per-WebSocket state machine.
 //!
 //! Once an incoming WS is authenticated (step 9) and a `SessionHandle` is
-//! inserted into the `SessionRegistry`, the relay transfers control to
+//! inserted into the `SessionRegistry`, the backend transfers control to
 //! [`run_session`]. That function owns the socket for its lifetime and
 //! drives three concurrent branches via `tokio::select!`:
 //!
@@ -55,7 +55,7 @@ use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
 use crate::{
-    error::RelayError,
+    error::BackendError,
     http::BackendPublicConfig,
     ingest::translate::ThreadTranslators,
     pairing::PairingService,
@@ -94,10 +94,10 @@ const CLOSE_CODE_BAD_REQUEST: u16 = 4400;
 ///
 /// # Errors
 ///
-/// Returns `Err(RelayError)` only for the internal book-keeping failures
+/// Returns `Err(BackendError)` only for the internal book-keeping failures
 /// that callers would plausibly surface; normal socket-close paths are
-/// `Ok(())`. Step 10 wires a [`From<RelayError>`] into `MinosError` at the
-/// axum handler layer.
+/// `Ok(())`. Step 10 wires a [`From<BackendError>`] into the outer error
+/// surface at the axum handler layer.
 #[allow(clippy::too_many_arguments)] // Pipes state through; each arg is used.
 pub async fn run_session(
     mut ws: WebSocket,
@@ -109,7 +109,7 @@ pub async fn run_session(
     token_ttl: Duration,
     translators: Arc<ThreadTranslators>,
     public_cfg: Arc<BackendPublicConfig>,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     let result = run_session_inner(
         &mut ws,
         &session,
@@ -152,7 +152,7 @@ async fn run_session_inner(
     token_ttl: Duration,
     translators: &ThreadTranslators,
     public_cfg: &BackendPublicConfig,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
     let mut revocation_rx = session.subscribe_revocation();
     // First tick fires immediately; skip it so we don't ping right after
@@ -400,7 +400,7 @@ async fn dispatch_envelope(
         // permitted; anyone else is a protocol violation and the socket
         // closes 4400. The dispatch itself is crash-safe: translator errors
         // surface as synthetic UI-event frames, DB errors surface as
-        // RelayError and drop the event (with a warn log) but keep the
+        // BackendError and drop the event (with a warn log) but keep the
         // session alive.
         Envelope::Ingest {
             version,
@@ -482,10 +482,10 @@ pub async fn handle_forward(
         .await
     {
         Ok(()) => None,
-        Err(RelayError::PeerOffline { .. }) => {
+        Err(BackendError::PeerOffline { .. }) => {
             Some(synth_peer_offline_forwarded(session.device_id, &payload))
         }
-        Err(RelayError::PeerBackpressure { .. }) => Some(synth_peer_backpressure_forwarded(
+        Err(BackendError::PeerBackpressure { .. }) => Some(synth_peer_backpressure_forwarded(
             session.device_id,
             &payload,
         )),

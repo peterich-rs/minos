@@ -25,7 +25,7 @@ uniffi::setup_scaffolding!();
 
 #[cfg(feature = "uniffi")]
 mod uniffi_bridges {
-    use minos_domain::DeviceId;
+    use minos_domain::{DeviceId, DeviceSecret};
     use uuid::Uuid;
 
     uniffi::custom_type!(Uuid, String, {
@@ -38,5 +38,11 @@ mod uniffi_bridges {
         remote,
         lower: |device_id| device_id.0,
         try_lift: |uuid| Ok(DeviceId(uuid)),
+    });
+
+    uniffi::custom_type!(DeviceSecret, String, {
+        remote,
+        lower: |secret| secret.0,
+        try_lift: |value| Ok(DeviceSecret(value)),
     });
 }

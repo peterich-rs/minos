@@ -12,7 +12,7 @@
 //!   constraint in `migrations/0001_devices.sql`).
 //! - Reads: `String.parse::<Uuid>()` and `DeviceRole::from_str`.
 //!
-//! This keeps sqlx type plumbing contained in the relay crate and avoids
+//! This keeps sqlx type plumbing contained in the backend crate and avoids
 //! cross-crate scope creep. If future code paths need `sqlx::Type` on the
 //! newtypes, we can revisit in `minos-domain`.
 
@@ -21,7 +21,7 @@ use sqlx::{Executor, Sqlite, SqlitePool};
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 
 /// A single row of the `devices` table after decoding into domain types.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +51,7 @@ pub async fn insert_device(
     name: &str,
     role: DeviceRole,
     now: i64,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     insert_device_with_executor(pool, id, name, role, now).await
 }
 
@@ -61,7 +61,7 @@ pub(crate) async fn insert_device_with_executor<'e, E>(
     name: &str,
     role: DeviceRole,
     now: i64,
-) -> Result<(), RelayError>
+) -> Result<(), BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -81,7 +81,7 @@ where
     )
     .execute(executor)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "insert_device".to_string(),
         message: e.to_string(),
     })?;
@@ -91,12 +91,12 @@ where
 
 /// Set (or overwrite) a device's argon2id `secret_hash`.
 ///
-/// Returns [`RelayError::DeviceNotFound`] if no row matches `id`.
+/// Returns [`BackendError::DeviceNotFound`] if no row matches `id`.
 pub async fn upsert_secret_hash(
     pool: &SqlitePool,
     id: DeviceId,
     hash: &str,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     upsert_secret_hash_with_executor(pool, id, hash).await
 }
 
@@ -104,7 +104,7 @@ pub(crate) async fn upsert_secret_hash_with_executor<'e, E>(
     executor: E,
     id: DeviceId,
     hash: &str,
-) -> Result<(), RelayError>
+) -> Result<(), BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -117,13 +117,13 @@ where
     )
     .execute(executor)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "upsert_secret_hash".to_string(),
         message: e.to_string(),
     })?;
 
     if result.rows_affected() == 0 {
-        return Err(RelayError::DeviceNotFound { device_id: id_str });
+        return Err(BackendError::DeviceNotFound { device_id: id_str });
     }
 
     Ok(())
@@ -131,15 +131,15 @@ where
 
 /// Clear a device's stored `secret_hash`.
 ///
-/// Returns [`RelayError::DeviceNotFound`] if no row matches `id`.
-pub async fn clear_secret_hash(pool: &SqlitePool, id: DeviceId) -> Result<(), RelayError> {
+/// Returns [`BackendError::DeviceNotFound`] if no row matches `id`.
+pub async fn clear_secret_hash(pool: &SqlitePool, id: DeviceId) -> Result<(), BackendError> {
     clear_secret_hash_with_executor(pool, id).await
 }
 
 pub(crate) async fn clear_secret_hash_with_executor<'e, E>(
     executor: E,
     id: DeviceId,
-) -> Result<(), RelayError>
+) -> Result<(), BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -149,13 +149,13 @@ where
         .bind(&id_str)
         .execute(executor)
         .await
-        .map_err(|e| RelayError::StoreQuery {
+        .map_err(|e| BackendError::StoreQuery {
             operation: "clear_secret_hash".to_string(),
             message: e.to_string(),
         })?;
 
     if result.rows_affected() == 0 {
-        return Err(RelayError::DeviceNotFound { device_id: id_str });
+        return Err(BackendError::DeviceNotFound { device_id: id_str });
     }
 
     Ok(())
@@ -164,14 +164,17 @@ where
 /// Look up a device by id.
 ///
 /// Returns `Ok(None)` if the row does not exist.
-pub async fn get_device(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceRow>, RelayError> {
+pub async fn get_device(
+    pool: &SqlitePool,
+    id: DeviceId,
+) -> Result<Option<DeviceRow>, BackendError> {
     get_device_with_executor(pool, id).await
 }
 
 pub(crate) async fn get_device_with_executor<'e, E>(
     executor: E,
     id: DeviceId,
-) -> Result<Option<DeviceRow>, RelayError>
+) -> Result<Option<DeviceRow>, BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -187,7 +190,7 @@ where
     )
     .fetch_optional(executor)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "get_device".to_string(),
         message: e.to_string(),
     })?;
@@ -199,11 +202,11 @@ where
     let device_id =
         Uuid::parse_str(&r.device_id)
             .map(DeviceId)
-            .map_err(|e| RelayError::StoreDecode {
+            .map_err(|e| BackendError::StoreDecode {
                 column: "device_id".to_string(),
                 message: e.to_string(),
             })?;
-    let role = DeviceRole::from_str(&r.role).map_err(|e| RelayError::StoreDecode {
+    let role = DeviceRole::from_str(&r.role).map_err(|e| BackendError::StoreDecode {
         column: "role".to_string(),
         message: e,
     })?;
@@ -228,7 +231,7 @@ where
 pub async fn get_secret_hash(
     pool: &SqlitePool,
     id: DeviceId,
-) -> Result<Option<String>, RelayError> {
+) -> Result<Option<String>, BackendError> {
     let id_str = id.to_string();
 
     // query_scalar! returns Option<Option<String>> for a nullable column on
@@ -241,7 +244,7 @@ pub async fn get_secret_hash(
     )
     .fetch_optional(pool)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "get_secret_hash".to_string(),
         message: e.to_string(),
     })?;
@@ -328,7 +331,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            RelayError::DeviceNotFound { device_id } => {
+            BackendError::DeviceNotFound { device_id } => {
                 assert_eq!(device_id, missing.to_string());
             }
             other => panic!("expected DeviceNotFound, got {other:?}"),

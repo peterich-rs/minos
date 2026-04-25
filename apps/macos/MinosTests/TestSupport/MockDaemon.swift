@@ -169,15 +169,19 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     static func makeTrustedDevice(
         deviceId: DeviceId = UUID().uuidString,
         name: String = "Alice's iPhone",
+        hostDeviceId: DeviceId? = nil,
         host: String = "100.64.0.20",
         port: UInt16 = 7878,
+        assignedDeviceSecret: DeviceSecret? = nil,
         pairedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
     ) -> TrustedDevice {
         TrustedDevice(
             deviceId: deviceId,
             name: name,
+            hostDeviceId: hostDeviceId,
             host: host,
             port: port,
+            assignedDeviceSecret: assignedDeviceSecret,
             pairedAt: pairedAt
         )
     }

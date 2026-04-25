@@ -1,6 +1,6 @@
 //! HTTP surface: axum `Router` + shared state + header extraction helpers.
 //!
-//! The relay exposes exactly two HTTP-level endpoints:
+//! The backend exposes exactly two HTTP-level endpoints:
 //!
 //! - `GET /health` — plaintext liveness probe ([`health::get`]). Body carries
 //!   the crate name and version so a deploy smoke can assert both.
@@ -10,8 +10,8 @@
 //!
 //! # State plumbing
 //!
-//! [`RelayState`] bundles the three runtime Arcs (`SessionRegistry`,
-//! `PairingService`, `SqlitePool`) plus the relay version string. It is
+//! [`BackendState`] bundles the three runtime Arcs (`SessionRegistry`,
+//! `PairingService`, `SqlitePool`) plus the backend version string. It is
 //! [`Clone`] so axum's [`axum::extract::State`] can hand it to every
 //! handler without borrowing; inner fields are either `Arc`-wrapped,
 //! cheap-to-clone (`SqlitePool`), or `&'static str`.
@@ -57,7 +57,7 @@ pub struct BackendPublicConfig {
 /// Cheap to clone: the service types are `Arc`-wrapped, and [`SqlitePool`]
 /// is itself an `Arc` internally.
 #[derive(Clone)]
-pub struct RelayState {
+pub struct BackendState {
     /// In-memory map of live WS sessions.
     pub registry: Arc<SessionRegistry>,
     /// Pairing business logic (token issue / consume / forget).
@@ -70,7 +70,7 @@ pub struct RelayState {
     pub translators: Arc<ThreadTranslators>,
     /// Public-facing config snapshot (public URL + CF Access tokens) used
     /// by `RequestPairingQr` to assemble the QR payload. `Arc` so
-    /// `RelayState::clone` is still cheap.
+    /// `BackendState::clone` is still cheap.
     pub public_cfg: Arc<BackendPublicConfig>,
     /// Crate version string; exposed via `/health`.
     ///
@@ -80,7 +80,7 @@ pub struct RelayState {
     pub version: &'static str,
 }
 
-impl RelayState {
+impl BackendState {
     /// Construct a state bundle with the crate's `CARGO_PKG_VERSION`.
     ///
     /// Intended call site: `main.rs` in step 10. Tests that need a custom
@@ -108,12 +108,12 @@ impl RelayState {
     }
 }
 
-/// Build the relay's top-level axum `Router`.
+/// Build the backend's top-level axum `Router`.
 ///
 /// Two routes (see module docs). No middleware is attached here — the
 /// edge (Cloudflare Access) handles auth, TLS, and rate limiting; logs
 /// are wired via `tracing` rather than `tower-http::trace` in this MVP.
-pub fn router(state: RelayState) -> Router {
+pub fn router(state: BackendState) -> Router {
     Router::new()
         .route("/health", axum::routing::get(health::get))
         .route("/devices", axum::routing::get(ws_devices::upgrade))

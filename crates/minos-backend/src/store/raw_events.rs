@@ -9,7 +9,7 @@ use minos_domain::AgentName;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 
 /// Decoded row from the `raw_events` table.
 #[derive(Debug, Clone)]
@@ -29,12 +29,12 @@ fn agent_str(a: AgentName) -> &'static str {
     }
 }
 
-fn parse_agent(s: &str) -> Result<AgentName, RelayError> {
+fn parse_agent(s: &str) -> Result<AgentName, BackendError> {
     match s {
         "codex" => Ok(AgentName::Codex),
         "claude" => Ok(AgentName::Claude),
         "gemini" => Ok(AgentName::Gemini),
-        other => Err(RelayError::StoreDecode {
+        other => Err(BackendError::StoreDecode {
             column: "raw_events.agent".into(),
             message: other.to_string(),
         }),
@@ -51,8 +51,8 @@ pub async fn insert_if_absent(
     agent: AgentName,
     payload: &Value,
     ts_ms: i64,
-) -> Result<bool, RelayError> {
-    let payload_s = serde_json::to_string(payload).map_err(|e| RelayError::StoreQuery {
+) -> Result<bool, BackendError> {
+    let payload_s = serde_json::to_string(payload).map_err(|e| BackendError::StoreQuery {
         operation: "raw_events.insert_if_absent.serialise".into(),
         message: e.to_string(),
     })?;
@@ -67,7 +67,7 @@ pub async fn insert_if_absent(
     .bind(ts_ms)
     .execute(pool)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "raw_events.insert_if_absent".into(),
         message: e.to_string(),
     })?;
@@ -82,7 +82,7 @@ pub async fn read_range(
     thread_id: &str,
     from_seq: u64,
     limit: u32,
-) -> Result<Vec<RawEventRow>, RelayError> {
+) -> Result<Vec<RawEventRow>, BackendError> {
     let rows = sqlx::query_as::<_, (i64, String, String, i64)>(
         r"SELECT seq, agent, payload_json, ts_ms FROM raw_events
            WHERE thread_id = ?1 AND seq >= ?2
@@ -93,7 +93,7 @@ pub async fn read_range(
     .bind(i64::from(limit))
     .fetch_all(pool)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "raw_events.read_range".into(),
         message: e.to_string(),
     })?;
@@ -101,10 +101,11 @@ pub async fn read_range(
     rows.into_iter()
         .map(|(seq, agent, payload, ts_ms)| {
             let agent = parse_agent(&agent)?;
-            let payload = serde_json::from_str(&payload).map_err(|e| RelayError::StoreDecode {
-                column: "raw_events.payload_json".into(),
-                message: e.to_string(),
-            })?;
+            let payload =
+                serde_json::from_str(&payload).map_err(|e| BackendError::StoreDecode {
+                    column: "raw_events.payload_json".into(),
+                    message: e.to_string(),
+                })?;
             Ok(RawEventRow {
                 seq,
                 agent,
@@ -118,13 +119,13 @@ pub async fn read_range(
 /// Return the largest `seq` ever persisted for `thread_id`, or `0` if no
 /// rows exist. Used by the agent-host to decide whether to re-ingest on
 /// startup (`GetThreadLastSeq` LocalRpc).
-pub async fn last_seq(pool: &SqlitePool, thread_id: &str) -> Result<u64, RelayError> {
+pub async fn last_seq(pool: &SqlitePool, thread_id: &str) -> Result<u64, BackendError> {
     let v: Option<i64> =
         sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE thread_id = ?1")
             .bind(thread_id)
             .fetch_one(pool)
             .await
-            .map_err(|e| RelayError::StoreQuery {
+            .map_err(|e| BackendError::StoreQuery {
                 operation: "raw_events.last_seq".into(),
                 message: e.to_string(),
             })?;

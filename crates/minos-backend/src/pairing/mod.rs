@@ -1,4 +1,4 @@
-//! Broker-side pairing service: token issuance, token consumption, and
+//! Backend-side pairing service: token issuance, token consumption, and
 //! pair dismissal.
 //!
 //! Sits on top of `store::{devices, pairings, tokens}` and layers the
@@ -27,7 +27,7 @@
 //! Spec §10.2 R4 says "Mac UI confirms replace; iPhone UI: 'Mac is already
 //! paired'". The MVP server-side policy implemented here is to refuse
 //! consumption when either side already has a pairing row, returning
-//! [`RelayError::PairingStateMismatch`] — the UI is expected to resolve it
+//! [`BackendError::PairingStateMismatch`] — the UI is expected to resolve it
 //! by calling `forget_peer` and retrying.
 //!
 //! # Atomicity
@@ -48,7 +48,7 @@ use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
 use crate::{
-    error::RelayError,
+    error::BackendError,
     store::{devices, pairings, tokens},
 };
 
@@ -58,7 +58,7 @@ pub mod secret;
 ///
 /// Both plaintext secrets live in this struct momentarily — just long
 /// enough for the caller to push each one to its owning device over the
-/// envelope. Neither value is persisted anywhere in the relay; only their
+/// envelope. Neither value is persisted anywhere in the backend; only their
 /// argon2id hashes were written as part of `consume_token` itself.
 #[derive(Debug, Clone)]
 pub struct PairingOutcome {
@@ -96,18 +96,18 @@ impl PairingService {
     ///
     /// # Errors
     ///
-    /// - [`RelayError::StoreQuery`] — the underlying `INSERT` failed (for
+    /// - [`BackendError::StoreQuery`] — the underlying `INSERT` failed (for
     ///   example an FK violation if `issuer` has not been inserted yet).
     pub async fn request_token(
         &self,
         issuer: DeviceId,
         ttl: Duration,
-    ) -> Result<(PairingToken, DateTime<Utc>), RelayError> {
+    ) -> Result<(PairingToken, DateTime<Utc>), BackendError> {
         let now = Utc::now();
         // `Duration::from_std` fails only on values beyond i64 nanoseconds
         // (~292 years). 5-minute TTL is nowhere near that.
         let expires = now
-            + chrono::Duration::from_std(ttl).map_err(|e| RelayError::PairingHash {
+            + chrono::Duration::from_std(ttl).map_err(|e| BackendError::PairingHash {
                 message: format!("ttl out of range: {e}"),
             })?;
 
@@ -131,9 +131,9 @@ impl PairingService {
     /// Steps:
     /// 1. Hash the candidate and atomically mark the matching row
     ///    consumed (via [`tokens::consume_token`]). A missing, expired, or
-    ///    already-consumed token surfaces as [`RelayError::PairingTokenInvalid`].
+    ///    already-consumed token surfaces as [`BackendError::PairingTokenInvalid`].
     /// 2. Refuse if either the consumer or the issuer already has a pairing
-    ///    row ([`RelayError::PairingStateMismatch`]).
+    ///    row ([`BackendError::PairingStateMismatch`]).
     /// 3. Mint two fresh `DeviceSecret`s, hash each with argon2id.
     /// 4. Upsert the consumer's device row (no-op if already registered),
     ///    write both `secret_hash` columns, insert the pairing row.
@@ -143,39 +143,37 @@ impl PairingService {
     ///
     /// # Errors
     ///
-    /// - [`RelayError::PairingTokenInvalid`] — unknown / expired / already
+    /// - [`BackendError::PairingTokenInvalid`] — unknown / expired / already
     ///   consumed candidate.
-    /// - [`RelayError::PairingStateMismatch`] — consumer or issuer already
+    /// - [`BackendError::PairingStateMismatch`] — consumer or issuer already
     ///   paired.
-    /// - [`RelayError::PairingHash`] — argon2 reported an internal error.
-    /// - [`RelayError::StoreQuery`] / [`RelayError::DeviceNotFound`] — any
+    /// - [`BackendError::PairingHash`] — argon2 reported an internal error.
+    /// - [`BackendError::StoreQuery`] / [`BackendError::DeviceNotFound`] — any
     ///   underlying store write failed.
     pub async fn consume_token(
         &self,
         candidate: &PairingToken,
         consumer: DeviceId,
         consumer_name: String,
-    ) -> Result<PairingOutcome, RelayError> {
+    ) -> Result<PairingOutcome, BackendError> {
         let now = Utc::now().timestamp_millis();
         let digest = sha256_hex(candidate.as_str());
 
-        let mut tx =
-            self.pool
-                .begin_with("BEGIN IMMEDIATE")
-                .await
-                .map_err(|e| RelayError::StoreQuery {
-                    operation: "begin_pairing_consume".to_string(),
-                    message: e.to_string(),
-                })?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+            BackendError::StoreQuery {
+                operation: "begin_pairing_consume".to_string(),
+                message: e.to_string(),
+            }
+        })?;
 
-        let result: Result<PairingOutcome, RelayError> = async {
+        let result: Result<PairingOutcome, BackendError> = async {
             let issuer = tokens::peek_usable_token_with_executor(&mut *tx, &digest, now)
                 .await?
-                .ok_or(RelayError::PairingTokenInvalid)?
+                .ok_or(BackendError::PairingTokenInvalid)?
                 .issuer_device_id;
 
             if issuer == consumer {
-                return Err(RelayError::PairingStateMismatch {
+                return Err(BackendError::PairingStateMismatch {
                     actual: "self".to_string(),
                 });
             }
@@ -186,7 +184,7 @@ impl PairingService {
                 .await?
                 .is_some()
             {
-                return Err(RelayError::PairingStateMismatch {
+                return Err(BackendError::PairingStateMismatch {
                     actual: "paired".to_string(),
                 });
             }
@@ -194,7 +192,7 @@ impl PairingService {
                 .await?
                 .is_some()
             {
-                return Err(RelayError::PairingStateMismatch {
+                return Err(BackendError::PairingStateMismatch {
                     actual: "paired".to_string(),
                 });
             }
@@ -206,7 +204,7 @@ impl PairingService {
 
             tokens::consume_token_with_executor(&mut *tx, &digest, now)
                 .await?
-                .ok_or(RelayError::PairingTokenInvalid)?;
+                .ok_or(BackendError::PairingTokenInvalid)?;
 
             if devices::get_device_with_executor(&mut *tx, consumer)
                 .await?
@@ -238,14 +236,14 @@ impl PairingService {
 
         match result {
             Ok(outcome) => {
-                tx.commit().await.map_err(|e| RelayError::StoreQuery {
+                tx.commit().await.map_err(|e| BackendError::StoreQuery {
                     operation: "commit_pairing_consume".to_string(),
                     message: e.to_string(),
                 })?;
                 Ok(outcome)
             }
             Err(err) => {
-                tx.rollback().await.map_err(|e| RelayError::StoreQuery {
+                tx.rollback().await.map_err(|e| BackendError::StoreQuery {
                     operation: "rollback_pairing_consume".to_string(),
                     message: e.to_string(),
                 })?;
@@ -264,19 +262,20 @@ impl PairingService {
     ///
     /// # Errors
     ///
-    /// - [`RelayError::StoreQuery`] / [`RelayError::StoreDecode`] — any
+    /// - [`BackendError::StoreQuery`] / [`BackendError::StoreDecode`] — any
     ///   underlying store op failed.
-    pub async fn forget_pair(&self, either_side: DeviceId) -> Result<Option<DeviceId>, RelayError> {
-        let mut tx =
-            self.pool
-                .begin_with("BEGIN IMMEDIATE")
-                .await
-                .map_err(|e| RelayError::StoreQuery {
-                    operation: "begin_forget_pair".to_string(),
-                    message: e.to_string(),
-                })?;
+    pub async fn forget_pair(
+        &self,
+        either_side: DeviceId,
+    ) -> Result<Option<DeviceId>, BackendError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+            BackendError::StoreQuery {
+                operation: "begin_forget_pair".to_string(),
+                message: e.to_string(),
+            }
+        })?;
 
-        let result: Result<Option<DeviceId>, RelayError> = async {
+        let result: Result<Option<DeviceId>, BackendError> = async {
             let Some(peer) = pairings::get_pair_with_executor(&mut *tx, either_side).await? else {
                 return Ok(None);
             };
@@ -291,14 +290,14 @@ impl PairingService {
 
         match result {
             Ok(peer) => {
-                tx.commit().await.map_err(|e| RelayError::StoreQuery {
+                tx.commit().await.map_err(|e| BackendError::StoreQuery {
                     operation: "commit_forget_pair".to_string(),
                     message: e.to_string(),
                 })?;
                 Ok(peer)
             }
             Err(err) => {
-                tx.rollback().await.map_err(|e| RelayError::StoreQuery {
+                tx.rollback().await.map_err(|e| BackendError::StoreQuery {
                     operation: "rollback_forget_pair".to_string(),
                     message: e.to_string(),
                 })?;
@@ -322,13 +321,13 @@ fn sha256_hex(input: &str) -> String {
     out
 }
 
-fn normalize_pairing_insert_error(err: RelayError) -> RelayError {
+fn normalize_pairing_insert_error(err: BackendError) -> BackendError {
     match err {
-        RelayError::StoreQuery { operation, message }
+        BackendError::StoreQuery { operation, message }
             if operation == "insert_pairing"
                 && message.contains(pairings::SINGLE_PAIR_VIOLATION_MARKER) =>
         {
-            RelayError::PairingStateMismatch {
+            BackendError::PairingStateMismatch {
                 actual: "paired".to_string(),
             }
         }
@@ -368,7 +367,7 @@ mod tests {
     // Inlined (no proptest! wrapper) because `PairingToken::generate` takes
     // no inputs — proptest's generator would just drive an iteration count,
     // which a plain loop does more clearly. `minos-domain` already carries a
-    // `proptest!` version; this test earns its keep by landing on the relay
+    // `proptest!` version; this test earns its keep by landing on the backend
     // side too, which is where spec §14's acceptance criterion lives.
 
     #[test]
@@ -453,7 +452,7 @@ mod tests {
             .consume_token(&token, consumer, "iphone".into())
             .await
             .unwrap_err();
-        assert!(matches!(err, RelayError::PairingTokenInvalid));
+        assert!(matches!(err, BackendError::PairingTokenInvalid));
     }
 
     #[tokio::test]
@@ -475,7 +474,7 @@ mod tests {
             .consume_token(&token, other_consumer, "another iphone".into())
             .await
             .unwrap_err();
-        assert!(matches!(err, RelayError::PairingTokenInvalid));
+        assert!(matches!(err, BackendError::PairingTokenInvalid));
     }
 
     #[tokio::test]
@@ -490,7 +489,7 @@ mod tests {
             .consume_token(&bogus, consumer, "iphone".into())
             .await
             .unwrap_err();
-        assert!(matches!(err, RelayError::PairingTokenInvalid));
+        assert!(matches!(err, BackendError::PairingTokenInvalid));
     }
 
     // ── integration: state-mismatch cases ──────────────────────────────
@@ -522,7 +521,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            RelayError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
+            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
             other => panic!("expected PairingStateMismatch, got {other:?}"),
         }
     }
@@ -539,7 +538,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            RelayError::PairingStateMismatch { actual } => assert_eq!(actual, "self"),
+            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "self"),
             other => panic!("expected PairingStateMismatch, got {other:?}"),
         }
 
@@ -581,7 +580,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            RelayError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
+            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
             other => panic!("expected PairingStateMismatch, got {other:?}"),
         }
     }
@@ -640,7 +639,7 @@ mod tests {
         };
 
         match loser_result {
-            RelayError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
+            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
             other => panic!("expected PairingStateMismatch, got {other:?}"),
         }
 
@@ -687,7 +686,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            RelayError::StoreQuery { operation, message } => {
+            BackendError::StoreQuery { operation, message } => {
                 assert_eq!(operation, "insert_pairing");
                 assert!(message.contains("pairing insert failed"));
             }

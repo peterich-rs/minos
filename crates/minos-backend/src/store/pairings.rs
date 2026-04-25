@@ -11,7 +11,7 @@ use minos_domain::DeviceId;
 use sqlx::{Executor, Sqlite, SqlitePool};
 use uuid::Uuid;
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 
 /// SQLite trigger message used when a device is already present in some
 /// other pairing row.
@@ -44,7 +44,7 @@ pub async fn insert_pairing(
     a: DeviceId,
     b: DeviceId,
     now: i64,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     insert_pairing_with_executor(pool, a, b, now).await
 }
 
@@ -53,7 +53,7 @@ pub(crate) async fn insert_pairing_with_executor<'e, E>(
     a: DeviceId,
     b: DeviceId,
     now: i64,
-) -> Result<(), RelayError>
+) -> Result<(), BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -71,7 +71,7 @@ where
     )
     .execute(executor)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "insert_pairing".to_string(),
         message: e.to_string(),
     })?;
@@ -84,14 +84,14 @@ where
 /// Returns `Ok(None)` if `id` has no pairing row. In the MVP a device has
 /// at most one pair (spec §7.2), so any row that touches `id` names the
 /// peer in its other column.
-pub async fn get_pair(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceId>, RelayError> {
+pub async fn get_pair(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceId>, BackendError> {
     get_pair_with_executor(pool, id).await
 }
 
 pub(crate) async fn get_pair_with_executor<'e, E>(
     executor: E,
     id: DeviceId,
-) -> Result<Option<DeviceId>, RelayError>
+) -> Result<Option<DeviceId>, BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -109,7 +109,7 @@ where
     )
     .fetch_optional(executor)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "get_pair".to_string(),
         message: e.to_string(),
     })?;
@@ -126,7 +126,7 @@ where
 
     let peer = Uuid::parse_str(&peer_str)
         .map(DeviceId)
-        .map_err(|e| RelayError::StoreDecode {
+        .map_err(|e| BackendError::StoreDecode {
             column: "pairings.device_a/b".to_string(),
             message: e.to_string(),
         })?;
@@ -136,7 +136,7 @@ where
 /// Delete the pairing between `a` and `b` (in either order). No-op if no
 /// such row exists; callers that need strict semantics can check via
 /// [`get_pair`] first.
-pub async fn delete_pair(pool: &SqlitePool, a: DeviceId, b: DeviceId) -> Result<(), RelayError> {
+pub async fn delete_pair(pool: &SqlitePool, a: DeviceId, b: DeviceId) -> Result<(), BackendError> {
     delete_pair_with_executor(pool, a, b).await
 }
 
@@ -144,7 +144,7 @@ pub(crate) async fn delete_pair_with_executor<'e, E>(
     executor: E,
     a: DeviceId,
     b: DeviceId,
-) -> Result<(), RelayError>
+) -> Result<(), BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -157,7 +157,7 @@ where
     )
     .execute(executor)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "delete_pair".to_string(),
         message: e.to_string(),
     })?;
@@ -232,7 +232,7 @@ mod tests {
 
         let err = insert_pairing(&pool, a, c, T0 + 1).await.unwrap_err();
         match err {
-            RelayError::StoreQuery { operation, message } => {
+            BackendError::StoreQuery { operation, message } => {
                 assert_eq!(operation, "insert_pairing");
                 assert!(message.contains(SINGLE_PAIR_VIOLATION_MARKER));
             }

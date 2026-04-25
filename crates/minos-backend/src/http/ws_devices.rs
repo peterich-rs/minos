@@ -28,20 +28,20 @@
 //! `on_upgrade` callback now revalidates the current device row / role /
 //! secret before publishing the socket in the live registry. If auth became
 //! stale in the gap between the HTTP 101 response and the callback running,
-//! the relay closes the already-opened socket with close code `4401`
+//! the backend closes the already-opened socket with close code `4401`
 //! instead of activating it.
 //!
 //! # Role default
 //!
 //! The plan pins `IosClient` as the MVP default when `X-Device-Role` is
-//! absent on first registration. For existing rows, the relay trusts the
+//! absent on first registration. For existing rows, the backend trusts the
 //! stored role and rejects any mismatching header instead of reclassifying
 //! the device from client input.
 //!
 //! # Cloudflare Access
 //!
 //! `CF-Access-Client-Id` / `CF-Access-Client-Secret` are validated at the
-//! edge. The relay does not re-verify them; we emit a debug-level log
+//! edge. The backend does not re-verify them; we emit a debug-level log
 //! when they are observed so dev builds can confirm header plumbing.
 //!
 //! # Unpaired-mode gating
@@ -71,7 +71,7 @@ use minos_protocol::{Envelope, EventKind};
 use std::str::FromStr;
 use uuid::Uuid;
 
-use super::RelayState;
+use super::BackendState;
 use crate::{
     envelope::run_session,
     pairing::secret::verify_secret,
@@ -112,7 +112,7 @@ const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
 /// - `Ok(Response)` where the response is the WS upgrade carrying
 ///   [`run_session`] as its post-upgrade callback.
 pub async fn upgrade(
-    State(state): State<RelayState>,
+    State(state): State<BackendState>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
@@ -416,7 +416,7 @@ fn log_cf_access_presence(headers: &HeaderMap) {
             target: "minos_backend::http",
             cf_access_client_id_present = cf_id,
             cf_access_client_secret_present = cf_sec,
-            "CF-Access headers observed (edge-validated; relay does not re-check)"
+            "CF-Access headers observed (edge-validated; backend does not re-check)"
         );
     }
 }

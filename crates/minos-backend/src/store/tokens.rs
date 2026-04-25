@@ -1,8 +1,8 @@
 //! `pairing_tokens` table CRUD.
 //!
 //! A pairing token is a 32-byte random bearer value the Mac host hands to
-//! the iOS client (typically via QR). The relay stores only the argon2id
-//! hash of the token plus the issuer's `DeviceId` and expiry. Tokens are
+//! the iOS client (typically via QR). The backend stores only the SHA-256
+//! digest of the token plus the issuer's `DeviceId` and expiry. Tokens are
 //! one-shot: [`consume_token`] atomically marks a row `consumed_at = now`
 //! and returns the issuer, or returns `None` for any non-usable state
 //! (expired, already consumed, unknown).
@@ -17,7 +17,7 @@ use minos_domain::DeviceId;
 use sqlx::{Executor, Sqlite, SqlitePool};
 use uuid::Uuid;
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 
 /// Successful output of [`consume_token`].
 ///
@@ -31,17 +31,15 @@ pub struct ConsumedToken {
 
 /// Insert a new pairing token row.
 ///
-/// `token_hash` is an argon2id verifier string; since argon2 uses a fresh
-/// random salt per call, even identical inputs produce different hash
-/// strings — so collision on the PK is not a practical concern. `now` and
-/// `expires_at` are both unix epoch ms.
+/// `token_hash` is the hex-encoded SHA-256 digest of the plaintext pairing
+/// token. `now` and `expires_at` are both unix epoch ms.
 pub async fn issue_token(
     pool: &SqlitePool,
     token_hash: &str,
     issuer: DeviceId,
     expires_at: i64,
     now: i64,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     let issuer_str = issuer.to_string();
 
     sqlx::query!(
@@ -56,7 +54,7 @@ pub async fn issue_token(
     )
     .execute(pool)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "issue_token".to_string(),
         message: e.to_string(),
     })?;
@@ -79,7 +77,7 @@ pub(crate) async fn peek_usable_token_with_executor<'e, E>(
     executor: E,
     token_hash_candidate: &str,
     now: i64,
-) -> Result<Option<ConsumedToken>, RelayError>
+) -> Result<Option<ConsumedToken>, BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -96,7 +94,7 @@ where
     .bind(now)
     .fetch_optional(executor)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "peek_usable_token".to_string(),
         message: e.to_string(),
     })?;
@@ -108,7 +106,7 @@ pub async fn consume_token(
     pool: &SqlitePool,
     token_hash_candidate: &str,
     now: i64,
-) -> Result<Option<ConsumedToken>, RelayError> {
+) -> Result<Option<ConsumedToken>, BackendError> {
     consume_token_with_executor(pool, token_hash_candidate, now).await
 }
 
@@ -116,7 +114,7 @@ pub(crate) async fn consume_token_with_executor<'e, E>(
     executor: E,
     token_hash_candidate: &str,
     now: i64,
-) -> Result<Option<ConsumedToken>, RelayError>
+) -> Result<Option<ConsumedToken>, BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
@@ -135,7 +133,7 @@ where
     )
     .fetch_optional(executor)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "consume_token".to_string(),
         message: e.to_string(),
     })?;
@@ -146,14 +144,14 @@ where
 fn decode_consumed_token(
     issuer_device_id: Option<String>,
     operation: &str,
-) -> Result<Option<ConsumedToken>, RelayError> {
+) -> Result<Option<ConsumedToken>, BackendError> {
     let Some(issuer_device_id) = issuer_device_id else {
         return Ok(None);
     };
 
     let issuer_device_id = Uuid::parse_str(&issuer_device_id)
         .map(DeviceId)
-        .map_err(|e| RelayError::StoreDecode {
+        .map_err(|e| BackendError::StoreDecode {
             column: format!("pairing_tokens.issuer_device_id ({operation})"),
             message: e.to_string(),
         })?;
@@ -164,14 +162,14 @@ fn decode_consumed_token(
 ///
 /// Consumed tokens are preserved as an audit trail (spec §8.2:
 /// `consumed_at` is permanent).
-pub async fn gc_expired(pool: &SqlitePool, now: i64) -> Result<u64, RelayError> {
+pub async fn gc_expired(pool: &SqlitePool, now: i64) -> Result<u64, BackendError> {
     let result = sqlx::query!(
         r#"DELETE FROM pairing_tokens WHERE expires_at <= ? AND consumed_at IS NULL"#,
         now,
     )
     .execute(pool)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "gc_expired".to_string(),
         message: e.to_string(),
     })?;
@@ -310,7 +308,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            RelayError::StoreQuery { operation, .. } => {
+            BackendError::StoreQuery { operation, .. } => {
                 assert_eq!(operation, "issue_token");
             }
             other => panic!("expected StoreQuery, got {other:?}"),

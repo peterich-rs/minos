@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1580993418;
+  int get rustContentHash => -1452323239;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -91,14 +91,27 @@ abstract class RustLibApi extends BaseApi {
 
   MobileClient crateApiMinosMobileClientNew({required String selfName});
 
+  MobileClient crateApiMinosMobileClientNewWithPersistedState({
+    required String selfName,
+    required PersistedPairingState state,
+  });
+
   Future<void> crateApiMinosMobileClientPairWithQrJson({
     required MobileClient that,
     required String qrJson,
   });
 
+  Future<PersistedPairingState> crateApiMinosMobileClientPersistedPairingState({
+    required MobileClient that,
+  });
+
   Future<ReadThreadResponse> crateApiMinosMobileClientReadThread({
     required MobileClient that,
     required ReadThreadParams req,
+  });
+
+  Future<void> crateApiMinosMobileClientResumePersistedSession({
+    required MobileClient that,
   });
 
   Stream<ConnectionState> crateApiMinosMobileClientSubscribeState({
@@ -266,6 +279,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  MobileClient crateApiMinosMobileClientNewWithPersistedState({
+    required String selfName,
+    required PersistedPairingState state,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(selfName, serializer);
+          sse_encode_box_autoadd_persisted_pairing_state(state, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMinosMobileClientNewWithPersistedStateConstMeta,
+        argValues: [selfName, state],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientNewWithPersistedStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_new_with_persisted_state",
+        argNames: ["selfName", "state"],
+      );
+
+  @override
   Future<void> crateApiMinosMobileClientPairWithQrJson({
     required MobileClient that,
     required String qrJson,
@@ -282,7 +326,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 6,
             port: port_,
           );
         },
@@ -304,6 +348,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<PersistedPairingState> crateApiMinosMobileClientPersistedPairingState({
+    required MobileClient that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_persisted_pairing_state,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientPersistedPairingStateConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientPersistedPairingStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_persisted_pairing_state",
+        argNames: ["that"],
+      );
+
+  @override
   Future<ReadThreadResponse> crateApiMinosMobileClientReadThread({
     required MobileClient that,
     required ReadThreadParams req,
@@ -320,7 +400,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 8,
             port: port_,
           );
         },
@@ -342,6 +422,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiMinosMobileClientResumePersistedSession({
+    required MobileClient that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientResumePersistedSessionConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientResumePersistedSessionConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_resume_persisted_session",
+        argNames: ["that"],
+      );
+
+  @override
   Stream<ConnectionState> crateApiMinosMobileClientSubscribeState({
     required MobileClient that,
   }) {
@@ -359,7 +475,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 7,
+              funcId: 10,
               port: port_,
             );
           },
@@ -400,7 +516,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 8,
+              funcId: 11,
               port: port_,
             );
           },
@@ -433,7 +549,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 12,
             port: port_,
           );
         },
@@ -462,7 +578,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_error_kind(kind, serializer);
           sse_encode_lang(lang, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -571,6 +687,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ListThreadsParams dco_decode_box_autoadd_list_threads_params(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_list_threads_params(raw);
+  }
+
+  @protected
+  PersistedPairingState dco_decode_box_autoadd_persisted_pairing_state(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_persisted_pairing_state(raw);
   }
 
   @protected
@@ -744,7 +868,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 14:
         return MinosError_PeerOffline(peerDeviceId: dco_decode_String(raw[1]));
       case 15:
-        return MinosError_RelayInternal(message: dco_decode_String(raw[1]));
+        return MinosError_BackendInternal(message: dco_decode_String(raw[1]));
       case 16:
         return MinosError_CodexSpawnFailed(message: dco_decode_String(raw[1]));
       case 17:
@@ -830,6 +954,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PairingState dco_decode_pairing_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return PairingState.values[raw as int];
+  }
+
+  @protected
+  PersistedPairingState dco_decode_persisted_pairing_state(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return PersistedPairingState(
+      backendUrl: dco_decode_opt_String(arr[0]),
+      deviceId: dco_decode_opt_String(arr[1]),
+      deviceSecret: dco_decode_opt_String(arr[2]),
+      cfAccessClientId: dco_decode_opt_String(arr[3]),
+      cfAccessClientSecret: dco_decode_opt_String(arr[4]),
+    );
   }
 
   @protected
@@ -1111,6 +1250,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  PersistedPairingState sse_decode_box_autoadd_persisted_pairing_state(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_persisted_pairing_state(deserializer));
+  }
+
+  @protected
   ReadThreadParams sse_decode_box_autoadd_read_thread_params(
     SseDeserializer deserializer,
   ) {
@@ -1317,7 +1464,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return MinosError_PeerOffline(peerDeviceId: var_peerDeviceId);
       case 15:
         var var_message = sse_decode_String(deserializer);
-        return MinosError_RelayInternal(message: var_message);
+        return MinosError_BackendInternal(message: var_message);
       case 16:
         var var_message = sse_decode_String(deserializer);
         return MinosError_CodexSpawnFailed(message: var_message);
@@ -1439,6 +1586,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return PairingState.values[inner];
+  }
+
+  @protected
+  PersistedPairingState sse_decode_persisted_pairing_state(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_backendUrl = sse_decode_opt_String(deserializer);
+    var var_deviceId = sse_decode_opt_String(deserializer);
+    var var_deviceSecret = sse_decode_opt_String(deserializer);
+    var var_cfAccessClientId = sse_decode_opt_String(deserializer);
+    var var_cfAccessClientSecret = sse_decode_opt_String(deserializer);
+    return PersistedPairingState(
+      backendUrl: var_backendUrl,
+      deviceId: var_deviceId,
+      deviceSecret: var_deviceSecret,
+      cfAccessClientId: var_cfAccessClientId,
+      cfAccessClientSecret: var_cfAccessClientSecret,
+    );
   }
 
   @protected
@@ -1791,6 +1957,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_persisted_pairing_state(
+    PersistedPairingState self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_persisted_pairing_state(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_read_thread_params(
     ReadThreadParams self,
     SseSerializer serializer,
@@ -1983,7 +2158,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case MinosError_PeerOffline(peerDeviceId: final peerDeviceId):
         sse_encode_i_32(14, serializer);
         sse_encode_String(peerDeviceId, serializer);
-      case MinosError_RelayInternal(message: final message):
+      case MinosError_BackendInternal(message: final message):
         sse_encode_i_32(15, serializer);
         sse_encode_String(message, serializer);
       case MinosError_CodexSpawnFailed(message: final message):
@@ -2104,6 +2279,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_pairing_state(PairingState self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_persisted_pairing_state(
+    PersistedPairingState self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_opt_String(self.backendUrl, serializer);
+    sse_encode_opt_String(self.deviceId, serializer);
+    sse_encode_opt_String(self.deviceSecret, serializer);
+    sse_encode_opt_String(self.cfAccessClientId, serializer);
+    sse_encode_opt_String(self.cfAccessClientSecret, serializer);
   }
 
   @protected
@@ -2345,12 +2533,22 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   Future<void> pairWithQrJson({required String qrJson}) => RustLib.instance.api
       .crateApiMinosMobileClientPairWithQrJson(that: this, qrJson: qrJson);
 
+  /// Export the current pairing snapshot so Dart can mirror it into secure
+  /// storage after pairing succeeds.
+  Future<PersistedPairingState> persistedPairingState() => RustLib.instance.api
+      .crateApiMinosMobileClientPersistedPairingState(that: this);
+
   /// Read a window of translated UI events for one thread.
   Future<ReadThreadResponse> readThread({required ReadThreadParams req}) =>
       RustLib.instance.api.crateApiMinosMobileClientReadThread(
         that: this,
         req: req,
       );
+
+  /// Reconnect using the durable pairing snapshot already loaded from the
+  /// Dart-side secure store.
+  Future<void> resumePersistedSession() => RustLib.instance.api
+      .crateApiMinosMobileClientResumePersistedSession(that: this);
 
   /// Subscribe to connection-state transitions. Emits the current value
   /// immediately, then every subsequent change. The spawned task exits once

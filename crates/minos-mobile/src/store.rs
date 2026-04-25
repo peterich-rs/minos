@@ -16,6 +16,16 @@ use async_trait::async_trait;
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use tokio::sync::RwLock;
 
+/// Durable mobile pairing snapshot mirrored into the iOS keychain.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PersistedPairingState {
+    pub backend_url: Option<String>,
+    pub device_id: Option<String>,
+    pub device_secret: Option<String>,
+    pub cf_access_client_id: Option<String>,
+    pub cf_access_client_secret: Option<String>,
+}
+
 /// Asynchronous store for the mobile client's durable pairing state.
 ///
 /// Errors surface as `MinosError::StoreIo` / `StoreCorrupt` at the boundary.
@@ -53,6 +63,21 @@ impl InMemoryPairingStore {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn from_parts(
+        backend_url: Option<String>,
+        cf_access: Option<(String, String)>,
+        device: Option<(DeviceId, DeviceSecret)>,
+    ) -> Self {
+        Self {
+            inner: RwLock::new(InMemoryState {
+                backend_url,
+                cf_access,
+                device,
+            }),
+        }
     }
 }
 

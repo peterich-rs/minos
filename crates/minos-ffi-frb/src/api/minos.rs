@@ -83,6 +83,39 @@ pub struct UiEventFrame {
     pub ts_ms: i64,
 }
 
+/// Durable mobile pairing snapshot mirrored into the iOS keychain.
+pub struct PersistedPairingState {
+    pub backend_url: Option<String>,
+    pub device_id: Option<String>,
+    pub device_secret: Option<String>,
+    pub cf_access_client_id: Option<String>,
+    pub cf_access_client_secret: Option<String>,
+}
+
+impl From<minos_mobile::PersistedPairingState> for PersistedPairingState {
+    fn from(state: minos_mobile::PersistedPairingState) -> Self {
+        Self {
+            backend_url: state.backend_url,
+            device_id: state.device_id,
+            device_secret: state.device_secret,
+            cf_access_client_id: state.cf_access_client_id,
+            cf_access_client_secret: state.cf_access_client_secret,
+        }
+    }
+}
+
+impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
+    fn from(state: PersistedPairingState) -> Self {
+        Self {
+            backend_url: state.backend_url,
+            device_id: state.device_id,
+            device_secret: state.device_secret,
+            cf_access_client_id: state.cf_access_client_id,
+            cf_access_client_secret: state.cf_access_client_secret,
+        }
+    }
+}
+
 impl From<MobileUiEventFrame> for UiEventFrame {
     fn from(f: MobileUiEventFrame) -> Self {
         Self {
@@ -105,10 +138,27 @@ impl MobileClient {
         ))
     }
 
+    /// Construct a client preloaded with a durable pairing snapshot from the
+    /// Dart-side secure store.
+    #[frb(sync)]
+    #[must_use]
+    pub fn new_with_persisted_state(self_name: String, state: PersistedPairingState) -> Self {
+        Self(minos_mobile::MobileClient::new_with_persisted_state(
+            self_name,
+            state.into(),
+        ))
+    }
+
     /// Pair using the raw JSON payload extracted from the scanned QR v2
     /// code. Delegates to `MobileClient::pair_with_qr_json`.
     pub async fn pair_with_qr_json(&self, qr_json: String) -> Result<(), MinosError> {
         self.0.pair_with_qr_json(qr_json).await
+    }
+
+    /// Reconnect using the durable pairing snapshot already loaded from the
+    /// Dart-side secure store.
+    pub async fn resume_persisted_session(&self) -> Result<(), MinosError> {
+        self.0.resume_persisted_session().await
     }
 
     /// Forget the paired backend; clears secure storage and tears down the
@@ -131,6 +181,15 @@ impl MobileClient {
         req: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
         self.0.read_thread(req).await
+    }
+
+    /// Export the current pairing snapshot so Dart can mirror it into secure
+    /// storage after pairing succeeds.
+    pub async fn persisted_pairing_state(&self) -> Result<PersistedPairingState, MinosError> {
+        self.0
+            .persisted_pairing_state()
+            .await
+            .map(PersistedPairingState::from)
     }
 
     /// Current connection state, read from the watch-channel cache. Cheap and
@@ -249,7 +308,7 @@ pub enum _ErrorKind {
     ConnectionStateMismatch,
     EnvelopeVersionUnsupported,
     PeerOffline,
-    RelayInternal,
+    BackendInternal,
     CodexSpawnFailed,
     CodexConnectFailed,
     CodexProtocolError,
@@ -283,7 +342,7 @@ pub enum _MinosError {
     ConnectionStateMismatch { expected: String, actual: String },
     EnvelopeVersionUnsupported { version: u8 },
     PeerOffline { peer_device_id: String },
-    RelayInternal { message: String },
+    BackendInternal { message: String },
     CodexSpawnFailed { message: String },
     CodexConnectFailed { url: String, message: String },
     CodexProtocolError { method: String, message: String },

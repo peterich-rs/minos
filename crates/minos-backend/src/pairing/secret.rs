@@ -3,7 +3,7 @@
 //! Separate from the pairing-token digest in [`super`] because the two
 //! values have different threat profiles:
 //!
-//! - `DeviceSecret` is stored forever in the relay's SQLite `devices.secret_hash`
+//! - `DeviceSecret` is stored forever in the backend's SQLite `devices.secret_hash`
 //!   column, so a DB exfiltration attacker has unbounded compute time to brute
 //!   the original. Argon2id's tunable memory/time cost is the right tool.
 //! - `PairingToken` is short-lived (≤5 min TTL) and high-entropy (32B random,
@@ -24,19 +24,19 @@ use argon2::{
 };
 use minos_domain::DeviceSecret;
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 
 /// Hash a fresh `DeviceSecret` with argon2id default parameters for at-rest
 /// storage.
 ///
 /// The returned PHC string carries algorithm id, params, random salt, and
 /// digest — all we need for [`verify_secret`] later.
-pub fn hash_secret(plain: &DeviceSecret) -> Result<String, RelayError> {
+pub fn hash_secret(plain: &DeviceSecret) -> Result<String, BackendError> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(plain.as_str().as_bytes(), &salt)
         .map(|h| h.to_string())
-        .map_err(|e| RelayError::PairingHash {
+        .map_err(|e| BackendError::PairingHash {
             message: e.to_string(),
         })
 }
@@ -46,20 +46,20 @@ pub fn hash_secret(plain: &DeviceSecret) -> Result<String, RelayError> {
 /// - `Ok(true)` — candidate matches the stored hash.
 /// - `Ok(false)` — candidate does not match; signal this to the caller as a
 ///   failed authentication (distinct from a malformed-hash error).
-/// - `Err(RelayError::PairingHash)` — the stored hash string failed to parse
+/// - `Err(BackendError::PairingHash)` — the stored hash string failed to parse
 ///   (schema drift or column corruption) or argon2 reported an internal error.
 ///
 /// `argon2::Argon2::verify_password` performs the final byte compare via
 /// `subtle::ConstantTimeEq`, so no additional guard is needed. We never
 /// recover the plaintext or use a `==` on the digest bytes in this path.
-pub fn verify_secret(plain: &str, hash: &str) -> Result<bool, RelayError> {
-    let parsed = PasswordHash::new(hash).map_err(|e| RelayError::PairingHash {
+pub fn verify_secret(plain: &str, hash: &str) -> Result<bool, BackendError> {
+    let parsed = PasswordHash::new(hash).map_err(|e| BackendError::PairingHash {
         message: e.to_string(),
     })?;
     match Argon2::default().verify_password(plain.as_bytes(), &parsed) {
         Ok(()) => Ok(true),
         Err(argon2::password_hash::Error::Password) => Ok(false),
-        Err(e) => Err(RelayError::PairingHash {
+        Err(e) => Err(BackendError::PairingHash {
             message: e.to_string(),
         }),
     }
@@ -101,7 +101,7 @@ mod tests {
     fn verify_with_malformed_hash_returns_pairing_hash_error() {
         let err = verify_secret("anything", "not-a-valid-phc-string").unwrap_err();
         match err {
-            RelayError::PairingHash { message } => {
+            BackendError::PairingHash { message } => {
                 assert!(!message.is_empty());
             }
             other => panic!("expected PairingHash, got {other:?}"),

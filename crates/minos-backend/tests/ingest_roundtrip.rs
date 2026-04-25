@@ -11,7 +11,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
-    http::{router, RelayState},
+    http::{router, BackendState},
     ingest::translate::ThreadTranslators,
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
@@ -52,7 +52,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
 
-    let state = RelayState {
+    let state = BackendState {
         registry: Arc::new(SessionRegistry::new()),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
@@ -290,6 +290,86 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
             .fetch_one(&relay.pool)
             .await?;
     assert_eq!(row_count, 1, "retransmit must be a no-op at the DB layer");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_update(
+) -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+
+    let host_id = DeviceId::new();
+    let phone_id = DeviceId::new();
+    let host_secret = DeviceSecret::generate();
+    let phone_secret = DeviceSecret::generate();
+    let host_hash = hash_secret(&host_secret)?;
+    let phone_hash = hash_secret(&phone_secret)?;
+
+    store::devices::insert_device(&relay.pool, host_id, "host", DeviceRole::AgentHost, 0).await?;
+    store::devices::insert_device(&relay.pool, phone_id, "phone", DeviceRole::IosClient, 0).await?;
+    store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
+    store::devices::upsert_secret_hash(&relay.pool, phone_id, &phone_hash).await?;
+    store::pairings::insert_pairing(&relay.pool, host_id, phone_id, 0).await?;
+
+    let mut phone = connect_client(
+        &relay,
+        phone_id,
+        DeviceRole::IosClient,
+        Some(phone_secret.as_str()),
+        Some("phone"),
+    )
+    .await?;
+    let _ = recv_envelope(&mut phone).await?;
+
+    let mut host = connect_client(
+        &relay,
+        host_id,
+        DeviceRole::AgentHost,
+        Some(host_secret.as_str()),
+        Some("host"),
+    )
+    .await?;
+    let _ = recv_envelope(&mut host).await?;
+
+    let prompt = "Explain why the mobile pair contract broke and how to fix it cleanly";
+    send_envelope(
+        &mut host,
+        &Envelope::Ingest {
+            version: 1,
+            agent: AgentName::Codex,
+            thread_id: "thr_title".into(),
+            seq: 1,
+            payload: serde_json::json!({
+                "method": "item/started",
+                "params": {
+                    "itemId": "u1",
+                    "role": "user",
+                    "startedAtMs": 1,
+                    "input": [{"type": "text", "text": prompt}]
+                }
+            }),
+            ts_ms: 1,
+        },
+    )
+    .await?;
+
+    let (thread_id, seq, ui) = recv_ui_event(&mut phone).await?;
+    assert_eq!(thread_id, "thr_title");
+    assert_eq!(seq, 1);
+    match ui {
+        UiEventMessage::ThreadTitleUpdated { thread_id, title } => {
+            assert_eq!(thread_id, "thr_title");
+            assert_eq!(title, prompt);
+        }
+        other => panic!("expected ThreadTitleUpdated, got {other:?}"),
+    }
+
+    let stored_title: Option<String> =
+        sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = 'thr_title'")
+            .fetch_one(&relay.pool)
+            .await?;
+    assert_eq!(stored_title.as_deref(), Some(prompt));
 
     Ok(())
 }

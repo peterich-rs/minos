@@ -22,7 +22,7 @@ extension MinosErrorDisplay on MinosError {
     MinosError_EnvelopeVersionUnsupported() =>
       ErrorKind.envelopeVersionUnsupported,
     MinosError_PeerOffline() => ErrorKind.peerOffline,
-    MinosError_RelayInternal() => ErrorKind.relayInternal,
+    MinosError_BackendInternal() => ErrorKind.backendInternal,
     MinosError_CodexSpawnFailed() => ErrorKind.codexSpawnFailed,
     MinosError_CodexConnectFailed() => ErrorKind.codexConnectFailed,
     MinosError_CodexProtocolError() => ErrorKind.codexProtocolError,

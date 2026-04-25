@@ -699,6 +699,7 @@ fn prune_unexpected_uniffi_outputs(out_dir: &Path) {
     let _ = out_dir;
 }
 
+#[allow(clippy::too_many_lines)] // Sequential drift guards; splitting them would obscure the per-needle context.
 fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     // All `.replace()` calls here rewrite `uniffi-bindgen-swift`'s exact output
     // text. If upstream tweaks whitespace, naming, or pragma layout, a replacement
@@ -712,7 +713,19 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     const MODULEMAP_DECL: &str = "framework module MinosCore {";
     const MODULEMAP_DECL_NORMALIZED: &str = "module MinosCoreFFI {";
     const MODULEMAP_DECL_ALREADY_NORMALIZED: &str = "framework module MinosCoreFFI {";
-    const DUPLICATE_DAEMON_NEWTYPE_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias DeviceId = Uuid\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeDeviceId: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceId {\n        return try FfiConverterTypeUuid.read(from: &buf)\n    }\n\n    public static func write(_ value: DeviceId, into buf: inout [UInt8]) {\n        return FfiConverterTypeUuid.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> DeviceId {\n        return try FfiConverterTypeUuid_lift(value)\n    }\n\n    public static func lower(_ value: DeviceId) -> RustBuffer {\n        return FfiConverterTypeUuid_lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lift(_ value: RustBuffer) throws -> DeviceId {\n    return try FfiConverterTypeDeviceId.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lower(_ value: DeviceId) -> RustBuffer {\n    return FfiConverterTypeDeviceId.lower(value)\n}\n\n\n\n/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias Uuid = String\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeUuid: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Uuid {\n        return try FfiConverterString.read(from: &buf)\n    }\n\n    public static func write(_ value: Uuid, into buf: inout [UInt8]) {\n        return FfiConverterString.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> Uuid {\n        return try FfiConverterString.lift(value)\n    }\n\n    public static func lower(_ value: Uuid) -> RustBuffer {\n        return FfiConverterString.lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lift(_ value: RustBuffer) throws -> Uuid {\n    return try FfiConverterTypeUuid.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lower(_ value: Uuid) -> RustBuffer {\n    return FfiConverterTypeUuid.lower(value)\n}\n";
+    // Each cross-crate newtype that minos-daemon and minos-pairing both
+    // register as a `remote` UniFFI custom_type emits an identical typealias
+    // + FfiConverter block in `minos_daemon.swift` and `minos_pairing.swift`.
+    // The two files share a Swift module, so we strip the daemon copy and
+    // let pairing's stay as the canonical definition.
+    //
+    // Three independent strips (one per type) are intentional: uniffi-bindgen
+    // -swift sorts these blocks alphabetically, so a future `remote` newtype
+    // landing between two existing ones (e.g. between `DeviceSecret` and
+    // `Uuid`) would silently break a single monolithic needle.
+    const DUPLICATE_DAEMON_DEVICE_ID_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias DeviceId = Uuid\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeDeviceId: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceId {\n        return try FfiConverterTypeUuid.read(from: &buf)\n    }\n\n    public static func write(_ value: DeviceId, into buf: inout [UInt8]) {\n        return FfiConverterTypeUuid.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> DeviceId {\n        return try FfiConverterTypeUuid_lift(value)\n    }\n\n    public static func lower(_ value: DeviceId) -> RustBuffer {\n        return FfiConverterTypeUuid_lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lift(_ value: RustBuffer) throws -> DeviceId {\n    return try FfiConverterTypeDeviceId.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceId_lower(_ value: DeviceId) -> RustBuffer {\n    return FfiConverterTypeDeviceId.lower(value)\n}\n";
+    const DUPLICATE_DAEMON_DEVICE_SECRET_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias DeviceSecret = String\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeDeviceSecret: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceSecret {\n        return try FfiConverterString.read(from: &buf)\n    }\n\n    public static func write(_ value: DeviceSecret, into buf: inout [UInt8]) {\n        return FfiConverterString.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> DeviceSecret {\n        return try FfiConverterString.lift(value)\n    }\n\n    public static func lower(_ value: DeviceSecret) -> RustBuffer {\n        return FfiConverterString.lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceSecret_lift(_ value: RustBuffer) throws -> DeviceSecret {\n    return try FfiConverterTypeDeviceSecret.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeDeviceSecret_lower(_ value: DeviceSecret) -> RustBuffer {\n    return FfiConverterTypeDeviceSecret.lower(value)\n}\n";
+    const DUPLICATE_DAEMON_UUID_BLOCK: &str = "/**\n * Typealias from the type name used in the UDL file to the builtin type.  This\n * is needed because the UDL type name is used in function/method signatures.\n */\npublic typealias Uuid = String\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic struct FfiConverterTypeUuid: FfiConverter {\n    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Uuid {\n        return try FfiConverterString.read(from: &buf)\n    }\n\n    public static func write(_ value: Uuid, into buf: inout [UInt8]) {\n        return FfiConverterString.write(value, into: &buf)\n    }\n\n    public static func lift(_ value: RustBuffer) throws -> Uuid {\n        return try FfiConverterString.lift(value)\n    }\n\n    public static func lower(_ value: Uuid) -> RustBuffer {\n        return FfiConverterString.lower(value)\n    }\n}\n\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lift(_ value: RustBuffer) throws -> Uuid {\n    return try FfiConverterTypeUuid.lift(value)\n}\n\n#if swift(>=5.8)\n@_documentation(visibility: private)\n#endif\npublic func FfiConverterTypeUuid_lower(_ value: Uuid) -> RustBuffer {\n    return FfiConverterTypeUuid.lower(value)\n}\n";
     const VTABLE_DECL_OLD: &str =
         "    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceConnectionStateObserver> = {";
     const VTABLE_DECL_NEW: &str =
@@ -796,11 +809,27 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
         if file_name == "minos_daemon.swift" {
             updated = replace_required(
                 updated,
-                DUPLICATE_DAEMON_NEWTYPE_BLOCK,
+                DUPLICATE_DAEMON_DEVICE_ID_BLOCK,
                 "",
-                "minos_daemon.swift: DeviceId/Uuid duplicate typealias block (emitted \
-                 alongside minos_domain.swift; kept only in the domain file to avoid \
-                 duplicate symbols)",
+                "minos_daemon.swift: DeviceId duplicate typealias block (canonical \
+                 copy lives in minos_pairing.swift; both files compile into the same \
+                 Swift module so daemon's must be removed)",
+            )?;
+            updated = replace_required(
+                updated,
+                DUPLICATE_DAEMON_DEVICE_SECRET_BLOCK,
+                "",
+                "minos_daemon.swift: DeviceSecret duplicate typealias block (canonical \
+                 copy lives in minos_pairing.swift; both files compile into the same \
+                 Swift module so daemon's must be removed)",
+            )?;
+            updated = replace_required(
+                updated,
+                DUPLICATE_DAEMON_UUID_BLOCK,
+                "",
+                "minos_daemon.swift: Uuid duplicate typealias block (canonical copy \
+                 lives in minos_pairing.swift; both files compile into the same Swift \
+                 module so daemon's must be removed)",
             )?;
             updated = replace_required(
                 updated,

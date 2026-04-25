@@ -143,7 +143,7 @@ async fn stop_is_idempotent() {
 #[tokio::test]
 async fn current_trusted_device_empty_then_populated() {
     use chrono::Utc;
-    use minos_domain::DeviceId;
+    use minos_domain::{DeviceId, DeviceSecret};
     use minos_pairing::{PairingStore, TrustedDevice};
     use std::sync::Arc;
 
@@ -168,8 +168,10 @@ async fn current_trusted_device_empty_then_populated() {
     let dev = TrustedDevice {
         device_id: DeviceId::new(),
         name: "iPhone".into(),
+        host_device_id: Some(DeviceId::new()),
         host: "100.64.0.42".into(),
         port: 7878,
+        assigned_device_secret: Some(DeviceSecret::generate()),
         paired_at: Utc::now(),
     };
     store.save(&[dev.clone()]).unwrap();
@@ -189,5 +191,7 @@ async fn current_trusted_device_empty_then_populated() {
     let td = handle.current_trusted_device().unwrap().unwrap();
     assert_eq!(td.device_id, dev.device_id);
     assert_eq!(td.name, dev.name);
+    assert_eq!(td.host_device_id, dev.host_device_id);
+    assert_eq!(td.assigned_device_secret, dev.assigned_device_secret);
     handle.stop().await.unwrap();
 }

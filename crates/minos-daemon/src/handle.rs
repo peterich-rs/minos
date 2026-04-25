@@ -7,6 +7,7 @@
 //! without consuming the handle.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -288,7 +289,8 @@ impl DaemonHandle {
         runner: Arc<dyn CommandRunner>,
         agent: Arc<AgentGlue>,
     ) -> Result<Arc<Self>, MinosError> {
-        let initial_state = if store.load()?.is_empty() {
+        let trusted_devices = store.load()?;
+        let initial_state = if trusted_devices.is_empty() {
             PairingState::Unpaired
         } else {
             PairingState::Paired
@@ -298,6 +300,11 @@ impl DaemonHandle {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
         let state_tx = Arc::new(state_tx);
         let active_token: Arc<Mutex<Option<ActiveToken>>> = Arc::new(Mutex::new(None));
+        let bound_port = Arc::new(AtomicU16::new(cfg.bind_addr.port()));
+        let host_device_id = trusted_devices
+            .iter()
+            .find_map(|device| device.host_device_id)
+            .unwrap_or_else(DeviceId::new);
 
         let impl_ = RpcServerImpl {
             started_at: Instant::now(),
@@ -305,8 +312,9 @@ impl DaemonHandle {
             store: store.clone(),
             runner,
             mac_name: cfg.mac_name.clone(),
+            host_device_id,
             host: cfg.bind_addr.ip().to_string(),
-            port: cfg.bind_addr.port(),
+            port: bound_port.clone(),
             active_token: active_token.clone(),
             conn_state_tx: state_tx.clone(),
             agent: agent.clone(),
@@ -322,6 +330,7 @@ impl DaemonHandle {
 
         let server = WsServer::bind(cfg.bind_addr, module).await?;
         let addr = server.addr();
+        bound_port.store(addr.port(), Ordering::Relaxed);
 
         let _ = state_tx.send(ConnectionState::Disconnected);
 

@@ -84,7 +84,7 @@ impl PairingStore for FilePairingStore {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use minos_domain::DeviceId;
+    use minos_domain::{DeviceId, DeviceSecret};
 
     #[test]
     fn round_trip_save_load() {
@@ -93,14 +93,39 @@ mod tests {
         let dev = TrustedDevice {
             device_id: DeviceId::new(),
             name: "iPhone".into(),
+            host_device_id: Some(DeviceId::new()),
             host: "100.64.0.42".into(),
             port: 7878,
+            assigned_device_secret: Some(DeviceSecret::generate()),
             paired_at: Utc::now(),
         };
         store.save(&[dev.clone()]).unwrap();
         let back = store.load().unwrap();
         assert_eq!(back.len(), 1);
-        assert_eq!(back[0].device_id, dev.device_id);
+        assert_eq!(back[0], dev);
+    }
+
+    #[test]
+    fn legacy_records_without_durable_pair_fields_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("d.json");
+        let legacy = serde_json::json!([
+            {
+                "device_id": DeviceId::new(),
+                "name": "iPhone",
+                "host": "100.64.0.42",
+                "port": 7878,
+                "paired_at": Utc::now(),
+            }
+        ]);
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let store = FilePairingStore::new(path);
+        let back = store.load().unwrap();
+
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].host_device_id, None);
+        assert_eq!(back[0].assigned_device_secret, None);
     }
 
     #[test]

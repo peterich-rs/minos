@@ -24,6 +24,7 @@ url = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 dashmap = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

@@ -15,7 +15,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
-    http::{router, RelayState},
+    http::{router, BackendState},
     ingest::translate::ThreadTranslators,
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
@@ -56,7 +56,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
 
-    let state = RelayState {
+    let state = BackendState {
         registry: Arc::new(SessionRegistry::new()),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),

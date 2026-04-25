@@ -1,7 +1,7 @@
 //! Pairing persistence port + trusted-device record.
 
 use chrono::{DateTime, Utc};
-use minos_domain::{DeviceId, MinosError};
+use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use serde::{Deserialize, Serialize};
 
 /// One peer that has successfully paired and may reconnect on its own.
@@ -10,10 +10,16 @@ use serde::{Deserialize, Serialize};
 pub struct TrustedDevice {
     pub device_id: DeviceId,
     pub name: String,
+    /// Stable daemon-side device identity surfaced to the peer in typed
+    /// `pair()` responses. Legacy records may omit this until they pair again.
+    pub host_device_id: Option<DeviceId>,
     /// Tailscale IP captured at pair time. Used by the mobile side to know
     /// where to reconnect; the Mac daemon ignores this field.
     pub host: String,
     pub port: u16,
+    /// Long-lived secret assigned to this peer. Legacy records may omit this
+    /// until they pair again.
+    pub assigned_device_secret: Option<DeviceSecret>,
     pub paired_at: DateTime<Utc>,
 }
 
@@ -50,8 +56,10 @@ mod tests {
         let dev = TrustedDevice {
             device_id: DeviceId::new(),
             name: "fan iPhone".into(),
+            host_device_id: Some(DeviceId::new()),
             host: "100.64.0.42".into(),
             port: 7878,
+            assigned_device_secret: Some(DeviceSecret::generate()),
             paired_at: Utc::now(),
         };
         store.save(&[dev.clone()]).unwrap();

@@ -1,17 +1,18 @@
-//! Relay-internal error type.
+//! Backend-internal error type.
 //!
-//! Kept crate-local for now; a `From<RelayError> for minos_domain::MinosError`
+//! Kept crate-local for now; a `From<BackendError> for minos_domain::MinosError`
 //! conversion will land in step 10 when `main.rs` wires the HTTP/WebSocket
-//! surface. Per spec §10.1, the fallback mapping is `MinosError::RelayInternal`
-//! for store errors, but the concrete mapping table is deferred until the
-//! outer boundary actually needs it.
+//! surface. Per spec §10.1, store errors still collapse to the existing
+//! generic internal-error fallback in `minos_domain::MinosError`, but the
+//! concrete mapping table is deferred until the outer boundary actually
+//! needs it.
 //!
 //! Start minimal — steps 5–10 will add variants as the auth, REST, and hub
 //! layers grow. The enum mirrors the `#[derive(thiserror::Error, Debug)]`
 //! + `#[error("...")]` style used in `minos-domain::MinosError`.
 
 #[derive(Debug, thiserror::Error)]
-pub enum RelayError {
+pub enum BackendError {
     #[error("store connect failed at {url}: {message}")]
     StoreConnect { url: String, message: String },
 
@@ -46,8 +47,7 @@ pub enum RelayError {
     ///
     /// Raised by `pairing::secret::{hash_secret, verify_secret}` for malformed
     /// PHC strings or internal argon2 errors. Named for easy future
-    /// `From<RelayError> for MinosError` mapping (mirrors
-    /// `MinosError::RelayInternal`).
+    /// `From<BackendError> for MinosError` mapping.
     #[error("pairing hash failed: {message}")]
     PairingHash { message: String },
 
@@ -87,7 +87,7 @@ pub enum RelayError {
     /// forwarded frames.
     ///
     /// Emitted by `session::SessionRegistry::route` when the destination
-    /// outbox is full. This stays relay-local: callers that can recover in
+    /// outbox is full. This stays backend-local: callers that can recover in
     /// protocol space should surface a deterministic retryable error to the
     /// sender rather than hanging until timeout.
     #[error("peer backpressure: {peer_device_id}")]

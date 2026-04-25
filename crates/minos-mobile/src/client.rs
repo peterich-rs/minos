@@ -39,8 +39,9 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
+use uuid::Uuid;
 
-use crate::store::{InMemoryPairingStore, MobilePairingStore};
+use crate::store::{InMemoryPairingStore, MobilePairingStore, PersistedPairingState};
 
 /// One live UI event pushed from backend fan-out. Mobile layers consume
 /// these via [`MobileClient::ui_events_stream`] (broadcast receiver).
@@ -73,6 +74,15 @@ const LOCAL_RPC_TIMEOUT: Duration = Duration::from_secs(15);
 impl MobileClient {
     #[must_use]
     pub fn new(store: Arc<dyn MobilePairingStore>, self_name: String) -> Self {
+        Self::new_with_device_id(store, self_name, DeviceId::new())
+    }
+
+    #[must_use]
+    fn new_with_device_id(
+        store: Arc<dyn MobilePairingStore>,
+        self_name: String,
+        device_id: DeviceId,
+    ) -> Self {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
         let (ui_events_tx, _) = broadcast::channel(256);
         Self {
@@ -83,7 +93,7 @@ impl MobileClient {
             outbox: Mutex::new(None),
             next_rpc_id: AtomicU64::new(1),
             pending: Arc::new(DashMap::new()),
-            device_id: DeviceId::new(),
+            device_id,
             self_name,
             tasks: Mutex::new(Vec::new()),
         }
@@ -95,6 +105,22 @@ impl MobileClient {
     #[must_use]
     pub fn new_with_in_memory_store(self_name: String) -> Self {
         Self::new(Arc::new(InMemoryPairingStore::new()), self_name)
+    }
+
+    /// Rehydrate a client from a previously persisted snapshot. Missing or
+    /// malformed device credentials fall back to a fresh device id; any valid
+    /// backend URL / CF Access headers are still restored into the in-memory
+    /// pairing store.
+    #[must_use]
+    pub fn new_with_persisted_state(self_name: String, state: PersistedPairingState) -> Self {
+        let device = restored_device(&state);
+        let device_id = device.as_ref().map_or_else(DeviceId::new, |(id, _)| *id);
+        let store = Arc::new(InMemoryPairingStore::from_parts(
+            state.backend_url.clone(),
+            restored_cf_access(&state),
+            device,
+        ));
+        Self::new_with_device_id(store, self_name, device_id)
     }
 
     /// Current connection state snapshot. Cheap and synchronous.
@@ -122,6 +148,74 @@ impl MobileClient {
     #[must_use]
     pub fn device_id(&self) -> DeviceId {
         self.device_id
+    }
+
+    /// Export the current pairing snapshot so Dart can mirror it into secure
+    /// storage after pairing succeeds.
+    pub async fn persisted_pairing_state(&self) -> Result<PersistedPairingState, MinosError> {
+        let backend_url = self.store.load_backend_url().await?;
+        let cf_access = self.store.load_cf_access().await?;
+        let device = self.store.load_device().await?;
+
+        Ok(PersistedPairingState {
+            backend_url,
+            device_id: device.as_ref().map(|(id, _)| id.to_string()),
+            device_secret: device
+                .as_ref()
+                .map(|(_, secret)| secret.as_str().to_string()),
+            cf_access_client_id: cf_access.as_ref().map(|(id, _)| id.clone()),
+            cf_access_client_secret: cf_access.as_ref().map(|(_, secret)| secret.clone()),
+        })
+    }
+
+    /// Reconnect using the durable pairing snapshot already loaded into the
+    /// backing store. This is the cold-start resume path used by Dart after it
+    /// reconstructs the client from secure storage.
+    pub async fn resume_persisted_session(&self) -> Result<(), MinosError> {
+        if matches!(self.current_state(), ConnectionState::Connected) {
+            return Ok(());
+        }
+
+        let Some(backend_url) = self.store.load_backend_url().await? else {
+            return Err(MinosError::StoreCorrupt {
+                path: "persisted_pairing_state.backend_url".into(),
+                message: "missing backend_url for resume".into(),
+            });
+        };
+        let Some((device_id, device_secret)) = self.store.load_device().await? else {
+            return Err(MinosError::StoreCorrupt {
+                path: "persisted_pairing_state.device".into(),
+                message: "missing device_id/device_secret for resume".into(),
+            });
+        };
+        if device_id != self.device_id {
+            return Err(MinosError::StoreCorrupt {
+                path: "persisted_pairing_state.device_id".into(),
+                message: format!(
+                    "stored device_id {device_id} does not match client device_id {}",
+                    self.device_id
+                ),
+            });
+        }
+
+        let cf_access = self.store.load_cf_access().await?;
+        let _ = self
+            .state_tx
+            .send(ConnectionState::Reconnecting { attempt: 1 });
+
+        match self
+            .connect(&backend_url, Some(device_secret.as_str()), cf_access)
+            .await
+        {
+            Ok(()) => {
+                let _ = self.state_tx.send(ConnectionState::Connected);
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.state_tx.send(ConnectionState::Disconnected);
+                Err(err)
+            }
+        }
     }
 
     // ─────────────────────────── pairing flow ────────────────────────────
@@ -173,13 +267,14 @@ impl MobileClient {
 
         // Backend replies with the minted DeviceSecret. Persist it so the
         // next connect can resume authenticated. Shape (spec §6.1):
-        // { "device_secret": "<base64url>" }.
+        // { "peer_device_id": "...", "peer_name": "...",
+        //   "your_device_secret": "<base64url>" }.
         let secret_str = result
-            .get("device_secret")
+            .get("your_device_secret")
             .and_then(|v| v.as_str())
             .ok_or_else(|| MinosError::RpcCallFailed {
                 method: "pair".into(),
-                message: "pair response missing device_secret".into(),
+                message: "pair response missing your_device_secret".into(),
             })?;
         let device_secret = DeviceSecret(secret_str.to_string());
         self.store
@@ -507,6 +602,36 @@ fn from_rpc_error(err: &RpcError) -> MinosError {
     }
 }
 
+fn restored_cf_access(state: &PersistedPairingState) -> Option<(String, String)> {
+    match (
+        state.cf_access_client_id.as_ref(),
+        state.cf_access_client_secret.as_ref(),
+    ) {
+        (Some(id), Some(secret)) => Some((id.clone(), secret.clone())),
+        _ => None,
+    }
+}
+
+fn restored_device(state: &PersistedPairingState) -> Option<(DeviceId, DeviceSecret)> {
+    let (Some(device_id), Some(device_secret)) =
+        (state.device_id.as_deref(), state.device_secret.as_deref())
+    else {
+        return None;
+    };
+
+    match Uuid::parse_str(device_id) {
+        Ok(uuid) => Some((DeviceId(uuid), DeviceSecret(device_secret.to_string()))),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                device_id,
+                "mobile: ignoring malformed persisted device_id"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +640,22 @@ mod tests {
     fn new_with_in_memory_store_starts_disconnected() {
         let client = MobileClient::new_with_in_memory_store("test".into());
         assert_eq!(client.current_state(), ConnectionState::Disconnected);
+    }
+
+    #[test]
+    fn new_with_persisted_state_reuses_device_identity() {
+        let persisted = PersistedPairingState {
+            backend_url: Some("ws://127.0.0.1/devices".into()),
+            device_id: Some(DeviceId::new().to_string()),
+            device_secret: Some(DeviceSecret::generate().as_str().to_string()),
+            cf_access_client_id: Some("cf-id".into()),
+            cf_access_client_secret: Some("cf-secret".into()),
+        };
+
+        let client = MobileClient::new_with_persisted_state("test".into(), persisted.clone());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let exported = rt.block_on(client.persisted_pairing_state()).unwrap();
+        assert_eq!(exported, persisted);
     }
 
     #[tokio::test]

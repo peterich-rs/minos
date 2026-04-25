@@ -3,6 +3,7 @@
 //! Holds `Arc`s only — cheap to clone once and pass into the jsonrpsee
 //! `RpcModule`.
 
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -11,7 +12,7 @@ use chrono::Utc;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::types::ErrorObjectOwned;
 use minos_cli_detect::{detect_all, CommandRunner};
-use minos_domain::{ConnectionState, MinosError};
+use minos_domain::{ConnectionState, DeviceId, DeviceSecret, MinosError};
 use minos_pairing::{ActiveToken, Pairing, PairingStore, TrustedDevice};
 use minos_protocol::{
     HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
@@ -27,8 +28,9 @@ pub struct RpcServerImpl {
     pub store: Arc<dyn PairingStore>,
     pub runner: Arc<dyn CommandRunner>,
     pub mac_name: String,
+    pub host_device_id: DeviceId,
     pub host: String,
-    pub port: u16,
+    pub port: Arc<AtomicU16>,
     /// Active pairing token shared with the `DaemonHandle` that issued the QR.
     /// `pair()` validates the request token against this and clears it on
     /// successful consumption.
@@ -67,19 +69,36 @@ impl MinosRpcServer for RpcServerImpl {
         }
 
         let mut current = self.store.load().map_err(rpc_err)?;
-        let dev = TrustedDevice {
-            device_id: req.device_id,
-            name: req.name,
-            host: self.host.clone(),
-            port: self.port,
-            paired_at: Utc::now(),
-        };
-        // Replace any existing entry for the same device_id; otherwise append.
-        if let Some(idx) = current.iter().position(|d| d.device_id == req.device_id) {
-            current[idx] = dev;
+        let paired_at = Utc::now();
+        let bound_port = self.port.load(Ordering::Relaxed);
+        let assigned_device_secret = if let Some(existing) = current
+            .iter_mut()
+            .find(|device| device.device_id == req.device_id)
+        {
+            existing.name.clone_from(&req.name);
+            existing.host_device_id = Some(self.host_device_id);
+            existing.host.clone_from(&self.host);
+            existing.port = bound_port;
+            existing.paired_at = paired_at;
+            let secret = existing
+                .assigned_device_secret
+                .clone()
+                .unwrap_or_else(DeviceSecret::generate);
+            existing.assigned_device_secret = Some(secret.clone());
+            secret
         } else {
-            current.push(dev);
-        }
+            let secret = DeviceSecret::generate();
+            current.push(TrustedDevice {
+                device_id: req.device_id,
+                name: req.name,
+                host_device_id: Some(self.host_device_id),
+                host: self.host.clone(),
+                port: bound_port,
+                assigned_device_secret: Some(secret.clone()),
+                paired_at,
+            });
+            secret
+        };
         self.store.save(&current).map_err(rpc_err)?;
 
         // Surface the new peer to events_stream subscribers. jsonrpsee does
@@ -87,8 +106,9 @@ impl MinosRpcServer for RpcServerImpl {
         let _ = self.conn_state_tx.send(ConnectionState::Connected);
 
         Ok(PairResponse {
-            ok: true,
-            mac_name: self.mac_name.clone(),
+            peer_device_id: self.host_device_id,
+            peer_name: self.mac_name.clone(),
+            your_device_secret: assigned_device_secret,
         })
     }
 

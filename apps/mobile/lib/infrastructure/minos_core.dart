@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'package:meta/meta.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
 import 'package:minos/infrastructure/secure_pairing_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -11,6 +12,11 @@ import 'package:minos/src/rust/frb_generated.dart';
 /// [MinosCoreProtocol] instead.
 class MinosCore implements MinosCoreProtocol {
   MinosCore._(this._client, this._secure);
+
+  factory MinosCore.forTesting({
+    required MobileClient client,
+    required SecurePairingStore secureStore,
+  }) => MinosCore._(client, secureStore);
 
   final MobileClient _client;
   final SecurePairingStore _secure;
@@ -33,18 +39,52 @@ class MinosCore implements MinosCoreProtocol {
         : null;
     await RustLib.init(externalLibrary: externalLibrary);
     await initLogging(logDir: logDir);
-    final client = MobileClient(selfName: selfName);
-    return MinosCore._(client, secureStore ?? SecurePairingStore());
+    final secure = secureStore ?? SecurePairingStore();
+    final client = await resolveClient(
+      secure: secure,
+      buildFresh: () => MobileClient(selfName: selfName),
+      buildFromPersisted: (state) =>
+          MobileClient.newWithPersistedState(selfName: selfName, state: state),
+    );
+    return MinosCore._(client, secure);
+  }
+
+  /// Decide which [MobileClient] to hand back to callers at startup,
+  /// recovering from a stale persisted snapshot when resume fails.
+  ///
+  /// The recovery branch matters because the Rust client retains the
+  /// persisted device id even when the secret is no longer valid: a
+  /// subsequent `pair` would otherwise re-use that identity against an
+  /// authenticated row on the backend and be rejected with 401. Dropping
+  /// the snapshot lets the next pair attempt mint a fresh device.
+  @visibleForTesting
+  static Future<MobileClient> resolveClient({
+    required SecurePairingStore secure,
+    required MobileClient Function() buildFresh,
+    required MobileClient Function(PersistedPairingState) buildFromPersisted,
+  }) async {
+    final persisted = await secure.loadState();
+    if (persisted == null) return buildFresh();
+
+    final client = buildFromPersisted(persisted);
+    try {
+      await client.resumePersistedSession();
+      return client;
+    } catch (_) {
+      await secure.clearAll();
+      return buildFresh();
+    }
   }
 
   @override
   Future<void> pairWithQrJson(String qrJson) async {
     await _client.pairWithQrJson(qrJson: qrJson);
-    // Mirror the QR's persistable fields into the Keychain. The Rust side
-    // holds them in its (in-memory) pairing store for the life of the
-    // process; the Keychain copy is what survives app restarts so the
-    // next `MobileClient` can pick up where we left off.
-    await _secure.saveFromQrJson(qrJson);
+    try {
+      await _secure.saveState(await _client.persistedPairingState());
+    } catch (error, stackTrace) {
+      await _rollbackFailedPersistedPairSave();
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   @override
@@ -69,4 +109,19 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   ConnectionState get currentConnectionState => _client.currentState();
+
+  Future<void> _rollbackFailedPersistedPairSave() async {
+    try {
+      await _client.forgetPeer();
+    } catch (_) {
+      // Best effort: if the session is already gone we still want to wipe any
+      // partially persisted keychain snapshot before surfacing the failure.
+    }
+    try {
+      await _secure.clearAll();
+    } catch (_) {
+      // Preserve the original persistence failure; the next launch will still
+      // treat any leftover partial snapshot as non-resumable.
+    }
+  }
 }

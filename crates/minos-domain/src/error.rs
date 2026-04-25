@@ -37,7 +37,7 @@ pub enum ErrorKind {
     ConnectionStateMismatch,
     EnvelopeVersionUnsupported,
     PeerOffline,
-    RelayInternal,
+    BackendInternal,
     CodexSpawnFailed,
     CodexConnectFailed,
     CodexProtocolError,
@@ -67,16 +67,16 @@ impl ErrorKind {
     pub fn user_message(self, lang: Lang) -> &'static str {
         match (self, lang) {
             (Self::BindFailed, Lang::Zh) => {
-                "无法绑定中继监听地址；请检查 MINOS_BACKEND_LISTEN 配置"
+                "无法绑定后端监听地址；请检查 MINOS_BACKEND_LISTEN 配置"
             }
             (Self::BindFailed, Lang::En) => {
-                "Cannot bind relay listen address; check MINOS_BACKEND_LISTEN"
+                "Cannot bind backend listen address; check MINOS_BACKEND_LISTEN"
             }
             (Self::ConnectFailed, Lang::Zh) => {
-                "无法连接中继服务；请检查网络与 Cloudflare Access 令牌"
+                "无法连接后端服务；请检查网络与 Cloudflare Access 令牌"
             }
             (Self::ConnectFailed, Lang::En) => {
-                "Cannot reach relay; check network and Cloudflare Access token"
+                "Cannot reach backend; check network and Cloudflare Access token"
             }
             (Self::Disconnected, Lang::Zh) => "连接已断开，正在重试",
             (Self::Disconnected, Lang::En) => "Disconnected; reconnecting",
@@ -112,8 +112,8 @@ impl ErrorKind {
             }
             (Self::PeerOffline, Lang::Zh) => "对端设备离线，请检查配对设备",
             (Self::PeerOffline, Lang::En) => "Paired device offline; please check status",
-            (Self::RelayInternal, Lang::Zh) => "中继服务异常，请稍后重试",
-            (Self::RelayInternal, Lang::En) => "Relay service error; please retry later",
+            (Self::BackendInternal, Lang::Zh) => "后端服务异常，请稍后重试",
+            (Self::BackendInternal, Lang::En) => "Backend service error; please retry later",
             (Self::CodexSpawnFailed, Lang::Zh) => "无法启动 Codex CLI；请确认已安装 `codex`",
             (Self::CodexSpawnFailed, Lang::En) => "Failed to launch codex CLI; is codex installed?",
             (Self::CodexConnectFailed, Lang::Zh) => "无法连接 Codex 服务",
@@ -193,11 +193,11 @@ pub enum MinosError {
     #[error("rpc call failed: {method}: {message}")]
     RpcCallFailed { method: String, message: String },
 
-    // ── relay layer (spec §10.1) ──
+    // ── backend layer (spec §10.1) ──
     #[error("unauthorized for this operation: {reason}")]
     Unauthorized { reason: String },
 
-    #[error("relay connection state not suitable: expected {expected}, got {actual}")]
+    #[error("backend connection state not suitable: expected {expected}, got {actual}")]
     ConnectionStateMismatch { expected: String, actual: String },
 
     #[error("envelope version unsupported: {version}")]
@@ -206,8 +206,8 @@ pub enum MinosError {
     #[error("peer offline: {peer_device_id}")]
     PeerOffline { peer_device_id: String },
 
-    #[error("relay internal error: {message}")]
-    RelayInternal { message: String },
+    #[error("backend internal error: {message}")]
+    BackendInternal { message: String },
 
     // ── agent runtime layer (spec §5.3) ──
     #[error("failed to spawn codex: {message}")]
@@ -274,7 +274,7 @@ impl MinosError {
             Self::ConnectionStateMismatch { .. } => ErrorKind::ConnectionStateMismatch,
             Self::EnvelopeVersionUnsupported { .. } => ErrorKind::EnvelopeVersionUnsupported,
             Self::PeerOffline { .. } => ErrorKind::PeerOffline,
-            Self::RelayInternal { .. } => ErrorKind::RelayInternal,
+            Self::BackendInternal { .. } => ErrorKind::BackendInternal,
             Self::CodexSpawnFailed { .. } => ErrorKind::CodexSpawnFailed,
             Self::CodexConnectFailed { .. } => ErrorKind::CodexConnectFailed,
             Self::CodexProtocolError { .. } => ErrorKind::CodexProtocolError,
@@ -420,10 +420,10 @@ mod tests {
                 ErrorKind::PeerOffline,
             ),
             (
-                MinosError::RelayInternal {
+                MinosError::BackendInternal {
                     message: String::new(),
                 },
-                ErrorKind::RelayInternal,
+                ErrorKind::BackendInternal,
             ),
             (
                 MinosError::CodexSpawnFailed {
@@ -525,7 +525,7 @@ mod tests {
         ErrorKind::ConnectionStateMismatch,
         ErrorKind::EnvelopeVersionUnsupported,
         ErrorKind::PeerOffline,
-        ErrorKind::RelayInternal,
+        ErrorKind::BackendInternal,
         ErrorKind::CodexSpawnFailed,
         ErrorKind::CodexConnectFailed,
         ErrorKind::CodexProtocolError,
@@ -625,16 +625,16 @@ mod tests {
     }
 
     #[test]
-    fn relay_error_variants_user_messages_match_spec() {
-        // Spot-check the new relay copy so edits to the translation table
+    fn backend_error_variants_user_messages_match_spec() {
+        // Spot-check the backend-facing copy so edits to the translation table
         // show up as failing asserts rather than silent drift.
         assert_eq!(
             ErrorKind::BindFailed.user_message(Lang::En),
-            "Cannot bind relay listen address; check MINOS_BACKEND_LISTEN"
+            "Cannot bind backend listen address; check MINOS_BACKEND_LISTEN"
         );
         assert_eq!(
             ErrorKind::ConnectFailed.user_message(Lang::En),
-            "Cannot reach relay; check network and Cloudflare Access token"
+            "Cannot reach backend; check network and Cloudflare Access token"
         );
         assert_eq!(
             ErrorKind::Unauthorized.user_message(Lang::En),
@@ -649,8 +649,8 @@ mod tests {
             "Paired device offline; please check status"
         );
         assert_eq!(
-            ErrorKind::RelayInternal.user_message(Lang::En),
-            "Relay service error; please retry later"
+            ErrorKind::BackendInternal.user_message(Lang::En),
+            "Backend service error; please retry later"
         );
         assert_eq!(
             ErrorKind::ConnectionStateMismatch.user_message(Lang::En),

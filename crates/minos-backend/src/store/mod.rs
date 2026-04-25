@@ -8,7 +8,7 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 
 pub mod devices;
 pub mod pairings;
@@ -25,10 +25,10 @@ pub use tokens::{consume_token, gc_expired, issue_token, ConsumedToken};
 /// `db_url` is a sqlx connection string, e.g. `sqlite://./minos-backend.db`
 /// or `sqlite::memory:` for tests. Missing files are created on connect
 /// via `SqliteConnectOptions::create_if_missing(true)`.
-pub async fn connect(db_url: &str) -> Result<SqlitePool, RelayError> {
+pub async fn connect(db_url: &str) -> Result<SqlitePool, BackendError> {
     let opts = db_url
         .parse::<SqliteConnectOptions>()
-        .map_err(|e| RelayError::StoreConnect {
+        .map_err(|e| BackendError::StoreConnect {
             url: db_url.to_string(),
             message: e.to_string(),
         })?
@@ -39,7 +39,7 @@ pub async fn connect(db_url: &str) -> Result<SqlitePool, RelayError> {
         .max_connections(8)
         .connect_with(opts)
         .await
-        .map_err(|e| RelayError::StoreConnect {
+        .map_err(|e| BackendError::StoreConnect {
             url: db_url.to_string(),
             message: e.to_string(),
         })?;
@@ -47,7 +47,7 @@ pub async fn connect(db_url: &str) -> Result<SqlitePool, RelayError> {
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
-        .map_err(|e| RelayError::StoreMigrate {
+        .map_err(|e| BackendError::StoreMigrate {
             message: e.to_string(),
         })?;
 

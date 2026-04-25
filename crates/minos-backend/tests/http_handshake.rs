@@ -8,7 +8,7 @@
 use std::{sync::Arc, time::Duration};
 
 use minos_backend::{
-    http::{router, RelayState},
+    http::{router, BackendState},
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
     store,
@@ -28,7 +28,7 @@ use tokio_tungstenite::tungstenite::{
 async fn spawn_relay() -> (String, tokio::task::JoinHandle<()>, sqlx::SqlitePool) {
     let pool = store::connect("sqlite::memory:").await.unwrap();
 
-    let state = RelayState {
+    let state = BackendState {
         registry: Arc::new(SessionRegistry::new()),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),

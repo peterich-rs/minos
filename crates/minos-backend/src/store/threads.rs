@@ -12,7 +12,7 @@ use minos_domain::AgentName;
 use minos_ui_protocol::ThreadEndReason;
 use sqlx::SqlitePool;
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 
 /// Wire-value string for an `AgentName`, matching the DB CHECK constraint.
 fn agent_str(a: AgentName) -> &'static str {
@@ -32,7 +32,7 @@ pub async fn upsert(
     agent: AgentName,
     owner_device_id: &str,
     ts_ms: i64,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     sqlx::query(
         r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms, message_count)
            VALUES (?1, ?2, ?3, ?4, ?4, 0)
@@ -44,7 +44,7 @@ pub async fn upsert(
     .bind(ts_ms)
     .execute(pool)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "threads.upsert".into(),
         message: e.to_string(),
     })?;
@@ -59,8 +59,8 @@ pub async fn mark_ended(
     thread_id: &str,
     reason: &ThreadEndReason,
     ts_ms: i64,
-) -> Result<(), RelayError> {
-    let reason_json = serde_json::to_string(reason).map_err(|e| RelayError::StoreQuery {
+) -> Result<(), BackendError> {
+    let reason_json = serde_json::to_string(reason).map_err(|e| BackendError::StoreQuery {
         operation: "threads.mark_ended.serialise".into(),
         message: e.to_string(),
     })?;
@@ -70,7 +70,7 @@ pub async fn mark_ended(
         .bind(thread_id)
         .execute(pool)
         .await
-        .map_err(|e| RelayError::StoreQuery {
+        .map_err(|e| BackendError::StoreQuery {
             operation: "threads.mark_ended".into(),
             message: e.to_string(),
         })?;
@@ -83,13 +83,13 @@ pub async fn update_title(
     pool: &SqlitePool,
     thread_id: &str,
     title: &str,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     sqlx::query(r"UPDATE threads SET title = ?1 WHERE thread_id = ?2")
         .bind(title)
         .bind(thread_id)
         .execute(pool)
         .await
-        .map_err(|e| RelayError::StoreQuery {
+        .map_err(|e| BackendError::StoreQuery {
             operation: "threads.update_title".into(),
             message: e.to_string(),
         })?;
@@ -112,7 +112,7 @@ pub async fn list(
     agent: Option<AgentName>,
     before_ts_ms: Option<i64>,
     limit: u32,
-) -> Result<Vec<minos_protocol::ThreadSummary>, RelayError> {
+) -> Result<Vec<minos_protocol::ThreadSummary>, BackendError> {
     let agent_s = agent.map(agent_str);
     let rows = sqlx::query_as::<
         _,
@@ -141,7 +141,7 @@ pub async fn list(
     .bind(i64::from(limit))
     .fetch_all(pool)
     .await
-    .map_err(|e| RelayError::StoreQuery {
+    .map_err(|e| BackendError::StoreQuery {
         operation: "threads.list".into(),
         message: e.to_string(),
     })?;
@@ -163,7 +163,7 @@ pub async fn list(
                     "claude" => AgentName::Claude,
                     "gemini" => AgentName::Gemini,
                     other => {
-                        return Err(RelayError::StoreDecode {
+                        return Err(BackendError::StoreDecode {
                             column: "threads.agent".into(),
                             message: other.to_string(),
                         })
@@ -173,7 +173,7 @@ pub async fn list(
                     .as_ref()
                     .map(|s| serde_json::from_str::<ThreadEndReason>(s))
                     .transpose()
-                    .map_err(|e| RelayError::StoreDecode {
+                    .map_err(|e| BackendError::StoreDecode {
                         column: "threads.end_reason".into(),
                         message: e.to_string(),
                     })?;
@@ -194,12 +194,15 @@ pub async fn list(
 
 /// Bump `message_count` by 1. Called when the translator places a new
 /// `MessageStarted` — gives the list view a cheap "N messages" badge.
-pub async fn increment_message_count(pool: &SqlitePool, thread_id: &str) -> Result<(), RelayError> {
+pub async fn increment_message_count(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<(), BackendError> {
     sqlx::query(r"UPDATE threads SET message_count = message_count + 1 WHERE thread_id = ?1")
         .bind(thread_id)
         .execute(pool)
         .await
-        .map_err(|e| RelayError::StoreQuery {
+        .map_err(|e| BackendError::StoreQuery {
             operation: "threads.increment_message_count".into(),
             message: e.to_string(),
         })?;

@@ -31,7 +31,7 @@
 //! - `"pairing_token_invalid"` — unknown/expired/consumed pairing token.
 //! - `"pairing_state_mismatch"` — already paired / not paired for the method.
 //! - `"thread_not_found"` — `ReadThread` called with an unknown thread id.
-//! - `"internal"` — any underlying [`RelayError::StoreQuery`] etc. Caller
+//! - `"internal"` — any underlying [`BackendError::StoreQuery`] etc. Caller
 //!   should log and retry / escalate.
 //!
 //! # Peer-event delivery (§10.2 R4)
@@ -50,7 +50,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::{
-    error::RelayError,
+    error::BackendError,
     pairing::PairingService,
     session::{SessionHandle, SessionRegistry},
     store::devices,
@@ -152,17 +152,48 @@ async fn handle_list_threads(
 /// replays never share state with the live-ingest translator cache — this
 /// guarantees deterministic output on repeated reads and protects the live
 /// path from replay-induced mutation.
+#[allow(clippy::too_many_lines)] // Single-site reader: ownership probe + read_range + translation + title/end-reason probes share a pagination cursor.
 async fn handle_read_thread(
     ctx: &LocalRpcContext<'_>,
     params: &serde_json::Value,
 ) -> LocalRpcOutcome {
-    if ctx.session.paired_with.read().await.is_none() {
+    let Some(owner_id) = *ctx.session.paired_with.read().await else {
         return err("unauthorized", "read_thread requires a paired session");
-    }
+    };
     let p: minos_protocol::ReadThreadParams = match serde_json::from_value(params.clone()) {
         Ok(v) => v,
         Err(e) => return err("bad_request", format!("invalid params: {e}")),
     };
+
+    let owner_device_id: Option<String> =
+        match sqlx::query_scalar("SELECT owner_device_id FROM threads WHERE thread_id = ?1")
+            .bind(&p.thread_id)
+            .fetch_optional(ctx.store)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::local_rpc",
+                    error = %e,
+                    thread_id = %p.thread_id,
+                    "read_thread.owner_probe failed"
+                );
+                return err("internal", "read_thread failed");
+            }
+        };
+    let Some(owner_device_id) = owner_device_id else {
+        return err(
+            "thread_not_found",
+            format!("thread not found: {}", p.thread_id),
+        );
+    };
+    if owner_device_id != owner_id.to_string() {
+        return err(
+            "thread_not_found",
+            format!("thread not found: {}", p.thread_id),
+        );
+    }
 
     let from_seq = p.from_seq.unwrap_or(0);
     let limit = p.limit.min(2000);
@@ -181,34 +212,7 @@ async fn handle_read_thread(
         }
     };
 
-    if rows.is_empty() {
-        // Distinguish empty-but-exists from not-found.
-        let exists: Option<i64> =
-            match sqlx::query_scalar("SELECT 1 FROM threads WHERE thread_id = ?1")
-                .bind(&p.thread_id)
-                .fetch_optional(ctx.store)
-                .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(
-                        target: "minos_backend::local_rpc",
-                        error = %e,
-                        "read_thread.exists_probe failed"
-                    );
-                    return err("internal", "read_thread failed");
-                }
-            };
-        if exists.is_none() {
-            return err(
-                "thread_not_found",
-                format!("thread not found: {}", p.thread_id),
-            );
-        }
-    }
-
-    // Fresh translator state per call. Codex is the only translator shipped
-    // today; other agents fall through to Raw so history is at least visible.
+    // Fresh translator state per call so history stays deterministic.
     let mut state = minos_ui_protocol::CodexTranslatorState::new(p.thread_id.clone());
     let mut ui_events: Vec<minos_ui_protocol::UiEventMessage> = Vec::new();
     let mut last_seq_read = from_seq;
@@ -225,14 +229,62 @@ async fn handle_read_thread(
                     }),
                 }
             }
-            other => {
-                // Claude / Gemini stubs: surface as a Raw placeholder so at
-                // least the history is browsable.
-                ui_events.push(minos_ui_protocol::UiEventMessage::Raw {
-                    kind: format!("unsupported_agent:{other:?}"),
-                    payload_json: serde_json::to_string(&row.payload).unwrap_or_default(),
-                });
+            minos_domain::AgentName::Claude => {
+                match minos_ui_protocol::translate_claude(&row.payload) {
+                    Ok(v) => ui_events.extend(v),
+                    Err(e) => ui_events.push(minos_ui_protocol::UiEventMessage::Error {
+                        code: "translation_failed".into(),
+                        message: format!("{e}"),
+                        message_id: None,
+                    }),
+                }
             }
+            minos_domain::AgentName::Gemini => {
+                match minos_ui_protocol::translate_gemini(&row.payload) {
+                    Ok(v) => ui_events.extend(v),
+                    Err(e) => ui_events.push(minos_ui_protocol::UiEventMessage::Error {
+                        code: "translation_failed".into(),
+                        message: format!("{e}"),
+                        message_id: None,
+                    }),
+                }
+            }
+        }
+    }
+
+    if from_seq == 0
+        && !ui_events.iter().any(|ui| {
+            matches!(
+                ui,
+                minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { .. }
+            )
+        })
+    {
+        let stored_title: Option<Option<String>> =
+            match sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = ?1")
+                .bind(&p.thread_id)
+                .fetch_optional(ctx.store)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_backend::local_rpc",
+                        error = %e,
+                        thread_id = %p.thread_id,
+                        "read_thread.title_probe failed"
+                    );
+                    return err("internal", "read_thread failed");
+                }
+            };
+        if let Some(Some(title)) = stored_title {
+            ui_events.insert(
+                0,
+                minos_ui_protocol::UiEventMessage::ThreadTitleUpdated {
+                    thread_id: p.thread_id.clone(),
+                    title,
+                },
+            );
         }
     }
 
@@ -246,11 +298,22 @@ async fn handle_read_thread(
 
     // Look up end_reason (may be present even if rows are empty).
     let end_reason_json: Option<Option<String>> =
-        sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = ?1")
+        match sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = ?1")
             .bind(&p.thread_id)
             .fetch_optional(ctx.store)
             .await
-            .unwrap_or(None);
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::local_rpc",
+                    error = %e,
+                    thread_id = %p.thread_id,
+                    "read_thread.end_reason_probe failed"
+                );
+                return err("internal", "read_thread failed");
+            }
+        };
     let thread_end_reason = end_reason_json
         .flatten()
         .as_ref()
@@ -315,7 +378,7 @@ pub(crate) fn err(code: &str, message: impl Into<String>) -> LocalRpcOutcome {
 async fn compensate_pair_delivery_failure(
     ctx: &LocalRpcContext<'_>,
     issuer_handle: Option<&SessionHandle>,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     if let Some(issuer_handle) = issuer_handle {
         *issuer_handle.paired_with.write().await = None;
     }
@@ -323,7 +386,7 @@ async fn compensate_pair_delivery_failure(
 
     match ctx.pairing.forget_pair(ctx.session.device_id).await? {
         Some(_) => Ok(()),
-        None => Err(RelayError::StoreQuery {
+        None => Err(BackendError::StoreQuery {
             operation: "compensate_pair_delivery_failure".to_string(),
             message: "expected committed pair to exist during compensation".to_string(),
         }),
@@ -507,13 +570,13 @@ async fn handle_pair(ctx: &LocalRpcContext<'_>, params: &serde_json::Value) -> L
         .await
     {
         Ok(o) => o,
-        Err(RelayError::PairingTokenInvalid) => {
+        Err(BackendError::PairingTokenInvalid) => {
             return err(
                 "pairing_token_invalid",
                 "pairing token is unknown, expired, or already consumed",
             );
         }
-        Err(RelayError::PairingStateMismatch { actual }) => {
+        Err(BackendError::PairingStateMismatch { actual }) => {
             let message = if actual == "self" {
                 "device cannot pair with itself".to_string()
             } else {
@@ -651,11 +714,16 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
     // UI wired via the LocalRpcResponse we're about to return, but the
     // wire contract (spec §7.4) says both sides receive the event — so
     // push it explicitly and let the client decide how to reconcile.
+    //
+    // Routing through `try_send_current` keeps a superseded socket from
+    // eating the frame during a reconnect race: a stale outbox stays open
+    // until the writer task tears down, so a raw `try_send` can succeed
+    // against it while the live replacement misses the event.
     let unpaired = Envelope::Event {
         version: 1,
         event: EventKind::Unpaired,
     };
-    if let Err(e) = ctx.session.outbox.try_send(unpaired.clone()) {
+    if let Err(e) = ctx.registry.try_send_current(ctx.session, unpaired.clone()) {
         tracing::warn!(
             target: "minos_backend::envelope",
             error = ?e,
@@ -669,7 +737,7 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
         // the peer dispatcher cannot route one last Forward off stale state.
         *peer_handle.paired_with.write().await = None;
 
-        if let Err(e) = peer_handle.outbox.try_send(unpaired) {
+        if let Err(e) = ctx.registry.try_send_current(&peer_handle, unpaired) {
             tracing::warn!(
                 target: "minos_backend::envelope",
                 error = ?e,
@@ -687,8 +755,8 @@ async fn handle_forget_peer(ctx: &LocalRpcContext<'_>) -> LocalRpcOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{devices, pairings, test_support::memory_pool};
-    use minos_domain::{DeviceId, DeviceRole};
+    use crate::store::{devices, pairings, raw_events, test_support::memory_pool, threads};
+    use minos_domain::{AgentName, DeviceId, DeviceRole};
     use pretty_assertions::assert_eq;
 
     // ── small helpers ─────────────────────────────────────────────────
@@ -728,6 +796,21 @@ mod tests {
             cf_access_client_id: None,
             cf_access_client_secret: None,
         }
+    }
+
+    async fn seed_thread(
+        pool: &SqlitePool,
+        owner: DeviceId,
+        thread_id: &str,
+        agent: AgentName,
+        payload: &serde_json::Value,
+    ) {
+        threads::upsert(pool, thread_id, agent, &owner.to_string(), 1)
+            .await
+            .unwrap();
+        raw_events::insert_if_absent(pool, thread_id, 1, agent, payload, 1)
+            .await
+            .unwrap();
     }
 
     // ── ping ──────────────────────────────────────────────────────────
@@ -860,6 +943,186 @@ mod tests {
             }
             other => panic!("expected Err, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn read_thread_hides_threads_owned_by_a_different_paired_host() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let caller_peer = insert_device_row(&pool, "mac-a", DeviceRole::AgentHost).await;
+        let other_peer = insert_device_row(&pool, "mac-b", DeviceRole::AgentHost).await;
+        let ios = insert_device_row(&pool, "iphone", DeviceRole::IosClient).await;
+        pairings::insert_pairing(&pool, caller_peer, ios, 0)
+            .await
+            .unwrap();
+
+        let (session, _rx) = make_session(ios, DeviceRole::IosClient);
+        *session.paired_with.write().await = Some(caller_peer);
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
+
+        seed_thread(
+            &pool,
+            other_peer,
+            "thr-foreign",
+            AgentName::Codex,
+            &serde_json::json!({"method":"thread/started","params":{"threadId":"thr-foreign"}}),
+        )
+        .await;
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::ReadThread,
+            &serde_json::json!({"thread_id": "thr-foreign", "limit": 10}),
+        )
+        .await;
+        match out {
+            LocalRpcOutcome::Err { error } => {
+                assert_eq!(error.code, "thread_not_found");
+                assert_eq!(error.message, "thread not found: thr-foreign");
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_thread_uses_translation_failed_for_unsupported_agent_history() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let host = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let ios = insert_device_row(&pool, "iphone", DeviceRole::IosClient).await;
+        pairings::insert_pairing(&pool, host, ios, 0).await.unwrap();
+
+        let (session, _rx) = make_session(ios, DeviceRole::IosClient);
+        *session.paired_with.write().await = Some(host);
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
+
+        seed_thread(
+            &pool,
+            host,
+            "thr-claude",
+            AgentName::Claude,
+            &serde_json::json!({"method":"anything","params":{"value":1}}),
+        )
+        .await;
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::ReadThread,
+            &serde_json::json!({"thread_id": "thr-claude", "limit": 10}),
+        )
+        .await;
+        let result = match out {
+            LocalRpcOutcome::Ok { result } => result,
+            other => panic!("expected Ok, got {other:?}"),
+        };
+        let read: minos_protocol::ReadThreadResponse = serde_json::from_value(result).unwrap();
+        assert!(matches!(
+            read.ui_events.as_slice(),
+            [minos_ui_protocol::UiEventMessage::Error { code, message, message_id: None }]
+                if code == "translation_failed"
+                    && message == "translator not implemented for agent Claude"
+        ));
+    }
+
+    #[tokio::test]
+    async fn read_thread_surfaces_internal_error_when_title_decode_fails() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let host = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let ios = insert_device_row(&pool, "iphone", DeviceRole::IosClient).await;
+        pairings::insert_pairing(&pool, host, ios, 0).await.unwrap();
+
+        let (session, _rx) = make_session(ios, DeviceRole::IosClient);
+        *session.paired_with.write().await = Some(host);
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
+
+        seed_thread(
+            &pool,
+            host,
+            "thr-bad-title",
+            AgentName::Codex,
+            &serde_json::json!({"method":"thread/started","params":{"threadId":"thr-bad-title"}}),
+        )
+        .await;
+
+        // Force the title column to non-UTF-8 bytes via a CAST. SQLite stores
+        // the bytes as TEXT but sqlx fails to decode them as a Rust String,
+        // exercising the title-probe error branch in read_thread.
+        sqlx::query("UPDATE threads SET title = CAST(X'C328' AS TEXT) WHERE thread_id = ?1")
+            .bind("thr-bad-title")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::ReadThread,
+            &serde_json::json!({"thread_id": "thr-bad-title", "limit": 10}),
+        )
+        .await;
+        match out {
+            LocalRpcOutcome::Err { error } => assert_eq!(error.code, "internal"),
+            other => panic!("expected internal error from title decode failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_thread_first_page_includes_stored_title_when_history_has_no_title_event() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let host = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let ios = insert_device_row(&pool, "iphone", DeviceRole::IosClient).await;
+        pairings::insert_pairing(&pool, host, ios, 0).await.unwrap();
+
+        let (session, _rx) = make_session(ios, DeviceRole::IosClient);
+        *session.paired_with.write().await = Some(host);
+        let ctx = make_ctx(&session, &registry, &pairing, &pool);
+
+        seed_thread(
+            &pool,
+            host,
+            "thr-title",
+            AgentName::Codex,
+            &serde_json::json!({
+                "method": "item/started",
+                "params": {
+                    "itemId": "u1",
+                    "role": "user",
+                    "startedAtMs": 1,
+                    "input": [{"type": "text", "text": "Explain the reconnect contract"}]
+                }
+            }),
+        )
+        .await;
+        threads::update_title(&pool, "thr-title", "Explain the reconnect contract")
+            .await
+            .unwrap();
+
+        let out = handle(
+            &ctx,
+            &LocalRpcMethod::ReadThread,
+            &serde_json::json!({"thread_id": "thr-title", "limit": 10}),
+        )
+        .await;
+        let result = match out {
+            LocalRpcOutcome::Ok { result } => result,
+            other => panic!("expected Ok, got {other:?}"),
+        };
+        let read: minos_protocol::ReadThreadResponse = serde_json::from_value(result).unwrap();
+
+        assert!(matches!(
+            read.ui_events.first(),
+            Some(minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { thread_id, title })
+                if thread_id == "thr-title" && title == "Explain the reconnect contract"
+        ));
     }
 
     // ── pair ──────────────────────────────────────────────────────────
@@ -1339,6 +1602,84 @@ mod tests {
             other => panic!("expected Unpaired, got {other:?}"),
         }
         // iOS peer also got Event::Unpaired.
+        let peer_event = ios_rx.recv().await.expect("iPhone must get Unpaired");
+        match peer_event {
+            Envelope::Event {
+                event: EventKind::Unpaired,
+                ..
+            } => {}
+            other => panic!("expected Unpaired, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn forget_peer_does_not_push_unpaired_to_self_when_session_is_superseded() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let pairing = PairingService::new(pool.clone());
+
+        let mac = insert_device_row(&pool, "mac", DeviceRole::AgentHost).await;
+        let (mac_v1, mut mac_v1_rx) = make_session(mac, DeviceRole::AgentHost);
+        registry.insert(mac_v1.clone());
+
+        let ios = DeviceId::new();
+        let (ios_handle, mut ios_rx) = make_session(ios, DeviceRole::IosClient);
+        registry.insert(ios_handle.clone());
+
+        let (token, _) = pairing
+            .request_token(mac, Duration::from_mins(5))
+            .await
+            .unwrap();
+
+        {
+            let ctx = make_ctx(&ios_handle, &registry, &pairing, &pool);
+            let _ = handle(
+                &ctx,
+                &LocalRpcMethod::Pair,
+                &serde_json::json!({"token": token.as_str(), "device_name": "iphone"}),
+            )
+            .await;
+            // Drain the issuer's Event::Paired so we observe forget_peer's
+            // delivery decisions next.
+            let _paired = mac_v1_rx.recv().await;
+        }
+
+        // A reconnect supersedes mac_v1 in the registry. mac_v1 stays "paired"
+        // in memory because forget_peer is racing this replacement, but the
+        // live session is now mac_v2.
+        let (mac_v2, mut mac_v2_rx) = make_session(mac, DeviceRole::AgentHost);
+        *mac_v2.paired_with.write().await = Some(ios);
+        registry.insert(mac_v2.clone());
+
+        // Run forget_peer from the stale mac_v1 session (the dispatcher
+        // handed it off before the reconnect won the registry race).
+        let ctx = make_ctx(&mac_v1, &registry, &pairing, &pool);
+        let out = handle(&ctx, &LocalRpcMethod::ForgetPeer, &serde_json::json!({})).await;
+        match out {
+            LocalRpcOutcome::Ok { result } => assert_eq!(result, serde_json::json!({"ok": true})),
+            other => panic!("expected Ok, got {other:?}"),
+        }
+
+        // The stale socket must not consume Event::Unpaired — it's no longer
+        // the live device session, so the frame would be observed by the
+        // dying writer task instead of the replacement.
+        assert!(
+            matches!(
+                mac_v1_rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ),
+            "superseded self handle must not receive Event::Unpaired"
+        );
+        assert!(
+            matches!(
+                mac_v2_rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ),
+            "replacement self handle is not the forget_peer caller and must not receive Unpaired",
+        );
+
+        // Peer side still uses the registry's current ios entry, which was
+        // never replaced; it must observe Event::Unpaired exactly once.
         let peer_event = ios_rx.recv().await.expect("iPhone must get Unpaired");
         match peer_event {
             Envelope::Event {

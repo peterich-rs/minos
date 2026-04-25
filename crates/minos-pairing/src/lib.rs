@@ -18,7 +18,7 @@ uniffi::setup_scaffolding!();
 #[cfg(feature = "uniffi")]
 mod uniffi_bridges {
     use chrono::{DateTime, Utc};
-    use minos_domain::{DeviceId, PairingToken};
+    use minos_domain::{DeviceId, DeviceSecret, PairingToken};
     use std::time::SystemTime;
     use uuid::Uuid;
 
@@ -46,6 +46,11 @@ mod uniffi_bridges {
         remote,
         lower: |d| d.0,
         try_lift: |u| Ok(DeviceId(u)),
+    });
+    uniffi::custom_type!(DeviceSecret, String, {
+        remote,
+        lower: |secret| secret.0,
+        try_lift: |value| Ok(DeviceSecret(value)),
     });
     uniffi::custom_type!(PairingToken, String, {
         remote,

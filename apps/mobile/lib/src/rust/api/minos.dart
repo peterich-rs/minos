@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `spawn_state_forwarder`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -41,12 +41,30 @@ abstract class MobileClient implements RustOpaqueInterface {
   factory MobileClient({required String selfName}) =>
       RustLib.instance.api.crateApiMinosMobileClientNew(selfName: selfName);
 
+  /// Construct a client preloaded with a durable pairing snapshot from the
+  /// Dart-side secure store.
+  static MobileClient newWithPersistedState({
+    required String selfName,
+    required PersistedPairingState state,
+  }) => RustLib.instance.api.crateApiMinosMobileClientNewWithPersistedState(
+    selfName: selfName,
+    state: state,
+  );
+
   /// Pair using the raw JSON payload extracted from the scanned QR v2
   /// code. Delegates to `MobileClient::pair_with_qr_json`.
   Future<void> pairWithQrJson({required String qrJson});
 
+  /// Export the current pairing snapshot so Dart can mirror it into secure
+  /// storage after pairing succeeds.
+  Future<PersistedPairingState> persistedPairingState();
+
   /// Read a window of translated UI events for one thread.
   Future<ReadThreadResponse> readThread({required ReadThreadParams req});
+
+  /// Reconnect using the durable pairing snapshot already loaded from the
+  /// Dart-side secure store.
+  Future<void> resumePersistedSession();
 
   /// Subscribe to connection-state transitions. Emits the current value
   /// immediately, then every subsequent change. The spawned task exits once
@@ -88,7 +106,7 @@ enum ErrorKind {
   connectionStateMismatch,
   envelopeVersionUnsupported,
   peerOffline,
-  relayInternal,
+  backendInternal,
   codexSpawnFailed,
   codexConnectFailed,
   codexProtocolError,
@@ -197,8 +215,8 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_EnvelopeVersionUnsupported;
   const factory MinosError.peerOffline({required String peerDeviceId}) =
       MinosError_PeerOffline;
-  const factory MinosError.relayInternal({required String message}) =
-      MinosError_RelayInternal;
+  const factory MinosError.backendInternal({required String message}) =
+      MinosError_BackendInternal;
   const factory MinosError.codexSpawnFailed({required String message}) =
       MinosError_CodexSpawnFailed;
   const factory MinosError.codexConnectFailed({
@@ -236,6 +254,42 @@ sealed class MinosError with _$MinosError implements FrbException {
 }
 
 enum PairingState { unpaired, awaitingPeer, paired }
+
+/// Durable mobile pairing snapshot mirrored into the iOS keychain.
+class PersistedPairingState {
+  final String? backendUrl;
+  final String? deviceId;
+  final String? deviceSecret;
+  final String? cfAccessClientId;
+  final String? cfAccessClientSecret;
+
+  const PersistedPairingState({
+    this.backendUrl,
+    this.deviceId,
+    this.deviceSecret,
+    this.cfAccessClientId,
+    this.cfAccessClientSecret,
+  });
+
+  @override
+  int get hashCode =>
+      backendUrl.hashCode ^
+      deviceId.hashCode ^
+      deviceSecret.hashCode ^
+      cfAccessClientId.hashCode ^
+      cfAccessClientSecret.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PersistedPairingState &&
+          runtimeType == other.runtimeType &&
+          backendUrl == other.backendUrl &&
+          deviceId == other.deviceId &&
+          deviceSecret == other.deviceSecret &&
+          cfAccessClientId == other.cfAccessClientId &&
+          cfAccessClientSecret == other.cfAccessClientSecret;
+}
 
 class ReadThreadParams {
   final String threadId;

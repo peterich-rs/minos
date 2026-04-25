@@ -1,6 +1,6 @@
 //! Request and response payload types.
 
-use minos_domain::{AgentDescriptor, AgentName, DeviceId, PairingToken};
+use minos_domain::{AgentDescriptor, AgentName, DeviceId, DeviceSecret, PairingToken};
 use minos_ui_protocol::{ThreadEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
 
@@ -16,8 +16,11 @@ pub struct PairRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairResponse {
-    pub ok: bool,
-    pub mac_name: String,
+    /// Mirrors the envelope/local-RPC pair result naming so the legacy typed
+    /// jsonrpsee surface exposes the same contract.
+    pub peer_device_id: DeviceId,
+    pub peer_name: String,
+    pub your_device_secret: DeviceSecret,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -175,10 +178,21 @@ mod tests {
     #[test]
     fn pair_response_round_trip() {
         let resp = PairResponse {
-            ok: true,
-            mac_name: "MacBook".into(),
+            peer_device_id: DeviceId::new(),
+            peer_name: "MacBook".into(),
+            your_device_secret: DeviceSecret::generate(),
         };
         let json = serde_json::to_string(&resp).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value["peer_device_id"],
+            serde_json::to_value(resp.peer_device_id).unwrap()
+        );
+        assert_eq!(value["peer_name"], serde_json::json!("MacBook"));
+        assert_eq!(
+            value["your_device_secret"],
+            serde_json::json!(resp.your_device_secret.as_str())
+        );
         let back: PairResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
     }

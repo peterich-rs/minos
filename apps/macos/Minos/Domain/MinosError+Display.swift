@@ -33,8 +33,8 @@ extension MinosError {
             return .envelopeVersionUnsupported
         case .PeerOffline:
             return .peerOffline
-        case .RelayInternal:
-            return .relayInternal
+        case .BackendInternal:
+            return .backendInternal
         case .CodexSpawnFailed:
             return .codexSpawnFailed
         case .CodexConnectFailed:

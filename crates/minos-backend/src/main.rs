@@ -19,8 +19,8 @@
 //!
 //! ## Graceful shutdown
 //!
-//! Two-phase teardown (see commit history for `fix(relay): shutdown
-//! ordering...`). Phase 1 is the `with_graceful_shutdown` future:
+//! Two-phase teardown (see commit history for the shutdown-ordering fix).
+//! Phase 1 is the `with_graceful_shutdown` future:
 //! [`wait_for_signal`] awaits either `SIGINT` (Ctrl-C) or `SIGTERM`, then
 //! we broadcast `Event::ServerShutdown` to every live session and sleep
 //! 500ms so clients can drain. Only after `axum::serve` returns — which
@@ -37,7 +37,7 @@ use clap::Parser;
 use mars_xlog::{LogLevel, Xlog, XlogConfig, XlogLayer, XlogLayerConfig};
 use minos_backend::{
     config::Config,
-    http::{self, RelayState},
+    http::{self, BackendState},
     pairing::PairingService,
     session::SessionRegistry,
     store,
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
 
     let registry = Arc::new(SessionRegistry::new());
     let pairing = Arc::new(PairingService::new(pool.clone()));
-    let mut state = RelayState::new(
+    let mut state = BackendState::new(
         registry.clone(),
         pairing.clone(),
         pool.clone(),
@@ -185,7 +185,7 @@ fn init_tracing(cfg: &Config) -> Result<()> {
 ///
 /// Ticks every [`TOKEN_GC_INTERVAL`] and calls
 /// [`store::tokens::gc_expired`]. Errors are logged at `warn!` — GC is
-/// best-effort; a failure here does not take the relay down.
+/// best-effort; a failure here does not take the backend down.
 fn spawn_token_gc(pool: SqlitePool) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(TOKEN_GC_INTERVAL);

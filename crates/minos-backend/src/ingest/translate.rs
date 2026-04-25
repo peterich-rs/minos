@@ -16,7 +16,7 @@ use minos_ui_protocol::{
 };
 use serde_json::Value;
 
-/// Per-thread translator-state store. Wrap in `Arc` so the HTTP `RelayState`
+/// Per-thread translator-state store. Wrap in `Arc` so the HTTP `BackendState`
 /// can hand a clone to every dispatched ingest call without locking.
 pub struct ThreadTranslators {
     codex: DashMap<String, CodexTranslatorState>,

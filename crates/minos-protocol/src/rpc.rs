@@ -1,5 +1,6 @@
 //! The shared service trait. `jsonrpsee` macros generate a server stub
-//! (implemented by `minos-daemon`) and a typed client (used by `minos-mobile`).
+//! (implemented by `minos-daemon`) plus a typed client retained for Rust-side
+//! callers and tests; `minos-mobile` now uses the envelope/local-RPC path.
 
 use crate::{
     HealthResponse, ListClisResponse, PairRequest, PairResponse, SendUserMessageRequest,

@@ -2,13 +2,13 @@
 //!
 //! # Model
 //!
-//! For every authenticated WebSocket, the relay constructs a
+//! For every authenticated WebSocket, the backend constructs a
 //! [`SessionHandle`] and inserts it into a shared [`SessionRegistry`].
 //! The handle carries:
 //!
 //! - the session's [`DeviceId`] (also the registry key);
 //! - a `paired_with` slot (`Arc<RwLock<Option<DeviceId>>>`) that mirrors the
-//!   current pairing state for this session. The relay updates this when
+//!   current pairing state for this session. The backend updates this when
 //!   `consume_token` or `forget_peer` changes the DB — step 8 wires the
 //!   update path;
 //! - an **outbox**: `tokio::sync::mpsc::Sender<ServerFrame>` handed to the
@@ -24,7 +24,7 @@
 //!
 //! The outbox has a fixed capacity of [`OUTBOX_CAPACITY`] = 256 frames. On
 //! a slow consumer the channel can fill up; when it does, `route()` now
-//! returns [`RelayError::PeerBackpressure`] instead of silently dropping the
+//! returns [`BackendError::PeerBackpressure`] instead of silently dropping the
 //! forwarded payload. That keeps the registry thin while ensuring the sender
 //! gets a deterministic failure instead of hanging until timeout.
 //!
@@ -33,7 +33,7 @@
 //! If step 12's e2e coverage shows that retry-on-backpressure is not enough,
 //! revisit this with a writer-owned `drain_one_then_retry` path.
 //!
-//! On [`TrySendError::Closed`] we translate to [`RelayError::PeerOffline`].
+//! On [`TrySendError::Closed`] we translate to [`BackendError::PeerOffline`].
 //! The receiver going away means the writer task has shut down; from the
 //! caller's perspective the peer is effectively offline.
 
@@ -45,7 +45,7 @@ use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::Envelope;
 use tokio::sync::{mpsc, watch, RwLock};
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 
 /// Outbox capacity in frames. 256 matches spec §7 bullet "Bounded mpsc".
 ///
@@ -53,7 +53,7 @@ use crate::error::RelayError;
 /// buffer drains". A reasonable default; tune later with e2e data.
 pub const OUTBOX_CAPACITY: usize = 256;
 
-/// A frame queued for push from the relay to a specific device.
+/// A frame queued for push from the backend to a specific device.
 ///
 /// Aliased to [`Envelope`] directly rather than wrapped in a narrower enum
 /// — the envelope already carries the discriminator (`Forwarded`, `Event`,
@@ -204,28 +204,28 @@ impl SessionRegistry {
         &self,
         current: &SessionHandle,
         frame: ServerFrame,
-    ) -> Result<(), RelayError> {
+    ) -> Result<(), BackendError> {
         let Some(live) = self.0.get(&current.device_id) else {
-            return Err(RelayError::PeerOffline {
+            return Err(BackendError::PeerOffline {
                 peer_device_id: current.device_id.to_string(),
             });
         };
 
         if !live.same_session(current) {
-            return Err(RelayError::PeerOffline {
+            return Err(BackendError::PeerOffline {
                 peer_device_id: current.device_id.to_string(),
             });
         }
 
         match live.outbox.try_send(frame) {
             Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(RelayError::PeerBackpressure {
+            Err(mpsc::error::TrySendError::Full(_)) => Err(BackendError::PeerBackpressure {
                 peer_device_id: current.device_id.to_string(),
             }),
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 drop(live);
                 self.remove_current(current);
-                Err(RelayError::PeerOffline {
+                Err(BackendError::PeerOffline {
                     peer_device_id: current.device_id.to_string(),
                 })
             }
@@ -280,16 +280,16 @@ impl SessionRegistry {
     /// before calling `route`.
     ///
     /// Behaviour:
-    /// - `to` not in the registry → [`RelayError::PeerOffline`].
+    /// - `to` not in the registry → [`BackendError::PeerOffline`].
     /// - Outbox accepts → `Ok(())`.
     /// - Outbox full → emit `tracing::warn!` and return
-    ///   [`RelayError::PeerBackpressure`].
+    ///   [`BackendError::PeerBackpressure`].
     /// - Outbox closed (receiver dropped) → evict only if the handle is
     ///   still the one whose sender we tried (ABA-safe via
     ///   [`mpsc::Sender::same_channel`]); if a reconnect has already
     ///   replaced the entry, the fresh handle is kept alive so the next
     ///   route succeeds on the new outbox. Returns
-    ///   [`RelayError::PeerOffline`] either way — the close signals the
+    ///   [`BackendError::PeerOffline`] either way — the close signals the
     ///   writer task we tried has shut down.
     ///
     /// # Errors
@@ -308,9 +308,9 @@ impl SessionRegistry {
         from: DeviceId,
         to: DeviceId,
         payload: serde_json::Value,
-    ) -> Result<(), RelayError> {
+    ) -> Result<(), BackendError> {
         let Some(handle) = self.get(to) else {
-            return Err(RelayError::PeerOffline {
+            return Err(BackendError::PeerOffline {
                 peer_device_id: to.to_string(),
             });
         };
@@ -330,7 +330,7 @@ impl SessionRegistry {
                     from = %from,
                     "outbox full; rejecting forwarded frame"
                 );
-                Err(RelayError::PeerBackpressure {
+                Err(BackendError::PeerBackpressure {
                     peer_device_id: to.to_string(),
                 })
             }
@@ -342,7 +342,7 @@ impl SessionRegistry {
                 // outbox. Prevents the ABA race where we evict a
                 // just-reconnected session.
                 self.remove_current(&handle);
-                Err(RelayError::PeerOffline {
+                Err(BackendError::PeerOffline {
                     peer_device_id: to.to_string(),
                 })
             }
@@ -513,7 +513,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            RelayError::PeerOffline { peer_device_id } => {
+            BackendError::PeerOffline { peer_device_id } => {
                 assert_eq!(peer_device_id, ghost.0.to_string());
             }
             other => panic!("expected PeerOffline, got {other:?}"),
@@ -539,7 +539,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            RelayError::PeerBackpressure { peer_device_id } => {
+            BackendError::PeerBackpressure { peer_device_id } => {
                 assert_eq!(peer_device_id, b.0.to_string());
             }
             other => panic!("expected PeerBackpressure, got {other:?}"),
@@ -561,7 +561,7 @@ mod tests {
         drop(rxb);
 
         let err = reg.route(a, b, serde_json::json!({})).await.unwrap_err();
-        assert!(matches!(err, RelayError::PeerOffline { .. }));
+        assert!(matches!(err, BackendError::PeerOffline { .. }));
         // Stale entry was cleaned up.
         assert!(reg.get(b).is_none());
     }
@@ -596,7 +596,7 @@ mod tests {
         let err = reg
             .try_send_current(&stale, guarded_frame)
             .expect_err("stale handle must not count as the current live session");
-        assert!(matches!(err, RelayError::PeerOffline { .. }));
+        assert!(matches!(err, BackendError::PeerOffline { .. }));
         assert!(matches!(
             stale_rx.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)

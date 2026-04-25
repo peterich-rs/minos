@@ -24,7 +24,7 @@ use minos_protocol::{Envelope, EventKind};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use crate::error::RelayError;
+use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
 use crate::session::SessionRegistry;
 use crate::store::{raw_events, threads};
@@ -41,7 +41,7 @@ pub async fn dispatch(
     payload: &Value,
     ts_ms: i64,
     owner_device_id: minos_domain::DeviceId,
-) -> Result<(), RelayError> {
+) -> Result<(), BackendError> {
     // 1. Upsert the thread row (creates on first ingest, bumps last_ts_ms otherwise).
     threads::upsert(pool, thread_id, agent, &owner_device_id.to_string(), ts_ms).await?;
 
@@ -58,7 +58,7 @@ pub async fn dispatch(
 
     // 3. Translate. Translator failures are non-fatal: we emit a synthetic
     // Error UI event so mobile sees a deterministic surface.
-    let translated = match translators.translate(agent, thread_id, payload) {
+    let mut translated = match translators.translate(agent, thread_id, payload) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(
@@ -72,6 +72,25 @@ pub async fn dispatch(
             }]
         }
     };
+
+    let has_explicit_title = translated.iter().any(|ui| {
+        matches!(
+            ui,
+            minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { .. }
+        )
+    });
+    if !has_explicit_title && thread_title_is_missing(pool, thread_id).await {
+        if let Some(title) = derive_fallback_title(payload, &translated) {
+            let _ = threads::update_title(pool, thread_id, &title).await;
+            translated.insert(
+                0,
+                minos_ui_protocol::UiEventMessage::ThreadTitleUpdated {
+                    thread_id: thread_id.to_string(),
+                    title,
+                },
+            );
+        }
+    }
 
     // 4. Fan out each UI event to every live peer paired with owner_device_id.
     for ui in translated {
@@ -103,6 +122,91 @@ pub async fn dispatch(
     }
 
     Ok(())
+}
+
+async fn thread_title_is_missing(pool: &SqlitePool, thread_id: &str) -> bool {
+    match sqlx::query_scalar::<_, Option<String>>("SELECT title FROM threads WHERE thread_id = ?1")
+        .bind(thread_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(None)) => true,
+        Ok(Some(Some(_)) | None) => false,
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::ingest",
+                error = ?e,
+                thread_id,
+                "failed to probe thread title before fallback"
+            );
+            false
+        }
+    }
+}
+
+fn derive_fallback_title(
+    payload: &Value,
+    translated: &[minos_ui_protocol::UiEventMessage],
+) -> Option<String> {
+    if let Some(title) = derive_title_from_translated(translated) {
+        return Some(title);
+    }
+    derive_title_from_raw_payload(payload)
+}
+
+fn derive_title_from_translated(
+    translated: &[minos_ui_protocol::UiEventMessage],
+) -> Option<String> {
+    let saw_user_start = translated.iter().any(|ui| {
+        matches!(
+            ui,
+            minos_ui_protocol::UiEventMessage::MessageStarted {
+                role: minos_ui_protocol::MessageRole::User,
+                ..
+            }
+        )
+    });
+    if !saw_user_start {
+        return None;
+    }
+
+    translated.iter().find_map(|ui| match ui {
+        minos_ui_protocol::UiEventMessage::TextDelta { text, .. } => sanitize_title(text),
+        _ => None,
+    })
+}
+
+fn derive_title_from_raw_payload(payload: &Value) -> Option<String> {
+    let params = payload.get("params")?;
+    let role = params.get("role").and_then(Value::as_str);
+    if role != Some("user") {
+        return None;
+    }
+
+    if let Some(text) = params.get("text").and_then(Value::as_str) {
+        return sanitize_title(text);
+    }
+    if let Some(text) = params.get("delta").and_then(Value::as_str) {
+        return sanitize_title(text);
+    }
+    if let Some(text) = params.get("content").and_then(Value::as_str) {
+        return sanitize_title(text);
+    }
+    params
+        .get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|item| item.get("text").and_then(Value::as_str))
+        .and_then(sanitize_title)
+}
+
+fn sanitize_title(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(80).collect())
 }
 
 /// Look up the pair for `device_id` in the DB, find its live session in the
@@ -144,12 +248,16 @@ async fn broadcast_to_peers_of(
         return;
     };
 
-    if let Err(e) = handle.outbox.try_send(env.clone()) {
+    // Route through `try_send_current` so a reconnect race (peer reconnects
+    // between `get` and the send) cannot let a superseded socket consume
+    // the live UI event. The replacement session will catch up via the
+    // next ingest tick or via list/read_thread on its own (re)attach.
+    if let Err(e) = registry.try_send_current(&handle, env.clone()) {
         tracing::warn!(
             target: "minos_backend::ingest",
             peer = %peer,
             error = ?e,
-            "peer outbox full; dropping ui event"
+            "peer outbox full or superseded; dropping ui event"
         );
     }
 }

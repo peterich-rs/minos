@@ -1,0 +1,173 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+
+import 'package:minos/infrastructure/minos_core.dart';
+import 'package:minos/infrastructure/secure_pairing_store.dart';
+import 'package:minos/src/rust/api/minos.dart';
+
+class _MockMobileClient extends Mock implements MobileClient {}
+
+class _MockSecurePairingStore extends Mock implements SecurePairingStore {}
+
+void main() {
+  late _MockMobileClient client;
+  late _MockSecurePairingStore secureStore;
+
+  setUp(() {
+    client = _MockMobileClient();
+    secureStore = _MockSecurePairingStore();
+
+    when(
+      () => client.subscribeState(),
+    ).thenAnswer((_) => const Stream<ConnectionState>.empty());
+    when(
+      () => client.subscribeUiEvents(),
+    ).thenAnswer((_) => const Stream<UiEventFrame>.empty());
+    when(
+      () => client.currentState(),
+    ).thenReturn(const ConnectionState.disconnected());
+  });
+
+  test(
+    'pairWithQrJson rolls back the live session when keychain persistence fails',
+    () async {
+      const qrJson = '{"v":2}';
+      const persisted = PersistedPairingState(
+        backendUrl: 'ws://127.0.0.1/devices',
+        deviceId: 'dev-123',
+        deviceSecret: 'sec-456',
+      );
+      final persistError = StateError('keychain write failed');
+
+      when(
+        () => client.pairWithQrJson(qrJson: qrJson),
+      ).thenAnswer((_) async {});
+      when(
+        () => client.persistedPairingState(),
+      ).thenAnswer((_) async => persisted);
+      when(() => secureStore.saveState(persisted)).thenThrow(persistError);
+      when(() => client.forgetPeer()).thenAnswer((_) async {});
+      when(() => secureStore.clearAll()).thenAnswer((_) async {});
+
+      final core = MinosCore.forTesting(
+        client: client,
+        secureStore: secureStore,
+      );
+
+      await expectLater(
+        core.pairWithQrJson(qrJson),
+        throwsA(same(persistError)),
+      );
+
+      verify(() => client.pairWithQrJson(qrJson: qrJson)).called(1);
+      verify(() => client.persistedPairingState()).called(1);
+      verify(() => secureStore.saveState(persisted)).called(1);
+      verify(() => client.forgetPeer()).called(1);
+      verify(() => secureStore.clearAll()).called(1);
+    },
+  );
+
+  test('pairWithQrJson does not clear secure storage on success', () async {
+    const qrJson = '{"v":2}';
+    const persisted = PersistedPairingState(
+      backendUrl: 'ws://127.0.0.1/devices',
+      deviceId: 'dev-123',
+      deviceSecret: 'sec-456',
+    );
+
+    when(() => client.pairWithQrJson(qrJson: qrJson)).thenAnswer((_) async {});
+    when(
+      () => client.persistedPairingState(),
+    ).thenAnswer((_) async => persisted);
+    when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
+
+    final core = MinosCore.forTesting(client: client, secureStore: secureStore);
+
+    await core.pairWithQrJson(qrJson);
+
+    verify(() => secureStore.saveState(persisted)).called(1);
+    verifyNever(() => client.forgetPeer());
+    verifyNever(() => secureStore.clearAll());
+  });
+
+  group('resolveClient', () {
+    test(
+      'returns a freshly built client when no persisted state is present',
+      () async {
+        final freshClient = _MockMobileClient();
+        when(() => secureStore.loadState()).thenAnswer((_) async => null);
+
+        final result = await MinosCore.resolveClient(
+          secure: secureStore,
+          buildFresh: () => freshClient,
+          buildFromPersisted: (_) {
+            fail('buildFromPersisted must not run when no snapshot is loaded');
+          },
+        );
+
+        expect(result, same(freshClient));
+        verify(() => secureStore.loadState()).called(1);
+        verifyNever(() => secureStore.clearAll());
+      },
+    );
+
+    test('returns the rehydrated client when resume succeeds', () async {
+      const persisted = PersistedPairingState(
+        backendUrl: 'ws://127.0.0.1/devices',
+        deviceId: 'dev-123',
+        deviceSecret: 'sec-456',
+      );
+      final rehydrated = _MockMobileClient();
+      when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+      when(() => rehydrated.resumePersistedSession()).thenAnswer((_) async {});
+
+      final result = await MinosCore.resolveClient(
+        secure: secureStore,
+        buildFresh: () => fail('buildFresh must not run when resume succeeds'),
+        buildFromPersisted: (state) {
+          expect(state, persisted);
+          return rehydrated;
+        },
+      );
+
+      expect(result, same(rehydrated));
+      verify(() => rehydrated.resumePersistedSession()).called(1);
+      verifyNever(() => secureStore.clearAll());
+    });
+
+    test(
+      'wipes secure storage and returns a fresh client when resume fails',
+      () async {
+        const persisted = PersistedPairingState(
+          backendUrl: 'ws://127.0.0.1/devices',
+          deviceId: 'dev-stale',
+          deviceSecret: 'sec-revoked',
+        );
+        final rehydrated = _MockMobileClient();
+        final freshClient = _MockMobileClient();
+        when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+        when(() => secureStore.clearAll()).thenAnswer((_) async {});
+        when(
+          () => rehydrated.resumePersistedSession(),
+        ).thenAnswer((_) async => throw StateError('auth drift'));
+
+        final result = await MinosCore.resolveClient(
+          secure: secureStore,
+          buildFresh: () => freshClient,
+          buildFromPersisted: (state) {
+            expect(state, persisted);
+            return rehydrated;
+          },
+        );
+
+        expect(
+          result,
+          same(freshClient),
+          reason: 'returned client must come from buildFresh after recovery',
+        );
+        verify(() => rehydrated.resumePersistedSession()).called(1);
+        verify(() => secureStore.clearAll()).called(1);
+      },
+    );
+  });
+}

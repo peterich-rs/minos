@@ -72,6 +72,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ListThreadsParams dco_decode_box_autoadd_list_threads_params(dynamic raw);
 
   @protected
+  PersistedPairingState dco_decode_box_autoadd_persisted_pairing_state(
+    dynamic raw,
+  );
+
+  @protected
   ReadThreadParams dco_decode_box_autoadd_read_thread_params(dynamic raw);
 
   @protected
@@ -133,6 +138,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PairingState dco_decode_pairing_state(dynamic raw);
+
+  @protected
+  PersistedPairingState dco_decode_persisted_pairing_state(dynamic raw);
 
   @protected
   ReadThreadParams dco_decode_read_thread_params(dynamic raw);
@@ -219,6 +227,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  PersistedPairingState sse_decode_box_autoadd_persisted_pairing_state(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ReadThreadParams sse_decode_box_autoadd_read_thread_params(
     SseDeserializer deserializer,
   );
@@ -296,6 +309,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PairingState sse_decode_pairing_state(SseDeserializer deserializer);
+
+  @protected
+  PersistedPairingState sse_decode_persisted_pairing_state(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ReadThreadParams sse_decode_read_thread_params(SseDeserializer deserializer);
@@ -399,6 +417,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_persisted_pairing_state(
+    PersistedPairingState self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_read_thread_params(
     ReadThreadParams self,
     SseSerializer serializer,
@@ -493,6 +517,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_pairing_state(PairingState self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_persisted_pairing_state(
+    PersistedPairingState self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_read_thread_params(
