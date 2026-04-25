@@ -1,14 +1,14 @@
-# Cloudflare Tunnel + Access Setup for `minos-relay`
+# Cloudflare Tunnel + Access Setup for `minos-backend`
 
-Operational runbook for bringing up the public ingress in front of `minos-relay`. Source of truth for the architectural choice is ADR 0010; this document captures the concrete commands to reproduce the tunnel on a fresh machine.
+Operational runbook for bringing up the public ingress in front of `minos-backend`. Source of truth for the architectural choices is ADR 0010 (tunnel topology) plus ADR 0014 (CF Access tokens now live in the backend's env vars and are distributed to mobile via the pairing QR, not the mac app's keychain). This document captures the concrete commands to reproduce the tunnel on a fresh machine.
 
-**Scope:** one named tunnel (`minos`) bound to one hostname (`minos.fan-nn.top`), forwarding to `http://127.0.0.1:8787` (the relay). A Cloudflare Access application gates the hostname for both interactive browser access and Service-Token-authenticated clients (macOS app, iOS app).
+**Scope:** one named tunnel (`minos`) bound to one hostname (`minos.fan-nn.top`), forwarding to `http://127.0.0.1:8787` (the backend). A Cloudflare Access application gates the hostname for both interactive browser access and Service-Token-authenticated clients (the iOS app — agent-host talks to backend over loopback and never crosses the CF edge).
 
 **Prerequisites:**
 
 - A Cloudflare account with the domain (`fan-nn.top`) already on Cloudflare name servers.
 - Admin access to the Cloudflare Zero Trust dashboard.
-- A Mac or Linux box where the relay will run (MVP: the owner's Mac).
+- A Mac or Linux box where the backend will run (MVP: the owner's Mac).
 - Homebrew installed on macOS, or equivalent package manager on Linux.
 
 Commands below use `<UUID>` / `<CLIENT_ID>` / `<CLIENT_SECRET>` as placeholders. Never commit the real values.
@@ -100,8 +100,8 @@ ingress:
 
 Notes:
 
-- `service` points at the relay's loopback listen address (`127.0.0.1:8787` by default).
-- `keepAliveTimeout: 90s` pairs with the relay's heartbeat; clients send application-layer ping every ~30s to avoid CF edge's idle cutoff.
+- `service` points at the backend's loopback listen address (`127.0.0.1:8787` by default).
+- `keepAliveTimeout: 90s` pairs with the backend's heartbeat; clients send application-layer ping every ~30s to avoid CF edge's idle cutoff.
 - The trailing `http_status:404` is required by cloudflared as a catch-all for unmatched hostnames.
 - The final `service:` value must be a URL or pseudo-URL (`http_status:N`, `hello_world`, etc.); `config.yml` refuses a bare service entry.
 
@@ -109,11 +109,11 @@ Notes:
 
 ## 6. Smoke-test the tunnel before installing as a service
 
-Start the relay (or any temporary server on port 8787):
+Start the backend (or any temporary server on port 8787):
 
 ```bash
-# If the relay exists:
-cargo xtask relay-run
+# If the backend exists:
+cargo xtask backend-run
 
 # Or temporarily:
 python3 -m http.server 8787
@@ -131,7 +131,7 @@ In a third terminal, verify the public hostname resolves and reaches the origin:
 curl -v https://minos.fan-nn.top/
 ```
 
-Expect the origin's response (relay's 404 for `/`, or the Python server's directory listing).
+Expect the origin's response (backend's 404 for `/`, or the Python server's directory listing).
 
 **If this fails:**
 - Check `cloudflared` logs for the tunnel handshake.
@@ -177,11 +177,41 @@ sudo systemctl status cloudflared
 sudo journalctl -u cloudflared -f
 ```
 
+### 7a. Set backend env vars on the LaunchDaemon / systemd unit
+
+Per ADR 0014, the backend itself owns the CF Access service-token pair and embeds it into pairing QR payloads. After step 9 mints the token, configure the backend service with:
+
+```
+MINOS_BACKEND_PUBLIC_URL=wss://minos.fan-nn.top/devices
+MINOS_BACKEND_CF_ACCESS_CLIENT_ID=<CLIENT_ID>.access
+MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET=<CLIENT_SECRET>
+```
+
+On macOS, drop these into the LaunchDaemon plist's `EnvironmentVariables` dictionary and reload:
+
+```bash
+sudo launchctl bootout system/ai.minos.backend
+sudo launchctl bootstrap system /Library/LaunchDaemons/ai.minos.backend.plist
+```
+
+On Linux (systemd), put them in a drop-in:
+
+```
+sudo systemctl edit ai.minos.backend.service
+# [Service]
+# Environment="MINOS_BACKEND_PUBLIC_URL=wss://minos.fan-nn.top/devices"
+# Environment="MINOS_BACKEND_CF_ACCESS_CLIENT_ID=..."
+# Environment="MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET=..."
+sudo systemctl restart ai.minos.backend.service
+```
+
+Without these, the backend startup validation rejects a `wss://` `PUBLIC_URL` with `MinosError::CfAccessMisconfigured` (set `MINOS_BACKEND_ALLOW_DEV=1` to override for local-loopback testing).
+
 ---
 
 ## 8. Create a Cloudflare Access application
 
-The tunnel is now publicly reachable. Without Access, any client that knows the URL can reach the relay. Put the hostname behind Access next.
+The tunnel is now publicly reachable. Without Access, any client that knows the URL can reach the backend. Put the hostname behind Access next.
 
 Dashboard path:
 
@@ -191,7 +221,7 @@ Cloudflare Dashboard → Zero Trust → Access → Applications → Add an appli
 
 Fill in:
 
-- **Application name**: `Minos Relay`
+- **Application name**: `Minos Backend`
 - **Session duration**: `24h` (or whatever the team prefers; shorter is stricter)
 - **Application domain**: `minos.fan-nn.top`
 - **Policy name**: `Owner access`
@@ -206,7 +236,7 @@ Save. The hostname is now gated.
 
 ## 9. Mint a Service Token for non-browser clients
 
-The Mac and iOS apps cannot complete an interactive SSO flow. Generate a machine credential for them.
+The iOS app cannot complete an interactive SSO flow. Generate a machine credential and have the **backend** carry it (per ADR 0014); mobile picks it up via the pairing QR.
 
 Dashboard path:
 
@@ -216,15 +246,15 @@ Cloudflare Dashboard → Zero Trust → Access → Service Auth → Service Toke
 
 Fill in:
 
-- **Service Token name**: `minos-app-clients`
+- **Service Token name**: `minos-mobile`
 - **Duration**: longest available (you will rotate manually if compromised)
 
-On save, Cloudflare shows the `Client ID` and `Client Secret` **once**. Copy both immediately.
+On save, Cloudflare shows the `Client ID` and `Client Secret` **once**. Paste them into the backend's env vars (step 7a) and restart the backend service.
 
 Go back to the Access application you created in step 8, edit its policy, and add a second rule:
 
 - **Action**: `Service Auth`
-- **Include**: `Service Token` → `minos-app-clients`
+- **Include**: `Service Token` → `minos-mobile`
 
 Save. The token is now authorized for this hostname.
 
@@ -239,18 +269,21 @@ curl -v \
   https://minos.fan-nn.top/health
 ```
 
-Expect `200 OK` from the relay. If you get `302` or a sign-in page, the headers are not set correctly or the Service Token policy is missing.
+Expect `200 OK` from the backend. If you get `302` or a sign-in page, the headers are not set correctly or the Service Token policy is missing.
 
 ---
 
-## 11. Distribute the Service Token to clients (MVP)
+## 11. Distribute the Service Token to mobile (MVP)
 
-The Mac and iOS apps read `CF-Access-Client-Id` and `CF-Access-Client-Secret` from local configuration at first run and inject them into every outbound WSS handshake. For MVP:
+Per ADR 0014, the backend carries the CF service-token pair in its env vars (step 7a) and embeds it into every `PairingQrPayload` it issues. The iOS app reads `cf_access_client_id` / `cf_access_client_secret` from the scanned QR JSON and persists them to the app-scoped Keychain (`flutter_secure_storage` keys `minos.cf_access_client_id` / `minos.cf_access_client_secret`).
 
-- **macOS app**: paste both values into the app's onboarding screen; the app stores them in the app-scoped Keychain entry `ai.minos.macos.cf-access`.
-- **iOS app**: same flow, stored in the app-scoped Keychain entry `ai.minos.ios.cf-access`.
+Rotating the token therefore happens entirely on the backend:
 
-The tokens are per-install credentials. Rotating them means generating a new token in the dashboard and re-entering in each client.
+1. Mint a new Service Token in the dashboard.
+2. Paste the new pair into the backend env vars (step 7a) and restart the backend.
+3. Re-issue the pairing QR from the agent-host UI; previously-paired phones must scan the new QR to pick up the rotated credential.
+
+There is no on-device manual paste step in v2 of the QR. The agent-host never holds the CF token in code or in its own keychain.
 
 **Do not** commit tokens to the repository or paste them into CI configs checked into git. They are long-lived and high-privilege.
 
@@ -260,9 +293,9 @@ The tokens are per-install credentials. Rotating them means generating a new tok
 
 | Action | Dashboard path | Effect |
 |---|---|---|
-| Rotate a Service Token | Zero Trust → Access → Service Auth → Service Tokens → ⋯ → Regenerate | Old secret invalidated; must paste new secret into every client |
+| Rotate a Service Token | Zero Trust → Access → Service Auth → Service Tokens → ⋯ → Regenerate | Old secret invalidated; update backend env vars (step 7a) and re-issue the pairing QR for every paired phone |
 | Revoke a specific client's access | Remove user's email from the Allow policy (step 8) | Interactive access blocked; Service Token still works until rotated |
-| Take the hostname offline | Disable the Application in Access, or stop `cloudflared` | Nothing reaches the relay |
+| Take the hostname offline | Disable the Application in Access, or stop `cloudflared` | Nothing reaches the backend |
 
 ---
 
@@ -271,7 +304,8 @@ The tokens are per-install credentials. Rotating them means generating a new tok
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `curl https://minos.fan-nn.top/health` returns `Cloudflare 1033` | Tunnel not running | Start `cloudflared` or check service status |
-| Handshake returns `5xx`  | Relay not listening on configured port | Start `minos-relay`; verify `MINOS_RELAY_LISTEN` matches `config.yml` `service:` |
+| Handshake returns `5xx`  | Backend not listening on configured port | Start `minos-backend`; verify `MINOS_BACKEND_LISTEN` matches `config.yml` `service:` |
+| Backend rejects boot with `CfAccessMisconfigured` | `PUBLIC_URL` is `wss://...` but env vars not set | Step 7a; or set `MINOS_BACKEND_ALLOW_DEV=1` for loopback dev |
 | Clients disconnect every ~100s | Heartbeat not firing | Check `minos-transport` heartbeat loop; CF edge idle cutoff is ~100s |
 | `curl` with Service Token returns sign-in page | Service Token policy missing from Access application | Add Service Auth rule in step 9 revision |
 | New dev machine: `cloudflared tunnel run minos` fails with "credentials not found" | `cert.pem` / `<UUID>.json` not present on this machine | Re-run `cloudflared tunnel login` + copy the credential JSON from the original machine |
@@ -297,4 +331,6 @@ The tokens are per-install credentials. Rotating them means generating a new tok
 ## Reference
 
 - ADR 0010: Cloudflare Tunnel + Access for Public Exposure
-- Spec: `docs/superpowers/specs/minos-relay-backend-design.md` §4.3 (security boundaries) and §9.3 (runbook reference)
+- ADR 0014: Backend-Assembled Pairing QR (CF Access tokens leave the host)
+- ADR 0015: Rename `minos-relay` → `minos-backend`
+- Spec: `docs/superpowers/specs/minos-relay-backend-design.md` §4.3 (security boundaries) and §9.3 (runbook reference) — note: filename retains the historical `minos-relay-backend-design` slug, see ADR 0015
