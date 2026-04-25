@@ -65,11 +65,16 @@ pub async fn capture_user_shell_env() -> HashMap<String, String> {
         .filter(|p| Path::new(p).is_absolute())
         .unwrap_or_else(|| FALLBACK_SHELL.to_owned());
 
-    let fut = Command::new(&shell)
+    capture_shell_env(&shell, SHELL_TIMEOUT).await
+}
+
+async fn capture_shell_env(shell: &str, shell_timeout: Duration) -> HashMap<String, String> {
+    let fut = Command::new(shell)
         .args(["-l", "-i", "-c", DUMP_SCRIPT])
+        .kill_on_drop(true)
         .output();
 
-    match timeout(SHELL_TIMEOUT, fut).await {
+    match timeout(shell_timeout, fut).await {
         Ok(Ok(out)) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
             let map = parse_env_dump(&stdout);
@@ -104,7 +109,7 @@ pub async fn capture_user_shell_env() -> HashMap<String, String> {
         Err(_) => {
             warn!(
                 shell = %shell,
-                timeout_secs = SHELL_TIMEOUT.as_secs(),
+                timeout_ms = shell_timeout.as_millis(),
                 "shell env dump timed out; falling back to process env",
             );
             std::env::vars().collect()
@@ -115,6 +120,11 @@ pub async fn capture_user_shell_env() -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn shell_quote(path: &Path) -> String {
+        format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    }
 
     #[test]
     fn empty_input_yields_empty_map() {
@@ -179,5 +189,53 @@ mod tests {
         let s = "\x01MINOS_ENV_BEGIN\x01PATH=/usr/bin\0\0\x01MINOS_ENV_END\x01";
         let map = parse_env_dump(s);
         assert_eq!(map.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_shell_is_killed_on_drop() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "minos-env-timeout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir(&dir).expect("create temp test directory");
+
+        let shell = dir.join("slow-shell");
+        let started = dir.join("started");
+        let completed = dir.join("completed");
+        fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\nprintf started > {}\nsleep 1\nprintf completed > {}\n",
+                shell_quote(&started),
+                shell_quote(&completed)
+            ),
+        )
+        .expect("write slow shell script");
+
+        let mut perms = fs::metadata(&shell)
+            .expect("stat slow shell script")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&shell, perms).expect("make slow shell executable");
+
+        let shell_path = shell.to_str().expect("temp shell path should be utf-8");
+        let _ = capture_shell_env(shell_path, Duration::from_millis(50)).await;
+
+        assert!(started.exists(), "test shell should have started");
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        assert!(
+            !completed.exists(),
+            "timed-out shell should be killed before completing"
+        );
+
+        fs::remove_dir_all(&dir).expect("remove temp test directory");
     }
 }
