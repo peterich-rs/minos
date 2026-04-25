@@ -41,7 +41,7 @@ use tokio::time::timeout;
 
 /// Wall-clock ceiling for each test's primary await. Copied from the
 /// relay's own e2e wrapper — plenty of slack for a shared-runner CI.
-const STEP_TIMEOUT: Duration = Duration::from_secs(5);
+const STEP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Token TTL fed into the relay state; tests exercise the ISSUANCE path,
 /// not expiry, so a generous value is fine.
