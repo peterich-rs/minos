@@ -77,9 +77,13 @@ impl DaemonHandle {
     ) -> Result<Arc<Self>, MinosError> {
         let local_state_path = LocalState::default_path();
 
+        // Capture the user's login-shell env once. Failures fall back to
+        // process env internally, so this never blocks bootstrap.
+        let subprocess_env = Arc::new(minos_cli_detect::capture_user_shell_env().await);
+
         let agent = Arc::new(AgentGlue::new(
             paths::minos_home()?.join("workspaces"),
-            Arc::new(std::collections::HashMap::new()),
+            subprocess_env.clone(),
         ));
 
         // The relay-client dispatches forwarded peer JSON-RPC into this
@@ -87,9 +91,9 @@ impl DaemonHandle {
         // now there is exactly one shared instance threaded through.
         let rpc_server = Arc::new(crate::rpc_server::RpcServerImpl {
             started_at: std::time::Instant::now(),
-            runner: Arc::new(minos_cli_detect::RealCommandRunner::new(Arc::new(
-                std::collections::HashMap::new(),
-            ))),
+            runner: Arc::new(minos_cli_detect::RealCommandRunner::new(
+                subprocess_env.clone(),
+            )),
             agent: agent.clone(),
         });
 
