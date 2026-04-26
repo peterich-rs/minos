@@ -332,8 +332,17 @@ pub async fn post_logout(
     if authenticate(&state.store, &headers).await.is_err() {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     }
-    if bearer::require(&state, &headers).is_err() {
+    let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
+    };
+    // Per-account bucket sits between bearer-success and `revoke_one` so a
+    // compromised access token can't spam logout to revoke arbitrary
+    // candidate refresh tokens. Reuses the refresh bucket — both write
+    // refresh_tokens, both should share the same per-account budget.
+    if let Some(resp) =
+        check_bucket(&state.auth_refresh_per_acc, &bearer_outcome.account_id)
+    {
+        return resp;
     }
     if refresh_tokens::revoke_one(&state.store, &req.refresh_token)
         .await
