@@ -41,8 +41,9 @@
 //! # Cloudflare Access
 //!
 //! `CF-Access-Client-Id` / `CF-Access-Client-Secret` are validated at the
-//! edge. The backend does not re-verify them; we emit a debug-level log
-//! when they are observed so dev builds can confirm header plumbing.
+//! edge. The backend does not re-verify them; the auth helper emits a
+//! debug-level log when they are observed so dev builds can confirm header
+//! plumbing.
 //!
 //! # Unpaired-mode gating
 //!
@@ -68,34 +69,14 @@ use axum::{
 };
 use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::{Envelope, EventKind};
-use std::str::FromStr;
-use uuid::Uuid;
 
 use super::BackendState;
 use crate::{
     envelope::run_session,
-    pairing::secret::verify_secret,
+    http::auth::{self, AuthError, Classification},
     session::{SessionHandle, SessionRegistry},
-    store::{self, devices::DeviceRow},
+    store,
 };
-
-/// `X-Device-Id` — required, UUID v4.
-const HDR_DEVICE_ID: &str = "x-device-id";
-/// `X-Device-Role` — optional; defaults to [`DeviceRole::IosClient`].
-const HDR_DEVICE_ROLE: &str = "x-device-role";
-/// `X-Device-Secret` — optional; required when the device row has a hash.
-const HDR_DEVICE_SECRET: &str = "x-device-secret";
-/// `X-Device-Name` — optional; used for first-connect `display_name`.
-const HDR_DEVICE_NAME: &str = "x-device-name";
-/// Cloudflare Access client id; logged only.
-const HDR_CF_ACCESS_ID: &str = "cf-access-client-id";
-/// Cloudflare Access client secret; logged only.
-const HDR_CF_ACCESS_SECRET: &str = "cf-access-client-secret";
-
-/// Default `display_name` for devices whose handshake does not send
-/// `X-Device-Name`. Spec §8.1 requires NOT NULL; the client can rename on
-/// first `Pair` via the `device_name` param.
-const DEFAULT_DISPLAY_NAME: &str = "unnamed";
 
 /// WS close code used when auth changes after the HTTP upgrade succeeds but
 /// before the socket is published in the live registry.
@@ -116,51 +97,19 @@ pub async fn upgrade(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
-    // 1. Device id: required. Plan §9 step 1.
-    let device_id = extract_device_id(&headers)?;
-
-    // 2. Role header: parsed if present, resolved against the stored row below.
-    let requested_role = extract_device_role(&headers)?;
-
-    // 3. Secret: optional; needed iff the stored row carries a hash.
-    let device_secret = extract_device_secret(&headers);
-
-    // 4. Display name: optional; defaults to `DEFAULT_DISPLAY_NAME`.
-    let display_name = extract_device_name(&headers).unwrap_or(DEFAULT_DISPLAY_NAME.to_string());
-
-    // CF-Access sanity log (no validation — edge handles it).
-    log_cf_access_presence(&headers);
-
-    // Look up the device row. Absent row → first connect (Unpaired mode).
-    let existing = store::devices::get_device(&state.store, device_id)
+    let outcome = auth::authenticate(&state.store, &headers)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AuthError::into_response_tuple)?;
 
-    let role = resolve_device_role(existing.as_ref(), requested_role)?;
-    let classification = classify(existing, device_secret.as_deref())?;
+    let device_id = outcome.device_id;
+    let role = outcome.role;
+    let device_secret = auth::extract_device_secret(&headers);
+    // The header may be missing or malformed; both cases collapse to "no
+    // requested role" because pre-upgrade `authenticate` already validated
+    // the value when present. We use `.ok().flatten()` so we don't bubble
+    // a fresh error for a stale header read.
+    let requested_role = auth::extract_device_role(&headers).ok().flatten();
 
-    // On first-connect, insert the device row so step-8 handlers can find
-    // it. The row carries `secret_hash = NULL` until `Pair` fires.
-    if classification.is_first_connect() {
-        let now = chrono::Utc::now().timestamp_millis();
-        if let Err(e) =
-            store::devices::insert_device(&state.store, device_id, &display_name, role, now).await
-        {
-            // A race here (another handshake inserted in the gap) would
-            // manifest as a PK conflict; we log and continue because by
-            // the time we upgrade, a row is present either way.
-            tracing::warn!(
-                target: "minos_backend::http",
-                error = %e,
-                device_id = %device_id,
-                "first-connect insert_device failed (possibly a race)"
-            );
-        }
-    }
-
-    // Build the session handle + receiver now, but defer any live-session
-    // side effects until the upgrade callback is actually running. Pairing
-    // state is also refreshed there so reconnects use the latest DB view.
     let (handle, outbox_rx) = SessionHandle::new(device_id, role);
 
     // Perform the upgrade; `run_session` owns the socket for its lifetime.
@@ -235,60 +184,18 @@ pub async fn upgrade(
     }))
 }
 
-// ── classification ───────────────────────────────────────────────────────
-
-/// Three auth outcomes feeding the handshake flow.
-#[derive(Debug)]
-enum Classification {
-    /// No row in `devices` for this id. Insert-then-Unpaired.
-    FirstConnect,
-    /// Row exists but `secret_hash` is NULL. Re-enter Unpaired without
-    /// checking the provided secret.
-    UnpairedExisting,
-    /// Row exists with a non-null `secret_hash` that we successfully
-    /// verified against the provided `X-Device-Secret`.
-    Authenticated,
-}
-
 #[derive(Debug)]
 enum ActivationAuthError {
     Unauthorized(String),
     Internal(String),
 }
 
-impl Classification {
-    fn is_first_connect(&self) -> bool {
-        matches!(self, Self::FirstConnect)
-    }
-}
-
-/// Pure decision function: row-state × provided-secret → `Classification`
-/// or a 401 tuple. Split out from [`upgrade`] for testability.
-fn classify(
-    row: Option<DeviceRow>,
-    provided_secret: Option<&str>,
-) -> Result<Classification, (StatusCode, String)> {
-    match row {
-        None => Ok(Classification::FirstConnect),
-        Some(r) => match r.secret_hash {
-            None => Ok(Classification::UnpairedExisting),
-            Some(hash) => {
-                let Some(secret) = provided_secret else {
-                    return Err((
-                        StatusCode::UNAUTHORIZED,
-                        "X-Device-Secret required for authenticated device".to_string(),
-                    ));
-                };
-                match verify_secret(secret, &hash) {
-                    Ok(true) => Ok(Classification::Authenticated),
-                    Ok(false) => Err((
-                        StatusCode::UNAUTHORIZED,
-                        "X-Device-Secret does not match stored hash".to_string(),
-                    )),
-                    Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-                }
-            }
-        },
+impl From<AuthError> for ActivationAuthError {
+    fn from(value: AuthError) -> Self {
+        match value {
+            AuthError::Unauthorized(m) => Self::Unauthorized(m),
+            AuthError::Internal(m) => Self::Internal(m),
+        }
     }
 }
 
@@ -308,21 +215,14 @@ async fn revalidate_live_session_auth(
             )
         })?;
 
-    let resolved_role = resolve_device_role(Some(&row), requested_role)
-        .map_err(|(_status, message)| ActivationAuthError::Unauthorized(message))?;
+    let resolved_role = auth::resolve_device_role(Some(&row), requested_role)?;
     if resolved_role != expected_role {
         return Err(ActivationAuthError::Unauthorized(format!(
             "device role changed during websocket activation: expected {expected_role}, got {resolved_role}"
         )));
     }
 
-    match classify(Some(row), provided_secret).map_err(|(status, message)| {
-        if status == StatusCode::UNAUTHORIZED {
-            ActivationAuthError::Unauthorized(message)
-        } else {
-            ActivationAuthError::Internal(message)
-        }
-    })? {
+    match auth::classify(Some(row), provided_secret)? {
         Classification::FirstConnect => Err(ActivationAuthError::Unauthorized(
             "device row missing during websocket activation".to_string(),
         )),
@@ -330,94 +230,6 @@ async fn revalidate_live_session_auth(
         Classification::Authenticated => store::pairings::get_pair(store, device_id)
             .await
             .map_err(|e| ActivationAuthError::Internal(e.to_string())),
-    }
-}
-
-// ── header helpers ───────────────────────────────────────────────────────
-
-fn extract_device_id(headers: &HeaderMap) -> Result<DeviceId, (StatusCode, String)> {
-    let raw = headers
-        .get(HDR_DEVICE_ID)
-        .ok_or((StatusCode::UNAUTHORIZED, "X-Device-Id required".to_string()))?;
-    let s = raw.to_str().map_err(|_| {
-        (
-            StatusCode::UNAUTHORIZED,
-            "X-Device-Id not UTF-8".to_string(),
-        )
-    })?;
-    Uuid::parse_str(s).map(DeviceId).map_err(|e| {
-        (
-            StatusCode::UNAUTHORIZED,
-            format!("X-Device-Id not a valid UUID: {e}"),
-        )
-    })
-}
-
-fn extract_device_role(headers: &HeaderMap) -> Result<Option<DeviceRole>, (StatusCode, String)> {
-    let Some(raw) = headers.get(HDR_DEVICE_ROLE) else {
-        return Ok(None);
-    };
-    let s = raw.to_str().map_err(|_| {
-        (
-            StatusCode::UNAUTHORIZED,
-            "X-Device-Role not UTF-8".to_string(),
-        )
-    })?;
-    DeviceRole::from_str(s).map(Some).map_err(|e| {
-        (
-            StatusCode::UNAUTHORIZED,
-            format!("X-Device-Role invalid: {e}"),
-        )
-    })
-}
-
-fn resolve_device_role(
-    existing: Option<&DeviceRow>,
-    requested_role: Option<DeviceRole>,
-) -> Result<DeviceRole, (StatusCode, String)> {
-    match existing {
-        Some(row) => {
-            if let Some(role) = requested_role {
-                if role != row.role {
-                    return Err((
-                        StatusCode::UNAUTHORIZED,
-                        format!(
-                            "X-Device-Role mismatch for existing device: expected {}, got {}",
-                            row.role, role
-                        ),
-                    ));
-                }
-            }
-            Ok(row.role)
-        }
-        None => Ok(requested_role.unwrap_or(DeviceRole::IosClient)),
-    }
-}
-
-fn extract_device_secret(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(HDR_DEVICE_SECRET)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
-}
-
-fn extract_device_name(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(HDR_DEVICE_NAME)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
-}
-
-fn log_cf_access_presence(headers: &HeaderMap) {
-    let cf_id = headers.contains_key(HDR_CF_ACCESS_ID);
-    let cf_sec = headers.contains_key(HDR_CF_ACCESS_SECRET);
-    if cf_id || cf_sec {
-        tracing::debug!(
-            target: "minos_backend::http",
-            cf_access_client_id_present = cf_id,
-            cf_access_client_secret_present = cf_sec,
-            "CF-Access headers observed (edge-validated; backend does not re-check)"
-        );
     }
 }
 
@@ -529,180 +341,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::error::TryRecvError;
 
-    // ── header extraction ─────────────────────────────────────────────
-
-    #[test]
-    fn extract_device_id_missing_returns_401() {
-        let headers = HeaderMap::new();
-        let err = extract_device_id(&headers).unwrap_err();
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-        assert!(err.1.contains("X-Device-Id"));
-    }
-
-    #[test]
-    fn extract_device_id_non_uuid_returns_401() {
-        let mut headers = HeaderMap::new();
-        headers.insert(HDR_DEVICE_ID, "not-a-uuid".parse().unwrap());
-        let err = extract_device_id(&headers).unwrap_err();
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-        assert!(err.1.contains("valid UUID"));
-    }
-
-    #[test]
-    fn extract_device_id_valid_round_trips() {
-        let id = DeviceId::new();
-        let mut headers = HeaderMap::new();
-        headers.insert(HDR_DEVICE_ID, id.to_string().parse().unwrap());
-        let got = extract_device_id(&headers).unwrap();
-        assert_eq!(got, id);
-    }
-
-    #[test]
-    fn extract_device_role_absent_defaults_to_ios_client() {
-        let headers = HeaderMap::new();
-        assert_eq!(extract_device_role(&headers).unwrap(), None);
-    }
-
-    #[test]
-    fn extract_device_role_kebab_case_parses() {
-        let mut headers = HeaderMap::new();
-        headers.insert(HDR_DEVICE_ROLE, "agent-host".parse().unwrap());
-        assert_eq!(
-            extract_device_role(&headers).unwrap(),
-            Some(DeviceRole::AgentHost)
-        );
-    }
-
-    #[test]
-    fn extract_device_role_unknown_value_returns_401() {
-        let mut headers = HeaderMap::new();
-        headers.insert(HDR_DEVICE_ROLE, "gizmo".parse().unwrap());
-        let err = extract_device_role(&headers).unwrap_err();
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-    }
-
-    #[test]
-    fn resolve_device_role_first_connect_defaults_to_ios_client() {
-        let role = resolve_device_role(None, None).unwrap();
-        assert_eq!(role, DeviceRole::IosClient);
-    }
-
-    #[test]
-    fn resolve_device_role_existing_row_rejects_mismatched_header() {
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "mac".to_string(),
-            role: DeviceRole::AgentHost,
-            secret_hash: None,
-            created_at: 0,
-            last_seen_at: 0,
-        };
-
-        let err = resolve_device_role(Some(&row), Some(DeviceRole::IosClient)).unwrap_err();
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-        assert!(err.1.contains("mismatch"));
-    }
-
-    #[test]
-    fn extract_device_secret_absent_is_none() {
-        assert_eq!(extract_device_secret(&HeaderMap::new()), None);
-    }
-
-    #[test]
-    fn extract_device_secret_present_returns_string() {
-        let mut headers = HeaderMap::new();
-        headers.insert(HDR_DEVICE_SECRET, "sek".parse().unwrap());
-        assert_eq!(extract_device_secret(&headers), Some("sek".to_string()));
-    }
-
-    // ── classify: pure decision function ──────────────────────────────
-
-    #[test]
-    fn classify_no_row_is_first_connect() {
-        let out = classify(None, None).unwrap();
-        assert!(matches!(out, Classification::FirstConnect));
-    }
-
-    #[test]
-    fn classify_row_without_hash_is_unpaired_existing() {
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
-            secret_hash: None,
-            created_at: 0,
-            last_seen_at: 0,
-        };
-        let out = classify(Some(row), None).unwrap();
-        assert!(matches!(out, Classification::UnpairedExisting));
-    }
-
-    #[test]
-    fn classify_row_with_hash_missing_secret_is_401() {
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
-            secret_hash: Some("$argon2id$v=19$m=19456,t=2,p=1$abc$def".to_string()),
-            created_at: 0,
-            last_seen_at: 0,
-        };
-        let err = classify(Some(row), None).unwrap_err();
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-        assert!(err.1.contains("X-Device-Secret required"));
-    }
-
-    #[tokio::test]
-    async fn classify_row_with_hash_matching_secret_is_authenticated() {
-        // Produce a real argon2id hash so verify_secret returns Ok(true).
-        let plain = minos_domain::DeviceSecret::generate();
-        let hash = crate::pairing::secret::hash_secret(&plain).unwrap();
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
-            secret_hash: Some(hash),
-            created_at: 0,
-            last_seen_at: 0,
-        };
-        let out = classify(Some(row), Some(plain.as_str())).unwrap();
-        assert!(matches!(out, Classification::Authenticated));
-    }
-
-    #[tokio::test]
-    async fn classify_row_with_hash_wrong_secret_is_401() {
-        let plain = minos_domain::DeviceSecret::generate();
-        let hash = crate::pairing::secret::hash_secret(&plain).unwrap();
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
-            secret_hash: Some(hash),
-            created_at: 0,
-            last_seen_at: 0,
-        };
-        let err = classify(Some(row), Some("wrong-secret")).unwrap_err();
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-        assert!(err.1.contains("does not match"));
-    }
-
-    #[tokio::test]
-    async fn classify_smoke_via_real_store_row() {
-        // End-to-end smoke with a real pool: insert a row, fetch it, feed
-        // through `classify` — exercises the DeviceRow shape from sqlx.
-        let pool = memory_pool().await;
-        let id = DeviceId::new();
-        insert_device(&pool, id, "smoke", DeviceRole::AgentHost, 0)
-            .await
-            .unwrap();
-        let row = store::devices::get_device(&pool, id)
-            .await
-            .unwrap()
-            .unwrap();
-        let out = classify(Some(row), None).unwrap();
-        assert!(matches!(out, Classification::UnpairedExisting));
-    }
-
     #[tokio::test]
     async fn revalidate_live_session_auth_allows_unpaired_existing_row() {
         let pool = memory_pool().await;
@@ -770,8 +408,9 @@ mod tests {
             .unwrap();
 
         let existing = store::devices::get_device(&pool, id).await.unwrap();
-        let role = resolve_device_role(existing.as_ref(), Some(DeviceRole::AgentHost)).unwrap();
-        let classification = classify(existing, Some(secret.as_str())).unwrap();
+        let role =
+            auth::resolve_device_role(existing.as_ref(), Some(DeviceRole::AgentHost)).unwrap();
+        let classification = auth::classify(existing, Some(secret.as_str())).unwrap();
         assert!(matches!(classification, Classification::Authenticated));
 
         store::devices::upsert_secret_hash(&pool, id, &replacement_hash)

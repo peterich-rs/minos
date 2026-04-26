@@ -2061,6 +2061,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "mars-xlog",
+ "minos-backend",
  "minos-domain",
  "minos-protocol",
  "minos-ui-protocol",

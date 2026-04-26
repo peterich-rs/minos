@@ -58,8 +58,13 @@ pub async fn connect(db_url: &str) -> Result<SqlitePool, BackendError> {
 /// `crate::pairing`'s integration tests. Extracted to collapse ~35 lines of
 /// duplication that accrued across `devices::tests`, `pairings::tests`, and
 /// `tokens::tests` during step 5.
-#[cfg(test)]
-pub(crate) mod test_support {
+///
+/// Exposed publicly when the `test-support` feature is enabled so
+/// integration tests in sibling crates (and this crate's own integration
+/// test files under `tests/`) can build an in-memory pool without
+/// duplicating the boilerplate.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
     use super::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
     /// Fixed unix-epoch ms used as `now` in tests.

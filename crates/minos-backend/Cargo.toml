@@ -54,6 +54,11 @@ minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 
 [dev-dependencies]
+# Self-reference enables the `test-support` feature for this crate's own
+# integration tests under `tests/` so they can reach the `pub mod
+# test_support` factories. Cargo allows a crate to appear in its own
+# `[dev-dependencies]` exactly so features can be toggled for tests.
+minos-backend = { path = ".", version = "0.1.0", features = ["test-support"] }
 tokio-test = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
@@ -64,6 +69,14 @@ tokio-tungstenite = { workspace = true }
 # raw TCP request; `url` parses the ws:// / http:// endpoints handed
 # back from `TcpListener::bind("127.0.0.1:0")`.
 url = { workspace = true }
+
+[features]
+# Re-exports `test_support::*` modules (`store::test_support`,
+# `http::test_support`) as `pub` so integration tests in sibling crates
+# (notably `minos-mobile`'s dev-deps in Phase B) can build a backend
+# state with an in-memory pool. No production code path enables it; the
+# feature is purely a visibility toggle.
+test-support = []
 
 [lints]
 workspace = true

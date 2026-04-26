@@ -38,6 +38,7 @@ use crate::{
     ingest::translate::ThreadTranslators, pairing::PairingService, session::SessionRegistry,
 };
 
+pub mod auth;
 pub mod health;
 pub mod ws_devices;
 
@@ -118,4 +119,42 @@ pub fn router(state: BackendState) -> Router {
         .route("/health", axum::routing::get(health::get))
         .route("/devices", axum::routing::get(ws_devices::upgrade))
         .with_state(state)
+}
+
+/// Test scaffolding factories shared by the crate's integration tests.
+///
+/// Exposed publicly when the `test-support` feature is enabled (and
+/// always when compiling tests) so test files under `tests/` and
+/// downstream crates' dev-deps can build a ready-to-serve
+/// [`BackendState`] backed by an in-memory SQLite pool.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use super::{BackendPublicConfig, BackendState};
+    use crate::pairing::PairingService;
+    use crate::session::SessionRegistry;
+    use crate::store::test_support::memory_pool;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Build a `BackendState` against a fresh in-memory pool, with a
+    /// 5-minute pairing-token TTL and a stub `BackendPublicConfig` whose
+    /// `public_url` matches the dev default.
+    pub async fn backend_state() -> BackendState {
+        let pool = memory_pool().await;
+        let registry = Arc::new(SessionRegistry::new());
+        let pairing = Arc::new(PairingService::new(pool.clone()));
+        BackendState {
+            registry,
+            pairing,
+            store: pool,
+            token_ttl: Duration::from_mins(5),
+            translators: crate::ingest::translate::ThreadTranslators::new(),
+            public_cfg: Arc::new(BackendPublicConfig {
+                public_url: "ws://127.0.0.1:8787/devices".into(),
+                cf_access_client_id: None,
+                cf_access_client_secret: None,
+            }),
+            version: env!("CARGO_PKG_VERSION"),
+        }
+    }
 }

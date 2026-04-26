@@ -106,7 +106,7 @@ After this phase the backend serves `POST /v1/pairing/tokens` (parallel to the W
 - Modify: `crates/minos-backend/src/http/mod.rs` (`pub mod auth;` + add `test_support` module)
 - Modify: `crates/minos-backend/src/http/ws_devices.rs` (delegate to new module)
 
-- [ ] **Step 1: Write the failing test for `Authenticator::authenticate`**
+- [x] **Step 1: Write the failing test for `Authenticator::authenticate`**
 
 Create `crates/minos-backend/tests/auth_helper.rs`:
 
@@ -170,7 +170,7 @@ async fn role_mismatch_against_existing_row_is_unauthorized() {
 }
 ```
 
-- [ ] **Step 2: Run — must fail**
+- [x] **Step 2: Run — must fail**
 
 ```bash
 cargo test -p minos-backend --test auth_helper
@@ -178,7 +178,7 @@ cargo test -p minos-backend --test auth_helper
 
 Expected: compilation error (`use minos_backend::http::auth::...` unresolved).
 
-- [ ] **Step 3: Implement `crates/minos-backend/src/http/auth.rs`**
+- [x] **Step 3: Implement `crates/minos-backend/src/http/auth.rs`**
 
 ```rust
 //! Shared header extraction + auth classification for HTTP handlers.
@@ -402,7 +402,7 @@ pub fn log_cf_access_presence(headers: &HeaderMap) {
 }
 ```
 
-- [ ] **Step 4: Re-export from `http/mod.rs` and add `test_support`**
+- [x] **Step 4: Re-export from `http/mod.rs` and add `test_support`**
 
 In `crates/minos-backend/src/http/mod.rs`, add `pub mod auth;` between the existing `pub mod health;` and `pub mod ws_devices;` lines. Then add a `test_support` factory exposed under `#[cfg(test)]` plus integration-test-friendly via `#[cfg(any(test, feature = "test-support"))]`:
 
@@ -428,7 +428,7 @@ In `crates/minos-backend/Cargo.toml` add a `test-support` feature gate:
 test-support = []
 ```
 
-- [ ] **Step 5: Refactor `ws_devices.rs` to use `http::auth`**
+- [x] **Step 5: Refactor `ws_devices.rs` to use `http::auth`**
 
 Replace the inline `extract_device_id`, `extract_device_role`, `extract_device_secret`, `extract_device_name`, `resolve_device_role`, `classify`, `Classification`, `log_cf_access_presence`, and `HDR_*` constants in `crates/minos-backend/src/http/ws_devices.rs` with calls into `crate::http::auth`. The body of `pub async fn upgrade` keeps the same control flow but reads as:
 
@@ -493,7 +493,7 @@ pub async fn upgrade(
 
 The existing tests at the bottom of `ws_devices.rs` that exercise `extract_*` / `classify` (≈lines 525-700) **move** verbatim to `crates/minos-backend/src/http/auth.rs` — the only edits are import paths.
 
-- [ ] **Step 6: Run the new test + the relocated tests; confirm green**
+- [x] **Step 6: Run the new test + the relocated tests; confirm green**
 
 ```bash
 cargo test -p minos-backend --test auth_helper
@@ -503,7 +503,7 @@ cargo test -p minos-backend --lib http::ws_devices
 
 Expected: all PASS. The relocated `extract_device_*` / `classify` / `revalidate_live_session_auth` tests still cover the same surface.
 
-- [ ] **Step 7: Workspace acceptance**
+- [x] **Step 7: Workspace acceptance**
 
 ```bash
 cargo xtask check-all
@@ -511,7 +511,7 @@ cargo xtask check-all
 
 Expected: PASS (per the user's standing rule for this repo).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/minos-backend/src/http/auth.rs \
