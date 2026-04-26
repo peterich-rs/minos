@@ -338,6 +338,41 @@ impl SessionRegistry {
         to: DeviceId,
         payload: serde_json::Value,
     ) -> Result<(), BackendError> {
+        // Phase 2 Task 2.4: account-scoped Mac→iOS forwarding. When the
+        // sender is an `AgentHost`, the destination must belong to the
+        // same account. A device-secret pair across two accounts (which
+        // can occur if a Mac was paired before login or with another
+        // account previously) must NOT route — surface it as
+        // `PeerOffline` so the existing `handle_forward` mapping returns
+        // a synthesised peer-offline JSON-RPC reply (spec §7.3 `(*)`)
+        // rather than a hard error to the sender.
+        if let Some(from_handle) = self.get(from) {
+            if from_handle.role == DeviceRole::AgentHost {
+                if let Some(to_handle) = self.get(to) {
+                    let from_account = from_handle.account_id();
+                    let to_account = to_handle.account_id();
+                    let mismatch = match (from_account, to_account) {
+                        (Some(a), Some(b)) => a != b,
+                        // Unbound account on either side means the pair
+                        // hasn't been associated with a logged-in iOS
+                        // user — treat as offline for routing purposes.
+                        _ => true,
+                    };
+                    if mismatch {
+                        tracing::debug!(
+                            target: "minos_backend::session",
+                            from = %from,
+                            to = %to,
+                            "rejecting Mac→iOS route: account_id mismatch"
+                        );
+                        return Err(BackendError::PeerOffline {
+                            peer_device_id: to.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
         let Some(handle) = self.get(to) else {
             return Err(BackendError::PeerOffline {
                 peer_device_id: to.to_string(),
@@ -386,9 +421,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_handle(id: DeviceId) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
-        // Tests default to `AgentHost` — role-gating is not exercised by the
-        // registry itself; the envelope dispatcher (step 8) tests cover it.
-        SessionHandle::new(id, DeviceRole::AgentHost)
+        // Tests default to `IosClient` so the Mac→iOS account-scope gate
+        // added in Phase 2 Task 2.4 does not fire. The dedicated
+        // `routing_mac_to_ios_*` tests construct `AgentHost` senders
+        // explicitly and seed `account_id` to exercise that gate.
+        SessionHandle::new(id, DeviceRole::IosClient)
     }
 
     // Small outbox variant so we can fill it deterministically in tests.
@@ -538,6 +575,112 @@ mod tests {
                 assert_eq!(version, 1);
                 assert_eq!(from, a);
                 assert_eq!(p, payload);
+            }
+            other => panic!("expected Forwarded, got {other:?}"),
+        }
+    }
+
+    // ── routing: account-aware Mac→iOS scoping (Task 2.4) ─────────────
+
+    #[tokio::test]
+    async fn routing_mac_to_ios_filters_by_account_id() {
+        let reg = SessionRegistry::new();
+        let mac = DeviceId::new();
+        let ios = DeviceId::new();
+        let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+
+        mac_handle.set_account_id("acct-shared".into());
+        ios_handle.set_account_id("acct-shared".into());
+
+        reg.insert(mac_handle);
+        reg.insert(ios_handle);
+
+        // Same account → forward delivers.
+        reg.route(mac, ios, serde_json::json!({"n": 1}))
+            .await
+            .expect("matching account_id should route");
+        let frame = ios_rx.recv().await.expect("iOS receives the frame");
+        match frame {
+            Envelope::Forwarded { from, payload, .. } => {
+                assert_eq!(from, mac);
+                assert_eq!(payload["n"], 1);
+            }
+            other => panic!("expected Forwarded, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn routing_mac_to_ios_with_no_account_match_returns_not_paired() {
+        let reg = SessionRegistry::new();
+        let mac = DeviceId::new();
+        let ios = DeviceId::new();
+        let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+
+        // Distinct accounts simulate a stale pairing or cross-account
+        // device-secret reuse. Routing must not punch through.
+        mac_handle.set_account_id("acct-mac".into());
+        ios_handle.set_account_id("acct-other".into());
+
+        reg.insert(mac_handle);
+        reg.insert(ios_handle);
+
+        let err = reg
+            .route(mac, ios, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BackendError::PeerOffline { .. }));
+        assert!(
+            ios_rx.try_recv().is_err(),
+            "iOS must not receive a forwarded frame when accounts disagree",
+        );
+    }
+
+    #[tokio::test]
+    async fn routing_mac_to_ios_with_unbound_account_is_rejected() {
+        // Mac has no account_id (e.g. paired before any iOS login). Even
+        // if the iOS side has an account, routing is rejected — there's
+        // no positive ownership claim to base scope on.
+        let reg = SessionRegistry::new();
+        let mac = DeviceId::new();
+        let ios = DeviceId::new();
+        let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        ios_handle.set_account_id("acct-1".into());
+        reg.insert(mac_handle);
+        reg.insert(ios_handle);
+
+        let err = reg
+            .route(mac, ios, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BackendError::PeerOffline { .. }));
+        assert!(ios_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn routing_ios_to_mac_does_not_apply_account_filter() {
+        // The reverse direction (iOS → Mac) is not gated; only Mac → iOS
+        // is. iOS is the authenticated side; trust flows down to the Mac.
+        let reg = SessionRegistry::new();
+        let mac = DeviceId::new();
+        let ios = DeviceId::new();
+        let (mac_handle, mut mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        let (ios_handle, _ios_rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        mac_handle.set_account_id("acct-mac".into());
+        ios_handle.set_account_id("acct-other".into());
+        reg.insert(mac_handle);
+        reg.insert(ios_handle);
+
+        reg.route(ios, mac, serde_json::json!({"n": 9}))
+            .await
+            .expect("iOS → Mac should not be account-filtered");
+        let frame = mac_rx.recv().await.expect("Mac receives the frame");
+        match frame {
+            Envelope::Forwarded { from, payload, .. } => {
+                assert_eq!(from, ios);
+                assert_eq!(payload["n"], 9);
             }
             other => panic!("expected Forwarded, got {other:?}"),
         }
