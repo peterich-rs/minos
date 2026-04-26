@@ -17,6 +17,7 @@
 //! `mpsc::channel(256)`; full channels drop the one frame with a warn log
 //! rather than blocking the ingest path.
 
+pub mod history;
 pub mod translate;
 
 use minos_domain::AgentName;

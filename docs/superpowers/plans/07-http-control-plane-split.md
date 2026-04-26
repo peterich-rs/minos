@@ -1953,7 +1953,7 @@ Headers: X-Device-Id, X-Device-Role, X-Device-Secret (must verify, must be paire
 - Create: `crates/minos-backend/src/http/v1/threads.rs` (was a stub)
 - Test: `crates/minos-backend/tests/v1_threads.rs`
 
-- [ ] **Step 1: Test**
+- [x] **Step 1: Test**
 
 `crates/minos-backend/tests/v1_threads.rs`:
 
@@ -2028,13 +2028,13 @@ async fn get_threads_unpaired_returns_401() {
 }
 ```
 
-- [ ] **Step 2: Run — fail**
+- [x] **Step 2: Run — fail**
 
 ```bash
 cargo test -p minos-backend --test v1_threads get_threads
 ```
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `crates/minos-backend/src/http/v1/threads.rs`:
 
@@ -2206,13 +2206,13 @@ Given the scope, the simpler path is: **keep the WS handler's existing body unto
 
 Add `pub mod history;` to `crates/minos-backend/src/ingest/mod.rs`.
 
-- [ ] **Step 4: Run — pass**
+- [x] **Step 4: Run — pass**
 
 ```bash
 cargo test -p minos-backend --test v1_threads
 ```
 
-- [ ] **Step 5: Workspace acceptance + commit**
+- [x] **Step 5: Workspace acceptance + commit**
 
 ```bash
 cargo xtask check-all
