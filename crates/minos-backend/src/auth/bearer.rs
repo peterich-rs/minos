@@ -19,7 +19,16 @@ pub struct AccountAuthOutcome {
 #[derive(Debug)]
 pub enum BearerError {
     Missing,
+    /// JWT decode/verify failed. The inner string is the upstream
+    /// `jsonwebtoken` message (e.g. `"InvalidSignature"`,
+    /// `"ExpiredSignature"`, `"Base64"`) — kept here for ops logs only.
+    /// `into_response_tuple` deliberately collapses this to a fixed
+    /// `"invalid bearer"` body so anonymous probes can't fingerprint
+    /// which JWT failure mode they tripped.
     Invalid(String),
+    /// `X-Device-Id` header was absent.
+    MissingDeviceHeader,
+    /// JWT verified but its `did` claim doesn't match `X-Device-Id`.
     DeviceMismatch,
 }
 
@@ -27,7 +36,13 @@ impl BearerError {
     pub fn into_response_tuple(self) -> (StatusCode, String) {
         match self {
             Self::Missing => (StatusCode::UNAUTHORIZED, "missing bearer".into()),
-            Self::Invalid(m) => (StatusCode::UNAUTHORIZED, format!("invalid bearer: {m}")),
+            Self::Invalid(message) => {
+                tracing::debug!(target: "minos_backend::auth::bearer", %message, "bearer verify failed");
+                (StatusCode::UNAUTHORIZED, "invalid bearer".into())
+            }
+            Self::MissingDeviceHeader => {
+                (StatusCode::UNAUTHORIZED, "missing device header".into())
+            }
             Self::DeviceMismatch => (StatusCode::UNAUTHORIZED, "device mismatch".into()),
         }
     }
@@ -55,7 +70,7 @@ pub fn require(
         BackendError::JwtVerify { message } => BearerError::Invalid(message),
         _ => BearerError::Invalid("verify failed".into()),
     })?;
-    let device_id = extract_device_id(headers).map_err(|_| BearerError::DeviceMismatch)?;
+    let device_id = extract_device_id(headers).map_err(|_| BearerError::MissingDeviceHeader)?;
     if claims.did != device_id.to_string() {
         return Err(BearerError::DeviceMismatch);
     }
@@ -149,5 +164,27 @@ mod tests {
         headers.insert("x-device-id", device_id.to_string().parse().unwrap());
         let outcome = require(&state, &headers).unwrap();
         assert_eq!(outcome.account_id, "acct-1");
+    }
+
+    #[tokio::test]
+    async fn require_without_device_header_returns_missing_device_header() {
+        let state = backend_state().await;
+        let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", "any-device").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", auth_header(&token).parse().unwrap());
+        // No x-device-id header.
+        let err = require(&state, &headers).unwrap_err();
+        assert!(matches!(err, BearerError::MissingDeviceHeader));
+    }
+
+    #[test]
+    fn invalid_response_body_is_collapsed_to_fixed_string() {
+        // Whatever upstream message we capture, the response body must
+        // not echo it: anonymous probes shouldn't be able to fingerprint
+        // `InvalidSignature` vs `ExpiredSignature` vs `Base64`.
+        let (status, body) =
+            BearerError::Invalid("ExpiredSignature".to_string()).into_response_tuple();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, "invalid bearer");
     }
 }
