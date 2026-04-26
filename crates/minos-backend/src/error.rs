@@ -74,6 +74,14 @@ pub enum BackendError {
     #[error("password hash error: {message}")]
     PasswordHash { message: String },
 
+    /// HS256 JWT signing failed (e.g. malformed key).
+    #[error("jwt sign error: {message}")]
+    JwtSign { message: String },
+
+    /// HS256 JWT decode/verify failed (bad signature, expired, malformed).
+    #[error("jwt verify error: {message}")]
+    JwtVerify { message: String },
+
     /// Pairing refused because one side was already paired.
     ///
     /// Spec §10.2 R4: MVP policy is "refuse and let the UI confirm replace
