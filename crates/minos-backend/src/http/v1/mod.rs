@@ -14,11 +14,13 @@ use axum::Router;
 
 use super::BackendState;
 
+pub mod auth;
 pub mod pairing;
 pub mod threads;
 
 pub fn router() -> Router<BackendState> {
     Router::new()
+        .merge(auth::router())
         .merge(pairing::router())
         .merge(threads::router())
 }
