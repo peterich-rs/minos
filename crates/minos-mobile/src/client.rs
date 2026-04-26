@@ -1341,18 +1341,24 @@ async fn reconnect_loop(ctx: ReconnectContext) {
         .await
         {
             Ok(()) => {
+                // Subscribe BEFORE publishing `Connected` so the recv_loop
+                // can't fire `Disconnected` between the send and the
+                // subscribe and leave us hanging on the next `changed()`.
+                // The borrow_and_update() right after subscribe handles the
+                // case where Disconnected lands inside the very-narrow
+                // window between subscribe and Connected publishing.
+                let mut state_rx = ctx.state_tx.subscribe();
                 let _ = ctx.state_tx.send(ConnectionState::Connected);
                 ctx.reconnect.record_success().await;
-                // Wait for the connection to drop. We do this by
-                // subscribing to state changes and waiting until we see
-                // a Disconnected frame.
-                let mut state_rx = ctx.state_tx.subscribe();
                 loop {
+                    if matches!(
+                        *state_rx.borrow_and_update(),
+                        ConnectionState::Disconnected
+                    ) {
+                        break;
+                    }
                     if state_rx.changed().await.is_err() {
                         return;
-                    }
-                    if matches!(*state_rx.borrow(), ConnectionState::Disconnected) {
-                        break;
                     }
                 }
             }
