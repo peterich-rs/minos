@@ -26,16 +26,37 @@ use crate::http::auth::authenticate;
 use crate::http::BackendState;
 use crate::store::{accounts, refresh_tokens};
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct RegisterReq {
     pub email: String,
     pub password: String,
 }
 
-#[derive(Debug, Deserialize)]
+// Hand-rolled `Debug` so a future maintainer adding `tracing::debug!(?req)`
+// doesn't leak passwords into xlog. Email is fine to surface; the
+// password field is replaced with the literal string `"<redacted>"`.
+impl std::fmt::Debug for RegisterReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisterReq")
+            .field("email", &self.email)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Deserialize)]
 pub struct LoginReq {
     pub email: String,
     pub password: String,
+}
+
+impl std::fmt::Debug for LoginReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginReq")
+            .field("email", &self.email)
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -361,4 +382,33 @@ pub fn router() -> Router<BackendState> {
         .route("/auth/login", post(post_login))
         .route("/auth/refresh", post(post_refresh))
         .route("/auth/logout", post(post_logout))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn register_req_debug_redacts_password() {
+        let req = RegisterReq {
+            email: "alice@example.com".into(),
+            password: "supersecret".into(),
+        };
+        let s = format!("{req:?}");
+        assert!(s.contains("alice@example.com"));
+        assert!(s.contains("<redacted>"));
+        assert!(!s.contains("supersecret"));
+    }
+
+    #[test]
+    fn login_req_debug_redacts_password() {
+        let req = LoginReq {
+            email: "bob@example.com".into(),
+            password: "anothersecret".into(),
+        };
+        let s = format!("{req:?}");
+        assert!(s.contains("bob@example.com"));
+        assert!(s.contains("<redacted>"));
+        assert!(!s.contains("anothersecret"));
+    }
 }
