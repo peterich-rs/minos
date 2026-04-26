@@ -21,13 +21,15 @@
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::time::Duration;
 
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use minos_domain::{ConnectionState, DeviceId, DeviceSecret, MinosError};
+use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceSecret, MinosError};
 use minos_protocol::{
     Envelope, EventKind, GetThreadLastSeqParams, GetThreadLastSeqResponse, ListThreadsParams,
     ListThreadsResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, RwLock};
@@ -38,7 +40,7 @@ use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 use crate::auth::{AuthSession, AuthStateFrame};
-use crate::rpc::{drain_pending, RpcReply};
+use crate::rpc::{drain_pending, forward_rpc, RpcReply};
 use crate::store::{InMemoryPairingStore, MobilePairingStore, PersistedPairingState};
 
 /// One live UI event pushed from backend fan-out. Mobile layers consume
@@ -350,6 +352,112 @@ impl MobileClient {
         let (backend_url, secret, cf) = self.http_creds().await?;
         let http = crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)?;
         http.get_thread_last_seq(&secret, &req.thread_id).await
+    }
+
+    // ─────────────────────────── agent dispatch ────────────────────────────
+
+    /// Start a fresh agent session and deliver `prompt` as the first user
+    /// message. Spec §6.2 / plan 08a Task 5.4.
+    ///
+    /// Composes two forward-RPCs:
+    ///   1. `minos_start_agent` → `StartAgentResponse { session_id, cwd }`
+    ///   2. `minos_send_user_message` against that session, carrying the
+    ///      caller-supplied prompt.
+    ///
+    /// `StartAgentResponse.session_id` IS the daemon's `thread_id` (per the
+    /// doc comment on the protocol type). Per-call timeouts: 60s for the
+    /// start, 10s for the prompt delivery. Returns the start response so
+    /// callers can stash the session id; on send failure the caller knows
+    /// the session is started but unaddressed.
+    pub async fn start_agent(
+        &self,
+        agent: AgentName,
+        prompt: String,
+    ) -> Result<StartAgentResponse, MinosError> {
+        let outbox = self
+            .outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or(MinosError::NotConnected)?;
+        let req = StartAgentRequest { agent };
+        let resp: StartAgentResponse = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            "minos_start_agent",
+            req,
+            Duration::from_secs(60),
+        )
+        .await?;
+        let send_req = SendUserMessageRequest {
+            session_id: resp.session_id.clone(),
+            text: prompt,
+        };
+        let _: () = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            "minos_send_user_message",
+            send_req,
+            Duration::from_secs(10),
+        )
+        .await?;
+        Ok(resp)
+    }
+
+    /// Send a user message into an existing agent session. Spec §6.2.
+    pub async fn send_user_message(
+        &self,
+        session_id: String,
+        text: String,
+    ) -> Result<(), MinosError> {
+        let outbox = self
+            .outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or(MinosError::NotConnected)?;
+        let req = SendUserMessageRequest { session_id, text };
+        let _: () = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            "minos_send_user_message",
+            req,
+            Duration::from_secs(10),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Stop the agent currently running on the paired Mac. The daemon's
+    /// `stop_agent` RPC takes `()` (no `StopAgentRequest` struct exists),
+    /// so we serialise `serde_json::Value::Null` as the params payload.
+    pub async fn stop_agent(&self) -> Result<(), MinosError> {
+        let outbox = self
+            .outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or(MinosError::NotConnected)?;
+        let _: () = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            "minos_stop_agent",
+            serde_json::Value::Null,
+            Duration::from_secs(10),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Subscribe to auth-state transitions. The first read on the receiver
+    /// returns the current cached frame. Spec §6.1.
+    #[must_use]
+    pub fn subscribe_auth_state(&self) -> watch::Receiver<AuthStateFrame> {
+        self.auth_state_rx.clone()
     }
 
     /// Resolve `(backend_url, device_secret, cf_access)` from the persisted
@@ -964,6 +1072,38 @@ mod tests {
         let text = serde_json::to_string(&env).unwrap();
         handle_text_frame(&text, &ui_tx, &state_tx, &pending);
         assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_agent_returns_not_connected_when_disconnected() {
+        let client = MobileClient::new_with_in_memory_store("iPhone".into());
+        let res = client.start_agent(AgentName::Codex, "ping".into()).await;
+        assert!(matches!(res, Err(MinosError::NotConnected)));
+    }
+
+    #[tokio::test]
+    async fn send_user_message_returns_not_connected_when_disconnected() {
+        let client = MobileClient::new_with_in_memory_store("iPhone".into());
+        let res = client.send_user_message("thr_1".into(), "ping".into()).await;
+        assert!(matches!(res, Err(MinosError::NotConnected)));
+    }
+
+    #[tokio::test]
+    async fn stop_agent_returns_not_connected_when_disconnected() {
+        let client = MobileClient::new_with_in_memory_store("iPhone".into());
+        let res = client.stop_agent().await;
+        assert!(matches!(res, Err(MinosError::NotConnected)));
+    }
+
+    #[tokio::test]
+    async fn subscribe_auth_state_emits_unauthenticated_initially() {
+        let client = MobileClient::new_with_in_memory_store("iPhone".into());
+        let rx = client.subscribe_auth_state();
+        let snapshot = rx.borrow().clone();
+        assert!(
+            matches!(snapshot, AuthStateFrame::Unauthenticated),
+            "expected Unauthenticated, got {snapshot:?}"
+        );
     }
 
     #[tokio::test]
