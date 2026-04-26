@@ -270,11 +270,49 @@ enum LocalStateLoader {
             try save(initial, to: path)
             return (initial.selfDeviceId, nil)
         }
-        let data = try Data(contentsOf: path)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let json = try decoder.decode(LocalStateJSON.self, from: data)
+        let data: Data
+        do {
+            data = try Data(contentsOf: path)
+        } catch {
+            throw MinosError.StoreIo(path: path.path, message: error.localizedDescription)
+        }
+
+        let json = try decodePersistedState(data, from: path.path)
         return (json.selfDeviceId, json.toRecord())
+    }
+
+    static func decodePersistedState(_ data: Data, from path: String) throws -> LocalStateJSON {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom(decodeRustDate)
+        do {
+            return try decoder.decode(LocalStateJSON.self, from: data)
+        } catch {
+            throw MinosError.StoreCorrupt(path: path, message: String(describing: error))
+        }
+    }
+
+    private static func decodeRustDate(from decoder: Decoder) throws -> Date {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if let parsed = parseRustDate(value) {
+            return parsed
+        }
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "Expected RFC3339 timestamp from Rust local-state.json"
+        )
+    }
+
+    private static func parseRustDate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) {
+            return date
+        }
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: value)
     }
 
     private static func save(_ state: LocalStateJSON, to path: URL) throws {

@@ -122,6 +122,54 @@ final class AppStateBootTests: XCTestCase {
         }
     }
 
+    func testLocalStateLoaderAcceptsRustFractionalRfc3339PairedAt() throws {
+        let json = """
+        {
+          "self_device_id": "00000000-0000-0000-0000-000000000001",
+          "peer": {
+            "device_id": "00000000-0000-0000-0000-000000000002",
+            "name": "iPhone",
+            "paired_at": "2026-04-26T02:34:56.123456789Z"
+          }
+        }
+        """
+
+        let loaded = try LocalStateLoader.decodePersistedState(
+            Data(json.utf8),
+            from: "/tmp/local-state.json"
+        )
+
+        XCTAssertEqual(loaded.selfDeviceId, "00000000-0000-0000-0000-000000000001")
+        XCTAssertEqual(loaded.toRecord()?.deviceId, "00000000-0000-0000-0000-000000000002")
+        XCTAssertEqual(loaded.toRecord()?.name, "iPhone")
+    }
+
+    func testLocalStateLoaderReportsBadDateAsStoreCorrupt() throws {
+        let path = "/tmp/local-state.json"
+
+        let json = """
+        {
+          "self_device_id": "00000000-0000-0000-0000-000000000001",
+          "peer": {
+            "device_id": "00000000-0000-0000-0000-000000000002",
+            "name": "iPhone",
+            "paired_at": "not-a-date"
+          }
+        }
+        """
+
+        XCTAssertThrowsError(
+            try LocalStateLoader.decodePersistedState(Data(json.utf8), from: path)
+        ) { error in
+            guard case let .StoreCorrupt(errorPath, message) = error as? MinosError else {
+                XCTFail("expected StoreCorrupt, got \(error)")
+                return
+            }
+            XCTAssertEqual(errorPath, path)
+            XCTAssertTrue(message.contains("paired_at"))
+        }
+    }
+
     @MainActor
     func testRelayLinkObserverPushUpdatesState() async {
         let (appState, daemon) = AppStateFixtures.runningState()
