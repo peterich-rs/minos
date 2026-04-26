@@ -713,7 +713,7 @@ Body:    { "host_display_name": "string" }
 
 Body schema is exactly `minos_protocol::RequestPairingQrParams`; success body is exactly `minos_protocol::RequestPairingQrResponse` — reuse the types so wire compatibility is automatic.
 
-- [ ] **Step 1: Write the failing happy-path test**
+- [x] **Step 1: Write the failing happy-path test**
 
 `crates/minos-backend/tests/v1_pairing.rs`:
 
@@ -788,7 +788,7 @@ async fn post_pairing_tokens_rejects_missing_device_id() {
 }
 ```
 
-- [ ] **Step 2: Run — must fail**
+- [x] **Step 2: Run — must fail**
 
 ```bash
 cargo test -p minos-backend --test v1_pairing post_pairing_tokens
@@ -796,7 +796,7 @@ cargo test -p minos-backend --test v1_pairing post_pairing_tokens
 
 Expected: compile errors (the `pairing` module is empty) or 404 for `/v1/pairing/tokens`.
 
-- [ ] **Step 3: Implement the handler**
+- [x] **Step 3: Implement the handler**
 
 `crates/minos-backend/src/http/v1/pairing.rs`:
 
@@ -871,7 +871,7 @@ async fn post_tokens(
 }
 ```
 
-- [ ] **Step 4: Run — must pass**
+- [x] **Step 4: Run — must pass**
 
 ```bash
 cargo test -p minos-backend --test v1_pairing post_pairing_tokens
@@ -879,13 +879,13 @@ cargo test -p minos-backend --test v1_pairing post_pairing_tokens
 
 Expected: 3 tests PASS.
 
-- [ ] **Step 5: Workspace acceptance**
+- [x] **Step 5: Workspace acceptance**
 
 ```bash
 cargo xtask check-all
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/minos-backend/src/http/v1/pairing.rs \
