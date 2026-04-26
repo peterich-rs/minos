@@ -423,7 +423,7 @@ async fn auth_rate_limit_login_returns_429_with_retry_after() {
             .headers()
             .get("Retry-After")
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         // Drain body so the connection is reusable.
         let _ = resp.into_body().collect().await.unwrap().to_bytes();
     }

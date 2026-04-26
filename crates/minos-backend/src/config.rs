@@ -142,7 +142,7 @@ impl Config {
             .jwt_secret
             .as_ref()
             .ok_or_else(|| "MINOS_JWT_SECRET is required".to_string())?;
-        if secret.as_bytes().len() < 32 {
+        if secret.len() < 32 {
             return Err("MINOS_JWT_SECRET must be >=32 bytes".into());
         }
         Ok(())

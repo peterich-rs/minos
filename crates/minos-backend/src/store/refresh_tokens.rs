@@ -64,8 +64,8 @@ pub async fn insert(
         revoked_at: None,
     };
     sqlx::query(
-        r#"INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at, expires_at)
-           VALUES (?, ?, ?, ?, ?)"#,
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at, expires_at)
+           VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&row.token_hash)
     .bind(&row.account_id)
@@ -88,9 +88,9 @@ pub async fn find_active(
     let hash = hash_plaintext(plaintext);
     let now = Utc::now().timestamp_millis();
     let row = sqlx::query_as::<_, RefreshTokenRow>(
-        r#"SELECT token_hash, account_id, device_id, issued_at, expires_at, revoked_at
+        "SELECT token_hash, account_id, device_id, issued_at, expires_at, revoked_at
            FROM refresh_tokens
-           WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?"#,
+           WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
     )
     .bind(&hash)
     .bind(now)

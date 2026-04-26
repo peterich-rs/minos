@@ -25,8 +25,8 @@ pub async fn create(
     let email_norm = email.to_lowercase();
     let now = Utc::now().timestamp_millis();
     sqlx::query(
-        r#"INSERT INTO accounts (account_id, email, password_hash, created_at)
-           VALUES (?, ?, ?, ?)"#,
+        "INSERT INTO accounts (account_id, email, password_hash, created_at)
+           VALUES (?, ?, ?, ?)",
     )
     .bind(&account_id)
     .bind(&email_norm)
@@ -56,8 +56,8 @@ pub async fn find_by_email(
 ) -> Result<Option<AccountRow>, BackendError> {
     let email_norm = email.to_lowercase();
     let row = sqlx::query_as::<_, AccountRow>(
-        r#"SELECT account_id, email, password_hash, created_at, last_login_at
-           FROM accounts WHERE email = ?"#,
+        "SELECT account_id, email, password_hash, created_at, last_login_at
+           FROM accounts WHERE email = ?",
     )
     .bind(&email_norm)
     .fetch_optional(pool)

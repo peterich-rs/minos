@@ -133,25 +133,25 @@ impl BackendState {
 /// 10 logins per minute, keyed by email. Spec §5.6.
 #[must_use]
 pub fn default_login_per_email() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(10, Duration::from_secs(60)))
+    Arc::new(RateLimiter::new(10, Duration::from_mins(1)))
 }
 
 /// 5 logins per minute, keyed by IP. Spec §5.6.
 #[must_use]
 pub fn default_login_per_ip() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(5, Duration::from_secs(60)))
+    Arc::new(RateLimiter::new(5, Duration::from_mins(1)))
 }
 
 /// 3 register calls per hour, keyed by IP. Spec §5.6.
 #[must_use]
 pub fn default_register_per_ip() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(3, Duration::from_secs(60 * 60)))
+    Arc::new(RateLimiter::new(3, Duration::from_hours(1)))
 }
 
 /// 60 refreshes per hour, keyed by account. Spec §5.6.
 #[must_use]
 pub fn default_refresh_per_acc() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(60, Duration::from_secs(60 * 60)))
+    Arc::new(RateLimiter::new(60, Duration::from_hours(1)))
 }
 
 /// Build the backend's top-level axum `Router`.

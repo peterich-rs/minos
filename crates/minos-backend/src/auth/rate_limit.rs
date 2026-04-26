@@ -38,10 +38,15 @@ impl RateLimiter {
         entries.retain(|t| now.duration_since(*t) < self.window);
         if entries.len() >= self.permits {
             let oldest = entries[0];
-            let retry = self
+            let retry_secs = self
                 .window
                 .saturating_sub(now.duration_since(oldest))
-                .as_secs() as u32;
+                .as_secs();
+            // Clamp into u32. The window is bounded by the caller; in
+            // practice it never exceeds an hour, so the truncation is a
+            // formality. `min(u32::MAX as u64) → as u32` is the
+            // explicitly-checked path clippy is happy with.
+            let retry = u32::try_from(retry_secs).unwrap_or(u32::MAX);
             return Err(retry.max(1));
         }
         entries.push(now);
@@ -55,7 +60,7 @@ mod tests {
 
     #[test]
     fn check_allows_permits_count_then_blocks() {
-        let rl = RateLimiter::new(3, Duration::from_secs(60));
+        let rl = RateLimiter::new(3, Duration::from_mins(1));
         assert!(rl.check("k1").is_ok());
         assert!(rl.check("k1").is_ok());
         assert!(rl.check("k1").is_ok());
@@ -65,7 +70,7 @@ mod tests {
 
     #[test]
     fn check_isolates_keys() {
-        let rl = RateLimiter::new(1, Duration::from_secs(60));
+        let rl = RateLimiter::new(1, Duration::from_mins(1));
         assert!(rl.check("k1").is_ok());
         // k1 is full but k2 has its own bucket.
         assert!(rl.check("k1").is_err());
