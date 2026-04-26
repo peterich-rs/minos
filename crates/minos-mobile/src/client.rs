@@ -1391,10 +1391,13 @@ async fn reconnect_loop(ctx: ReconnectContext) {
 /// success (or when there's no session to refresh), `false` on failure
 /// (publishes RefreshFailed and clears auth state). Spec §6.3.
 async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
-    let _ = ctx.auth_state_tx.send(AuthStateFrame::Refreshing);
+    // Hoist the session check above `Refreshing` so a no-op refresh
+    // (no session) doesn't publish a `Refreshing → ?` transition with
+    // no follow-up frame.
     let Some(session) = ctx.auth_session.read().await.clone() else {
         return true; // Nothing to refresh.
     };
+    let _ = ctx.auth_state_tx.send(AuthStateFrame::Refreshing);
     let cf_access = ctx.store.load_cf_access().await.ok().flatten();
     let Ok(http) = crate::http::MobileHttpClient::new(backend_url, ctx.device_id, cf_access) else {
         return true; // Couldn't build the client; try again next iteration.
