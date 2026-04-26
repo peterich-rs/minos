@@ -1356,7 +1356,7 @@ git commit -m "feat(backend): DELETE /v1/pairing"
 - Create: `crates/minos-daemon/src/relay_http.rs`.
 - Modify: `crates/minos-daemon/src/relay_client.rs` — replace bodies of `request_pairing_token` (line 256) and `forget_peer` (line 289). Remove the `mac_name` argument plumbing if it's no longer needed by the WS dispatcher.
 
-- [ ] **Step 1: Add the workspace dep**
+- [x] **Step 1: Add the workspace dep**
 
 In root `Cargo.toml`, under `[workspace.dependencies]`, after `tokio-tungstenite`:
 
@@ -1370,7 +1370,7 @@ In `crates/minos-daemon/Cargo.toml`, add to `[dependencies]`:
 reqwest = { workspace = true }
 ```
 
-- [ ] **Step 2: Write the failing test for the HTTP client wrapper**
+- [x] **Step 2: Write the failing test for the HTTP client wrapper**
 
 `crates/minos-daemon/src/relay_http.rs` will own the wrapper. Add a unit test for URL derivation (the only pure piece — actual HTTP round-trips are exercised by integration tests next phase).
 
@@ -1388,7 +1388,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run — must fail**
+- [x] **Step 3: Run — must fail**
 
 ```bash
 cargo test -p minos-daemon relay_http
@@ -1396,7 +1396,7 @@ cargo test -p minos-daemon relay_http
 
 Expected: module not found.
 
-- [ ] **Step 4: Implement `relay_http.rs`**
+- [x] **Step 4: Implement `relay_http.rs`**
 
 ```rust
 //! HTTP client for the backend's `/v1/*` control plane.
@@ -1559,7 +1559,7 @@ pub(crate) fn http_base(ws_url: &str) -> Option<String> {
 
 Add `pub mod relay_http;` to `crates/minos-daemon/src/lib.rs`. Add `url` to dependencies if not already present.
 
-- [ ] **Step 5: Wire into `RelayClient`**
+- [x] **Step 5: Wire into `RelayClient`**
 
 In `crates/minos-daemon/src/relay_client.rs`, add an `http: Arc<RelayHttpClient>` field to `Inner`, populate it in `RelayClient::spawn`, and rewrite the two methods:
 
@@ -1596,7 +1596,7 @@ pub async fn forget_peer(&self) -> Result<(), MinosError> {
 
 The daemon currently stores `secret: Option<DeviceSecret>` on `DispatchCtx`. Move/duplicate it into `Inner` so `forget_peer` can access it without going through the dispatch task — it's a `Clone`, so this is cheap.
 
-- [ ] **Step 6: Run — must pass**
+- [x] **Step 6: Run — must pass**
 
 ```bash
 cargo test -p minos-daemon
@@ -1604,13 +1604,13 @@ cargo test -p minos-daemon
 
 The existing `relay_client_smoke` integration tests that exercise pairing-flow happy paths must still pass — they assert via `RelayClient::request_pairing_token` and `RelayClient::forget_peer`, both of which now route through HTTP. If those tests use a fake WS-only backend, point them at the real `minos-backend` test harness (or extend the fake to serve the two HTTP routes too — see the existing test at `crates/minos-daemon/tests/relay_client_smoke.rs` and adjust).
 
-- [ ] **Step 7: Workspace acceptance**
+- [x] **Step 7: Workspace acceptance**
 
 ```bash
 cargo xtask check-all
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Cargo.toml \

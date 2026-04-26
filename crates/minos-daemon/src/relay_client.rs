@@ -70,6 +70,7 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
 use crate::local_state::LocalState;
+use crate::relay_http::RelayHttpClient;
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
 use crate::rpc_server::{invoke_forwarded, wrap_response_envelope, RpcServerImpl};
 
@@ -111,6 +112,12 @@ struct Inner {
     /// does not embed CF fields in the QR, we can still hand the phone the
     /// same edge credentials that allowed the host to connect.
     config: RelayConfig,
+    /// Spawn-time snapshot of the device secret. Used by [`Self::forget_peer`]
+    /// to authenticate the HTTP `DELETE /v1/pairing` call. `None` until the
+    /// daemon respawns the client with a fresh secret post-pairing.
+    secret: Option<DeviceSecret>,
+    /// HTTP client for the backend's `/v1/*` control plane.
+    http: Arc<RelayHttpClient>,
 }
 
 pub struct RelayClient {
@@ -158,6 +165,34 @@ impl RelayClient {
         let pending: Arc<Mutex<Pending>> = Arc::new(Mutex::new(HashMap::new()));
 
         let inner_config = config.clone();
+        let inner_secret = secret.clone();
+        let http = match RelayHttpClient::new(
+            &backend_url,
+            self_device_id,
+            mac_name.clone(),
+            config.clone(),
+        ) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                tracing::error!(
+                    target: "minos_daemon::relay_client",
+                    error = %e,
+                    backend_url = %backend_url,
+                    "failed to construct RelayHttpClient; pairing/forget HTTP calls will fail",
+                );
+                // Build a placeholder client against the same URL — every
+                // attempt will surface the same error path.
+                Arc::new(
+                    RelayHttpClient::new(
+                        "ws://invalid.localhost/devices",
+                        self_device_id,
+                        mac_name.clone(),
+                        config.clone(),
+                    )
+                    .expect("placeholder RelayHttpClient builds against canonical URL"),
+                )
+            }
+        };
         let dispatch_ctx = DispatchCtx {
             config,
             self_device_id,
@@ -185,6 +220,8 @@ impl RelayClient {
             task: Mutex::new(Some(task)),
             mac_name,
             config: inner_config,
+            secret: inner_secret,
+            http,
         });
 
         (Arc::new(Self { inner }), link_rx, peer_rx)
@@ -248,23 +285,18 @@ impl RelayClient {
         }
     }
 
-    /// Issue `RequestPairingQr` and wrap the response into the Mac-side
-    /// QR payload shape. Per ADR 0014 the backend assembles the full QR
-    /// payload (backend URL + token + CF Access tokens); we receive a
-    /// `PairingQrPayload` and translate it to the Mac-side `RelayQrPayload`
-    /// the UI already binds to.
+    /// Issue `request_pairing_qr` against the backend's HTTP control plane
+    /// and wrap the response into the Mac-side QR payload shape.
+    ///
+    /// Per ADR 0014 the backend assembles the full QR payload (backend URL,
+    /// token, and CF Access tokens); we receive a `PairingQrPayload` and
+    /// translate it to the Mac-side `RelayQrPayload` the UI already binds to.
     pub async fn request_pairing_token(&self) -> Result<RelayQrPayload, MinosError> {
-        let params = serde_json::json!({
-            "host_display_name": self.inner.mac_name.clone(),
-        });
-        let result = self
-            .send_local_rpc(LocalRpcMethod::RequestPairingQr, params)
+        let qr = self
+            .inner
+            .http
+            .request_pairing_qr(self.inner.mac_name.clone())
             .await?;
-        let response: minos_protocol::RequestPairingQrResponse = serde_json::from_value(result)
-            .map_err(|e| MinosError::BackendInternal {
-                message: format!("request_pairing_qr response decode failed: {e}"),
-            })?;
-        let qr = response.qr_payload;
 
         let (cf_access_client_id, cf_access_client_secret) = qr_cf_access_or_host_env(
             qr.cf_access_client_id,
@@ -283,13 +315,19 @@ impl RelayClient {
         })
     }
 
-    /// Issue `ForgetPeer`. The relay then emits `Event::Unpaired` which the
-    /// dispatch loop pushes onto the peer-state watch channel — callers do
-    /// NOT need to await that event here.
+    /// Issue `DELETE /v1/pairing` against the backend. The backend then
+    /// emits `Event::Unpaired` to the live WS, which the dispatch loop
+    /// pushes onto the peer-state watch channel — callers do NOT need to
+    /// await that event here.
     pub async fn forget_peer(&self) -> Result<(), MinosError> {
-        self.send_local_rpc(LocalRpcMethod::ForgetPeer, serde_json::json!({}))
-            .await?;
-        Ok(())
+        let secret = self
+            .inner
+            .secret
+            .clone()
+            .ok_or_else(|| MinosError::DeviceNotTrusted {
+                device_id: "(none)".into(),
+            })?;
+        self.inner.http.forget_pairing(&secret).await
     }
 
     /// Signal the dispatch task to exit and await its join. Idempotent:

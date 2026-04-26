@@ -9,6 +9,7 @@ pub mod local_state;
 pub mod logging;
 pub mod paths;
 pub mod relay_client;
+pub mod relay_http;
 pub mod relay_pairing;
 pub mod rpc_server;
 pub mod subscription;

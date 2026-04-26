@@ -41,6 +41,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 axum = { version = "0.7", features = ["ws", "macros"] }
 jsonrpsee = { version = "0.24", features = ["server", "client", "ws-client", "macros"] }
 tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 futures-util = "0.3"
 async-trait = "0.1"
 
