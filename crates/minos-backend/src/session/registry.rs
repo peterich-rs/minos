@@ -36,6 +36,14 @@
 //! On [`TrySendError::Closed`] we translate to [`BackendError::PeerOffline`].
 //! The receiver going away means the writer task has shut down; from the
 //! caller's perspective the peer is effectively offline.
+//!
+//! # Mutex poisoning
+//!
+//! The per-session `account_id` slot uses `std::sync::Mutex`. We never
+//! `.await` while the guard is held, so the lock is uncontended in
+//! practice; on poison (i.e. a panic in a critical section) we recover
+//! the inner data via `into_inner()` rather than dropping the bind, so a
+//! poisoned account binding stays consistent with the live session.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -145,16 +153,38 @@ impl SessionHandle {
     /// peer's account. Idempotent overwrite — the most-recent claim wins.
     pub fn set_account_id(&self, id: String) {
         // Mutex is `std::sync::Mutex`; we never `.await` while the guard
-        // is held so the lock is uncontended in practice.
-        if let Ok(mut slot) = self.account_id.lock() {
-            *slot = Some(id);
+        // is held so the lock is uncontended in practice. On poison we
+        // log + recover via `into_inner()` rather than silently dropping
+        // the bind, so the session's account binding stays consistent.
+        match self.account_id.lock() {
+            Ok(mut slot) => {
+                *slot = Some(id);
+            }
+            Err(poison) => {
+                tracing::error!(
+                    target: "minos_backend::session",
+                    device_id = %self.device_id,
+                    "session account_id mutex poisoned; recovering",
+                );
+                *poison.into_inner() = Some(id);
+            }
         }
     }
 
     /// Snapshot of the bound account, if any.
     #[must_use]
     pub fn account_id(&self) -> Option<String> {
-        self.account_id.lock().ok().and_then(|g| g.clone())
+        match self.account_id.lock() {
+            Ok(g) => g.clone(),
+            Err(poison) => {
+                tracing::error!(
+                    target: "minos_backend::session",
+                    device_id = %self.device_id,
+                    "session account_id mutex poisoned; recovering",
+                );
+                poison.into_inner().clone()
+            }
+        }
     }
 
     /// Subscribe to revocation changes for this session.
