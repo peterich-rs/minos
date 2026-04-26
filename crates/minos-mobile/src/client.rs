@@ -69,7 +69,10 @@ pub struct MobileClient {
     outbox: Arc<Mutex<Option<mpsc::Sender<Envelope>>>>,
     device_id: DeviceId,
     self_name: String,
-    #[allow(dead_code)] // held so drop closes the inbound loop
+    /// Live send + recv task handles for the current WebSocket. Aborted
+    /// in `connect` / `connect_with_handles` before a fresh pair is
+    /// pushed, so the Vec stays bounded at exactly two entries per live
+    /// connection rather than growing across reconnects.
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     /// Outstanding forward-RPC oneshots, keyed by the JSON-RPC id we
     /// allocated. The recv-loop drains this on every disconnect via
@@ -851,6 +854,10 @@ impl MobileClient {
 
     // ─────────────────────────── internals ────────────────────────────
 
+    // The body is mostly header-stamping boilerplate that mirrors
+    // `connect_with_handles`; deduplicating across them is deferred to
+    // I2 (post-Wave-2 cleanup), so allow the line count for now.
+    #[allow(clippy::too_many_lines)]
     async fn connect(
         &self,
         url: &str,
@@ -956,6 +963,12 @@ impl MobileClient {
 
         *self.outbox.lock().await = Some(tx);
         let mut tasks = self.tasks.lock().await;
+        // Abort any handles from a prior connect/reconnect before pushing
+        // the new pair — otherwise the Vec grows unboundedly across long
+        // reconnect-heavy sessions (2 handles per attempt × N reconnects).
+        for h in tasks.drain(..) {
+            h.abort();
+        }
         tasks.push(send_handle);
         tasks.push(recv_handle);
         Ok(())
@@ -1525,6 +1538,11 @@ async fn connect_with_handles(
     ));
     *ctx.outbox.lock().await = Some(tx);
     let mut tasks = ctx.tasks.lock().await;
+    // Abort any handles from a prior connect/reconnect before pushing the
+    // new pair — see the matching comment in `MobileClient::connect`.
+    for h in tasks.drain(..) {
+        h.abort();
+    }
     tasks.push(send_handle);
     tasks.push(recv_handle);
     Ok(())
