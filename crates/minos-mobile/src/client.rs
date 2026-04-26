@@ -809,22 +809,39 @@ impl MobileClient {
     /// reconnects immediately. Spec §6.3 / §8.3.
     ///
     /// Sync wrapper so Dart's `WidgetsBindingObserver` (main isolate) can
-    /// call without an awaitable; the actual mutation is async-safe.
+    /// call without an awaitable; the actual mutation is async-safe. If
+    /// no Tokio runtime is bound to the calling thread (e.g. an early
+    /// lifecycle hook fires before the FFI side has spun one up) we log
+    /// at debug and return rather than panicking.
     pub fn notify_foregrounded(&self) {
         let r = self.reconnect.clone();
-        tokio::spawn(async move {
-            r.notify_foregrounded().await;
-        });
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) => {
+                h.spawn(async move {
+                    r.notify_foregrounded().await;
+                });
+            }
+            Err(_) => {
+                tracing::debug!("notify_foregrounded called outside Tokio runtime");
+            }
+        }
     }
 
     /// Notify the reconnect controller that the iOS app moved to the
     /// background. Sets paused so the loop's next wakeup exits. Spec
-    /// §6.3 / §8.3.
+    /// §6.3 / §8.3. Same runtime-handling shape as `notify_foregrounded`.
     pub fn notify_backgrounded(&self) {
         let r = self.reconnect.clone();
-        tokio::spawn(async move {
-            r.notify_backgrounded().await;
-        });
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) => {
+                h.spawn(async move {
+                    r.notify_backgrounded().await;
+                });
+            }
+            Err(_) => {
+                tracing::debug!("notify_backgrounded called outside Tokio runtime");
+            }
+        }
     }
 
     /// Resolve `(backend_url, device_secret, cf_access)` from the persisted
