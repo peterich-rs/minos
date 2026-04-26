@@ -37,7 +37,7 @@
 //! The receiver going away means the writer task has shut down; from the
 //! caller's perspective the peer is effectively offline.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use dashmap::DashMap;
@@ -98,6 +98,16 @@ pub struct SessionHandle {
     /// dead. Wrapped in `Arc<RwLock<_>>` so the writer/reader tasks can
     /// share it cheaply.
     pub last_pong_at: Arc<RwLock<Instant>>,
+    /// Account that owns this session, set after a successful bearer-
+    /// token check on iOS upgrades or copied across at pairing-consume on
+    /// the Mac side. `None` while the session has not yet been linked to
+    /// an account (e.g. fresh `IosClient` first-connect or a pre-bearer
+    /// `AgentHost`). Wrapped in [`Mutex`] (sync `std::sync`) so the
+    /// upgrade handler can `set_account_id` synchronously without
+    /// promising async borrow semantics — mirrors the seed style used for
+    /// `paired_with` but stays sync because no caller `.await`s while
+    /// holding the guard.
+    pub account_id: Arc<Mutex<Option<String>>>,
 }
 
 impl SessionHandle {
@@ -119,6 +129,7 @@ impl SessionHandle {
             outbox: tx,
             revoked,
             last_pong_at: Arc::new(RwLock::new(Instant::now())),
+            account_id: Arc::new(Mutex::new(None)),
         };
         (handle, rx)
     }
@@ -126,6 +137,24 @@ impl SessionHandle {
     /// Mark this session as superseded and wake any socket loop waiting on it.
     pub fn revoke(&self) {
         let _ = self.revoked.send(true);
+    }
+
+    /// Bind this session to an account (spec §5.5). Called by the iOS WS
+    /// upgrade handler after [`crate::auth::bearer::require`] succeeds and
+    /// by the pairing/consume handler after the Mac side adopts its
+    /// peer's account. Idempotent overwrite — the most-recent claim wins.
+    pub fn set_account_id(&self, id: String) {
+        // Mutex is `std::sync::Mutex`; we never `.await` while the guard
+        // is held so the lock is uncontended in practice.
+        if let Ok(mut slot) = self.account_id.lock() {
+            *slot = Some(id);
+        }
+    }
+
+    /// Snapshot of the bound account, if any.
+    #[must_use]
+    pub fn account_id(&self) -> Option<String> {
+        self.account_id.lock().ok().and_then(|g| g.clone())
     }
 
     /// Subscribe to revocation changes for this session.
@@ -374,6 +403,7 @@ mod tests {
                 outbox: tx,
                 revoked,
                 last_pong_at: Arc::new(RwLock::new(Instant::now())),
+                account_id: Arc::new(Mutex::new(None)),
             },
             rx,
         )
@@ -450,6 +480,19 @@ mod tests {
             .expect("current handle should be removed");
         assert!(removed.same_session(&h2));
         assert!(reg.get(id).is_none());
+    }
+
+    #[tokio::test]
+    async fn set_account_id_then_account_id_round_trips() {
+        let id = DeviceId::new();
+        let (handle, _rx) = make_handle(id);
+        assert_eq!(handle.account_id(), None);
+        handle.set_account_id("acct-42".into());
+        assert_eq!(handle.account_id(), Some("acct-42".into()));
+        // Clones share the underlying Mutex (Arc bump).
+        let clone = handle.clone();
+        clone.set_account_id("acct-43".into());
+        assert_eq!(handle.account_id(), Some("acct-43".into()));
     }
 
     #[tokio::test]
