@@ -1397,11 +1397,29 @@ async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
     let Some(session) = ctx.auth_session.read().await.clone() else {
         return true; // Nothing to refresh.
     };
-    let _ = ctx.auth_state_tx.send(AuthStateFrame::Refreshing);
+    // Build the HTTP client BEFORE publishing Refreshing so a build
+    // failure (effectively permanent under the current backend_url) is
+    // surfaced as a refresh failure rather than leaving the auth state
+    // machine stuck at `Refreshing` with no follow-up. Build failures
+    // mean the next iteration would also fail, so treating them as a
+    // hard refresh failure (clear auth, return false) is strictly
+    // better than looping with an expired token.
     let cf_access = ctx.store.load_cf_access().await.ok().flatten();
-    let Ok(http) = crate::http::MobileHttpClient::new(backend_url, ctx.device_id, cf_access) else {
-        return true; // Couldn't build the client; try again next iteration.
+    let http = match crate::http::MobileHttpClient::new(backend_url, ctx.device_id, cf_access) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(?e, "mobile: refresh aborted; could not build HTTP client");
+            let _ = ctx.auth_state_tx.send(AuthStateFrame::RefreshFailed {
+                error: Arc::new(MinosError::AuthRefreshFailed {
+                    message: format!("build http client: {e}"),
+                }),
+            });
+            *ctx.auth_session.write().await = None;
+            let _ = ctx.store.clear_auth().await;
+            return false;
+        }
     };
+    let _ = ctx.auth_state_tx.send(AuthStateFrame::Refreshing);
     match http.refresh(&session.refresh_token).await {
         Ok(r) => {
             let now_ms = chrono::Utc::now().timestamp_millis();
