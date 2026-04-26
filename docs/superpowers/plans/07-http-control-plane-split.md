@@ -1637,7 +1637,7 @@ git commit -m "feat(daemon): use HTTP for pairing token + forget"
 - Create: `crates/minos-mobile/src/http.rs` — HTTP client wrapper.
 - Modify: `crates/minos-mobile/src/client.rs` — replace bodies of `pair_with_qr_json` and `forget_peer`. Make `connect` always require a secret (delete the `Option<&str>` parameter for `device_secret`).
 
-- [ ] **Step 1: Add reqwest**
+- [x] **Step 1: Add reqwest**
 
 In `crates/minos-mobile/Cargo.toml`:
 
@@ -1645,7 +1645,7 @@ In `crates/minos-mobile/Cargo.toml`:
 reqwest = { workspace = true }
 ```
 
-- [ ] **Step 2: Tests for the HTTP wrapper**
+- [x] **Step 2: Tests for the HTTP wrapper**
 
 In `crates/minos-mobile/src/http.rs`, define the wrapper. Tests stay in `crates/minos-mobile/tests/http_smoke.rs`:
 
@@ -1694,7 +1694,7 @@ Add to `crates/minos-mobile/Cargo.toml` `[dev-dependencies]`:
 minos-backend = { path = "../minos-backend", features = ["test-support"] }
 ```
 
-- [ ] **Step 3: Run — must fail**
+- [x] **Step 3: Run — must fail**
 
 ```bash
 cargo test -p minos-mobile --test http_smoke
@@ -1702,7 +1702,7 @@ cargo test -p minos-mobile --test http_smoke
 
 Expected: module not found.
 
-- [ ] **Step 4: Implement `crates/minos-mobile/src/http.rs`**
+- [x] **Step 4: Implement `crates/minos-mobile/src/http.rs`**
 
 ```rust
 //! HTTP client for the backend's `/v1/*` control plane.
@@ -1828,7 +1828,7 @@ pub(crate) fn http_base(ws_url: &str) -> Option<String> {
 
 Add `pub mod http;` to `crates/minos-mobile/src/lib.rs`.
 
-- [ ] **Step 5: Rewrite `MobileClient::pair_with_qr_json`**
+- [x] **Step 5: Rewrite `MobileClient::pair_with_qr_json`**
 
 In `crates/minos-mobile/src/client.rs`, replace the body of `pair_with_qr_json` (lines 234-287 in the current file):
 
@@ -1911,7 +1911,7 @@ pub async fn forget_peer(&self) -> Result<(), MinosError> {
 }
 ```
 
-- [ ] **Step 6: Run — must pass**
+- [x] **Step 6: Run — must pass**
 
 ```bash
 cargo test -p minos-mobile
@@ -1920,7 +1920,7 @@ cargo test -p minos-mobile --test http_smoke
 
 Existing `pair_with_qr_json` tests likely seed a fake WS server; rewrite them to spin up `minos-backend`'s test router (matching the http_smoke pattern). The fake-peer binary at `crates/minos-mobile/src/bin/fake-peer.rs` continues to exercise the post-pair WS flow.
 
-- [ ] **Step 7: Workspace acceptance + commit**
+- [x] **Step 7: Workspace acceptance + commit**
 
 ```bash
 cargo xtask check-all

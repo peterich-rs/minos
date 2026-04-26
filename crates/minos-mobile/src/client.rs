@@ -205,7 +205,7 @@ impl MobileClient {
             .send(ConnectionState::Reconnecting { attempt: 1 });
 
         match self
-            .connect(&backend_url, Some(device_secret.as_str()), cf_access)
+            .connect(&backend_url, device_secret.as_str(), cf_access)
             .await
         {
             Ok(()) => {
@@ -254,32 +254,26 @@ impl MobileClient {
 
         let _ = self.state_tx.send(ConnectionState::Pairing);
 
-        // First-boot: no DeviceSecret yet. Connect without the secret
-        // header; the backend allows bearer-less handshakes on the
-        // pairing path and issues the secret inside the `Pair` result.
-        self.connect(&qr.backend_url, None, cf).await?;
+        // Step 1: redeem the pairing token over HTTP. The backend records
+        // both device-secret hashes and pushes Event::Paired to the Mac
+        // before returning, so by the time we get the response the Mac is
+        // already updated.
+        let http = crate::http::MobileHttpClient::new(&qr.backend_url, self.device_id, cf.clone())?;
+        let pair_resp = http
+            .pair_consume(minos_protocol::PairConsumeRequest {
+                token: minos_domain::PairingToken(qr.pairing_token),
+                device_name: self.self_name.clone(),
+            })
+            .await?;
 
-        // Perform the `Pair` RPC.
-        let params = serde_json::json!({
-            "token": qr.pairing_token,
-            "device_name": self.self_name,
-        });
-        let result = self.local_rpc(LocalRpcMethod::Pair, params).await?;
-
-        // Backend replies with the minted DeviceSecret. Persist it so the
-        // next connect can resume authenticated. Shape (spec §6.1):
-        // { "peer_device_id": "...", "peer_name": "...",
-        //   "your_device_secret": "<base64url>" }.
-        let secret_str = result
-            .get("your_device_secret")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| MinosError::RpcCallFailed {
-                method: "pair".into(),
-                message: "pair response missing your_device_secret".into(),
-            })?;
-        let device_secret = DeviceSecret(secret_str.to_string());
+        let device_secret = pair_resp.your_device_secret.clone();
         self.store
             .save_device(&self.device_id, &device_secret)
+            .await?;
+
+        // Step 2: now open the WS with the freshly-issued secret. From here
+        // on every connect carries `X-Device-Secret`.
+        self.connect(&qr.backend_url, device_secret.as_str(), cf)
             .await?;
 
         let _ = self.state_tx.send(ConnectionState::Connected);
@@ -289,10 +283,17 @@ impl MobileClient {
     /// Forget the current pairing. Clears secure storage, drops the
     /// socket, and emits `Disconnected`. Idempotent.
     pub async fn forget_peer(&self) -> Result<(), MinosError> {
-        // Best-effort: ask the server to tear down its side too.
-        let _ = self
-            .local_rpc(LocalRpcMethod::ForgetPeer, serde_json::json!({}))
-            .await;
+        let backend_url = self.store.load_backend_url().await?;
+        let device = self.store.load_device().await?;
+        let cf = self.store.load_cf_access().await?;
+
+        // Best-effort: ask the backend to tear down its side too. Failure
+        // here must not block the local-state cleanup below — the user
+        // re-pairs to recover.
+        if let (Some(url), Some((_, secret))) = (backend_url.as_deref(), device.as_ref()) {
+            let http = crate::http::MobileHttpClient::new(url, self.device_id, cf)?;
+            let _ = http.forget_pairing(secret).await;
+        }
 
         self.store.clear_all().await?;
         self.shutdown_outbound().await;
@@ -358,14 +359,13 @@ impl MobileClient {
     async fn connect(
         &self,
         url: &str,
-        device_secret: Option<&str>,
+        device_secret: &str,
         cf_access: Option<(String, String)>,
     ) -> Result<(), MinosError> {
         tracing::info!(
             target: "minos_mobile::client",
             url,
             device_id = %self.device_id,
-            device_secret_present = device_secret.is_some(),
             cf_access_present = cf_access.is_some(),
             "mobile: opening backend WebSocket"
         );
@@ -390,15 +390,15 @@ impl MobileClient {
             "X-Device-Role",
             "ios-client".parse().expect("static header value is valid"),
         );
-        if let Some(sec) = device_secret {
-            headers.insert(
-                "X-Device-Secret",
-                sec.parse().map_err(|_| MinosError::ConnectFailed {
+        headers.insert(
+            "X-Device-Secret",
+            device_secret
+                .parse()
+                .map_err(|_| MinosError::ConnectFailed {
                     url: url.to_string(),
                     message: "device_secret is not a valid header value".into(),
                 })?,
-            );
-        }
+        );
         if let Some((id, sec)) = cf_access {
             headers.insert(
                 "CF-Access-Client-Id",

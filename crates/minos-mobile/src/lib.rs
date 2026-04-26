@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod client;
+pub mod http;
 pub mod log_capture;
 pub mod logging;
 pub mod store;

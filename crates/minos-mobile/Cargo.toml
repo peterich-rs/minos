@@ -13,6 +13,7 @@ minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
+reqwest = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
@@ -50,6 +51,8 @@ required-features = ["cli"]
 [dev-dependencies]
 tokio-test = { workspace = true }
 tempfile = { workspace = true }
+minos-backend = { path = "../minos-backend", version = "0.1.0", features = ["test-support"] }
+axum = { workspace = true }
 
 [lints]
 workspace = true
