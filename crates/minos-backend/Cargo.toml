@@ -69,6 +69,11 @@ tokio-tungstenite = { workspace = true }
 # raw TCP request; `url` parses the ws:// / http:// endpoints handed
 # back from `TcpListener::bind("127.0.0.1:0")`.
 url = { workspace = true }
+# `tower::ServiceExt::oneshot` drives the axum `Router` directly in
+# `tests/v1_*.rs` without binding a TCP listener, and `http-body-util`
+# collects the response body into bytes for JSON assertions.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 [features]
 # Re-exports `test_support::*` modules (`store::test_support`,

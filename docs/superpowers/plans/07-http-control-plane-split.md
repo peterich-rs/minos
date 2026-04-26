@@ -530,7 +530,7 @@ git commit -m "refactor(backend): extract shared http::auth from ws_devices"
 - Create: `crates/minos-backend/src/http/v1/mod.rs`
 - Modify: `crates/minos-backend/src/http/mod.rs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `crates/minos-backend/tests/v1_routing.rs`:
 
@@ -588,7 +588,7 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 ```
 
-- [ ] **Step 2: Run — must fail**
+- [x] **Step 2: Run — must fail**
 
 ```bash
 cargo test -p minos-backend --test v1_routing
@@ -596,7 +596,7 @@ cargo test -p minos-backend --test v1_routing
 
 Expected: compile error or `404` reaches an empty router (status 404 may pass without `/v1` — that's fine, we still need the v1 module to exist for later tasks). If the test passes here, that's coincidence; the next steps still must run.
 
-- [ ] **Step 3: Create the v1 module skeleton**
+- [x] **Step 3: Create the v1 module skeleton**
 
 `crates/minos-backend/src/http/v1/mod.rs`:
 
@@ -665,7 +665,7 @@ pub fn router(state: BackendState) -> Router {
 
 And add `pub mod v1;` to `crates/minos-backend/src/http/mod.rs`.
 
-- [ ] **Step 4: Run — must pass**
+- [x] **Step 4: Run — must pass**
 
 ```bash
 cargo test -p minos-backend --test v1_routing
@@ -673,13 +673,13 @@ cargo test -p minos-backend --test v1_routing
 
 Expected: PASS.
 
-- [ ] **Step 5: Workspace acceptance**
+- [x] **Step 5: Workspace acceptance**
 
 ```bash
 cargo xtask check-all
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/minos-backend/src/http/v1/ \

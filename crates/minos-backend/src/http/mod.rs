@@ -40,6 +40,7 @@ use crate::{
 
 pub mod auth;
 pub mod health;
+pub mod v1;
 pub mod ws_devices;
 
 /// Backend-public config snapshot shared by every WS session. Bundles the
@@ -118,6 +119,7 @@ pub fn router(state: BackendState) -> Router {
     Router::new()
         .route("/health", axum::routing::get(health::get))
         .route("/devices", axum::routing::get(ws_devices::upgrade))
+        .nest("/v1", v1::router())
         .with_state(state)
 }
 
