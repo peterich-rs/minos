@@ -59,6 +59,14 @@ pub enum BackendError {
     #[error("pairing token invalid or expired")]
     PairingTokenInvalid,
 
+    /// An account create attempt collided with an existing email row.
+    ///
+    /// The `accounts` table has `UNIQUE COLLATE NOCASE` on email so the
+    /// check is enforced at insert time. Mirrors
+    /// `MinosError::EmailTaken` for the boundary mapping.
+    #[error("email already registered")]
+    EmailTaken,
+
     /// Pairing refused because one side was already paired.
     ///
     /// Spec §10.2 R4: MVP policy is "refuse and let the UI confirm replace
