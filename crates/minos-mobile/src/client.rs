@@ -38,6 +38,7 @@ use minos_ui_protocol::UiEventMessage;
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
@@ -360,11 +361,19 @@ impl MobileClient {
         device_secret: Option<&str>,
         cf_access: Option<(String, String)>,
     ) -> Result<(), MinosError> {
+        tracing::info!(
+            target: "minos_mobile::client",
+            url,
+            device_id = %self.device_id,
+            device_secret_present = device_secret.is_some(),
+            cf_access_present = cf_access.is_some(),
+            "mobile: opening backend WebSocket"
+        );
         let mut req = url
             .into_client_request()
             .map_err(|e| MinosError::ConnectFailed {
                 url: url.to_string(),
-                message: e.to_string(),
+                message: format!("invalid backend URL: {e}"),
             })?;
         let headers = req.headers_mut();
         headers.insert(
@@ -409,10 +418,7 @@ impl MobileClient {
 
         let (ws, _resp) = connect_async(req)
             .await
-            .map_err(|e| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: e.to_string(),
-            })?;
+            .map_err(|e| connect_error_to_minos(url, e))?;
         let (mut write, read) = ws.split();
 
         let (tx, mut rx) = mpsc::channel::<Envelope>(256);
@@ -602,6 +608,104 @@ fn from_rpc_error(err: &RpcError) -> MinosError {
     }
 }
 
+/// Map a tungstenite handshake error into a typed `MinosError`, picking
+/// the variant the localized UI hint should reflect and stuffing the raw
+/// classification into the `message` field so the iOS log panel surfaces
+/// the actual cause instead of just `e.to_string()`.
+fn connect_error_to_minos(url: &str, err: WsError) -> MinosError {
+    let detail = describe_ws_error(&err);
+    tracing::warn!(
+        target: "minos_mobile::client",
+        url,
+        kind = detail.kind,
+        message = %detail.message,
+        "mobile: WebSocket connect failed"
+    );
+
+    if matches!(detail.http_status, Some(302 | 401 | 403)) {
+        return MinosError::CfAuthFailed {
+            message: detail.message,
+        };
+    }
+
+    MinosError::ConnectFailed {
+        url: url.to_string(),
+        message: detail.message,
+    }
+}
+
+/// Structured view of a `tungstenite::Error`, kept private so the mapping
+/// in `connect_error_to_minos` doesn't have to keep a parallel `match`.
+struct WsErrorDetail {
+    kind: &'static str,
+    message: String,
+    /// Set only when `err` is `WsError::Http(_)`; lets the caller treat
+    /// CF-Access redirects specially without re-pattern-matching.
+    http_status: Option<u16>,
+}
+
+fn describe_ws_error(err: &WsError) -> WsErrorDetail {
+    match err {
+        WsError::Io(io_err) => WsErrorDetail {
+            kind: "io",
+            message: format!("io {kind:?}: {io_err}", kind = io_err.kind()),
+            http_status: None,
+        },
+        WsError::Tls(tls_err) => WsErrorDetail {
+            kind: "tls",
+            message: format!("tls: {tls_err}"),
+            http_status: None,
+        },
+        WsError::Url(url_err) => WsErrorDetail {
+            kind: "url",
+            message: format!("url: {url_err}"),
+            http_status: None,
+        },
+        WsError::Http(resp) => {
+            let status = resp.status();
+            let body = resp
+                .body()
+                .as_deref()
+                .and_then(|b| std::str::from_utf8(b).ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let body_snippet = body
+                .map(|s| format!(": {}", s.chars().take(160).collect::<String>()))
+                .unwrap_or_default();
+            WsErrorDetail {
+                kind: "http",
+                message: format!("http {status}{body_snippet}"),
+                http_status: Some(status.as_u16()),
+            }
+        }
+        WsError::HttpFormat(e) => WsErrorDetail {
+            kind: "http_format",
+            message: format!("http format: {e}"),
+            http_status: None,
+        },
+        WsError::Protocol(e) => WsErrorDetail {
+            kind: "protocol",
+            message: format!("protocol: {e}"),
+            http_status: None,
+        },
+        WsError::AttackAttempt => WsErrorDetail {
+            kind: "attack_attempt",
+            message: "tungstenite flagged the response as a potential attack".into(),
+            http_status: None,
+        },
+        WsError::ConnectionClosed | WsError::AlreadyClosed => WsErrorDetail {
+            kind: "closed",
+            message: format!("{err}"),
+            http_status: None,
+        },
+        other => WsErrorDetail {
+            kind: "other",
+            message: format!("{other}"),
+            http_status: None,
+        },
+    }
+}
+
 fn restored_cf_access(state: &PersistedPairingState) -> Option<(String, String)> {
     match (
         state.cf_access_client_id.as_ref(),
@@ -706,5 +810,70 @@ mod tests {
             matches!(err, MinosError::Disconnected { .. }),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn cf_access_http_rejection_maps_to_cf_auth_failed_with_status_in_message() {
+        let response = tokio_tungstenite::tungstenite::http::Response::builder()
+            .status(403)
+            .body(None::<Vec<u8>>)
+            .unwrap();
+        let err = connect_error_to_minos(
+            "wss://example.com/devices",
+            WsError::Http(Box::new(response)),
+        );
+
+        match err {
+            MinosError::CfAuthFailed { message } => {
+                assert!(
+                    message.contains("403"),
+                    "CfAuthFailed message should embed the status code: {message}"
+                );
+            }
+            other => panic!("expected CfAuthFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_cf_http_status_maps_to_connect_failed_with_status_detail() {
+        let response = tokio_tungstenite::tungstenite::http::Response::builder()
+            .status(502)
+            .body(Some(b"upstream timed out".to_vec()))
+            .unwrap();
+        let err = connect_error_to_minos(
+            "wss://example.com/devices",
+            WsError::Http(Box::new(response)),
+        );
+
+        match err {
+            MinosError::ConnectFailed { url, message } => {
+                assert_eq!(url, "wss://example.com/devices");
+                assert!(
+                    message.contains("502"),
+                    "expected status in message: {message}"
+                );
+                assert!(
+                    message.contains("upstream timed out"),
+                    "expected body snippet in message: {message}"
+                );
+            }
+            other => panic!("expected ConnectFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn io_error_maps_to_connect_failed_with_kind_in_message() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "nope");
+        let err = connect_error_to_minos("wss://example.com/devices", WsError::Io(io));
+
+        match err {
+            MinosError::ConnectFailed { message, .. } => {
+                assert!(
+                    message.contains("ConnectionRefused"),
+                    "expected io kind in message: {message}"
+                );
+            }
+            other => panic!("expected ConnectFailed, got {other:?}"),
+        }
     }
 }

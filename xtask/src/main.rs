@@ -36,7 +36,12 @@ enum Cmd {
     /// Generate Dart bindings via flutter_rust_bridge_codegen.
     GenFrb,
     /// Build the universal macOS static library for the Swift app.
-    BuildMacos,
+    BuildMacos {
+        /// Xcode build configuration. Configurations containing "debug" use
+        /// Cargo dev profile; all others use Cargo release profile.
+        #[arg(long)]
+        configuration: Option<String>,
+    },
     /// Build iOS release staticlibs from minos-ffi-frb (arm64 device + arm64 sim).
     BuildIos,
     /// Generate apps/macos/Minos.xcodeproj from apps/macos/project.yml.
@@ -55,7 +60,7 @@ fn main() -> Result<()> {
         Cmd::Bootstrap => bootstrap(),
         Cmd::GenUniffi => gen_uniffi(),
         Cmd::GenFrb => gen_frb(),
-        Cmd::BuildMacos => build_macos(),
+        Cmd::BuildMacos { configuration } => build_macos(configuration.as_deref()),
         Cmd::BuildIos => build_ios(),
         Cmd::GenXcode => gen_xcode(),
         Cmd::BackendDbReset => backend_db_reset(),
@@ -96,8 +101,8 @@ fn check_all(with_codex: bool) -> Result<()> {
         eprintln!("==> cargo xtask gen-uniffi");
         gen_uniffi()?;
 
-        eprintln!("==> cargo xtask build-macos");
-        build_macos()?;
+        eprintln!("==> cargo xtask build-macos --configuration Debug");
+        build_macos(Some("Debug"))?;
 
         eprintln!("==> cargo xtask gen-xcode");
         gen_xcode()?;
@@ -501,42 +506,99 @@ fn bootstrap() -> Result<()> {
     Ok(())
 }
 
-fn build_macos() -> Result<()> {
-    const MACOS_DEPLOYMENT_TARGET: &str = "13.0";
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CargoProfile {
+    Debug,
+    Release,
+}
+
+impl CargoProfile {
+    fn artifact_dir(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Release => "release",
+        }
+    }
+
+    fn cargo_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Debug => &[],
+            Self::Release => &["--release"],
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MacosBuildConfiguration {
+    xcode_name: String,
+    cargo_profile: CargoProfile,
+}
+
+impl MacosBuildConfiguration {
+    fn from_xcode(configuration: Option<&str>) -> Self {
+        let xcode_name = configuration
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Release")
+            .to_string();
+        let cargo_profile = if xcode_name.to_ascii_lowercase().contains("debug") {
+            CargoProfile::Debug
+        } else {
+            CargoProfile::Release
+        };
+
+        Self {
+            xcode_name,
+            cargo_profile,
+        }
+    }
+}
+
+fn build_macos(configuration: Option<&str>) -> Result<()> {
+    const MACOS_DEPLOYMENT_TARGET: &str = "14.0";
 
     if !cfg!(target_os = "macos") {
         bail!("`build-macos` requires a macOS host");
     }
 
     let root = workspace_root()?;
+    let build_config = MacosBuildConfiguration::from_xcode(configuration);
     if which("lipo").is_none() {
         bail!("lipo not installed; `build-macos` requires Xcode command-line tools");
     }
 
+    eprintln!(
+        "==> cargo build-macos: {} Xcode config -> {:?} Rust profile",
+        build_config.xcode_name, build_config.cargo_profile
+    );
     eprintln!("==> cargo build-macos: arm64 + x86_64 staticlib -> lipo universal");
     for target in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
         eprintln!("  target: {target}");
+        let mut args = vec!["build", "-p", "minos-ffi-uniffi", "--target", target];
+        args.extend_from_slice(build_config.cargo_profile.cargo_args());
         run_env(
             "cargo",
-            &[
-                "build",
-                "-p",
-                "minos-ffi-uniffi",
-                "--release",
-                "--target",
-                target,
-            ],
+            &args,
             &[("MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)],
             &root,
         )?;
     }
 
-    let out_dir = root.join("target/xcframework");
+    let out_dir = root
+        .join("target/xcframework")
+        .join(&build_config.xcode_name);
     fs::create_dir_all(&out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
 
     let out_lib = out_dir.join("libminos_ffi_uniffi.a");
-    let arm64 = root.join("target/aarch64-apple-darwin/release/libminos_ffi_uniffi.a");
-    let x86_64 = root.join("target/x86_64-apple-darwin/release/libminos_ffi_uniffi.a");
+    let artifact_dir = build_config.cargo_profile.artifact_dir();
+    let arm64 = root
+        .join("target/aarch64-apple-darwin")
+        .join(artifact_dir)
+        .join("libminos_ffi_uniffi.a");
+    let x86_64 = root
+        .join("target/x86_64-apple-darwin")
+        .join(artifact_dir)
+        .join("libminos_ffi_uniffi.a");
 
     eprintln!("==> lipo -create -> {}", out_lib.display());
     run(
@@ -553,6 +615,18 @@ fn build_macos() -> Result<()> {
 
     eprintln!("==> lipo -info (verification)");
     run("lipo", &["-info", out_lib.to_str().unwrap()], &root)?;
+
+    if build_config.xcode_name == "Release" {
+        let legacy_out_lib = root.join("target/xcframework/libminos_ffi_uniffi.a");
+        fs::copy(&out_lib, &legacy_out_lib).with_context(|| {
+            format!(
+                "copying {} to legacy path {}",
+                out_lib.display(),
+                legacy_out_lib.display()
+            )
+        })?;
+        eprintln!("OK: {} (legacy release path)", legacy_out_lib.display());
+    }
 
     eprintln!("OK: {} (universal)", out_lib.display());
     Ok(())

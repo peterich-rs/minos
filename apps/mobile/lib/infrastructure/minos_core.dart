@@ -76,9 +76,12 @@ class MinosCore implements MinosCoreProtocol {
     try {
       await client.resumePersistedSession();
       return client;
-    } catch (_) {
-      await secure.clearAll();
-      return buildFresh();
+    } catch (error) {
+      if (_shouldDiscardPersistedState(error)) {
+        await secure.clearAll();
+        return buildFresh();
+      }
+      return client;
     }
   }
 
@@ -97,6 +100,11 @@ class MinosCore implements MinosCoreProtocol {
   Future<void> forgetPeer() async {
     await _client.forgetPeer();
     await _secure.clearAll();
+  }
+
+  @override
+  Future<bool> hasPersistedPairing() async {
+    return await _secure.loadState() != null;
   }
 
   @override
@@ -129,5 +137,11 @@ class MinosCore implements MinosCoreProtocol {
       // Preserve the original persistence failure; the next launch will still
       // treat any leftover partial snapshot as non-resumable.
     }
+  }
+
+  static bool _shouldDiscardPersistedState(Object error) {
+    return error is MinosError_DeviceNotTrusted ||
+        error is MinosError_Unauthorized ||
+        error is MinosError_StoreCorrupt;
   }
 }

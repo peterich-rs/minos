@@ -40,7 +40,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # http / rpc
 axum = { version = "0.7", features = ["ws", "macros"] }
 jsonrpsee = { version = "0.24", features = ["server", "client", "ws-client", "macros"] }
-tokio-tungstenite = "0.29"
+tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 futures-util = "0.3"
 async-trait = "0.1"
 

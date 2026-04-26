@@ -12,6 +12,10 @@ abstract class MinosCoreProtocol {
   /// Forget the paired backend; drops credentials and tears down the WS.
   Future<void> forgetPeer();
 
+  /// Whether the durable store contains enough state to represent an
+  /// already-paired device, even if the current WebSocket is offline.
+  Future<bool> hasPersistedPairing();
+
   /// Paged thread summaries for the paired agent-host.
   Future<ListThreadsResponse> listThreads(ListThreadsParams params);
 

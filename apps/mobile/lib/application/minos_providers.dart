@@ -1,4 +1,5 @@
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show FutureProvider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'package:minos/domain/minos_core_protocol.dart';
@@ -21,6 +22,10 @@ MinosCoreProtocol minosCore(Ref ref) {
 Stream<ConnectionState> connectionState(Ref ref) {
   return ref.watch(minosCoreProvider).connectionStates;
 }
+
+final hasPersistedPairingProvider = FutureProvider<bool>((ref) {
+  return ref.watch(minosCoreProvider).hasPersistedPairing();
+});
 
 /// Camera permission status + action helpers. The notifier is the single
 /// source of truth for the permission state driving the pairing UI.
@@ -63,6 +68,7 @@ class PairingController extends _$PairingController {
     state = const AsyncValue.loading();
     try {
       await ref.read(minosCoreProvider).pairWithQrJson(qrJson);
+      ref.invalidate(hasPersistedPairingProvider);
       state = const AsyncValue.data(true);
     } on MinosError catch (e, st) {
       state = AsyncValue.error(e, st);

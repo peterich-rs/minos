@@ -132,6 +132,40 @@ void main() {
     verify(() => secureStore.saveState(persisted)).called(1);
   });
 
+  test('pairWithQrJson preserves qr-carried cf access credentials', () async {
+    const qrJson =
+        '{"v":2,"cf_access_client_id":"qr-id","cf_access_client_secret":"qr-secret"}';
+    const persisted = PersistedPairingState(
+      backendUrl: 'wss://example.com/devices',
+      deviceId: 'dev-123',
+      deviceSecret: 'sec-456',
+      cfAccessClientId: 'qr-id',
+      cfAccessClientSecret: 'qr-secret',
+    );
+
+    when(
+      () => client.pairWithQrJson(qrJson: any(named: 'qrJson')),
+    ).thenAnswer((_) async {});
+    when(
+      () => client.persistedPairingState(),
+    ).thenAnswer((_) async => persisted);
+    when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
+
+    final core = MinosCore.forTesting(client: client, secureStore: secureStore);
+
+    await core.pairWithQrJson(qrJson);
+
+    final captured =
+        verify(
+              () => client.pairWithQrJson(qrJson: captureAny(named: 'qrJson')),
+            ).captured.single
+            as String;
+    final preserved = jsonDecode(captured) as Map<String, Object?>;
+    expect(preserved['cf_access_client_id'], 'qr-id');
+    expect(preserved['cf_access_client_secret'], 'qr-secret');
+    verify(() => secureStore.saveState(persisted)).called(1);
+  });
+
   group('resolveClient', () {
     test(
       'returns a freshly built client when no persisted state is present',
@@ -178,7 +212,7 @@ void main() {
     });
 
     test(
-      'wipes secure storage and returns a fresh client when resume fails',
+      'wipes secure storage and returns a fresh client when resume is revoked',
       () async {
         const persisted = PersistedPairingState(
           backendUrl: 'ws://127.0.0.1/devices',
@@ -189,9 +223,10 @@ void main() {
         final freshClient = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
         when(() => secureStore.clearAll()).thenAnswer((_) async {});
-        when(
-          () => rehydrated.resumePersistedSession(),
-        ).thenAnswer((_) async => throw StateError('auth drift'));
+        when(() => rehydrated.resumePersistedSession()).thenAnswer(
+          (_) async =>
+              throw const MinosError.deviceNotTrusted(deviceId: 'dev-stale'),
+        );
 
         final result = await MinosCore.resolveClient(
           secure: secureStore,
@@ -211,5 +246,67 @@ void main() {
         verify(() => secureStore.clearAll()).called(1);
       },
     );
+
+    test(
+      'keeps persisted pairing when resume fails due to transient connection loss',
+      () async {
+        const persisted = PersistedPairingState(
+          backendUrl: 'ws://127.0.0.1/devices',
+          deviceId: 'dev-123',
+          deviceSecret: 'sec-456',
+        );
+        final rehydrated = _MockMobileClient();
+        when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+        when(() => rehydrated.resumePersistedSession()).thenAnswer(
+          (_) async => throw const MinosError.connectFailed(
+            url: 'ws://127.0.0.1/devices',
+            message: 'ConnectionRefused',
+          ),
+        );
+
+        final result = await MinosCore.resolveClient(
+          secure: secureStore,
+          buildFresh: () => fail('transient resume failure must stay paired'),
+          buildFromPersisted: (state) {
+            expect(state, persisted);
+            return rehydrated;
+          },
+        );
+
+        expect(result, same(rehydrated));
+        verify(() => rehydrated.resumePersistedSession()).called(1);
+        verifyNever(() => secureStore.clearAll());
+      },
+    );
+  });
+
+  group('hasPersistedPairing', () {
+    test('returns true when secure storage has a resumable snapshot', () async {
+      when(() => secureStore.loadState()).thenAnswer(
+        (_) async => const PersistedPairingState(
+          backendUrl: 'ws://127.0.0.1/devices',
+          deviceId: 'dev-123',
+          deviceSecret: 'sec-456',
+        ),
+      );
+
+      final core = MinosCore.forTesting(
+        client: client,
+        secureStore: secureStore,
+      );
+
+      expect(await core.hasPersistedPairing(), isTrue);
+    });
+
+    test('returns false when secure storage is empty', () async {
+      when(() => secureStore.loadState()).thenAnswer((_) async => null);
+
+      final core = MinosCore.forTesting(
+        client: client,
+        secureStore: secureStore,
+      );
+
+      expect(await core.hasPersistedPairing(), isFalse);
+    });
   });
 }

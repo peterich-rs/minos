@@ -22,7 +22,7 @@ final class AppStateBootTests: XCTestCase {
             peerName: "Existing iPhone",
             online: true
         )
-        appState.currentQr = MockDaemon.makeQrPayload(macDisplayName: "Old Mac")
+        appState.currentQr = MockDaemon.makeQrPayload(hostDisplayName: "Old Mac")
         appState.currentQrGeneratedAt = Date(timeIntervalSince1970: 123)
         appState.trustedDevice = MockDaemon.makeTrustedDevice(name: "Existing Device")
         appState.bootError = .StoreIo(path: "/tmp/state.json", message: "missing")
@@ -119,6 +119,54 @@ final class AppStateBootTests: XCTestCase {
                 return
             }
             XCTAssertTrue(reason.contains("CF_ACCESS_CLIENT_SECRET"))
+        }
+    }
+
+    func testLocalStateLoaderAcceptsRustFractionalRfc3339PairedAt() throws {
+        let json = """
+        {
+          "self_device_id": "00000000-0000-0000-0000-000000000001",
+          "peer": {
+            "device_id": "00000000-0000-0000-0000-000000000002",
+            "name": "iPhone",
+            "paired_at": "2026-04-26T02:34:56.123456789Z"
+          }
+        }
+        """
+
+        let loaded = try LocalStateLoader.decodePersistedState(
+            Data(json.utf8),
+            from: "/tmp/local-state.json"
+        )
+
+        XCTAssertEqual(loaded.selfDeviceId, "00000000-0000-0000-0000-000000000001")
+        XCTAssertEqual(loaded.toRecord()?.deviceId, "00000000-0000-0000-0000-000000000002")
+        XCTAssertEqual(loaded.toRecord()?.name, "iPhone")
+    }
+
+    func testLocalStateLoaderReportsBadDateAsStoreCorrupt() throws {
+        let path = "/tmp/local-state.json"
+
+        let json = """
+        {
+          "self_device_id": "00000000-0000-0000-0000-000000000001",
+          "peer": {
+            "device_id": "00000000-0000-0000-0000-000000000002",
+            "name": "iPhone",
+            "paired_at": "not-a-date"
+          }
+        }
+        """
+
+        XCTAssertThrowsError(
+            try LocalStateLoader.decodePersistedState(Data(json.utf8), from: path)
+        ) { error in
+            guard case let .StoreCorrupt(errorPath, message) = error as? MinosError else {
+                XCTFail("expected StoreCorrupt, got \(error)")
+                return
+            }
+            XCTAssertEqual(errorPath, path)
+            XCTAssertTrue(message.contains("paired_at"))
         }
     }
 

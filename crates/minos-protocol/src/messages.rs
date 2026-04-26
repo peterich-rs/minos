@@ -64,15 +64,23 @@ pub struct SendUserMessageRequest {
 /// before the bearer-secret WebSocket handshake.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PairingQrPayload {
+    #[serde(default = "default_pairing_qr_version")]
     pub v: u8,
     pub backend_url: String,
+    #[serde(alias = "mac_display_name")]
     pub host_display_name: String,
+    #[serde(alias = "token")]
     pub pairing_token: String,
+    #[serde(default)]
     pub expires_at_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cf_access_client_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cf_access_client_secret: Option<String>,
+}
+
+const fn default_pairing_qr_version() -> u8 {
+    2
 }
 
 /// Parameters for `request_pairing_qr` — the Mac tells the backend which
@@ -276,6 +284,22 @@ mod new_type_tests {
         let s = serde_json::to_string(&p).unwrap();
         assert!(!s.contains("cf_access_client_id"));
         assert!(!s.contains("cf_access_client_secret"));
+    }
+
+    #[test]
+    fn pairing_qr_payload_accepts_legacy_mac_field_names() {
+        let back: PairingQrPayload = serde_json::from_value(serde_json::json!({
+            "backend_url": "wss://minos.fan-nn.top/devices",
+            "mac_display_name": "Mac",
+            "token": "tok"
+        }))
+        .unwrap();
+
+        assert_eq!(back.v, 2);
+        assert_eq!(back.backend_url, "wss://minos.fan-nn.top/devices");
+        assert_eq!(back.host_display_name, "Mac");
+        assert_eq!(back.pairing_token, "tok");
+        assert_eq!(back.expires_at_ms, 0);
     }
 
     #[test]

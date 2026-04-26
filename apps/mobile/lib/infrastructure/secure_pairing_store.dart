@@ -6,10 +6,11 @@ import 'package:minos/src/rust/api/minos.dart';
 ///
 /// The Rust `minos_mobile::MobileClient` keeps this state in its own
 /// in-memory `MobilePairingStore` for the lifetime of the process. This
-/// Dart-side store is what survives an app cold-start; it persists only the
-/// backend URL and Minos device credential. CF Access credentials come from
-/// build-time env (`--dart-define`) and are injected into the Rust snapshot
-/// on load instead of being written to Keychain.
+/// Dart-side store is what survives an app cold-start; it persists the
+/// backend URL and Minos device credential. CF Access credentials normally
+/// come from build-time env (`--dart-define`), but QR-carried credentials are
+/// kept in Keychain when no build-time pair exists so real-device pairing can
+/// reconnect after an app restart.
 class SecurePairingStore {
   SecurePairingStore({
     FlutterSecureStorage? storage,
@@ -30,21 +31,26 @@ class SecurePairingStore {
     final backendUrl = await _storage.read(key: _keyBackendUrl);
     final deviceId = await _storage.read(key: _keyDeviceId);
     final deviceSecret = await _storage.read(key: _keyDeviceSecret);
-    await _deleteLegacyCfAccessKeys();
+    final storedCfId = await _storage.read(key: _keyCfId);
+    final storedCfSecret = await _storage.read(key: _keyCfSecret);
 
     final hasAnyValue =
-        backendUrl != null || deviceId != null || deviceSecret != null;
+        backendUrl != null ||
+        deviceId != null ||
+        deviceSecret != null ||
+        storedCfId != null ||
+        storedCfSecret != null;
     if (!hasAnyValue) return null;
 
-    final state = _cfAccessConfig.applyToState(
-      PersistedPairingState(
-        backendUrl: backendUrl,
-        deviceId: deviceId,
-        deviceSecret: deviceSecret,
-      ),
+    final state = PersistedPairingState(
+      backendUrl: backendUrl,
+      deviceId: deviceId,
+      deviceSecret: deviceSecret,
+      cfAccessClientId: _cfAccessConfig.clientId ?? storedCfId,
+      cfAccessClientSecret: _cfAccessConfig.clientSecret ?? storedCfSecret,
     );
 
-    if (!_isResumable(state)) {
+    if (!_isResumable(state) || !_hasCompleteCfAccess(state)) {
       await clearAll();
       return null;
     }
@@ -56,7 +62,12 @@ class SecurePairingStore {
     await _writeOrDelete(_keyBackendUrl, state.backendUrl);
     await _writeOrDelete(_keyDeviceId, state.deviceId);
     await _writeOrDelete(_keyDeviceSecret, state.deviceSecret);
-    await _deleteLegacyCfAccessKeys();
+    if (_cfAccessConfig.isConfigured || !_hasCompleteCfAccess(state)) {
+      await _deleteCfAccessKeys();
+    } else {
+      await _writeOrDelete(_keyCfId, state.cfAccessClientId);
+      await _writeOrDelete(_keyCfSecret, state.cfAccessClientSecret);
+    }
   }
 
   /// Wipe every key this store owns. Called from `forgetPeer`.
@@ -64,7 +75,7 @@ class SecurePairingStore {
     await _storage.delete(key: _keyBackendUrl);
     await _storage.delete(key: _keyDeviceId);
     await _storage.delete(key: _keyDeviceSecret);
-    await _deleteLegacyCfAccessKeys();
+    await _deleteCfAccessKeys();
   }
 
   Future<void> _writeOrDelete(String key, String? value) {
@@ -80,7 +91,12 @@ class SecurePairingStore {
         state.deviceSecret != null;
   }
 
-  Future<void> _deleteLegacyCfAccessKeys() async {
+  bool _hasCompleteCfAccess(PersistedPairingState state) {
+    return (state.cfAccessClientId == null) ==
+        (state.cfAccessClientSecret == null);
+  }
+
+  Future<void> _deleteCfAccessKeys() async {
     await _storage.delete(key: _keyCfId);
     await _storage.delete(key: _keyCfSecret);
   }

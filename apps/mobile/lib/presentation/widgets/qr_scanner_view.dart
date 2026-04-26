@@ -6,6 +6,11 @@ import 'package:minos/application/minos_providers.dart';
 
 /// Thin wrapper around [MobileScanner] that forwards the first non-empty QR
 /// payload to [pairingControllerProvider].
+///
+/// Submits at most once per camera-detected payload while the controller
+/// is busy or has already accepted the same raw value, otherwise the
+/// scanner would re-fire `submit` every frame and flood both the FRB
+/// boundary and the log panel with duplicate pair attempts.
 class QrScannerView extends ConsumerStatefulWidget {
   const QrScannerView({super.key});
 
@@ -15,6 +20,7 @@ class QrScannerView extends ConsumerStatefulWidget {
 
 class _QrScannerViewState extends ConsumerState<QrScannerView> {
   final MobileScannerController _controller = MobileScannerController();
+  String? _lastSubmitted;
 
   @override
   void dispose() {
@@ -30,9 +36,17 @@ class _QrScannerViewState extends ConsumerState<QrScannerView> {
         final raw = capture.barcodes.isNotEmpty
             ? capture.barcodes.first.rawValue
             : null;
-        if (raw != null && raw.isNotEmpty) {
-          ref.read(pairingControllerProvider.notifier).submit(raw);
-        }
+        if (raw == null || raw.isEmpty) return;
+
+        final pairing = ref.read(pairingControllerProvider);
+        // Already in flight — let it finish before considering a re-scan.
+        if (pairing is AsyncLoading) return;
+        // Same QR already accepted: ignore until the user clears it via
+        // forgetPeer (which resets _lastSubmitted on next mount).
+        if (raw == _lastSubmitted && pairing is AsyncData) return;
+
+        _lastSubmitted = raw;
+        ref.read(pairingControllerProvider.notifier).submit(raw);
       },
     );
   }

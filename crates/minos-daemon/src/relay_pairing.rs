@@ -6,17 +6,20 @@ use chrono::{DateTime, Utc};
 use minos_domain::{DeviceId, PairingToken};
 use serde::{Deserialize, Serialize};
 
-/// QR payload emitted by the Mac when pairing. Encodes where and what —
-/// the relay backend URL, a one-shot pairing token, and the Mac's display
-/// name. No IP/port: the backend is Cloudflare-fronted, addresses are
-/// invariant across deployments (baked at compile time).
+/// QR payload emitted by the Mac when pairing. This mirrors
+/// `minos_protocol::PairingQrPayload` so the Mac renders exactly the schema
+/// the iOS client scans: backend URL, host display name, one-shot token,
+/// expiry, and optional CF Access service-token headers.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RelayQrPayload {
     pub v: u8,
     pub backend_url: String,
-    pub token: PairingToken,
-    pub mac_display_name: String,
+    pub host_display_name: String,
+    pub pairing_token: PairingToken,
+    pub expires_at_ms: i64,
+    pub cf_access_client_id: Option<String>,
+    pub cf_access_client_secret: Option<String>,
 }
 
 /// Mac-side peer record (formerly `minos_pairing::TrustedDevice` without
@@ -36,15 +39,20 @@ mod tests {
     #[test]
     fn relay_qr_payload_round_trip() {
         let qr = RelayQrPayload {
-            v: 1,
+            v: 2,
             backend_url: "wss://minos.fan-nn.top/devices".into(),
-            token: PairingToken("example-32b".into()),
-            mac_display_name: "fannnzhang's MacBook".into(),
+            host_display_name: "fannnzhang's MacBook".into(),
+            pairing_token: PairingToken("example-32b".into()),
+            expires_at_ms: 1_700_000_000_000,
+            cf_access_client_id: Some("client-id".into()),
+            cf_access_client_secret: Some("client-secret".into()),
         };
         let j = serde_json::to_string(&qr).unwrap();
         let back: RelayQrPayload = serde_json::from_str(&j).unwrap();
         assert_eq!(qr, back);
-        assert!(!j.contains("host"));
+        assert!(!j.contains("\"host\""));
+        assert!(!j.contains("mac_display_name"));
+        assert!(!j.contains("\"token\""));
         assert!(!j.contains("port"));
     }
 

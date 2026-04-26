@@ -5,7 +5,8 @@ import Foundation
 /// Renders a `RelayQrPayload` into an `NSImage` suitable for the menubar
 /// pairing sheet. The payload is JSON-encoded with a stable field order
 /// so the iPhone scanner reliably parses it (the schema lives in spec
-/// §4.2: { v, backend_url, token, mac_display_name }).
+/// §7.2: { v, backend_url, host_display_name, pairing_token,
+/// expires_at_ms, cf_access_*? }).
 ///
 /// Plan 05 Phase J.4 — switched from minos_pairing.QrPayload (with
 /// host/port/name fields) to the relay-flow shape.
@@ -41,14 +42,23 @@ enum QRCodeRenderer {
         }
     }
 
-    private static func payloadData(for payload: RelayQrPayload) throws -> Data {
-        try JSONSerialization.data(
-            withJSONObject: [
-                "v": Int(payload.v),
-                "backend_url": payload.backendUrl,
-                "token": payload.token,
-                "mac_display_name": payload.macDisplayName
-            ],
+    static func payloadData(for payload: RelayQrPayload) throws -> Data {
+        var object: [String: Any] = [
+            "v": Int(payload.v),
+            "backend_url": payload.backendUrl,
+            "host_display_name": payload.hostDisplayName,
+            "pairing_token": payload.pairingToken,
+            "expires_at_ms": payload.expiresAtMs
+        ]
+        if let cfAccessClientId = payload.cfAccessClientId {
+            object["cf_access_client_id"] = cfAccessClientId
+        }
+        if let cfAccessClientSecret = payload.cfAccessClientSecret {
+            object["cf_access_client_secret"] = cfAccessClientSecret
+        }
+
+        return try JSONSerialization.data(
+            withJSONObject: object,
             options: [.sortedKeys]
         )
     }

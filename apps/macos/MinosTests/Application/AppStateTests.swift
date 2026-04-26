@@ -42,7 +42,7 @@ final class AppStateTests: XCTestCase {
 
     @MainActor
     func testShowQrStoresPayloadAndMarksShowingQr() async throws {
-        let expected = MockDaemon.makeQrPayload(macDisplayName: "Office Mac")
+        let expected = MockDaemon.makeQrPayload(hostDisplayName: "Office Mac")
         let daemon = MockDaemon(
             currentRelayLink: .connected,
             currentPeer: .unpaired,

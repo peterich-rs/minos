@@ -49,9 +49,17 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.minos.macos
         HEADER_SEARCH_PATHS: $(SRCROOT)/Minos/Generated
-        LIBRARY_SEARCH_PATHS: $(SRCROOT)/../../target/xcframework
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/../../target/xcframework/$(CONFIGURATION)
         OTHER_LDFLAGS: "-lminos_ffi_uniffi"
         OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/Minos/Generated/MinosCoreFFI.modulemap"
+    preBuildScripts:
+      - name: Build Rust UniFFI static library
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/../.."
+          cargo xtask build-macos --configuration "$CONFIGURATION"
   MinosTests:
     type: bundle.unit-test
     platform: macOS

@@ -38,7 +38,9 @@ The macOS app lives in `apps/macos/` and uses XcodeGen plus UniFFI-generated Swi
 
 ```bash
 # Build the universal Rust static library used by Xcode.
+# No configuration defaults to Release for compatibility.
 cargo xtask build-macos
+cargo xtask build-macos --configuration Debug
 
 # Regenerate Swift bindings and the Xcode project.
 cargo xtask gen-uniffi
@@ -47,6 +49,11 @@ cargo xtask gen-xcode
 # Open the generated project in Xcode.
 open apps/macos/Minos.xcodeproj
 ```
+
+The generated Xcode project runs `cargo xtask build-macos --configuration "$CONFIGURATION"`
+before compiling the app target. Debug Xcode builds link the Rust dev-profile
+archive from `target/xcframework/Debug/`; non-Debug configurations link a Rust
+release-profile archive from `target/xcframework/<Configuration>/`.
 
 ## Rust daemon CLI
 
@@ -88,9 +95,24 @@ cargo xtask gen-frb
 # Build iOS staticlibs (device + simulator).
 cargo xtask build-ios
 
-# Open the iOS project in Xcode (requires an Apple Developer team for real-device signing).
-open apps/mobile/ios/Runner.xcodeproj
+# Open the iOS workspace in Xcode (requires an Apple Developer team for real-device signing).
+open apps/mobile/ios/Runner.xcworkspace
 ```
+
+For a real-device install that still launches from the Home Screen after you
+force-quit it, install a Profile or Release Flutter build instead of a Debug
+`flutter run` build:
+
+```bash
+cd apps/mobile
+fvm flutter devices
+fvm flutter run --profile -d <device-id>
+# or: fvm flutter run --release -d <device-id>
+```
+
+If you install from Xcode, open `apps/mobile/ios/Runner.xcworkspace`, choose
+your signing team, then set the Runner scheme's Run configuration to `Profile`
+or `Release` before Product > Run.
 
 During development without a real device: iOS Tier A still uses the pre-relay Tailscale pair flow, so spin up the legacy minos-daemon stack on that side. The Mac-side relay flow has its own dev bin instead — see `cargo run -p minos-mobile --bin fake-peer --features cli`, which drives the relay end-to-end without an iPhone.
 

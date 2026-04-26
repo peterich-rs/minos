@@ -132,4 +132,27 @@ void main() {
     const err = MinosError.pairingTokenInvalid();
     expect(err.userMessage(Lang.zh), isNot(equals(err.userMessage(Lang.en))));
   });
+
+  group('MinosErrorDisplay.detail', () {
+    test('connectFailed returns "<url> — <message>"', () {
+      const err = MinosError.connectFailed(
+        url: 'wss://example.com/devices',
+        message: 'io ConnectionRefused: refused',
+      );
+      expect(
+        err.detail,
+        'wss://example.com/devices — io ConnectionRefused: refused',
+      );
+    });
+
+    test('cfAuthFailed exposes its message field', () {
+      const err = MinosError.cfAuthFailed(message: 'http 403');
+      expect(err.detail, 'http 403');
+    });
+
+    test('payload-less variants return null detail', () {
+      expect(const MinosError.pairingTokenInvalid().detail, isNull);
+      expect(const MinosError.agentNotRunning().detail, isNull);
+    });
+  });
 }

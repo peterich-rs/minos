@@ -45,4 +45,43 @@ extension MinosErrorDisplay on MinosError {
   /// `kind_message` free function.
   String userMessage([Lang lang = Lang.zh]) =>
       kindMessage(kind: kind, lang: lang);
+
+  /// Dynamic detail captured by the Rust side — the underlying TLS / IO /
+  /// HTTP-status string for connect failures, the failed RPC method, etc.
+  /// `null` for variants without an attached payload (e.g.
+  /// [MinosError_PairingTokenInvalid]). Used by the iOS UI to surface the
+  /// "WHY" past the static localized hint.
+  String? get detail => switch (this) {
+    final MinosError_BindFailed e => '${e.addr}: ${e.message}',
+    final MinosError_ConnectFailed e => '${e.url} — ${e.message}',
+    final MinosError_Disconnected e => e.reason,
+    MinosError_PairingTokenInvalid() => null,
+    final MinosError_PairingStateMismatch e => 'state=${e.actual}',
+    final MinosError_DeviceNotTrusted e => e.deviceId,
+    final MinosError_StoreIo e => '${e.path}: ${e.message}',
+    final MinosError_StoreCorrupt e => '${e.path}: ${e.message}',
+    final MinosError_CliProbeTimeout e => '${e.bin} after ${e.timeoutMs}ms',
+    final MinosError_CliProbeFailed e => '${e.bin}: ${e.message}',
+    final MinosError_RpcCallFailed e => '${e.method}: ${e.message}',
+    final MinosError_Unauthorized e => e.reason,
+    final MinosError_ConnectionStateMismatch e =>
+      'expected=${e.expected} actual=${e.actual}',
+    final MinosError_EnvelopeVersionUnsupported e => 'v=${e.version}',
+    final MinosError_PeerOffline e => e.peerDeviceId,
+    final MinosError_BackendInternal e => e.message,
+    final MinosError_CfAuthFailed e => e.message,
+    final MinosError_CodexSpawnFailed e => e.message,
+    final MinosError_CodexConnectFailed e => '${e.url}: ${e.message}',
+    final MinosError_CodexProtocolError e => '${e.method}: ${e.message}',
+    MinosError_AgentAlreadyRunning() => null,
+    MinosError_AgentNotRunning() => null,
+    final MinosError_AgentNotSupported e => e.agent.toString(),
+    MinosError_AgentSessionIdMismatch() => null,
+    final MinosError_CfAccessMisconfigured e => e.reason,
+    final MinosError_IngestSeqConflict e => '${e.threadId}@${e.seq}',
+    final MinosError_ThreadNotFound e => e.threadId,
+    final MinosError_TranslationNotImplemented e => e.agent.toString(),
+    final MinosError_TranslationFailed e => '${e.agent}: ${e.message}',
+    final MinosError_PairingQrVersionUnsupported e => 'v=${e.version}',
+  };
 }

@@ -174,14 +174,20 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
 
     static func makeQrPayload(
         backendUrl: String = "ws://127.0.0.1:8787/devices",
-        token: PairingToken = "pairing-token",
-        macDisplayName: String = "Minos Mac"
+        pairingToken: PairingToken = "pairing-token",
+        hostDisplayName: String = "Minos Mac",
+        expiresAtMs: Int64 = 1_700_000_000_000,
+        cfAccessClientId: String? = nil,
+        cfAccessClientSecret: String? = nil
     ) -> RelayQrPayload {
         RelayQrPayload(
-            v: 1,
+            v: 2,
             backendUrl: backendUrl,
-            token: token,
-            macDisplayName: macDisplayName
+            hostDisplayName: hostDisplayName,
+            pairingToken: pairingToken,
+            expiresAtMs: expiresAtMs,
+            cfAccessClientId: cfAccessClientId,
+            cfAccessClientSecret: cfAccessClientSecret
         )
     }
 

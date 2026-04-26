@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1452323239;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1633199874;
 
 // Section: executor
 
@@ -694,6 +694,73 @@ fn wire__crate__api__minos__kind_message_impl(
         },
     )
 }
+fn wire__crate__api__minos__recent_log_records_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "recent_log_records",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::minos::recent_log_records())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__minos__subscribe_log_records_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "subscribe_log_records",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_sink = <StreamSink<
+                crate::api::minos::LogRecord,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::minos::subscribe_log_records(api_sink);
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 
 // Section: static_checks
 
@@ -978,6 +1045,16 @@ impl SseDecode
 }
 
 impl SseDecode
+    for StreamSink<crate::api::minos::LogRecord, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
     for StreamSink<crate::api::minos::UiEventFrame, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -1108,6 +1185,18 @@ impl SseDecode for crate::api::minos::Lang {
     }
 }
 
+impl SseDecode for Vec<crate::api::minos::LogRecord> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::minos::LogRecord>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1169,6 +1258,37 @@ impl SseDecode for Vec<crate::api::minos::UiEventMessage> {
             ));
         }
         return ans_;
+    }
+}
+
+impl SseDecode for crate::api::minos::LogLevel {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::minos::LogLevel::Trace,
+            1 => crate::api::minos::LogLevel::Debug,
+            2 => crate::api::minos::LogLevel::Info,
+            3 => crate::api::minos::LogLevel::Warn,
+            4 => crate::api::minos::LogLevel::Error,
+            _ => unreachable!("Invalid variant for LogLevel: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::LogRecord {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_level = <crate::api::minos::LogLevel>::sse_decode(deserializer);
+        let mut var_target = <String>::sse_decode(deserializer);
+        let mut var_message = <String>::sse_decode(deserializer);
+        let mut var_tsMs = <i64>::sse_decode(deserializer);
+        return crate::api::minos::LogRecord {
+            level: var_level,
+            target: var_target,
+            message: var_message,
+            ts_ms: var_tsMs,
+        };
     }
 }
 
@@ -1774,6 +1894,9 @@ fn pde_ffi_dispatcher_primary_impl(
             data_len,
         ),
         12 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
+        15 => {
+            wire__crate__api__minos__subscribe_log_records_impl(port, ptr, rust_vec_len, data_len)
+        }
         _ => unreachable!(),
     }
 }
@@ -1794,6 +1917,7 @@ fn pde_ffi_dispatcher_sync_impl(
             data_len,
         ),
         13 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1975,6 +2099,47 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ListThreads
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ListThreadsResponse> {
         self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::minos::LogLevel {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Trace => 0.into_dart(),
+            Self::Debug => 1.into_dart(),
+            Self::Info => 2.into_dart(),
+            Self::Warn => 3.into_dart(),
+            Self::Error => 4.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::minos::LogLevel {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::LogLevel>
+    for crate::api::minos::LogLevel
+{
+    fn into_into_dart(self) -> crate::api::minos::LogLevel {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::minos::LogRecord {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.level.into_into_dart().into_dart(),
+            self.target.into_into_dart().into_dart(),
+            self.message.into_into_dart().into_dart(),
+            self.ts_ms.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::minos::LogRecord {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::LogRecord>
+    for crate::api::minos::LogRecord
+{
+    fn into_into_dart(self) -> crate::api::minos::LogRecord {
+        self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -2466,6 +2631,15 @@ impl SseEncode
 }
 
 impl SseEncode
+    for StreamSink<crate::api::minos::LogRecord, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
     for StreamSink<crate::api::minos::UiEventFrame, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -2603,6 +2777,16 @@ impl SseEncode for crate::api::minos::Lang {
     }
 }
 
+impl SseEncode for Vec<crate::api::minos::LogRecord> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::minos::LogRecord>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2647,6 +2831,35 @@ impl SseEncode for Vec<crate::api::minos::UiEventMessage> {
         for item in self {
             <crate::api::minos::UiEventMessage>::sse_encode(item, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::minos::LogLevel {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::minos::LogLevel::Trace => 0,
+                crate::api::minos::LogLevel::Debug => 1,
+                crate::api::minos::LogLevel::Info => 2,
+                crate::api::minos::LogLevel::Warn => 3,
+                crate::api::minos::LogLevel::Error => 4,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::minos::LogRecord {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::minos::LogLevel>::sse_encode(self.level, serializer);
+        <String>::sse_encode(self.target, serializer);
+        <String>::sse_encode(self.message, serializer);
+        <i64>::sse_encode(self.ts_ms, serializer);
     }
 }
 
