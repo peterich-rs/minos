@@ -100,6 +100,31 @@ void main() {
     expect(await store.loadState(), isNull);
   });
 
+  test(
+    'saveState/loadState preserves qr-carried cf access credentials',
+    () async {
+      final store = SecurePairingStore(storage: storage);
+      const state = PersistedPairingState(
+        backendUrl: 'wss://example.com/devices',
+        deviceId: 'dev-123',
+        deviceSecret: 'sec-456',
+        cfAccessClientId: 'qr-cf-id',
+        cfAccessClientSecret: 'qr-cf-secret',
+      );
+
+      await store.saveState(state);
+
+      expect(values, <String, String>{
+        'minos.backend_url': 'wss://example.com/devices',
+        'minos.device_id': 'dev-123',
+        'minos.device_secret': 'sec-456',
+        'minos.cf_access_client_id': 'qr-cf-id',
+        'minos.cf_access_client_secret': 'qr-cf-secret',
+      });
+      expect(await store.loadState(), state);
+    },
+  );
+
   test('loadState wipes incomplete core resume snapshots', () async {
     final store = SecurePairingStore(storage: storage);
     values.addAll(<String, String>{
@@ -113,31 +138,45 @@ void main() {
     expect(values, isEmpty);
   });
 
-  test(
-    'loadState removes legacy stored Cloudflare Access credentials',
-    () async {
-      final store = SecurePairingStore(storage: storage);
-      values.addAll(<String, String>{
-        'minos.backend_url': 'ws://127.0.0.1/devices',
-        'minos.device_id': 'dev-123',
-        'minos.device_secret': 'sec-456',
-        'minos.cf_access_client_id': 'legacy-cf-id',
-        'minos.cf_access_client_secret': 'legacy-cf-secret',
-      });
+  test('loadState restores stored Cloudflare Access credentials', () async {
+    final store = SecurePairingStore(storage: storage);
+    values.addAll(<String, String>{
+      'minos.backend_url': 'ws://127.0.0.1/devices',
+      'minos.device_id': 'dev-123',
+      'minos.device_secret': 'sec-456',
+      'minos.cf_access_client_id': 'stored-cf-id',
+      'minos.cf_access_client_secret': 'stored-cf-secret',
+    });
 
-      expect(
-        await store.loadState(),
-        const PersistedPairingState(
-          backendUrl: 'ws://127.0.0.1/devices',
-          deviceId: 'dev-123',
-          deviceSecret: 'sec-456',
-        ),
-      );
-      expect(values, <String, String>{
-        'minos.backend_url': 'ws://127.0.0.1/devices',
-        'minos.device_id': 'dev-123',
-        'minos.device_secret': 'sec-456',
-      });
-    },
-  );
+    expect(
+      await store.loadState(),
+      const PersistedPairingState(
+        backendUrl: 'ws://127.0.0.1/devices',
+        deviceId: 'dev-123',
+        deviceSecret: 'sec-456',
+        cfAccessClientId: 'stored-cf-id',
+        cfAccessClientSecret: 'stored-cf-secret',
+      ),
+    );
+    expect(values, <String, String>{
+      'minos.backend_url': 'ws://127.0.0.1/devices',
+      'minos.device_id': 'dev-123',
+      'minos.device_secret': 'sec-456',
+      'minos.cf_access_client_id': 'stored-cf-id',
+      'minos.cf_access_client_secret': 'stored-cf-secret',
+    });
+  });
+
+  test('loadState wipes incomplete Cloudflare Access credentials', () async {
+    final store = SecurePairingStore(storage: storage);
+    values.addAll(<String, String>{
+      'minos.backend_url': 'ws://127.0.0.1/devices',
+      'minos.device_id': 'dev-123',
+      'minos.device_secret': 'sec-456',
+      'minos.cf_access_client_id': 'stored-cf-id',
+    });
+
+    expect(await store.loadState(), isNull);
+    expect(values, isEmpty);
+  });
 }

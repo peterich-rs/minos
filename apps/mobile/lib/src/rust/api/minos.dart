@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `spawn_state_forwarder`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -22,6 +22,18 @@ Future<void> initLogging({required String logDir}) =>
 /// coding them.
 String kindMessage({required ErrorKind kind, required Lang lang}) =>
     RustLib.instance.api.crateApiMinosKindMessage(kind: kind, lang: lang);
+
+/// Snapshot the records currently held in the ring buffer (oldest first).
+/// Pair this with [`subscribe_log_records`] when populating a freshly
+/// mounted log panel so prior events are not lost.
+List<LogRecord> recentLogRecords() =>
+    RustLib.instance.api.crateApiMinosRecentLogRecords();
+
+/// Subscribe to the live tail. Each subscriber gets its own broadcast
+/// receiver; lagging subscribers drop old records (the producer is never
+/// blocked). The spawned task exits when the Dart side drops the stream.
+Stream<LogRecord> subscribeLogRecords() =>
+    RustLib.instance.api.crateApiMinosSubscribeLogRecords();
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>>
 abstract class MobileClient implements RustOpaqueInterface {
@@ -161,6 +173,38 @@ class ListThreadsResponse {
           runtimeType == other.runtimeType &&
           threads == other.threads &&
           nextBeforeTsMs == other.nextBeforeTsMs;
+}
+
+/// Severity tag mirrored from `minos_mobile::log_capture::LogLevel`.
+enum LogLevel { trace, debug, info, warn, error }
+
+/// Single tracing event captured by the in-process ring buffer.
+class LogRecord {
+  final LogLevel level;
+  final String target;
+  final String message;
+  final PlatformInt64 tsMs;
+
+  const LogRecord({
+    required this.level,
+    required this.target,
+    required this.message,
+    required this.tsMs,
+  });
+
+  @override
+  int get hashCode =>
+      level.hashCode ^ target.hashCode ^ message.hashCode ^ tsMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LogRecord &&
+          runtimeType == other.runtimeType &&
+          level == other.level &&
+          target == other.target &&
+          message == other.message &&
+          tsMs == other.tsMs;
 }
 
 enum MessageRole { user, assistant, system }

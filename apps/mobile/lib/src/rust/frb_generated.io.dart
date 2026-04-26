@@ -49,6 +49,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<LogRecord> dco_decode_StreamSink_log_record_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<UiEventFrame> dco_decode_StreamSink_ui_event_frame_Sse(
     dynamic raw,
   );
@@ -101,6 +104,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang dco_decode_lang(dynamic raw);
 
   @protected
+  List<LogRecord> dco_decode_list_log_record(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -114,6 +120,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<UiEventMessage> dco_decode_list_ui_event_message(dynamic raw);
+
+  @protected
+  LogLevel dco_decode_log_level(dynamic raw);
+
+  @protected
+  LogRecord dco_decode_log_record(dynamic raw);
 
   @protected
   MessageRole dco_decode_message_role(dynamic raw);
@@ -202,6 +214,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<LogRecord> sse_decode_StreamSink_log_record_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RustStreamSink<UiEventFrame> sse_decode_StreamSink_ui_event_frame_Sse(
     SseDeserializer deserializer,
   );
@@ -260,6 +277,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang sse_decode_lang(SseDeserializer deserializer);
 
   @protected
+  List<LogRecord> sse_decode_list_log_record(SseDeserializer deserializer);
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
@@ -281,6 +301,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<UiEventMessage> sse_decode_list_ui_event_message(
     SseDeserializer deserializer,
   );
+
+  @protected
+  LogLevel sse_decode_log_level(SseDeserializer deserializer);
+
+  @protected
+  LogRecord sse_decode_log_record(SseDeserializer deserializer);
 
   @protected
   MessageRole sse_decode_message_role(SseDeserializer deserializer);
@@ -384,6 +410,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_log_record_Sse(
+    RustStreamSink<LogRecord> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_ui_event_frame_Sse(
     RustStreamSink<UiEventFrame> self,
     SseSerializer serializer,
@@ -456,6 +488,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_lang(Lang self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_log_record(
+    List<LogRecord> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -484,6 +522,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     List<UiEventMessage> self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_log_level(LogLevel self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_log_record(LogRecord self, SseSerializer serializer);
 
   @protected
   void sse_encode_message_role(MessageRole self, SseSerializer serializer);

@@ -31,6 +31,9 @@ class _FakeCore implements MinosCoreProtocol {
   Future<void> forgetPeer() async {}
 
   @override
+  Future<bool> hasPersistedPairing() async => false;
+
+  @override
   Stream<ConnectionState> get connectionStates =>
       const Stream<ConnectionState>.empty();
 

@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use flutter_rust_bridge::frb;
+use minos_mobile::log_capture::{LogLevel as CoreLogLevel, LogRecord as CoreLogRecord};
 use minos_mobile::UiEventFrame as MobileUiEventFrame;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::watch;
@@ -248,6 +249,83 @@ pub fn init_logging(log_dir: String) -> Result<(), MinosError> {
 #[must_use]
 pub fn kind_message(kind: ErrorKind, lang: Lang) -> String {
     kind.user_message(lang).to_string()
+}
+
+// ───────────────────────────── log capture surface ─────────────────────────────
+
+/// Severity tag mirrored from `minos_mobile::log_capture::LogLevel`.
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl From<CoreLogLevel> for LogLevel {
+    fn from(level: CoreLogLevel) -> Self {
+        match level {
+            CoreLogLevel::Trace => Self::Trace,
+            CoreLogLevel::Debug => Self::Debug,
+            CoreLogLevel::Info => Self::Info,
+            CoreLogLevel::Warn => Self::Warn,
+            CoreLogLevel::Error => Self::Error,
+        }
+    }
+}
+
+/// Single tracing event captured by the in-process ring buffer.
+pub struct LogRecord {
+    pub level: LogLevel,
+    pub target: String,
+    pub message: String,
+    pub ts_ms: i64,
+}
+
+impl From<CoreLogRecord> for LogRecord {
+    fn from(record: CoreLogRecord) -> Self {
+        Self {
+            level: record.level.into(),
+            target: record.target,
+            message: record.message,
+            ts_ms: record.ts_ms,
+        }
+    }
+}
+
+/// Snapshot the records currently held in the ring buffer (oldest first).
+/// Pair this with [`subscribe_log_records`] when populating a freshly
+/// mounted log panel so prior events are not lost.
+#[frb(sync)]
+#[must_use]
+pub fn recent_log_records() -> Vec<LogRecord> {
+    minos_mobile::log_capture::recent()
+        .into_iter()
+        .map(LogRecord::from)
+        .collect()
+}
+
+/// Subscribe to the live tail. Each subscriber gets its own broadcast
+/// receiver; lagging subscribers drop old records (the producer is never
+/// blocked). The spawned task exits when the Dart side drops the stream.
+pub fn subscribe_log_records(sink: StreamSink<LogRecord>) {
+    let mut rx = minos_mobile::log_capture::subscribe();
+    frb_runtime().spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(record) => {
+                    if sink.add(LogRecord::from(record)).is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Best-effort tail; the Dart side can re-snapshot
+                    // recent_log_records() if it cares about the gap.
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 }
 
 // ─────────────────────────── mirrored domain types ───────────────────────────

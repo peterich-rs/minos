@@ -12,6 +12,8 @@ use mars_xlog::{LogLevel, Xlog, XlogConfig, XlogLayer, XlogLayerConfig, XlogLaye
 use minos_domain::MinosError;
 use tracing_subscriber::prelude::*;
 
+use crate::log_capture::CaptureLayer;
+
 static HANDLE: OnceLock<XlogLayerHandle> = OnceLock::new();
 
 const NAME_PREFIX: &str = "mobile-rust";
@@ -38,7 +40,11 @@ pub fn init(log_dir: &Path) -> Result<(), MinosError> {
 
     let _ = HANDLE.set(handle);
 
-    let subscriber = tracing_subscriber::registry().with(layer);
+    // Compose: xlog (durable on-disk) + CaptureLayer (in-process tail for
+    // the Dart UI). Both see every event so the UI panel matches the file.
+    let subscriber = tracing_subscriber::registry()
+        .with(layer)
+        .with(CaptureLayer);
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     tracing::info!(name_prefix = NAME_PREFIX, dir = %log_dir.display(), "mobile logging initialized");

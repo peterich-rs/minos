@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1452323239;
+  int get rustContentHash => -1633199874;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -128,6 +128,10 @@ abstract class RustLibApi extends BaseApi {
     required ErrorKind kind,
     required Lang lang,
   });
+
+  List<LogRecord> crateApiMinosRecentLogRecords();
+
+  Stream<LogRecord> crateApiMinosSubscribeLogRecords();
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_MobileClient;
@@ -596,6 +600,63 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     argNames: ["kind", "lang"],
   );
 
+  @override
+  List<LogRecord> crateApiMinosRecentLogRecords() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_log_record,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMinosRecentLogRecordsConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosRecentLogRecordsConstMeta =>
+      const TaskConstMeta(debugName: "recent_log_records", argNames: []);
+
+  @override
+  Stream<LogRecord> crateApiMinosSubscribeLogRecords() {
+    final sink = RustStreamSink<LogRecord>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_StreamSink_log_record_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 15,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: null,
+          ),
+          constMeta: kCrateApiMinosSubscribeLogRecordsConstMeta,
+          argValues: [sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiMinosSubscribeLogRecordsConstMeta =>
+      const TaskConstMeta(
+        debugName: "subscribe_log_records",
+        argNames: ["sink"],
+      );
+
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_MobileClient => wire
       .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient;
@@ -641,6 +702,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   RustStreamSink<ConnectionState> dco_decode_StreamSink_connection_state_Sse(
     dynamic raw,
   ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<LogRecord> dco_decode_StreamSink_log_record_Sse(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError();
   }
@@ -757,6 +824,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<LogRecord> dco_decode_list_log_record(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_log_record).toList();
+  }
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
@@ -797,6 +870,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<UiEventMessage> dco_decode_list_ui_event_message(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_ui_event_message).toList();
+  }
+
+  @protected
+  LogLevel dco_decode_log_level(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return LogLevel.values[raw as int];
+  }
+
+  @protected
+  LogRecord dco_decode_log_record(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return LogRecord(
+      level: dco_decode_log_level(arr[0]),
+      target: dco_decode_String(arr[1]),
+      message: dco_decode_String(arr[2]),
+      tsMs: dco_decode_i_64(arr[3]),
+    );
   }
 
   @protected
@@ -1204,6 +1297,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<LogRecord> sse_decode_StreamSink_log_record_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
   RustStreamSink<UiEventFrame> sse_decode_StreamSink_ui_event_frame_Sse(
     SseDeserializer deserializer,
   ) {
@@ -1328,6 +1429,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<LogRecord> sse_decode_list_log_record(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <LogRecord>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_log_record(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
@@ -1388,6 +1501,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ans_.add(sse_decode_ui_event_message(deserializer));
     }
     return ans_;
+  }
+
+  @protected
+  LogLevel sse_decode_log_level(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return LogLevel.values[inner];
+  }
+
+  @protected
+  LogRecord sse_decode_log_record(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_level = sse_decode_log_level(deserializer);
+    var var_target = sse_decode_String(deserializer);
+    var var_message = sse_decode_String(deserializer);
+    var var_tsMs = sse_decode_i_64(deserializer);
+    return LogRecord(
+      level: var_level,
+      target: var_target,
+      message: var_message,
+      tsMs: var_tsMs,
+    );
   }
 
   @protected
@@ -1900,6 +2035,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_log_record_Sse(
+    RustStreamSink<LogRecord> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_log_record,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_StreamSink_ui_event_frame_Sse(
     RustStreamSink<UiEventFrame> self,
     SseSerializer serializer,
@@ -2038,6 +2190,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_log_record(
+    List<LogRecord> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_log_record(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -2090,6 +2254,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     for (final item in self) {
       sse_encode_ui_event_message(item, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_log_level(LogLevel self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_log_record(LogRecord self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_log_level(self.level, serializer);
+    sse_encode_String(self.target, serializer);
+    sse_encode_String(self.message, serializer);
+    sse_encode_i_64(self.tsMs, serializer);
   }
 
   @protected

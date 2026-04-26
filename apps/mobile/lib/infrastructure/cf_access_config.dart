@@ -7,6 +7,9 @@ import 'package:minos/src/rust/api/minos.dart';
 /// Flutter reads these values from `--dart-define`, so CI can inject GitHub
 /// Secrets and local runs can forward shell env vars with:
 /// `--dart-define=CF_ACCESS_CLIENT_ID=$CF_ACCESS_CLIENT_ID`.
+///
+/// If no build-time values are present, QR-carried CF Access credentials are
+/// left intact so ad-hoc real-device pairing can use the host-provided token.
 class CfAccessConfig {
   CfAccessConfig({String? clientId, String? clientSecret})
     : clientId = _blankToNull(clientId),
@@ -41,12 +44,12 @@ class CfAccessConfig {
     );
   }
 
-  /// Override any QR-carried CF Access fields with the build-time values.
+  /// Override QR-carried CF Access fields only when build-time values are set.
   ///
   /// Invalid JSON is deliberately passed through unchanged so Rust preserves
   /// the existing `qr_payload` parse error behavior.
   String applyToQrJson(String qrJson) {
-    if (!isConfigured && !qrJson.contains('cf_access_client_')) {
+    if (!isConfigured) {
       return qrJson;
     }
 
@@ -59,13 +62,8 @@ class CfAccessConfig {
     if (decoded is! Map) return qrJson;
 
     final next = Map<String, Object?>.from(decoded);
-    if (isConfigured) {
-      next['cf_access_client_id'] = clientId;
-      next['cf_access_client_secret'] = clientSecret;
-    } else {
-      next.remove('cf_access_client_id');
-      next.remove('cf_access_client_secret');
-    }
+    next['cf_access_client_id'] = clientId;
+    next['cf_access_client_secret'] = clientSecret;
     return jsonEncode(next);
   }
 
