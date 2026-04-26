@@ -2227,7 +2227,7 @@ git commit -m "feat(backend): GET /v1/threads + /v1/threads/{id}/events,last_seq
 
 (`/v1/threads/{id}/events` and `/v1/threads/{id}/last_seq` ship with C1 because the route file is small enough to land together. Phase boundary kept for tracking only.)
 
-- [ ] **Step 1: confirm both routes are exercised by tests**
+- [x] **Step 1: confirm both routes are exercised by tests**
 
 Add to `crates/minos-backend/tests/v1_threads.rs`:
 
@@ -2277,13 +2277,13 @@ async fn get_thread_last_seq_returns_max() {
 }
 ```
 
-- [ ] **Step 2: Run — pass**
+- [x] **Step 2: Run — pass**
 
 ```bash
 cargo test -p minos-backend --test v1_threads
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/minos-backend/tests/v1_threads.rs
