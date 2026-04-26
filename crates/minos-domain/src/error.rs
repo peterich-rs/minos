@@ -75,6 +75,7 @@ impl ErrorKind {
     ///   6. the frb mirror enums `_MinosError` and `_ErrorKind` in
     ///      `crates/minos-ffi-frb/src/api/minos.rs` (re-run `cargo xtask gen-frb`)
     #[must_use]
+    #[allow(clippy::too_many_lines)] // localization table grows with every variant
     pub fn user_message(self, lang: Lang) -> &'static str {
         match (self, lang) {
             (Self::BindFailed, Lang::Zh) => {
