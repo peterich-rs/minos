@@ -4,6 +4,13 @@
 //!
 //! Plan 05 Phase L.1 / spec §10.3.
 //!
+//! Phase 2 Task 2.3 made `/v1/pairing/consume` bearer-gated for the
+//! `ios-client` role, so this binary now registers a throwaway account
+//! first and stamps the resulting bearer onto both the HTTP pair call
+//! and the subsequent WebSocket handshake. Phase 12 Task 12.1 will
+//! restructure this into clap subcommands; for now the single mode is
+//! "register-then-pair".
+//!
 //! Usage:
 //!
 //! ```text
@@ -16,14 +23,16 @@
 //! cargo run -p minos-mobile --bin fake-peer --features cli -- \
 //!     --backend ws://127.0.0.1:8787/devices \
 //!     --token <token-from-qr> \
-//!     --device-name "Fan's fake iPhone"
+//!     --device-name "Fan's fake iPhone" \
+//!     --email fake@example.com \
+//!     --password Sup3rSecret!
 //! ```
 //!
-//! The pairing handshake uses HTTP `POST /v1/pairing/consume` (the WS
-//! `LocalRpc` dispatcher was retired with plan 07 Phase D); the returned
-//! `device_secret` is then stamped onto an authenticated WebSocket
-//! connection and inbound frames are printed to stderr until the socket
-//! closes.
+//! The pairing handshake uses HTTP `POST /v1/auth/register` followed by
+//! `POST /v1/pairing/consume` (the WS `LocalRpc` dispatcher was retired
+//! with plan 07 Phase D); the returned `device_secret` and bearer are
+//! both stamped onto an authenticated WebSocket connection and inbound
+//! frames are printed to stderr until the socket closes.
 //!
 //! No retry logic, no Keychain persistence — this is dev-only.
 
@@ -41,9 +50,10 @@ use tokio_tungstenite::tungstenite::Message;
 #[command(
     name = "fake-peer",
     about = "Smoke-test Mac pairing without iOS by impersonating an ios-client.",
-    long_about = "Pairs against the backend's HTTP /v1/pairing/consume route, \
-                  opens an authenticated WebSocket with the returned \
-                  device-secret, and prints inbound frames until interrupted."
+    long_about = "Registers a throwaway account on the backend, pairs against \
+                  the HTTP /v1/pairing/consume route with the resulting bearer, \
+                  opens an authenticated WebSocket with the device-secret + \
+                  bearer, and prints inbound frames until interrupted."
 )]
 struct Args {
     /// Relay backend URL (the `/devices` WebSocket endpoint; the HTTP
@@ -56,6 +66,15 @@ struct Args {
     /// Display name announced to the host during pair.
     #[arg(long, default_value = "fake-peer")]
     device_name: String,
+    /// Email used to register a throwaway account on the backend. Phase
+    /// 2 made the `ios-client` rail bearer-gated, so the binary needs an
+    /// account before it can pair.
+    #[arg(long, default_value = "fake-peer@example.com")]
+    email: String,
+    /// Password for the throwaway account. Must satisfy the backend's
+    /// password rules (see spec §5.4).
+    #[arg(long, default_value = "fake-peer-pw-12345")]
+    password: String,
 }
 
 #[tokio::main]
@@ -63,16 +82,29 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device_id = DeviceId::new();
 
-    // 1. Pair via HTTP.
+    // 1. Register a throwaway account so we have a bearer for the
+    //    bearer-gated pair endpoint and the WS upgrade.
     let http =
         MobileHttpClient::new(&args.backend, device_id, None).context("build MobileHttpClient")?;
+    eprintln!("→ POST /v1/auth/register email={}", args.email);
+    let auth_resp = http
+        .register(&args.email, &args.password)
+        .await
+        .context("POST /v1/auth/register")?;
+    eprintln!(
+        "← account_id={} email={}",
+        auth_resp.account.account_id, auth_resp.account.email
+    );
+    let access_token = auth_resp.access_token;
+
+    // 2. Pair via HTTP, stamping the bearer.
     let pair_req = PairConsumeRequest {
         token: PairingToken(args.token.clone()),
         device_name: args.device_name.clone(),
     };
     eprintln!("→ POST /v1/pairing/consume token={}", args.token);
     let pair_resp = http
-        .pair_consume(pair_req)
+        .pair_consume(pair_req, &access_token)
         .await
         .context("POST /v1/pairing/consume")?;
     eprintln!(
@@ -81,7 +113,9 @@ async fn main() -> anyhow::Result<()> {
     );
     let secret = pair_resp.your_device_secret;
 
-    // 2. Open the authenticated WebSocket.
+    // 3. Open the authenticated WebSocket. The bearer is also stamped
+    //    on the WS upgrade so the backend's bearer-gated `IosClient`
+    //    rail accepts the connection (spec §6.1).
     let mut request = args
         .backend
         .clone()
@@ -113,6 +147,12 @@ async fn main() -> anyhow::Result<()> {
         args.device_name
             .parse()
             .context("encode device-name header")?,
+    );
+    request.headers_mut().insert(
+        HeaderName::from_static("authorization"),
+        format!("Bearer {access_token}")
+            .parse()
+            .context("encode authorization header")?,
     );
 
     eprintln!(
