@@ -4,3 +4,4 @@
 pub mod bearer;
 pub mod jwt;
 pub mod passwords;
+pub mod rate_limit;

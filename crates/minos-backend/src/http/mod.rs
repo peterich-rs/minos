@@ -35,7 +35,8 @@ use axum::Router;
 use sqlx::SqlitePool;
 
 use crate::{
-    ingest::translate::ThreadTranslators, pairing::PairingService, session::SessionRegistry,
+    auth::rate_limit::RateLimiter, ingest::translate::ThreadTranslators,
+    pairing::PairingService, session::SessionRegistry,
 };
 
 pub mod auth;
@@ -79,6 +80,14 @@ pub struct BackendState {
     /// bytes — sharing one heap copy across the request lifecycle keeps
     /// `BackendState::clone` cheap.
     pub jwt_secret: Arc<String>,
+    /// Per-email login bucket (10 / minute, spec §5.6).
+    pub auth_login_per_email: Arc<RateLimiter>,
+    /// Per-IP login bucket (5 / minute, spec §5.6).
+    pub auth_login_per_ip: Arc<RateLimiter>,
+    /// Per-IP register bucket (3 / hour, spec §5.6).
+    pub auth_register_per_ip: Arc<RateLimiter>,
+    /// Per-account refresh bucket (60 / hour, spec §5.6).
+    pub auth_refresh_per_acc: Arc<RateLimiter>,
     /// Crate version string; exposed via `/health`.
     ///
     /// Stored here rather than read from `env!("CARGO_PKG_VERSION")` at the
@@ -112,9 +121,37 @@ impl BackendState {
                 cf_access_client_secret: None,
             }),
             jwt_secret: Arc::new(jwt_secret),
+            auth_login_per_email: default_login_per_email(),
+            auth_login_per_ip: default_login_per_ip(),
+            auth_register_per_ip: default_register_per_ip(),
+            auth_refresh_per_acc: default_refresh_per_acc(),
             version: env!("CARGO_PKG_VERSION"),
         }
     }
+}
+
+/// 10 logins per minute, keyed by email. Spec §5.6.
+#[must_use]
+pub fn default_login_per_email() -> Arc<RateLimiter> {
+    Arc::new(RateLimiter::new(10, Duration::from_secs(60)))
+}
+
+/// 5 logins per minute, keyed by IP. Spec §5.6.
+#[must_use]
+pub fn default_login_per_ip() -> Arc<RateLimiter> {
+    Arc::new(RateLimiter::new(5, Duration::from_secs(60)))
+}
+
+/// 3 register calls per hour, keyed by IP. Spec §5.6.
+#[must_use]
+pub fn default_register_per_ip() -> Arc<RateLimiter> {
+    Arc::new(RateLimiter::new(3, Duration::from_secs(60 * 60)))
+}
+
+/// 60 refreshes per hour, keyed by account. Spec §5.6.
+#[must_use]
+pub fn default_refresh_per_acc() -> Arc<RateLimiter> {
+    Arc::new(RateLimiter::new(60, Duration::from_secs(60 * 60)))
 }
 
 /// Build the backend's top-level axum `Router`.
@@ -171,6 +208,10 @@ pub mod test_support {
                 cf_access_client_secret: None,
             }),
             jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
+            auth_login_per_email: super::default_login_per_email(),
+            auth_login_per_ip: super::default_login_per_ip(),
+            auth_register_per_ip: super::default_register_per_ip(),
+            auth_refresh_per_acc: super::default_refresh_per_acc(),
             version: env!("CARGO_PKG_VERSION"),
         }
     }

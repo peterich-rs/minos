@@ -40,6 +40,10 @@ async fn spawn_relay() -> (String, tokio::task::JoinHandle<()>, sqlx::SqlitePool
             cf_access_client_secret: None,
         }),
         jwt_secret: Arc::new("test-jwt-secret-32-bytes-padding".to_string()),
+        auth_login_per_email: minos_backend::http::default_login_per_email(),
+        auth_login_per_ip: minos_backend::http::default_login_per_ip(),
+        auth_register_per_ip: minos_backend::http::default_register_per_ip(),
+        auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
         version: "test",
     };
     let app = router(state);

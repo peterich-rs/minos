@@ -380,3 +380,58 @@ async fn auth_logout_without_bearer_returns_401() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["kind"], "unauthorized");
 }
+
+#[tokio::test]
+async fn auth_rate_limit_login_returns_429_with_retry_after() {
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+
+    let state = backend_state().await;
+    let mut app = http::router(state);
+    let device_id = uuid::Uuid::new_v4().to_string();
+
+    // Pre-register so the credentials check itself doesn't 401 fast.
+    let _ = post_json(
+        &mut app,
+        "/v1/auth/register",
+        &ios_headers(&device_id),
+        json!({"email": "rl@example.com", "password": "testpass1"}),
+    )
+    .await;
+
+    // Fire login 5 times: all should be allowed by the bucket. The 6th
+    // hits the per-IP limit and must return 429 with Retry-After.
+    let ip = "203.0.113.7";
+    let mut last_status: Option<StatusCode> = None;
+    let mut last_retry_after: Option<String> = None;
+    for _ in 0..6 {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/auth/login")
+            .header("content-type", "application/json")
+            .header("x-device-id", &device_id)
+            .header("x-device-role", "ios-client")
+            .header("x-forwarded-for", ip)
+            .body(json_body(json!({
+                "email": "rl@example.com",
+                "password": "testpass1"
+            })))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        last_status = Some(resp.status());
+        last_retry_after = resp
+            .headers()
+            .get("Retry-After")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        // Drain body so the connection is reusable.
+        let _ = resp.into_body().collect().await.unwrap().to_bytes();
+    }
+
+    assert_eq!(last_status, Some(StatusCode::TOO_MANY_REQUESTS));
+    let retry: u32 = last_retry_after
+        .expect("Retry-After header must be set on 429")
+        .parse()
+        .unwrap();
+    assert!(retry >= 1, "retry-after must be >= 1");
+}
