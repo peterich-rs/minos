@@ -1381,10 +1381,7 @@ async fn reconnect_loop(ctx: ReconnectContext) {
                 let _ = ctx.state_tx.send(ConnectionState::Connected);
                 ctx.reconnect.record_success().await;
                 loop {
-                    if matches!(
-                        *state_rx.borrow_and_update(),
-                        ConnectionState::Disconnected
-                    ) {
+                    if matches!(*state_rx.borrow_and_update(), ConnectionState::Disconnected) {
                         break;
                     }
                     if state_rx.changed().await.is_err() {
@@ -1923,9 +1920,9 @@ mod tests {
 
         // An empty stream models a transport that closed without an
         // explicit WS Close frame — `next()` returns None on the first poll.
-        let read = futures_util::stream::iter(
-            Vec::<Result<Message, tokio_tungstenite::tungstenite::Error>>::new(),
-        );
+        let read = futures_util::stream::iter(Vec::<
+            Result<Message, tokio_tungstenite::tungstenite::Error>,
+        >::new());
         recv_loop(read, ui_tx, state_tx, pending.clone()).await;
 
         // Pending must be drained.
