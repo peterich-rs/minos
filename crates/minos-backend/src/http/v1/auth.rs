@@ -10,6 +10,8 @@
 //! the act of revoking a refresh token must be authenticated by the
 //! account that owns it.
 
+use std::sync::OnceLock;
+
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -25,6 +27,20 @@ use crate::error::BackendError;
 use crate::http::auth::authenticate;
 use crate::http::BackendState;
 use crate::store::{accounts, refresh_tokens};
+
+/// Lazily-initialised argon2id PHC string used to burn the same compute
+/// time on `find_by_email → None` as on `find_by_email → Some` followed
+/// by a wrong-password verify. Without this, "unknown email" returned in
+/// <1 ms while "valid email + wrong password" took ~50 ms — a timing
+/// oracle for email enumeration. The plaintext is irrelevant; we only
+/// rely on `passwords::verify` doing the same kdf work either way.
+fn dummy_password_hash() -> &'static str {
+    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
+    DUMMY_HASH.get_or_init(|| {
+        passwords::hash("dummy_for_constant_time_check_xxxxxxx")
+            .expect("argon2id default params must hash a static string")
+    })
+}
 
 #[derive(Deserialize)]
 pub struct RegisterReq {
@@ -229,7 +245,12 @@ pub async fn post_login(
     let account = match accounts::find_by_email(&state.store, &req.email).await {
         Ok(Some(a)) => a,
         Ok(None) => {
-            return (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response()
+            // Burn the same argon2id verify time as the wrong-password
+            // path so an attacker can't tell unknown emails apart from
+            // valid-email-wrong-password by timing alone. Result is
+            // ignored; we always return `invalid_credentials`.
+            let _ = passwords::verify(&req.password, dummy_password_hash());
+            return (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response();
         }
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
     };
