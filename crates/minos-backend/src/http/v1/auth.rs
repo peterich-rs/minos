@@ -381,9 +381,7 @@ pub async fn post_logout(
     // compromised access token can't spam logout to revoke arbitrary
     // candidate refresh tokens. Reuses the refresh bucket — both write
     // refresh_tokens, both should share the same per-account budget.
-    if let Some(resp) =
-        check_bucket(&state.auth_refresh_per_acc, &bearer_outcome.account_id)
-    {
+    if let Some(resp) = check_bucket(&state.auth_refresh_per_acc, &bearer_outcome.account_id) {
         return resp;
     }
     if refresh_tokens::revoke_one(&state.store, &req.refresh_token)

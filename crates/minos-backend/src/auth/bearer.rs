@@ -40,9 +40,7 @@ impl BearerError {
                 tracing::debug!(target: "minos_backend::auth::bearer", %message, "bearer verify failed");
                 (StatusCode::UNAUTHORIZED, "invalid bearer".into())
             }
-            Self::MissingDeviceHeader => {
-                (StatusCode::UNAUTHORIZED, "missing device header".into())
-            }
+            Self::MissingDeviceHeader => (StatusCode::UNAUTHORIZED, "missing device header".into()),
             Self::DeviceMismatch => (StatusCode::UNAUTHORIZED, "device mismatch".into()),
         }
     }
