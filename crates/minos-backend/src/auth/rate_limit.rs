@@ -31,6 +31,14 @@ impl RateLimiter {
     /// if the bucket is full. The `retry_after` value is computed from
     /// the oldest in-window timestamp so callers can populate the
     /// `Retry-After` HTTP header truthfully (clamped to ≥1 second).
+    ///
+    /// Bounded-key contract: a key is only kept in the map while it owns
+    /// at least one in-window timestamp. After the retain trims expired
+    /// entries, if no fresh permit ends up pushed (e.g. degenerate
+    /// `permits == 0` config or a future mutator path that skips push),
+    /// the key is removed entirely. This keeps the map size bounded by
+    /// the active working set and stops abandoned keys from accumulating
+    /// across long uptimes when an attacker rotates IPs/emails.
     pub fn check(&self, key: &str) -> Result<(), u32> {
         let now = Instant::now();
         let mut map = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -50,6 +58,13 @@ impl RateLimiter {
             return Err(retry.max(1));
         }
         entries.push(now);
+        // GC: drop the key if its bucket is somehow still empty (the
+        // success path always pushes, so this only fires on the
+        // degenerate `permits == 0` config or a future mutator path).
+        // Belt-and-braces against the rotating-IP memory leak.
+        if entries.is_empty() {
+            map.remove(key);
+        }
         Ok(())
     }
 }
