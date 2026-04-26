@@ -15,6 +15,11 @@
 //! These tests do not exercise CF Access (no edge is involved) and do not
 //! exercise reconnection loops — the plan's scope is MVP envelope wiring.
 
+// MSRV portability: prefer `Duration::from_secs(N * 60)` over
+// `Duration::from_mins(N)` (which was only stabilized in Rust 1.84). See
+// the matching crate-level allow in `src/lib.rs`.
+#![allow(clippy::duration_suboptimal_units)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -64,7 +69,7 @@ async fn spawn_backend_with_paired_mac() -> RealBackend {
         registry: registry.clone(),
         pairing: pairing.clone(),
         store: pool.clone(),
-        token_ttl: Duration::from_mins(5),
+        token_ttl: Duration::from_secs(300),
         translators: minos_backend::ingest::translate::ThreadTranslators::new(),
         public_cfg: Arc::new(BackendPublicConfig {
             public_url,
@@ -98,7 +103,7 @@ async fn spawn_backend_with_paired_mac() -> RealBackend {
     .await
     .unwrap();
     let (token, _exp) = pairing
-        .request_token(mac_id, Duration::from_mins(5))
+        .request_token(mac_id, Duration::from_secs(300))
         .await
         .unwrap();
     let (handle, mac_outbox) = SessionHandle::new(mac_id, DeviceRole::AgentHost);

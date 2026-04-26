@@ -518,7 +518,7 @@ impl MobileClient {
             &outbox,
             "minos_start_agent",
             req,
-            Duration::from_mins(1),
+            Duration::from_secs(60),
         )
         .await?;
         let send_req = SendUserMessageRequest {
@@ -1335,7 +1335,7 @@ async fn reconnect_loop(ctx: ReconnectContext) {
             let guard = ctx.auth_session.read().await;
             guard
                 .as_ref()
-                .is_some_and(|s| s.access_expires_at <= Instant::now() + Duration::from_mins(2))
+                .is_some_and(|s| s.access_expires_at <= Instant::now() + Duration::from_secs(120))
         };
         if needs_refresh && !refresh_inline(&ctx, &backend_url).await {
             // refresh_inline returns false on failure; it has already

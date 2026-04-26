@@ -35,7 +35,7 @@ struct ReconnectState {
 
 const INITIAL_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(30);
-const STABLE_THRESHOLD: Duration = Duration::from_mins(1);
+const STABLE_THRESHOLD: Duration = Duration::from_secs(60);
 
 impl ReconnectController {
     #[must_use]

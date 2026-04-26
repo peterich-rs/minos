@@ -1,6 +1,11 @@
 //! Round-trip tests for [`minos_mobile::http::MobileHttpClient`] against an
 //! in-process `minos-backend` axum router.
 
+// MSRV portability: prefer `Duration::from_secs(N * 60)` over
+// `Duration::from_mins(N)` (which was only stabilized in Rust 1.84). See
+// the matching crate-level allow in `src/lib.rs`.
+#![allow(clippy::duration_suboptimal_units)]
+
 use minos_backend::http::{router, test_support::backend_state};
 use minos_domain::{DeviceId, DeviceRole, MinosError};
 use minos_mobile::http::MobileHttpClient;
@@ -21,7 +26,7 @@ async fn pair_consume_round_trips_against_real_backend() {
     .unwrap();
     let svc = minos_backend::pairing::PairingService::new(state.store.clone());
     let (token, _) = svc
-        .request_token(mac_id, std::time::Duration::from_mins(5))
+        .request_token(mac_id, std::time::Duration::from_secs(300))
         .await
         .unwrap();
 
