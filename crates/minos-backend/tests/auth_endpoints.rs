@@ -226,6 +226,73 @@ async fn auth_login_revokes_existing_refresh_tokens() {
 }
 
 #[tokio::test]
+async fn auth_login_closes_other_iphone_ws_sessions_for_same_account() {
+    // Phase 2 Task 2.5: when device B logs into the same account that
+    // device A is already logged into, A's live iOS WS session is dropped
+    // from the registry and its `revoked` watch fires.
+    use minos_backend::session::SessionHandle;
+    use minos_domain::{DeviceId, DeviceRole};
+
+    let state = backend_state().await;
+    let device_a_uuid = uuid::Uuid::new_v4();
+    let device_b_uuid = uuid::Uuid::new_v4();
+    let device_a_str = device_a_uuid.to_string();
+    let device_b_str = device_b_uuid.to_string();
+    let device_a_id = DeviceId(device_a_uuid);
+
+    let mut app = http::router(state.clone());
+
+    // Device A registers + acquires a session. Register also seeds
+    // accounts row + sets device_a.account_id.
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/register",
+        &ios_headers(&device_a_str),
+        json!({"email": "logout-displace@example.com", "password": "testpass1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
+
+    // Simulate device A's live WS by directly inserting a SessionHandle
+    // bound to the account. (The HTTP-only test app doesn't go through
+    // /devices, so we model the post-upgrade state manually.)
+    let (handle_a, mut rx_a) = SessionHandle::new(device_a_id, DeviceRole::IosClient);
+    handle_a.set_account_id(account_id.clone());
+    state.registry.insert(handle_a.clone());
+    let mut a_revoked = handle_a.subscribe_revocation();
+
+    // Device B logs in with the same credentials. This should:
+    //   1. revoke existing refresh tokens (covered by other test)
+    //   2. close A's live WS session.
+    let (status, _body) = post_json(
+        &mut app,
+        "/v1/auth/login",
+        &ios_headers(&device_b_str),
+        json!({"email": "logout-displace@example.com", "password": "testpass1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A is no longer in the registry.
+    assert!(
+        state.registry.get(device_a_id).is_none(),
+        "device A's session must be evicted after device B logs in",
+    );
+    // A's revoke watch fired.
+    a_revoked
+        .changed()
+        .await
+        .expect("device A must observe revocation");
+    assert!(*a_revoked.borrow());
+    // The outbox sender drops with the registry entry; receivers see
+    // the channel close after we drop our local clone.
+    drop(handle_a);
+    // After the local clone drops, recv returns None (channel closed).
+    assert!(rx_a.recv().await.is_none());
+}
+
+#[tokio::test]
 async fn auth_refresh_with_revoked_token_returns_401() {
     let state = backend_state().await;
     let mut app = http::router(state);

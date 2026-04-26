@@ -261,6 +261,45 @@ impl SessionRegistry {
         }
     }
 
+    /// Revoke and drop every iOS session bound to `account_id`, except an
+    /// optional `except` device id (provided as a string, matching the
+    /// `DeviceId::to_string` representation that bearer claims carry).
+    ///
+    /// Used at login time (spec §5.5 single-active-iPhone) to make sure
+    /// only the most-recently-logged-in iPhone session keeps a live WS.
+    /// Mac sessions are not touched — the Mac stays paired and online.
+    ///
+    /// Returns the number of sessions actually closed.
+    pub fn close_account_sessions(&self, account_id: &str, except: Option<&str>) -> usize {
+        let to_close: Vec<DeviceId> = self
+            .0
+            .iter()
+            .filter(|entry| {
+                let h = entry.value();
+                if h.role != DeviceRole::IosClient {
+                    return false;
+                }
+                if h.account_id().as_deref() != Some(account_id) {
+                    return false;
+                }
+                match except {
+                    Some(keep) => entry.key().to_string() != keep,
+                    None => true,
+                }
+            })
+            .map(|entry| *entry.key())
+            .collect();
+
+        let mut closed = 0;
+        for id in to_close {
+            if let Some((_, handle)) = self.0.remove(&id) {
+                handle.revoke();
+                closed += 1;
+            }
+        }
+        closed
+    }
+
     /// Current number of live sessions. Useful for metrics and tests;
     /// O(#shards) under the hood.
     #[must_use]
@@ -794,6 +833,80 @@ mod tests {
 
         let live = reg.get(id).expect("replacement handle still live");
         assert!(live.same_session(&current));
+    }
+
+    // ── close_account_sessions (Task 2.5) ─────────────────────────────
+
+    #[tokio::test]
+    async fn close_account_sessions_drops_other_devices_and_fires_revoke() {
+        // Two iPhones logged into the same account; closing the account's
+        // sessions with `except = a` must drop b but leave a alive, and
+        // b's revoke watch must fire so its socket loop exits.
+        let reg = SessionRegistry::new();
+        let a = DeviceId::new();
+        let b = DeviceId::new();
+        let (ha, _ra) = SessionHandle::new(a, DeviceRole::IosClient);
+        let (hb, _rb) = SessionHandle::new(b, DeviceRole::IosClient);
+        ha.set_account_id("acct-1".into());
+        hb.set_account_id("acct-1".into());
+        reg.insert(ha.clone());
+        reg.insert(hb.clone());
+
+        let mut b_revoked = hb.subscribe_revocation();
+        assert!(!*b_revoked.borrow());
+
+        let closed = reg.close_account_sessions("acct-1", Some(&a.to_string()));
+        assert_eq!(closed, 1, "only b should be closed");
+
+        // Registry membership: a stays, b is gone.
+        assert!(reg.get(a).is_some(), "device a must remain live");
+        assert!(reg.get(b).is_none(), "device b must be removed");
+
+        // b's revoke watch fired.
+        b_revoked
+            .changed()
+            .await
+            .expect("close_account_sessions must trigger revoke on b");
+        assert!(*b_revoked.borrow());
+    }
+
+    #[tokio::test]
+    async fn close_account_sessions_skips_other_accounts_and_mac_role() {
+        let reg = SessionRegistry::new();
+        let ios_target = DeviceId::new();
+        let ios_other_acct = DeviceId::new();
+        let mac_same_acct = DeviceId::new();
+        let (h_target, _r1) = SessionHandle::new(ios_target, DeviceRole::IosClient);
+        let (h_other, _r2) = SessionHandle::new(ios_other_acct, DeviceRole::IosClient);
+        let (h_mac, _r3) = SessionHandle::new(mac_same_acct, DeviceRole::AgentHost);
+        h_target.set_account_id("acct-1".into());
+        h_other.set_account_id("acct-2".into());
+        h_mac.set_account_id("acct-1".into());
+        reg.insert(h_target);
+        reg.insert(h_other);
+        reg.insert(h_mac);
+
+        let closed = reg.close_account_sessions("acct-1", None);
+        assert_eq!(
+            closed, 1,
+            "only the iOS device on acct-1 should be closed (Mac stays, other acct stays)"
+        );
+        assert!(reg.get(ios_target).is_none());
+        assert!(reg.get(ios_other_acct).is_some(), "different account untouched");
+        assert!(reg.get(mac_same_acct).is_some(), "Mac role untouched");
+    }
+
+    #[tokio::test]
+    async fn close_account_sessions_with_no_matches_returns_zero() {
+        let reg = SessionRegistry::new();
+        let id = DeviceId::new();
+        let (h, _r) = SessionHandle::new(id, DeviceRole::IosClient);
+        h.set_account_id("acct-1".into());
+        reg.insert(h);
+
+        let closed = reg.close_account_sessions("acct-other", None);
+        assert_eq!(closed, 0);
+        assert!(reg.get(id).is_some());
     }
 
     // ── routing: ABA-safe eviction on reconnect race ─────────────────

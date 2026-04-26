@@ -261,12 +261,26 @@ pub async fn post_login(
         return (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response();
     }
 
-    // Single-active-iPhone: revoke prior refresh tokens for this account.
-    // Forcibly closing the WS sessions on other devices is wired in
-    // Phase 2 Task 2.5 once SessionRegistry::close_account_sessions
-    // exists; until then login can still succeed and the next refresh
-    // attempt from the displaced device will fail with `invalid_refresh`.
+    // Single-active-iPhone (spec §5.5):
+    // 1. Revoke every prior refresh token for this account so any
+    //    displaced device cannot rotate its way back to a valid access
+    //    token.
+    // 2. Forcibly close every live iOS WS session bound to this account
+    //    EXCEPT the device that just logged in. The displaced device's
+    //    socket loop will see its `revoked` watch flip and tear down.
     let _ = refresh_tokens::revoke_all_for_account(&state.store, &account.account_id).await;
+    let closed = state.registry.close_account_sessions(
+        &account.account_id,
+        Some(&device_id.to_string()),
+    );
+    if closed > 0 {
+        tracing::info!(
+            target: "minos_backend::v1::auth",
+            account_id = %account.account_id,
+            closed,
+            "login displaced existing iOS sessions for this account"
+        );
+    }
 
     if accounts::touch_last_login(&state.store, &account.account_id)
         .await
