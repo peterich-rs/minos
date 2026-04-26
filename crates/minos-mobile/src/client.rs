@@ -973,6 +973,12 @@ impl MobileClient {
 /// Inbound read loop. Decodes each text frame as `Envelope` and surfaces
 /// `UiEventMessage` events to the broadcast channel; presence and
 /// pairing-state events update the connection-state watch.
+///
+/// Always drains `pending` and publishes `Disconnected` on exit, regardless
+/// of how the read loop terminated. The `Close`/error arms break out of the
+/// loop, and a TCP reset that produces no Close frame falls through the
+/// `while let Some(...)` and hits the post-loop drain. Without this,
+/// in-flight `forward_rpc` callers would hang until per-call timeout.
 async fn recv_loop<S>(
     mut read: S,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
@@ -988,19 +994,17 @@ async fn recv_loop<S>(
                 handle_text_frame(text, &ui_events_tx, &state_tx, &pending);
             }
             Ok(Message::Close(_)) => {
-                let _ = state_tx.send(ConnectionState::Disconnected);
-                drain_pending(&pending);
                 break;
             }
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(?e, "mobile: WS read error; inbound loop exiting");
-                let _ = state_tx.send(ConnectionState::Disconnected);
-                drain_pending(&pending);
                 break;
             }
         }
     }
+    let _ = state_tx.send(ConnectionState::Disconnected);
+    drain_pending(&pending);
 }
 
 fn handle_text_frame(
@@ -1839,5 +1843,40 @@ mod tests {
             other => panic!("expected RequestDropped err, got {other:?}"),
         }
         assert!(pending.is_empty());
+    }
+
+    /// Regression for the "TCP reset without WS Close" path: when the read
+    /// stream returns `None` immediately (no Close frame, no error) the
+    /// recv loop must still drain `pending` and publish `Disconnected`.
+    /// Otherwise an in-flight `forward_rpc` caller would hang until the
+    /// per-call timeout fires.
+    #[tokio::test]
+    async fn recv_loop_drains_pending_on_stream_end_without_close() {
+        let pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>> = Arc::new(DashMap::new());
+        let (rpc_tx, rpc_rx) = oneshot::channel::<RpcReply>();
+        pending.insert(1, rpc_tx);
+
+        let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (state_tx, mut state_rx) = watch::channel(ConnectionState::Connected);
+
+        // An empty stream models a transport that closed without an
+        // explicit WS Close frame — `next()` returns None on the first poll.
+        let read = futures_util::stream::iter(
+            Vec::<Result<Message, tokio_tungstenite::tungstenite::Error>>::new(),
+        );
+        recv_loop(read, ui_tx, state_tx, pending.clone()).await;
+
+        // Pending must be drained.
+        assert!(pending.is_empty(), "pending must be drained on stream end");
+        let reply = rpc_rx.await.expect("oneshot must have been resolved");
+        match reply {
+            RpcReply::Err { code, .. } => assert_eq!(code, crate::rpc::REQUEST_DROPPED_CODE),
+            other => panic!("expected RequestDropped err, got {other:?}"),
+        }
+        // And the connection-state watch transitioned to Disconnected.
+        assert!(matches!(
+            *state_rx.borrow_and_update(),
+            ConnectionState::Disconnected
+        ));
     }
 }
