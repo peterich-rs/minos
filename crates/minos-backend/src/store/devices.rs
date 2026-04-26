@@ -36,6 +36,10 @@ pub struct DeviceRow {
     pub created_at: i64,
     /// Unix epoch milliseconds.
     pub last_seen_at: i64,
+    /// Account that owns this device, set when an iOS client logs in or
+    /// the Mac side adopts the linked account through pairing. `None`
+    /// while a device is unauthenticated to any account.
+    pub account_id: Option<String>,
 }
 
 /// Insert a new device row.
@@ -161,6 +165,29 @@ where
     Ok(())
 }
 
+/// Set the `account_id` on an existing device row.
+///
+/// Used at login time (iOS side) and at pairing-consume time (Mac side
+/// inherits its peer's account). `account_id` is a UUIDv4 string; the
+/// foreign-key reference to `accounts(account_id)` is enforced by SQLite.
+pub async fn set_account_id(
+    pool: &SqlitePool,
+    device_id: &DeviceId,
+    account_id: &str,
+) -> Result<(), BackendError> {
+    let id_str = device_id.to_string();
+    sqlx::query("UPDATE devices SET account_id = ? WHERE device_id = ?")
+        .bind(account_id)
+        .bind(&id_str)
+        .execute(pool)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: "set_account_id".to_string(),
+            message: e.to_string(),
+        })?;
+    Ok(())
+}
+
 /// Look up a device by id.
 ///
 /// Returns `Ok(None)` if the row does not exist.
@@ -182,7 +209,7 @@ where
 
     let row = sqlx::query!(
         r#"
-        SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at
+        SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id
         FROM devices
         WHERE device_id = ?
         "#,
@@ -218,6 +245,7 @@ where
         secret_hash: r.secret_hash,
         created_at: r.created_at,
         last_seen_at: r.last_seen_at,
+        account_id: r.account_id,
     }))
 }
 
@@ -273,6 +301,23 @@ mod tests {
         assert_eq!(got.secret_hash, None);
         assert_eq!(got.created_at, T0);
         assert_eq!(got.last_seen_at, T0);
+        assert_eq!(got.account_id, None);
+    }
+
+    #[tokio::test]
+    async fn set_account_id_links_existing_device_to_account() {
+        let pool = memory_pool().await;
+        // Seed an account so the FK constraint is satisfied.
+        let account = crate::store::accounts::create(&pool, "alice@example.com", "phc")
+            .await
+            .unwrap();
+        let id = DeviceId::new();
+        insert_device(&pool, id, "iphone", DeviceRole::IosClient, T0)
+            .await
+            .unwrap();
+        set_account_id(&pool, &id, &account.account_id).await.unwrap();
+        let got = get_device(&pool, id).await.unwrap().unwrap();
+        assert_eq!(got.account_id.as_deref(), Some(account.account_id.as_str()));
     }
 
     #[tokio::test]

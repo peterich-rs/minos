@@ -289,6 +289,7 @@ mod tests {
             secret_hash: None,
             created_at: 0,
             last_seen_at: 0,
+            account_id: None,
         };
 
         let err = resolve_device_role(Some(&row), Some(DeviceRole::IosClient)).unwrap_err();
@@ -324,6 +325,7 @@ mod tests {
             secret_hash: None,
             created_at: 0,
             last_seen_at: 0,
+            account_id: None,
         };
         let out = classify(Some(row), None).unwrap();
         assert!(matches!(out, Classification::UnpairedExisting));
@@ -338,6 +340,7 @@ mod tests {
             secret_hash: Some("$argon2id$v=19$m=19456,t=2,p=1$abc$def".to_string()),
             created_at: 0,
             last_seen_at: 0,
+            account_id: None,
         };
         let err = classify(Some(row), None).unwrap_err();
         assert!(
@@ -357,6 +360,7 @@ mod tests {
             secret_hash: Some(hash),
             created_at: 0,
             last_seen_at: 0,
+            account_id: None,
         };
         let out = classify(Some(row), Some(plain.as_str())).unwrap();
         assert!(matches!(out, Classification::Authenticated));
@@ -373,6 +377,7 @@ mod tests {
             secret_hash: Some(hash),
             created_at: 0,
             last_seen_at: 0,
+            account_id: None,
         };
         let err = classify(Some(row), Some("wrong-secret")).unwrap_err();
         assert!(matches!(err, AuthError::Unauthorized(ref m) if m.contains("does not match")));

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n        SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at\n        FROM devices\n        WHERE device_id = ?\n        ",
+  "query": "\n        SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id\n        FROM devices\n        WHERE device_id = ?\n        ",
   "describe": {
     "columns": [
       {
@@ -32,6 +32,11 @@
         "name": "last_seen_at",
         "ordinal": 5,
         "type_info": "Integer"
+      },
+      {
+        "name": "account_id",
+        "ordinal": 6,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -43,8 +48,9 @@
       false,
       true,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "054fcd68230c054e99b7d9dbb2e4335b46a205efeaff8a97fc13fc06f51511c2"
+  "hash": "ed9e8469490da716689ed44e9fa7fb9de19278c7abf32a70ea2d9be08e4430b7"
 }
