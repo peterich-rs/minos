@@ -2415,7 +2415,7 @@ After Phase C, no production caller hits the WS `LocalRpcMethod::*` handlers. Ph
 - Modify: `crates/minos-protocol/src/lib.rs`
 - Modify: `crates/minos-protocol/tests/envelope_golden.rs` — drop `local_rpc_*` fixtures
 
-- [ ] **Step 1: Confirm there are no callers**
+- [x] **Step 1: Confirm there are no callers**
 
 ```bash
 rg 'LocalRpcMethod|LocalRpcOutcome|RpcError|Envelope::LocalRpc' crates/
@@ -2428,15 +2428,15 @@ Should return only:
 
 If any production file still references them, go back and finish Phase B/C for that subsystem before continuing.
 
-- [ ] **Step 2: Edit `crates/minos-protocol/src/envelope.rs`**
+- [x] **Step 2: Edit `crates/minos-protocol/src/envelope.rs`**
 
 Remove the `LocalRpc { ... }` and `LocalRpcResponse { ... }` arms of `enum Envelope`. Remove `LocalRpcMethod`, `LocalRpcOutcome`, `RpcError` types. Keep `Envelope::{Forward, Forwarded, Event, Ingest}`. Update doc comments to drop references to local-RPC.
 
-- [ ] **Step 3: Update re-exports**
+- [x] **Step 3: Update re-exports**
 
 In `crates/minos-protocol/src/lib.rs`, remove the lines that re-export the deleted types.
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 ```bash
 cargo build -p minos-protocol
@@ -2448,7 +2448,7 @@ Compilation will surface any remaining import. Fix and re-run.
 cargo test -p minos-protocol
 ```
 
-- [ ] **Step 5: Update golden tests**
+- [x] **Step 5: Update golden tests**
 
 In `crates/minos-protocol/tests/envelope_golden.rs`, delete the `local_rpc_*` fixture files under `tests/golden/envelope/` (`local_rpc_ping.json`, `local_rpc_request_pairing_qr.json`, `local_rpc_pair.json`, `local_rpc_response_ok.json`, `local_rpc_response_err.json` — confirm via `ls tests/golden/envelope/`). Drop the corresponding `assert_eq!(...)` blocks in the test file.
 
@@ -2456,7 +2456,7 @@ In `crates/minos-protocol/tests/envelope_golden.rs`, delete the `local_rpc_*` fi
 cargo test -p minos-protocol --test envelope_golden
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/minos-protocol/src/envelope.rs \

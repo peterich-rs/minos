@@ -7,16 +7,12 @@
 //!
 //! # Wire shape
 //!
-//! - The outer discriminator is `kind` (e.g. `"kind":"local_rpc"`),
+//! - The outer discriminator is `kind` (e.g. `"kind":"forward"`),
 //!   `rename_all = "snake_case"`.
 //! - Every envelope carries `"v": 1` (the field is named `version` in Rust
 //!   but renamed to `v` on the wire). Future breaking changes bump the
 //!   version; clients that see an unrecognised `v` are expected to close
 //!   the socket with a typed error (spec §6.3).
-//! - Local-RPC responses flatten an [`LocalRpcOutcome`] onto the parent
-//!   object; the discriminator is `status` (`"ok"` / `"err"`). This choice
-//!   documents intent on the wire and keeps the JSON flat enough to read
-//!   in logs.
 //! - `EventKind` flattens into [`Envelope::Event`] with a `type`
 //!   discriminator matching spec §6.
 //!
@@ -35,36 +31,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Envelope {
-    /// Client → Relay. The backend itself handles these and replies with
-    /// [`Envelope::LocalRpcResponse`] carrying the same `id`.
-    LocalRpc {
-        /// Protocol version. Always `1` in MVP.
-        #[serde(rename = "v")]
-        version: u8,
-        /// Client-assigned correlation id, unique per WebSocket connection.
-        /// Echoed back in the matching [`Envelope::LocalRpcResponse`].
-        id: u64,
-        /// The method being invoked. Flattened into the parent object so
-        /// the wire shape carries `"method":"ping"` rather than a nested
-        /// object; see the module-level docs for why.
-        #[serde(flatten)]
-        method: LocalRpcMethod,
-        /// Method-specific parameters. JSON object by convention; shape
-        /// is defined in spec §6.1 per method.
-        params: serde_json::Value,
-    },
-    /// Relay → Client. Reply to a prior [`Envelope::LocalRpc`].
-    LocalRpcResponse {
-        /// Protocol version. Echoes the request.
-        #[serde(rename = "v")]
-        version: u8,
-        /// Correlation id echoed from the request.
-        id: u64,
-        /// Success or failure result, flattened onto the parent object
-        /// with a `status` discriminator.
-        #[serde(flatten)]
-        outcome: LocalRpcOutcome,
-    },
     /// Client → Relay. Relay forwards `payload` opaquely to the paired
     /// peer as an [`Envelope::Forwarded`]. The relay does not inspect or
     /// mutate `payload`; correlation of request/response is the clients'
@@ -109,75 +75,6 @@ pub enum Envelope {
         seq: u64,
         payload: serde_json::Value,
         ts_ms: i64,
-    },
-}
-
-/// Discriminator for `LocalRpc` requests.
-///
-/// All variants are unit-like by design — method-specific request data
-/// always lives in the sibling [`Envelope::LocalRpc::params`] field. Adding
-/// data here would surface it alongside `params` (because we flatten) and
-/// break that contract.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(tag = "method", rename_all = "snake_case")]
-pub enum LocalRpcMethod {
-    /// Cheap liveness check. Params: `{}`. Result: `{"ok": true}`.
-    Ping,
-    /// Agent-host role only. Mints a fresh one-shot pairing token and
-    /// returns a `PairingQrPayload` for the agent-host to render as a QR
-    /// code (spec §6.1). Params: `{"host_display_name": "..."}`.
-    RequestPairingQr,
-    /// iOS-client role only. Consumes a pairing token and, on success,
-    /// the relay emits [`EventKind::Paired`] to the Mac (spec §7.1).
-    /// Params: `{"token": "...", "device_name": "..."}`.
-    Pair,
-    /// Either role. Tears down the pairing for both devices and emits
-    /// [`EventKind::Unpaired`] to the peer (spec §7.4).
-    ForgetPeer,
-    /// Mobile → Backend. List thread summaries for the paired agent-host.
-    /// Params: [`messages::ListThreadsParams`]. Result:
-    /// [`messages::ListThreadsResponse`].
-    ListThreads,
-    /// Mobile → Backend. Read a window of translated UI events for one
-    /// thread. Params: [`messages::ReadThreadParams`]. Result:
-    /// [`messages::ReadThreadResponse`].
-    ReadThread,
-    /// Host-only helper. Agent-host asks the backend for the last seq it
-    /// persisted on a given thread, so the host can decide whether to
-    /// re-ingest on startup. Params:
-    /// [`messages::GetThreadLastSeqParams`]. Result:
-    /// [`messages::GetThreadLastSeqResponse`].
-    GetThreadLastSeq,
-}
-
-/// Success or failure body for [`Envelope::LocalRpcResponse`].
-///
-/// Flattened onto the parent envelope with `status` as the discriminator:
-///
-/// ```json
-/// {"kind":"local_rpc_response","v":1,"id":42,"status":"ok","result":{...}}
-/// {"kind":"local_rpc_response","v":1,"id":42,"status":"err","error":{"code":"...","message":"..."}}
-/// ```
-///
-/// Using `status` (rather than re-using `type`) documents the intent on
-/// the wire and leaves the `type` key free if we ever want to tag the
-/// result shape itself. The plan's sketch called for
-/// `Ok { result } | Err { code, message }`; we split `code`/`message`
-/// into [`RpcError`] so machine-readable error codes can be reused
-/// outside of envelope responses.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum LocalRpcOutcome {
-    /// RPC returned successfully; `result` is method-specific JSON.
-    Ok {
-        /// Method-specific success payload (shape defined in spec §6.1).
-        result: serde_json::Value,
-    },
-    /// RPC failed; inspect [`RpcError::code`] for the machine-readable
-    /// kind and [`RpcError::message`] for the operator-facing reason.
-    Err {
-        /// Error body.
-        error: RpcError,
     },
 }
 
@@ -231,17 +128,6 @@ pub enum EventKind {
     },
 }
 
-/// Error body carried inside [`LocalRpcOutcome::Err`].
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct RpcError {
-    /// Machine-readable error code, e.g. `"pairing_token_invalid"`.
-    /// Snake-case, stable across releases; clients match on this.
-    pub code: String,
-    /// Human-readable message intended for operators' logs. Not
-    /// localised; not intended for end-user UI strings.
-    pub message: String,
-}
-
 #[cfg(test)]
 mod tests {
     //! Inline round-trip tests. The separate
@@ -257,71 +143,6 @@ mod tests {
         let reserialised = serde_json::to_value(&back).unwrap();
         let expected: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(reserialised, expected);
-    }
-
-    #[test]
-    fn local_rpc_ping_round_trips() {
-        let env = Envelope::LocalRpc {
-            version: 1,
-            id: 1,
-            method: LocalRpcMethod::Ping,
-            params: serde_json::json!({}),
-        };
-        round_trip(&env);
-        let v = serde_json::to_value(&env).unwrap();
-        assert_eq!(v["kind"], "local_rpc");
-        assert_eq!(v["v"], 1);
-        assert_eq!(v["method"], "ping");
-    }
-
-    #[test]
-    fn local_rpc_pair_round_trips() {
-        let env = Envelope::LocalRpc {
-            version: 1,
-            id: 7,
-            method: LocalRpcMethod::Pair,
-            params: serde_json::json!({
-                "token": "tok_abc",
-                "device_name": "iPhone of fan",
-            }),
-        };
-        round_trip(&env);
-        let v = serde_json::to_value(&env).unwrap();
-        assert_eq!(v["method"], "pair");
-        assert_eq!(v["params"]["token"], "tok_abc");
-    }
-
-    #[test]
-    fn local_rpc_response_ok_round_trips() {
-        let env = Envelope::LocalRpcResponse {
-            version: 1,
-            id: 42,
-            outcome: LocalRpcOutcome::Ok {
-                result: serde_json::json!({"ok": true}),
-            },
-        };
-        round_trip(&env);
-        let v = serde_json::to_value(&env).unwrap();
-        assert_eq!(v["status"], "ok");
-        assert_eq!(v["result"], serde_json::json!({"ok": true}));
-    }
-
-    #[test]
-    fn local_rpc_response_err_round_trips() {
-        let env = Envelope::LocalRpcResponse {
-            version: 1,
-            id: 42,
-            outcome: LocalRpcOutcome::Err {
-                error: RpcError {
-                    code: "pairing_token_invalid".into(),
-                    message: "token expired".into(),
-                },
-            },
-        };
-        round_trip(&env);
-        let v = serde_json::to_value(&env).unwrap();
-        assert_eq!(v["status"], "err");
-        assert_eq!(v["error"]["code"], "pairing_token_invalid");
     }
 
     #[test]
@@ -418,16 +239,6 @@ mod tests {
         round_trip(&env);
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["type"], "server_shutdown");
-    }
-
-    #[test]
-    fn rpc_error_is_plain_struct() {
-        let e = RpcError {
-            code: "nope".into(),
-            message: "because".into(),
-        };
-        let json = serde_json::to_string(&e).unwrap();
-        assert_eq!(json, r#"{"code":"nope","message":"because"}"#);
     }
 
     #[test]
