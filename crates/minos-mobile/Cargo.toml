@@ -25,6 +25,7 @@ url = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
+dashmap = { workspace = true }
 # Optional CLI deps for the fake-peer dev binary (gated on the `cli` feature).
 # tokio-tungstenite and futures-util are always-on (the envelope client
 # depends on them) so the cli feature only enables the CLI-specific extras.
