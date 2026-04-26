@@ -35,10 +35,11 @@ pub struct RpcServerImpl {
 impl MinosRpcServer for RpcServerImpl {
     async fn pair(&self, _req: PairRequest) -> jsonrpsee::core::RpcResult<PairResponse> {
         // Pairing is owned end-to-end by the backend broker (plan 05 Phase F.3).
-        // The Mac receives a Paired event from the backend's `Pair` LocalRpc
-        // handler — it never sees a peer-originated `pair` JSON-RPC. If a
-        // forwarded JSON-RPC frame somehow reaches here, the right answer is
-        // that the host explicitly does not trust this surface for pairing.
+        // The Mac receives a Paired event from the backend's HTTP
+        // `POST /v1/pairing/consume` handler — it never sees a peer-originated
+        // `pair` JSON-RPC. If a forwarded JSON-RPC frame somehow reaches here,
+        // the right answer is that the host explicitly does not trust this
+        // surface for pairing.
         Err(rpc_err(MinosError::Unauthorized {
             reason: "pair handled by backend, not host".into(),
         }))

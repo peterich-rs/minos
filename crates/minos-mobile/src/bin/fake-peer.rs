@@ -64,8 +64,8 @@ async fn main() -> anyhow::Result<()> {
     let device_id = DeviceId::new();
 
     // 1. Pair via HTTP.
-    let http = MobileHttpClient::new(&args.backend, device_id, None)
-        .context("build MobileHttpClient")?;
+    let http =
+        MobileHttpClient::new(&args.backend, device_id, None).context("build MobileHttpClient")?;
     let pair_req = PairConsumeRequest {
         token: PairingToken(args.token.clone()),
         device_name: args.device_name.clone(),

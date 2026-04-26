@@ -208,9 +208,9 @@ impl MobileClient {
     // ─────────────────────────── pairing flow ────────────────────────────
 
     /// Scan a QR v2 payload (raw JSON). Persists `backend_url` + CF tokens
-    /// to the store, opens the WebSocket, sends `LocalRpc::Pair`, persists
-    /// the returned `DeviceSecret` on success, and transitions
-    /// [`ConnectionState`] through `Pairing → Connected`.
+    /// to the store, calls `POST /v1/pairing/consume` over HTTP, persists
+    /// the returned `DeviceSecret`, opens the authenticated WebSocket, and
+    /// transitions [`ConnectionState`] through `Pairing → Connected`.
     ///
     /// Errors:
     /// - `StoreCorrupt { path: "qr_payload", .. }` when the JSON doesn't

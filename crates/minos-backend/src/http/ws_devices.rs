@@ -47,15 +47,12 @@
 //!
 //! # Unpaired-mode gating
 //!
-//! Step 9 does not introduce any new LocalRpc gating — step 8's dispatcher
-//! already enforces the correct behaviour:
-//! - `Ping` is always allowed.
-//! - `RequestPairingQr` rejects non-`AgentHost` callers.
-//! - `Pair` rejects if already paired.
-//! - `ForgetPeer` rejects if Unpaired.
-//! - `Forward` synthesises a JSON-RPC "peer offline" response when
-//!   `session.paired_with` is `None`, which is the plan's "reject
-//!   `Forward` entirely" in spirit.
+//! The HTTP `/v1/pairing/*` routes apply role / state gates per route
+//! (see `http::v1::pairing`). On the WebSocket itself the dispatcher only
+//! handles `Forward` and `Ingest`: `Forward` synthesises a JSON-RPC "peer
+//! offline" response when `session.paired_with` is `None` (the plan's
+//! "reject `Forward` entirely" in spirit) and `Ingest` is restricted to
+//! the `AgentHost` role.
 
 use std::sync::Arc;
 
@@ -158,16 +155,7 @@ pub async fn upgrade(
 
         activate_live_session(registry.as_ref(), &handle).await;
 
-        if let Err(e) = run_session(
-            socket,
-            handle,
-            outbox_rx,
-            registry,
-            store,
-            translators,
-        )
-        .await
-        {
+        if let Err(e) = run_session(socket, handle, outbox_rx, registry, store, translators).await {
             tracing::warn!(
                 target: "minos_backend::http",
                 error = %e,

@@ -6,7 +6,7 @@
 //! `ThreadTitleUpdated`, `increment_message_count` when a new message is
 //! placed, `mark_ended` when the backend sees `ThreadClosed`.
 //!
-//! List (for `LocalRpc::ListThreads`) lands in task C1.
+//! List backs the HTTP `GET /v1/threads` route (see `http::v1::threads`).
 
 use minos_domain::AgentName;
 use minos_ui_protocol::ThreadEndReason;
@@ -96,7 +96,7 @@ pub async fn update_title(
     Ok(())
 }
 
-/// List thread summaries for the `LocalRpc::ListThreads` response.
+/// List thread summaries for the `GET /v1/threads` HTTP response.
 ///
 /// Filters (all optional):
 /// - `owner_device_id`  — restrict to threads owned by this device.

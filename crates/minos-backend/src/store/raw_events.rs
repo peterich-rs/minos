@@ -118,7 +118,7 @@ pub async fn read_range(
 
 /// Return the largest `seq` ever persisted for `thread_id`, or `0` if no
 /// rows exist. Used by the agent-host to decide whether to re-ingest on
-/// startup (`GetThreadLastSeq` LocalRpc).
+/// startup (`GET /v1/threads/{id}/last_seq`).
 pub async fn last_seq(pool: &SqlitePool, thread_id: &str) -> Result<u64, BackendError> {
     let v: Option<i64> =
         sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE thread_id = ?1")

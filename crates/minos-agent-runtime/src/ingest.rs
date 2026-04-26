@@ -8,8 +8,9 @@
 //!
 //! 1. [`Ingestor::connect`] opens a WS to `ws(s)://<host>/devices` with the
 //!    agent-host's `X-Device-Id` (+ optional `X-Device-Secret`) headers.
-//!    Pairing itself still flows via `LocalRpc::Pair`; first-boot pairing is
-//!    driven by the outer `AgentRuntime` + daemon, not by this type.
+//!    Pairing itself flows via the backend's HTTP `/v1/pairing/*` routes;
+//!    first-boot pairing is driven by the outer `AgentRuntime` + daemon, not
+//!    by this type.
 //! 2. A bounded `mpsc` channel serialises outbound writes so `push()` is
 //!    safe to call from the agent-runtime's event pump task without holding
 //!    the socket.
@@ -17,10 +18,9 @@
 //!    a transport concern — the agent runtime's `RawIngest` broadcast does
 //!    not carry it. The backend idempotently inserts on `(thread_id, seq)`
 //!    so retransmits are safe.
-//! 4. Inbound frames (Event, LocalRpcResponse) are logged at debug level for
-//!    now; the agent-host does not need to consume them in Phase B. Later
-//!    phases may thread a subscriber channel for `PeerOnline` /
-//!    `ServerShutdown`.
+//! 4. Inbound `Envelope::Event` frames are logged at debug level for now;
+//!    the agent-host does not need to consume them in Phase B. Later phases
+//!    may thread a subscriber channel for `PeerOnline` / `ServerShutdown`.
 
 use std::sync::Arc;
 
@@ -118,7 +118,7 @@ impl Ingestor {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(Message::Text(t)) => {
-                        // Backend frames (Event / LocalRpcResponse) — not consumed yet.
+                        // Backend Envelope::Event frames — not consumed yet.
                         tracing::debug!(text = %t, "ingest WS inbound");
                     }
                     Ok(Message::Close(_)) => break,

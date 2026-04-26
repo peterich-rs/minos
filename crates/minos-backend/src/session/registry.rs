@@ -56,11 +56,11 @@ pub const OUTBOX_CAPACITY: usize = 256;
 /// A frame queued for push from the backend to a specific device.
 ///
 /// Aliased to [`Envelope`] directly rather than wrapped in a narrower enum
-/// — the envelope already carries the discriminator (`Forwarded`, `Event`,
-/// `LocalRpcResponse`) the writer needs. The alias exists so call sites
-/// at the registry surface can say "ServerFrame" (intent) without tying
-/// themselves to the envelope type forever; if we ever need to attach
-/// metadata (e.g. send-timestamp) it becomes a newtype around `Envelope`.
+/// — the envelope already carries the discriminator (`Forwarded`, `Event`)
+/// the writer needs. The alias exists so call sites at the registry
+/// surface can say "ServerFrame" (intent) without tying themselves to the
+/// envelope type forever; if we ever need to attach metadata (e.g.
+/// send-timestamp) it becomes a newtype around `Envelope`.
 pub type ServerFrame = Envelope;
 
 /// One live WebSocket session, indexed by its [`DeviceId`].
