@@ -67,6 +67,13 @@ pub enum BackendError {
     #[error("email already registered")]
     EmailTaken,
 
+    /// An argon2id password hash / verify operation failed.
+    ///
+    /// Distinct from `PairingHash` so the auth rail and the pairing rail
+    /// can surface independent log/metric labels.
+    #[error("password hash error: {message}")]
+    PasswordHash { message: String },
+
     /// Pairing refused because one side was already paired.
     ///
     /// Spec §10.2 R4: MVP policy is "refuse and let the UI confirm replace
