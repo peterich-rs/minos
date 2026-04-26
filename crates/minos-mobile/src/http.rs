@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use minos_protocol::{
-    GetThreadLastSeqResponse, ListThreadsParams, ListThreadsResponse, PairConsumeRequest,
-    PairResponse, ReadThreadParams, ReadThreadResponse,
+    AuthRequest, AuthResponse, GetThreadLastSeqResponse, ListThreadsParams, ListThreadsResponse,
+    LogoutRequest, PairConsumeRequest, PairResponse, ReadThreadParams, ReadThreadResponse,
+    RefreshRequest, RefreshResponse,
 };
 use reqwest::Client;
 use serde::Deserialize;
@@ -188,6 +189,120 @@ impl MobileHttpClient {
             Err(decode_error(status, resp).await)
         }
     }
+
+    // ─────────────────────────── auth endpoints ───────────────────────────
+
+    /// `POST /v1/auth/register` — create an account on the backend.
+    ///
+    /// The pairing-rail `x-device-*` headers still authenticate the device;
+    /// the new account-rail bearer/refresh tokens come back in the body.
+    pub async fn register(
+        &self,
+        email: &str,
+        password: &str,
+    ) -> Result<AuthResponse, MinosError> {
+        let url = format!("{}/v1/auth/register", self.base);
+        let body = AuthRequest {
+            email: email.into(),
+            password: password.into(),
+        };
+        let req = self
+            .client
+            .post(&url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .json(&body);
+        let req = stamp_cf(req, self.cf_access.as_ref());
+        let resp = req.send().await.map_err(|e| connect_err(&url, &e))?;
+        decode_auth_response(resp).await
+    }
+
+    /// `POST /v1/auth/login` — authenticate an existing account.
+    pub async fn login(&self, email: &str, password: &str) -> Result<AuthResponse, MinosError> {
+        let url = format!("{}/v1/auth/login", self.base);
+        let body = AuthRequest {
+            email: email.into(),
+            password: password.into(),
+        };
+        let req = self
+            .client
+            .post(&url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .json(&body);
+        let req = stamp_cf(req, self.cf_access.as_ref());
+        let resp = req.send().await.map_err(|e| connect_err(&url, &e))?;
+        decode_auth_response(resp).await
+    }
+
+    /// `POST /v1/auth/refresh` — rotate the bearer + refresh pair.
+    ///
+    /// The pairing-rail `x-device-*` headers must still be present so the
+    /// backend can confirm the device is paired; the body carries the
+    /// refresh-token plaintext (rotated server-side, returned new in the
+    /// response).
+    pub async fn refresh(&self, refresh_token: &str) -> Result<RefreshResponse, MinosError> {
+        let url = format!("{}/v1/auth/refresh", self.base);
+        let body = RefreshRequest {
+            refresh_token: refresh_token.into(),
+        };
+        let req = self
+            .client
+            .post(&url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .json(&body);
+        let req = stamp_cf(req, self.cf_access.as_ref());
+        let resp = req.send().await.map_err(|e| connect_err(&url, &e))?;
+        decode_refresh_response(resp).await
+    }
+
+    /// `POST /v1/auth/logout` — revoke the named refresh token.
+    ///
+    /// 204 No Content is the success status. The bearer token in
+    /// `Authorization` authenticates the request; the body specifies which
+    /// refresh token to revoke (the backend supports rotating-multi-device,
+    /// so we name the specific one).
+    pub async fn logout(&self, access_token: &str, refresh_token: &str) -> Result<(), MinosError> {
+        let url = format!("{}/v1/auth/logout", self.base);
+        let body = LogoutRequest {
+            refresh_token: refresh_token.into(),
+        };
+        let req = self
+            .client
+            .post(&url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .header("authorization", format!("Bearer {access_token}"))
+            .json(&body);
+        let req = stamp_cf(req, self.cf_access.as_ref());
+        let resp = req.send().await.map_err(|e| connect_err(&url, &e))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NO_CONTENT || status.is_success() {
+            Ok(())
+        } else {
+            Err(decode_kind_error(status, resp).await)
+        }
+    }
+
+    /// Build a request stamped with the pairing-rail device headers + the
+    /// bearer token. Cb-Access is also stamped if configured. Use this for
+    /// any account-aware route the daemon adds in future phases.
+    pub fn build_authed_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        access: &str,
+    ) -> reqwest::RequestBuilder {
+        let url = format!("{}{}", self.base, path);
+        let req = self
+            .client
+            .request(method, &url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .header("authorization", format!("Bearer {access}"));
+        stamp_cf(req, self.cf_access.as_ref())
+    }
 }
 
 fn stamp_cf(
@@ -225,6 +340,71 @@ async fn decode_error(status: reqwest::StatusCode, resp: reqwest::Response) -> M
         },
         Err(_) => MinosError::BackendInternal {
             message: format!("backend {status}"),
+        },
+    }
+}
+
+/// Decode an `AuthResponse` from the backend, mapping `kind` strings on
+/// the failure path to typed `MinosError` variants. Spec §5.4, §8.1.
+async fn decode_auth_response(resp: reqwest::Response) -> Result<AuthResponse, MinosError> {
+    let status = resp.status();
+    if status.is_success() {
+        return resp.json::<AuthResponse>().await.map_err(|e| {
+            MinosError::BackendInternal {
+                message: format!("decode AuthResponse: {e}"),
+            }
+        });
+    }
+    Err(decode_kind_error(status, resp).await)
+}
+
+/// Decode a `RefreshResponse` from the backend, mapping `kind` strings on
+/// the failure path to typed `MinosError` variants.
+async fn decode_refresh_response(resp: reqwest::Response) -> Result<RefreshResponse, MinosError> {
+    let status = resp.status();
+    if status.is_success() {
+        return resp.json::<RefreshResponse>().await.map_err(|e| {
+            MinosError::BackendInternal {
+                message: format!("decode RefreshResponse: {e}"),
+            }
+        });
+    }
+    Err(decode_kind_error(status, resp).await)
+}
+
+/// Map an HTTP error response that carries a `{ "kind": "..." }` body to
+/// a typed `MinosError`. Used by every `/v1/auth/*` endpoint. Spec §8.1.
+async fn decode_kind_error(
+    status: reqwest::StatusCode,
+    resp: reqwest::Response,
+) -> MinosError {
+    let retry_after = resp
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(60);
+    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    let kind = body
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    match (status.as_u16(), kind.as_str()) {
+        (400, "weak_password") => MinosError::WeakPassword,
+        (401, "invalid_credentials") => MinosError::InvalidCredentials,
+        (401, "invalid_refresh") => MinosError::AuthRefreshFailed {
+            message: "invalid refresh token".into(),
+        },
+        (401, _) => MinosError::Unauthorized {
+            reason: format!("auth failed ({kind})"),
+        },
+        (409, "email_taken") => MinosError::EmailTaken,
+        (429, _) => MinosError::RateLimited {
+            retry_after_s: retry_after,
+        },
+        _ => MinosError::BackendInternal {
+            message: format!("{status} {kind}"),
         },
     }
 }
