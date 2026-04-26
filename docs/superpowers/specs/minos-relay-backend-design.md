@@ -38,7 +38,7 @@ The existing `minos-architecture-and-mvp-design.md` continues to apply for every
    - *Unpaired* (no secret / unknown device): may call `request_pairing_token`, `pair`, `ping`. All other RPCs reject with `MinosError::Unauthorized`.
    - *Paired* (secret verified): full RPC + `forward` routing enabled.
 4. **QR-based pairing via broker.** Mac requests a one-shot pairing token from the relay; QR encodes only `{backend_url, token, mac_display_name}` (no IP/port — those are fixed). iPhone scans → `pair(token)` → relay persists pair record, issues `device_secret` to both sides, pushes `Paired` event.
-5. **Envelope-based message routing.** Messages carry one of four `kind`s: `local_rpc`, `forward`, `forwarded`, `event`. Backend handles `local_rpc` itself; `forward` is opaquely routed to the paired peer as `forwarded`. Business RPC schemas (`list_clis`, etc.) live in `payload` and are never parsed by the relay.
+5. **Envelope-based WS routing + HTTP control plane.** Backend-terminated control operations (issue/consume pairing tokens, forget peer, list/read threads, last-seq probe) ride a typed JSON-over-HTTP API at `POST/GET/DELETE /v1/*`. The WebSocket at `/devices` carries only the four envelope kinds the relay genuinely brokers: `forward` (client → relay, opaquely re-emitted to the peer as `forwarded`), `forwarded` (relay → client peer payload delivery), `event` (relay → client server-pushed state, e.g. `Paired` / `PeerOnline` / `UiEventMessage`), and `ingest` (agent-host → backend raw event stream). Business RPC schemas (`list_clis`, etc.) live in `forward.payload` and are never parsed by the relay.
 6. **SQLite persistence from day one.** Devices, pairings, pairing tokens, and secret hashes survive relay restarts. No in-memory fallback.
 7. **End-to-end RPC through broker.** iPhone calls `list_clis` → envelope forwarded to Mac host → Mac responds through same envelope path → iPhone surfaces result. Zero relay-side knowledge of the method's shape.
 8. **Reconnect resilience.** WS client exponential backoff (`1s→2s→…→30s` cap); server-side session cleanup on dropped connections; `PeerOnline` / `PeerOffline` events pushed to the opposite side.
@@ -166,7 +166,7 @@ Users are expected to install `cloudflared` on the box that runs `minos-relay` a
 | Crate | Status | MVP responsibility |
 |---|---|---|
 | `minos-relay` | **NEW**, bin | `axum` server, envelope dispatcher, session registry (`DashMap<DeviceId, SessionHandle>`), pairing service, SQLite store, cloudflared-agnostic |
-| `minos-protocol` | Add `envelope` module | Envelope enum + `EventKind` + `LocalRpcMethod` typed names. Existing `#[rpc]` trait unchanged (still authoritative for peer-to-peer business RPCs) |
+| `minos-protocol` | Add `envelope` module | Envelope enum (`Forward` / `Forwarded` / `Event` / `Ingest`) + `EventKind` + the JSON request/response types for the HTTP `/v1/*` control plane (`PairConsumeRequest`, `PairResponse`, `PairingQrPayload`, `ListThreadsResponse`, …). Existing `#[rpc]` trait unchanged (still authoritative for peer-to-peer business RPCs) |
 | `minos-domain` | Add types | `DeviceSecret` newtype; extend `MinosError` (see §8); `DeviceRole` enum (`MacHost` / `IosClient` / `BrowserAdmin`) |
 | `minos-pairing` | Semantic refactor | State machine flips: pairing is now backend-mediated. `PairingStore` trait retained on clients for local-only credential storage; token-issuance logic moves into `minos-relay`'s pairing service |
 | `minos-transport` | Scope narrowed | Server role **retired** in this MVP (nothing binds a public server any more). Client role (`WsClient::connect`, reconnect backoff, heartbeat loop) stays and grows an `auth: AuthHeaders` argument |
@@ -189,15 +189,17 @@ crates/minos-relay/
     ├── config.rs            # env vars + CLI flags (listen addr, db path, log dir)
     ├── http/
     │   ├── mod.rs           # axum Router wiring
+    │   ├── auth.rs          # shared header/auth classifier (used by /v1/* + /devices)
     │   ├── health.rs        # GET /health
-    │   └── ws_devices.rs    # GET /devices → WS upgrade
+    │   ├── ws_devices.rs    # GET /devices → WS upgrade
+    │   └── v1/              # HTTP control plane (POST /v1/pairing/{tokens,consume},
+    │                        # DELETE /v1/pairing, GET /v1/threads*)
     ├── session/
     │   ├── mod.rs           # SessionHandle, Session task
     │   ├── registry.rs      # DashMap<DeviceId, SessionHandle>
     │   └── heartbeat.rs     # ping/pong loop
     ├── envelope/
-    │   ├── mod.rs           # dispatch (local_rpc vs forward)
-    │   └── local_rpc.rs     # request_pairing_token / pair / ping / forget_peer
+    │   └── mod.rs           # dispatch (Forward + Ingest only; control-plane is HTTP)
     ├── pairing/
     │   ├── mod.rs           # issue, consume, persist
     │   └── secret.rs        # argon2 hash + verify
@@ -226,32 +228,29 @@ crates/minos-relay/
 
 ---
 
-## 6. Protocol: Envelope
+## 6. Protocol: Envelope (WebSocket) + HTTP `/v1/*` (control plane)
 
-Every WebSocket text frame over `/devices` is one JSON object matching this enum:
+The backend exposes two surfaces:
+
+1. **HTTP `/v1/*`** — JSON request/response routes for everything the
+   backend itself terminates (issue/consume pairing tokens, tear down
+   pairings, list/read threads). Authenticated per-request via the same
+   `X-Device-Id` / `X-Device-Role` / `X-Device-Secret` (and
+   `CF-Access-*`) header bundle the WebSocket uses.
+2. **WebSocket `/devices`** — bi-directional channel that brokers
+   peer-to-peer JSON-RPC payloads (`forward` / `forwarded`), pushes
+   server-side state events (`event`), and accepts agent-host raw event
+   streams (`ingest`). Every WS frame is one JSON object matching the
+   `Envelope` enum below.
 
 ```rust
 // crates/minos-protocol/src/envelope.rs
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Envelope {
-    /// Client → Relay. Backend handles, backend responds.
-    LocalRpc {
-        #[serde(rename = "v")] version: u8,   // always 1 in MVP
-        id: u64,                              // client-assigned correlation id
-        method: LocalRpcMethod,               // typed enum, not a free string
-        params: serde_json::Value,
-    },
-    /// Relay → Client. Response to a prior LocalRpc.
-    LocalRpcResponse {
-        #[serde(rename = "v")] version: u8,
-        id: u64,                              // echoes the request
-        #[serde(flatten)]
-        outcome: LocalRpcOutcome,             // Ok { result: Value } | Err { error: RpcError }
-    },
     /// Client → Relay. Relay forwards opaquely to paired peer.
     Forward {
-        #[serde(rename = "v")] version: u8,
+        #[serde(rename = "v")] version: u8,   // always 1 in MVP
         payload: serde_json::Value,           // opaque; JSON-RPC 2.0 by convention
     },
     /// Relay → Client. Peer sent you this.
@@ -266,15 +265,15 @@ pub enum Envelope {
         #[serde(flatten)]
         event: EventKind,
     },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "method", rename_all = "snake_case")]
-pub enum LocalRpcMethod {
-    Ping,
-    RequestPairingToken,
-    Pair,
-    ForgetPeer,
+    /// Agent-host → Backend. Raw native event for persistence + fan-out.
+    Ingest {
+        #[serde(rename = "v")] version: u8,
+        agent: AgentName,
+        thread_id: String,
+        seq: u64,
+        payload: serde_json::Value,
+        ts_ms: i64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -290,44 +289,54 @@ pub enum EventKind {
     Unpaired,
     /// Relay is shutting down; clients should reconnect.
     ServerShutdown,
+    /// Backend → Mobile. One translated UI event from backend's live fan-out.
+    UiEventMessage { thread_id: String, seq: u64, ui: UiEventMessage, ts_ms: i64 },
 }
 ```
 
-> **Outcome wire shape.** `LocalRpcResponse` uses an internally-tagged
-> outcome with `status: "ok" | "err"`. The `Ok` body flattens a single
-> `result: Value` field; the `Err` body flattens a single `error` field
-> whose value is an `{ code: string, message: string }` object. Example
-> frames:
->
-> ```json
-> {"kind":"local_rpc_response","v":1,"id":42,"status":"ok","result":{"token":"..."}}
-> {"kind":"local_rpc_response","v":1,"id":42,"status":"err","error":{"code":"pairing_token_invalid","message":"..."}}
-> ```
->
-> The nested-`error` shape (vs flat `code`/`message`) is the committed
-> wire contract — it keeps `RpcError` reusable and avoids key-name
-> collisions if a future success payload also wants `code`/`message`.
+### 6.1 HTTP control-plane routes
 
-### 6.1 Local RPCs (the only thing the backend itself handles)
+All routes require authenticated headers (`X-Device-Id`, `X-Device-Role`,
+optional `X-Device-Secret`, optional `CF-Access-*`) — the same auth
+classifier the WS handshake uses (`http::auth::authenticate`).
 
-| Method | Caller role | Pre-state | Params | Success result | Errors |
+| Method + path | Caller role | Pre-state | Body / query | Success | Errors |
 |---|---|---|---|---|---|
-| `ping` | any | any | `{}` | `{"ok": true}` | never |
-| `request_pairing_token` | `mac-host` | Paired OR Unpaired | `{}` | `{"token": "...", "expires_at": "RFC3339"}` | `Unauthorized` if role mismatch |
-| `pair` | `ios-client` | Unpaired | `{"token": "...", "device_name": "..."}` | `{"peer_device_id": "...", "peer_name": "...", "your_device_secret": "..."}` | `PairingTokenInvalid`, `PairingStateMismatch` |
-| `forget_peer` | any | Paired | `{}` | `{"ok": true}` | `Unauthorized` if unpaired |
+| `POST /v1/pairing/tokens` | `agent-host` | any | `{ "host_display_name": "..." }` | `{ "qr_payload": PairingQrPayload }` | `401` non-host, `403` CF-only edge state |
+| `POST /v1/pairing/consume` | `ios-client` | Unpaired | `{ "token": "...", "device_name": "..." }` | `PairResponse { peer_device_id, peer_name, your_device_secret }` | `409 pairing_token_invalid`, `409 pairing_state_mismatch` |
+| `DELETE /v1/pairing` | any (paired) | Paired | `X-Device-Secret` required | `204 No Content` | `404` if already unpaired |
+| `GET /v1/threads` | any (paired) | Paired | `?limit&before_ts_ms&agent=` | `ListThreadsResponse` | `401` unpaired |
+| `GET /v1/threads/{id}/events` | any (paired) | Paired, owns thread | `?limit&from_seq=` | `ReadThreadResponse` | `401` unpaired, `404` thread |
+| `GET /v1/threads/{id}/last_seq` | any (paired) | Paired, owns thread | — | `GetThreadLastSeqResponse` | `401`, `404` |
 
-Token TTL: **5 minutes**. Expired → garbage-collected by a background task every 60s. Consumed tokens are marked, never reused. Token hashing uses SHA-256 (not argon2id): the 32-byte plaintext has ≥256 bits of entropy and the short TTL bounds attacker exposure, so a deterministic hash suffices and (unlike argon2's salted PHC output) supports direct primary-key lookup.
+After `POST /v1/pairing/consume` succeeds, the backend pushes
+`Event::Paired` onto the issuer's live WebSocket so the Mac learns about
+the iPhone without polling. After `DELETE /v1/pairing`, both sessions
+receive `Event::Unpaired`.
+
+Token TTL: **5 minutes**. Expired tokens are GC'd by a background task
+every 60s. Consumed tokens are marked, never reused. Token hashing uses
+SHA-256 (not argon2id): the 32-byte plaintext has ≥256 bits of entropy
+and the short TTL bounds attacker exposure, so a deterministic hash
+suffices and (unlike argon2's salted PHC output) supports direct
+primary-key lookup.
 
 ### 6.2 Id semantics
 
-- `LocalRpc.id`: client-assigned, unique per connection, used by backend to correlate `LocalRpcResponse`.
-- `Forward.payload` carries its own JSON-RPC 2.0 `id` field; the relay does not read it. Correlation of forwarded RPC responses is the client's problem (handled by `jsonrpsee` or equivalent on each side).
-- Backend never generates ids — it only echoes or routes.
+- `Forward.payload` carries its own JSON-RPC 2.0 `id` field; the relay
+  does not read it. Correlation of forwarded RPC responses is the
+  client's problem (handled by `jsonrpsee` or equivalent on each side).
+- HTTP `/v1/*` calls have no envelope id; reqwest correlates request
+  with response at the transport layer.
+- Backend never generates ids — it only routes.
 
 ### 6.3 Version field
 
-`"v": 1` required on every envelope. Future breaking changes bump to 2; backend supports a window of versions during transitions. Clients that see `"v"` they don't understand close the socket with a typed error.
+`"v": 1` required on every WS envelope. Future breaking changes bump to
+2; backend supports a window of versions during transitions. Clients
+that see `"v"` they don't understand close the socket with WS code 4400.
+HTTP routes are versioned via the `/v1/` path prefix; future revisions
+land at `/v2/` rather than mutating the wire shape in place.
 
 ---
 
@@ -354,11 +363,14 @@ Token TTL: **5 minutes**. Expired → garbage-collected by a background task eve
    ◄─────── Event{type: "unpaired"} ──────────────
 
 4. user clicks "Show QR" in menu bar
-   ├─ send LocalRpc{method: request_pairing_token}
+   ├─ POST /v1/pairing/tokens
+   │   headers: X-Device-Id (mac), X-Device-Role: agent-host, CF-Access-*
+   │   body:    {"host_display_name": "Fan's Mac"}
    ─────────►                                      5. issue 32B token, hash it, store in
                                                        pairing_tokens (issuer=mac, ttl=5min)
-   ◄─────── LocalRpcResponse{result:{token, expires_at}}
-6. render QR: {backend_url, token, mac_display_name}
+   ◄─────── 200 OK { qr_payload: PairingQrPayload }
+6. render QR: PairingQrPayload v2 (backend_url, token, host_display_name,
+   expires_at_ms, optional CF-Access service-token fields)
 
                                                                                7. app launches
                                                                                   ├─ gen DeviceId
@@ -370,8 +382,12 @@ Token TTL: **5 minutes**. Expired → garbage-collected by a background task eve
                                                                                   9. user taps "Scan to pair"
                                                                                      camera yields QR
                                                                                ◄──── parse {token, ...}
-                                                         ◄──── LocalRpc{method: pair,
-                                                                params: {token, device_name}}
+                                                         ◄──── POST /v1/pairing/consume
+                                                                headers: X-Device-Id (iphone),
+                                                                         X-Device-Role: ios-client,
+                                                                         CF-Access-*
+                                                                body:    {"token": "...",
+                                                                          "device_name": "..."}
                                                   10. consume token:
                                                       ├─ hash(input) match pairing_tokens row?
                                                       ├─ not expired, not consumed?
@@ -381,14 +397,14 @@ Token TTL: **5 minutes**. Expired → garbage-collected by a background task eve
                                                       ├─ update devices rows with hashes
                                                       ├─ insert pairings row (mac, phone)
                                                       └─ upgrade both sessions to PAIRED
-   ◄───── Event{type: paired,                    11. push Paired event to both sides
-           peer_device_id: phone,                                                        ─────────►
-           peer_name: "...",
+   ◄───── Event{type: paired,                    11. push Paired event to mac's live WS
+           peer_device_id: phone,                    return PairResponse to phone over HTTP
+           peer_name: "...",                                                             ─────────►
            your_device_secret: <mac secret>}
-                                                                               ◄──── LocalRpcResponse{
-                                                                                   result:{peer_device_id,
-                                                                                           peer_name,
-                                                                                           your_device_secret}}
+                                                                               ◄──── 200 OK PairResponse
+                                                                                   { peer_device_id,
+                                                                                     peer_name,
+                                                                                     your_device_secret }
 
 12. client stores secret in Keychain                                      13. client stores secret in Keychain
     UI: "Connected (1 device)"                                                UI: navigate to HomePage
@@ -462,16 +478,18 @@ Token TTL: **5 minutes**. Expired → garbage-collected by a background task eve
 [initiator]                              [Relay]                                [peer]
 
 1. user taps "Forget this device"
-   LocalRpc{method: forget_peer}
+   DELETE /v1/pairing
+   headers: X-Device-Id, X-Device-Role, X-Device-Secret, CF-Access-*
    ─────────►
                                     2. find pairing row → delete
-                                    3. emit Event{type: unpaired} to *both* sessions
+                                    3. emit Event{type: unpaired} to *both* live sessions
                                        ├─ issuer session → unpaired mode
                                        └─ peer session   → unpaired mode; secret invalidated
                                                                     ─────────►
                                                                     4. peer wipes local Keychain
                                                                        secret; UI → PairingPage
-   ◄──── Event{type: unpaired}
+   ◄──── 204 No Content (HTTP)
+   ◄──── Event{type: unpaired} (over WS)
 5. wipe local Keychain secret; UI → PairingPage
 ```
 
