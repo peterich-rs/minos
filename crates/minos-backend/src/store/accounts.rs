@@ -78,10 +78,7 @@ pub async fn find_by_email(
     Ok(row)
 }
 
-pub async fn touch_last_login(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<(), BackendError> {
+pub async fn touch_last_login(pool: &SqlitePool, account_id: &str) -> Result<(), BackendError> {
     let now = Utc::now().timestamp_millis();
     sqlx::query("UPDATE accounts SET last_login_at = ? WHERE account_id = ?")
         .bind(now)
@@ -139,9 +136,7 @@ mod tests {
     #[tokio::test]
     async fn touch_last_login_updates_timestamp() {
         let pool = memory_pool().await;
-        let row = create(&pool, "alice@example.com", "phc")
-            .await
-            .unwrap();
+        let row = create(&pool, "alice@example.com", "phc").await.unwrap();
         touch_last_login(&pool, &row.account_id).await.unwrap();
         let got = find_by_email(&pool, "alice@example.com")
             .await

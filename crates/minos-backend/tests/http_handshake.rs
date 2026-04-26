@@ -111,8 +111,12 @@ async fn devices_first_connect_emits_unpaired_event() {
     // iOS upgrades require a bearer post-Phase-2 Task 2.2; sign one bound
     // to this device id so the first-connect path still surfaces the
     // initial Event::Unpaired we want to assert here.
-    let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-first-connect", &id.to_string())
-        .expect("sign test bearer");
+    let token = jwt::sign(
+        TEST_JWT_SECRET.as_bytes(),
+        "acct-first-connect",
+        &id.to_string(),
+    )
+    .expect("sign test bearer");
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", id.to_string())
         .with_header("X-Device-Role", DeviceRole::IosClient.to_string())
@@ -296,8 +300,7 @@ async fn devices_ios_upgrade_with_did_mismatch_rejects_with_401() {
     let url: Uri = format!("{}/devices", http_to_ws(&base)).parse().unwrap();
     let header_id = DeviceId::new();
     let token_did = DeviceId::new(); // different device baked into token
-    let token =
-        jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &token_did.to_string()).unwrap();
+    let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &token_did.to_string()).unwrap();
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", header_id.to_string())
         .with_header("X-Device-Role", DeviceRole::IosClient.to_string())

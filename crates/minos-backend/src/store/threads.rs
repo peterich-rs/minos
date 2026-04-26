@@ -339,7 +339,9 @@ mod tests {
             .unwrap();
         }
 
-        let r = list(&pool, Some("dev1"), None, None, 3, None).await.unwrap();
+        let r = list(&pool, Some("dev1"), None, None, 3, None)
+            .await
+            .unwrap();
         assert_eq!(r.len(), 3);
         assert_eq!(r[0].thread_id, "thr4");
         assert_eq!(r[1].thread_id, "thr3");
@@ -365,7 +367,9 @@ mod tests {
             .await
             .unwrap();
 
-        let r = list(&pool, Some("dev1"), None, None, 50, None).await.unwrap();
+        let r = list(&pool, Some("dev1"), None, None, 50, None)
+            .await
+            .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].thread_id, "mine");
     }

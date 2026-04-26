@@ -41,7 +41,10 @@ impl RateLimiter {
     /// across long uptimes when an attacker rotates IPs/emails.
     pub fn check(&self, key: &str) -> Result<(), u32> {
         let now = Instant::now();
-        let mut map = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entries = map.entry(key.to_string()).or_default();
         entries.retain(|t| now.duration_since(*t) < self.window);
         if entries.len() >= self.permits {

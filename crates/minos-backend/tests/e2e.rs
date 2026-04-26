@@ -33,9 +33,6 @@ use minos_backend::{
     session::SessionRegistry,
     store,
 };
-
-/// Fixed JWT secret used by the test relay; mirrors `test_support::TEST_JWT_SECRET`.
-const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
 use minos_protocol::{Envelope, EventKind};
 use sqlx::SqlitePool;
@@ -45,6 +42,9 @@ use tokio_tungstenite::{
     tungstenite::{client::ClientRequestBuilder, http::Uri, protocol::Message, Error as WsError},
     MaybeTlsStream, WebSocketStream,
 };
+
+/// Fixed JWT secret used by the test relay; mirrors `test_support::TEST_JWT_SECRET`.
+const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 
 /// Short timeout for individual `recv` calls. Sized for slow shared CI
 /// runners; local runs complete well under the bound.
@@ -124,8 +124,12 @@ async fn connect_client(
     // log in as — synthesise a token bound to the same `device_id` here so
     // the existing scenarios still exercise the post-upgrade behaviour.
     let token = (role == DeviceRole::IosClient).then(|| {
-        jwt::sign(TEST_JWT_SECRET.as_bytes(), "e2e-acct", &device_id.to_string())
-            .expect("test bearer signs cleanly")
+        jwt::sign(
+            TEST_JWT_SECRET.as_bytes(),
+            "e2e-acct",
+            &device_id.to_string(),
+        )
+        .expect("test bearer signs cleanly")
     });
     connect_client_with_bearer(relay, device_id, role, secret, name, token.as_deref()).await
 }

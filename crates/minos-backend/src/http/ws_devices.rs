@@ -113,8 +113,8 @@ pub async fn upgrade(
     // Mac (`AgentHost`) rail keeps the device-secret-only path so existing
     // pairings continue to authenticate without an account-side token.
     let account_id: Option<String> = if role == DeviceRole::IosClient {
-        let bearer_outcome = bearer::require(&state, &headers)
-            .map_err(bearer::BearerError::into_response_tuple)?;
+        let bearer_outcome =
+            bearer::require(&state, &headers).map_err(bearer::BearerError::into_response_tuple)?;
         Some(bearer_outcome.account_id)
     } else {
         None

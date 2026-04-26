@@ -34,10 +34,7 @@ async fn post_json(
 }
 
 fn ios_headers(device_id: &str) -> Vec<(&str, &str)> {
-    vec![
-        ("x-device-id", device_id),
-        ("x-device-role", "ios-client"),
-    ]
+    vec![("x-device-id", device_id), ("x-device-role", "ios-client")]
 }
 
 #[tokio::test]

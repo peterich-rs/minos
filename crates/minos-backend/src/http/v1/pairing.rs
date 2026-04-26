@@ -83,6 +83,12 @@ async fn post_tokens(
     Ok(Json(RequestPairingQrResponse { qr_payload }))
 }
 
+// `post_consume` has grown beyond the default `clippy::too_many_lines`
+// budget after Phase 2 Task 2.3 added bearer-required + dual-side
+// account_id propagation. The flow is straight-line — split halves
+// would just shuffle locals through arguments — so we allow it here
+// rather than fragment the handler.
+#[allow(clippy::too_many_lines)]
 async fn post_consume(
     State(state): State<BackendState>,
     headers: HeaderMap,

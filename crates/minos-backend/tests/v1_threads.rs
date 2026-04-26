@@ -15,12 +15,7 @@ mod common;
 async fn paired_pair_with_account(
     state: &minos_backend::http::BackendState,
     email: &str,
-) -> (
-    DeviceId,
-    DeviceId,
-    minos_domain::DeviceSecret,
-    String,
-) {
+) -> (DeviceId, DeviceId, minos_domain::DeviceSecret, String) {
     let mac = DeviceId::new();
     let ios = DeviceId::new();
     insert_device(&state.store, mac, "Mac", DeviceRole::AgentHost, 0)
@@ -40,10 +35,9 @@ async fn paired_pair_with_account(
     // Phase 2 Task 2.6: link both device rows to a real account_id so the
     // /v1/threads handler's account-scoped query returns the seeded
     // threads.
-    let account =
-        minos_backend::store::accounts::create(&state.store, email, "phc")
-            .await
-            .unwrap();
+    let account = minos_backend::store::accounts::create(&state.store, email, "phc")
+        .await
+        .unwrap();
     minos_backend::store::devices::set_account_id(&state.store, &mac, &account.account_id)
         .await
         .unwrap();
@@ -56,8 +50,12 @@ async fn paired_pair_with_account(
 
 /// Convenience: signed bearer JWT bound to the given (account_id, device_id).
 fn bearer_for(account_id: &str, device_id: DeviceId) -> String {
-    jwt::sign(TEST_JWT_SECRET.as_bytes(), account_id, &device_id.to_string())
-        .expect("test bearer signs cleanly")
+    jwt::sign(
+        TEST_JWT_SECRET.as_bytes(),
+        account_id,
+        &device_id.to_string(),
+    )
+    .expect("test bearer signs cleanly")
 }
 
 /// Backwards-compat shim used by the tests that don't care about

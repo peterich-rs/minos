@@ -5,9 +5,7 @@
 //! from another device is rejected at verify time.
 
 use chrono::Utc;
-use jsonwebtoken::{
-    decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
-};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -48,9 +46,11 @@ pub fn sign(secret: &[u8], account_id: &str, device_id: &str) -> Result<String, 
 pub fn verify(secret: &[u8], token: &str) -> Result<Claims, BackendError> {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.leeway = 5;
-    let data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)
-        .map_err(|e| BackendError::JwtVerify {
-            message: e.to_string(),
+    let data =
+        decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation).map_err(|e| {
+            BackendError::JwtVerify {
+                message: e.to_string(),
+            }
         })?;
     Ok(data.claims)
 }

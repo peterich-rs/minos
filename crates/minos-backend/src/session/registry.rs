@@ -892,7 +892,10 @@ mod tests {
             "only the iOS device on acct-1 should be closed (Mac stays, other acct stays)"
         );
         assert!(reg.get(ios_target).is_none());
-        assert!(reg.get(ios_other_acct).is_some(), "different account untouched");
+        assert!(
+            reg.get(ios_other_acct).is_some(),
+            "different account untouched"
+        );
         assert!(reg.get(mac_same_acct).is_some(), "Mac role untouched");
     }
 

@@ -244,6 +244,9 @@ mod tests {
     async fn find_active_with_unknown_token_returns_none() {
         let pool = memory_pool().await;
         let (_account_id, _device_id) = setup_account_and_device(&pool).await;
-        assert!(find_active(&pool, "not-a-real-token").await.unwrap().is_none());
+        assert!(find_active(&pool, "not-a-real-token")
+            .await
+            .unwrap()
+            .is_none());
     }
 }

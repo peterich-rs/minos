@@ -35,8 +35,8 @@ use axum::Router;
 use sqlx::SqlitePool;
 
 use crate::{
-    auth::rate_limit::RateLimiter, ingest::translate::ThreadTranslators,
-    pairing::PairingService, session::SessionRegistry,
+    auth::rate_limit::RateLimiter, ingest::translate::ThreadTranslators, pairing::PairingService,
+    session::SessionRegistry,
 };
 
 pub mod auth;

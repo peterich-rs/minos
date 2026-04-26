@@ -102,12 +102,8 @@ mod tests {
     async fn require_with_valid_token_and_matching_device_succeeds() {
         let state = backend_state().await;
         let device_id = DeviceId::new();
-        let token = jwt::sign(
-            TEST_JWT_SECRET.as_bytes(),
-            "acct-1",
-            &device_id.to_string(),
-        )
-        .unwrap();
+        let token =
+            jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &device_id.to_string()).unwrap();
         let mut headers = HeaderMap::new();
         headers.insert("authorization", auth_header(&token).parse().unwrap());
         headers.insert("x-device-id", device_id.to_string().parse().unwrap());
@@ -119,14 +115,10 @@ mod tests {
     #[tokio::test]
     async fn require_with_mismatched_device_returns_device_mismatch() {
         let state = backend_state().await;
-        let token =
-            jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", "some-other-device").unwrap();
+        let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", "some-other-device").unwrap();
         let mut headers = HeaderMap::new();
         headers.insert("authorization", auth_header(&token).parse().unwrap());
-        headers.insert(
-            "x-device-id",
-            DeviceId::new().to_string().parse().unwrap(),
-        );
+        headers.insert("x-device-id", DeviceId::new().to_string().parse().unwrap());
         let err = require(&state, &headers).unwrap_err();
         assert!(matches!(err, BearerError::DeviceMismatch));
     }
@@ -136,10 +128,7 @@ mod tests {
         let state = backend_state().await;
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer not.a.jwt".parse().unwrap());
-        headers.insert(
-            "x-device-id",
-            DeviceId::new().to_string().parse().unwrap(),
-        );
+        headers.insert("x-device-id", DeviceId::new().to_string().parse().unwrap());
         let err = require(&state, &headers).unwrap_err();
         assert!(matches!(err, BearerError::Invalid(_)));
     }
@@ -148,17 +137,10 @@ mod tests {
     async fn require_with_lowercase_bearer_prefix_succeeds() {
         let state = backend_state().await;
         let device_id = DeviceId::new();
-        let token = jwt::sign(
-            TEST_JWT_SECRET.as_bytes(),
-            "acct-1",
-            &device_id.to_string(),
-        )
-        .unwrap();
+        let token =
+            jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &device_id.to_string()).unwrap();
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            format!("bearer {token}").parse().unwrap(),
-        );
+        headers.insert("authorization", format!("bearer {token}").parse().unwrap());
         headers.insert("x-device-id", device_id.to_string().parse().unwrap());
         let outcome = require(&state, &headers).unwrap();
         assert_eq!(outcome.account_id, "acct-1");

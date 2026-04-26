@@ -269,10 +269,9 @@ pub async fn post_login(
     //    EXCEPT the device that just logged in. The displaced device's
     //    socket loop will see its `revoked` watch flip and tear down.
     let _ = refresh_tokens::revoke_all_for_account(&state.store, &account.account_id).await;
-    let closed = state.registry.close_account_sessions(
-        &account.account_id,
-        Some(&device_id.to_string()),
-    );
+    let closed = state
+        .registry
+        .close_account_sessions(&account.account_id, Some(&device_id.to_string()));
     if closed > 0 {
         tracing::info!(
             target: "minos_backend::v1::auth",

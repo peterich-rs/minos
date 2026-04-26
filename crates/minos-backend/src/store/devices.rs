@@ -315,7 +315,9 @@ mod tests {
         insert_device(&pool, id, "iphone", DeviceRole::IosClient, T0)
             .await
             .unwrap();
-        set_account_id(&pool, &id, &account.account_id).await.unwrap();
+        set_account_id(&pool, &id, &account.account_id)
+            .await
+            .unwrap();
         let got = get_device(&pool, id).await.unwrap().unwrap();
         assert_eq!(got.account_id.as_deref(), Some(account.account_id.as_str()));
     }

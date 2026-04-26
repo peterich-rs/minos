@@ -9,15 +9,19 @@ use minos_domain::{DeviceId, DeviceRole, PairingToken};
 use minos_protocol::{PairConsumeRequest, PairResponse, RequestPairingQrResponse};
 use std::time::Duration as StdDuration;
 
+mod common;
+
 /// Helper: sign a bearer JWT bound to `device_id` for the test JWT
 /// secret. Use a shared `account_id` across both sides of a pair when the
 /// test asserts post-consume account propagation.
 fn sign_bearer(device_id: DeviceId, account_id: &str) -> String {
-    jwt::sign(TEST_JWT_SECRET.as_bytes(), account_id, &device_id.to_string())
-        .expect("test bearer signs cleanly")
+    jwt::sign(
+        TEST_JWT_SECRET.as_bytes(),
+        account_id,
+        &device_id.to_string(),
+    )
+    .expect("test bearer signs cleanly")
 }
-
-mod common;
 
 fn json_body(v: serde_json::Value) -> Body {
     Body::from(serde_json::to_vec(&v).unwrap())
@@ -185,10 +189,9 @@ async fn pairing_consume_ios_writes_account_id_to_pairing_record() {
 
     let mut app = router(state.clone());
     let consumer_id = DeviceId::new();
-    let account =
-        minos_backend::store::accounts::create(&state.store, "scoped@example.com", "phc")
-            .await
-            .unwrap();
+    let account = minos_backend::store::accounts::create(&state.store, "scoped@example.com", "phc")
+        .await
+        .unwrap();
     let bearer = sign_bearer(consumer_id, &account.account_id);
     let auth_hdr = format!("Bearer {bearer}");
     let req = Request::builder()

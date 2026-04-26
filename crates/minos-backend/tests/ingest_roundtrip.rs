@@ -18,9 +18,6 @@ use minos_backend::{
     session::SessionRegistry,
     store,
 };
-
-/// Fixed JWT secret used by the test relay; mirrors `test_support::TEST_JWT_SECRET`.
-const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 use minos_domain::{AgentName, DeviceId, DeviceRole, DeviceSecret};
 use minos_protocol::{Envelope, EventKind};
 use minos_ui_protocol::UiEventMessage;
@@ -31,6 +28,9 @@ use tokio_tungstenite::{
     tungstenite::{client::ClientRequestBuilder, http::Uri, protocol::Message, Error as WsError},
     MaybeTlsStream, WebSocketStream,
 };
+
+/// Fixed JWT secret used by the test relay; mirrors `test_support::TEST_JWT_SECRET`.
+const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -113,9 +113,12 @@ async fn connect_client(
     // focused on translate/fan-out behaviour without dragging the auth
     // endpoints into every test.
     if role == DeviceRole::IosClient {
-        let token =
-            jwt::sign(TEST_JWT_SECRET.as_bytes(), "ingest-acct", &device_id.to_string())
-                .expect("test bearer signs cleanly");
+        let token = jwt::sign(
+            TEST_JWT_SECRET.as_bytes(),
+            "ingest-acct",
+            &device_id.to_string(),
+        )
+        .expect("test bearer signs cleanly");
         builder = builder.with_header("Authorization", format!("Bearer {token}"));
     }
     let (ws, _resp) = tokio_tungstenite::connect_async(builder).await?;
