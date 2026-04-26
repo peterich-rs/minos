@@ -19,19 +19,20 @@
 //!     --device-name "Fan's fake iPhone"
 //! ```
 //!
-//! After Pair the backend sends a Paired event back to the Mac and a
-//! LocalRpcResponse to the fake-peer. Subsequent inbound frames are
-//! printed verbatim to stderr so operators can eyeball Forwarded /
-//! Event traffic.
+//! The pairing handshake uses HTTP `POST /v1/pairing/consume` (the WS
+//! `LocalRpc` dispatcher was retired with plan 07 Phase D); the returned
+//! `device_secret` is then stamped onto an authenticated WebSocket
+//! connection and inbound frames are printed to stderr until the socket
+//! closes.
 //!
 //! No retry logic, no Keychain persistence — this is dev-only.
 
 use anyhow::Context as _;
 use clap::Parser;
-use futures_util::{SinkExt, StreamExt};
-use minos_domain::{DeviceId, DeviceRole};
-use minos_protocol::envelope::{Envelope, LocalRpcMethod};
-use serde_json::json;
+use futures_util::StreamExt;
+use minos_domain::{DeviceId, DeviceRole, PairingToken};
+use minos_mobile::http::MobileHttpClient;
+use minos_protocol::{Envelope, PairConsumeRequest};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderName;
 use tokio_tungstenite::tungstenite::Message;
@@ -40,17 +41,19 @@ use tokio_tungstenite::tungstenite::Message;
 #[command(
     name = "fake-peer",
     about = "Smoke-test Mac pairing without iOS by impersonating an ios-client.",
-    long_about = "Connects to a relay broker, sends a single Pair LocalRpc, then \
-                  prints inbound frames until interrupted. Intended for local dev only."
+    long_about = "Pairs against the backend's HTTP /v1/pairing/consume route, \
+                  opens an authenticated WebSocket with the returned \
+                  device-secret, and prints inbound frames until interrupted."
 )]
 struct Args {
-    /// Relay backend URL.
+    /// Relay backend URL (the `/devices` WebSocket endpoint; the HTTP
+    /// origin is derived from the same host).
     #[arg(long, default_value = "ws://127.0.0.1:8787/devices")]
     backend: String,
     /// Pairing token captured from the Mac's QR payload.
     #[arg(long)]
     token: String,
-    /// Display name announced to the host during Pair.
+    /// Display name announced to the host during pair.
     #[arg(long, default_value = "fake-peer")]
     device_name: String,
 }
@@ -60,6 +63,25 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device_id = DeviceId::new();
 
+    // 1. Pair via HTTP.
+    let http = MobileHttpClient::new(&args.backend, device_id, None)
+        .context("build MobileHttpClient")?;
+    let pair_req = PairConsumeRequest {
+        token: PairingToken(args.token.clone()),
+        device_name: args.device_name.clone(),
+    };
+    eprintln!("→ POST /v1/pairing/consume token={}", args.token);
+    let pair_resp = http
+        .pair_consume(pair_req)
+        .await
+        .context("POST /v1/pairing/consume")?;
+    eprintln!(
+        "← peer_device_id={} peer_name={}",
+        pair_resp.peer_device_id, pair_resp.peer_name
+    );
+    let secret = pair_resp.your_device_secret;
+
+    // 2. Open the authenticated WebSocket.
     let mut request = args
         .backend
         .clone()
@@ -79,6 +101,19 @@ async fn main() -> anyhow::Result<()> {
             .parse()
             .context("encode device-role header")?,
     );
+    request.headers_mut().insert(
+        HeaderName::from_static("x-device-secret"),
+        secret
+            .as_str()
+            .parse()
+            .context("encode device-secret header")?,
+    );
+    request.headers_mut().insert(
+        HeaderName::from_static("x-device-name"),
+        args.device_name
+            .parse()
+            .context("encode device-name header")?,
+    );
 
     eprintln!(
         "connecting as {device_id} (role=ios-client) to {}",
@@ -87,22 +122,7 @@ async fn main() -> anyhow::Result<()> {
     let (ws, _resp) = tokio_tungstenite::connect_async(request)
         .await
         .context("ws handshake")?;
-    let (mut sink, mut stream) = ws.split();
-
-    let pair_request = Envelope::LocalRpc {
-        version: 1,
-        id: 1,
-        method: LocalRpcMethod::Pair,
-        params: json!({
-            "token": args.token,
-            "device_name": args.device_name,
-        }),
-    };
-    let text = serde_json::to_string(&pair_request).context("serialize Pair envelope")?;
-    eprintln!("→ {text}");
-    sink.send(Message::Text(text.into()))
-        .await
-        .context("send Pair envelope")?;
+    let (_sink, mut stream) = ws.split();
 
     while let Some(msg) = stream.next().await {
         match msg.context("ws read")? {
@@ -123,16 +143,13 @@ async fn main() -> anyhow::Result<()> {
 
 fn print_envelope(envelope: &Envelope, raw: &str) {
     match envelope {
-        Envelope::LocalRpcResponse { id, outcome, .. } => {
-            eprintln!("← local_rpc_response id={id} outcome={outcome:?}");
-        }
         Envelope::Event { event, .. } => {
             eprintln!("← event: {event:?}");
         }
         Envelope::Forwarded { from, payload, .. } => {
             eprintln!("← forwarded from={from} payload={payload}");
         }
-        Envelope::Forward { .. } | Envelope::LocalRpc { .. } => {
+        Envelope::Forward { .. } | Envelope::Ingest { .. } => {
             eprintln!("← unexpected client→relay envelope mirrored back: {raw}");
         }
     }

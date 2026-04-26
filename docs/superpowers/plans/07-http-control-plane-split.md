@@ -2532,7 +2532,7 @@ git commit -m "refactor(daemon): drop send_local_rpc + pending-map"
 **Files:**
 - Modify: `crates/minos-mobile/src/client.rs`
 
-- [ ] **Step 1**
+- [x] **Step 1**
 
 Delete:
 - `MobileClient.next_rpc_id`, `MobileClient.pending` fields
@@ -2542,14 +2542,14 @@ Delete:
 
 Update `recv_loop`'s remaining match arms to handle only `Envelope::Event { event: EventKind::{Unpaired, ServerShutdown, UiEventMessage, Paired, PeerOnline, PeerOffline} }` and `Envelope::Forwarded`. (If `Forwarded` isn't routed today, leave that alone — out of scope.)
 
-- [ ] **Step 2: Run**
+- [x] **Step 2: Run**
 
 ```bash
 cargo test -p minos-mobile
 cargo xtask check-all
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/minos-mobile/src/client.rs

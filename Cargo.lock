@@ -2222,7 +2222,6 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
- "dashmap 6.1.0",
  "futures",
  "futures-util",
  "mars-xlog",

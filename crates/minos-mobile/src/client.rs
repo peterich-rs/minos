@@ -2,8 +2,8 @@
 //!
 //! Plan 05 replaces the jsonrpsee-backed client with a bespoke envelope
 //! WebSocket loop (spec §6) so the mobile side can consume
-//! `EventKind::UiEventMessage` frames live and call the new
-//! `LocalRpcMethod::{ListThreads, ReadThread}` for history.
+//! `EventKind::UiEventMessage` frames live; pairing and history reads now
+//! ride the backend's HTTP `/v1/*` control plane via [`crate::http`].
 //!
 //! Responsibilities:
 //!
@@ -14,28 +14,21 @@
 //!   pair.
 //! - Maintain a single outbound WebSocket; expose `ConnectionState` via a
 //!   `watch::Receiver` and live `UiEventFrame` over a `broadcast::Sender`.
-//! - Correlate `LocalRpc` requests by `id` using a `DashMap<u64,
-//!   oneshot::Sender<Envelope>>`; callers (`pair`, `list_threads`,
-//!   `read_thread`) send and await one-shot responses.
 //!
 //! For FFI use, [`MobileClient::new_with_in_memory_store`] avoids exposing
 //! the `Arc<dyn MobilePairingStore>` trait object across the frb boundary
 //! (real Keychain persistence lives on the Dart side; see plan D5).
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
-use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{ConnectionState, DeviceId, DeviceSecret, MinosError};
 use minos_protocol::{
     Envelope, EventKind, GetThreadLastSeqParams, GetThreadLastSeqResponse, ListThreadsParams,
-    ListThreadsResponse, LocalRpcMethod, LocalRpcOutcome, PairingQrPayload, ReadThreadParams,
-    ReadThreadResponse, RpcError,
+    ListThreadsResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
 };
 use minos_ui_protocol::UiEventMessage;
-use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Error as WsError;
@@ -61,21 +54,11 @@ pub struct MobileClient {
     state_rx: watch::Receiver<ConnectionState>,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
     outbox: Mutex<Option<mpsc::Sender<Envelope>>>,
-    // Phase C HTTP migration left this unused; Task D4 deletes it together
-    // with `local_rpc`. Silence the warning until that cleanup lands.
-    #[allow(dead_code)]
-    next_rpc_id: AtomicU64,
-    pending: Arc<DashMap<u64, oneshot::Sender<Envelope>>>,
     device_id: DeviceId,
     self_name: String,
     #[allow(dead_code)] // held so drop closes the inbound loop
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
-
-/// Timeout for one local-RPC round trip. Generous; typical RTT < 100ms.
-// Phase C HTTP migration retired the only user; Task D4 deletes this.
-#[allow(dead_code)]
-const LOCAL_RPC_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl MobileClient {
     #[must_use]
@@ -97,8 +80,6 @@ impl MobileClient {
             state_rx,
             ui_events_tx,
             outbox: Mutex::new(None),
-            next_rpc_id: AtomicU64::new(1),
-            pending: Arc::new(DashMap::new()),
             device_id,
             self_name,
             tasks: Mutex::new(Vec::new()),
@@ -451,7 +432,6 @@ impl MobileClient {
         let recv_handle = tokio::spawn(recv_loop(
             read,
             self.ui_events_tx.clone(),
-            self.pending.clone(),
             self.state_tx.clone(),
         ));
 
@@ -465,73 +445,15 @@ impl MobileClient {
     async fn shutdown_outbound(&self) {
         let mut guard = self.outbox.lock().await;
         *guard = None; // drops the Sender; send task exits when channel closes
-        self.pending.clear();
-    }
-
-    // Phase C migrated all callers to HTTP; Task D4 deletes this method.
-    #[allow(dead_code)]
-    async fn local_rpc(
-        &self,
-        method: LocalRpcMethod,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, MinosError> {
-        let id = self.next_rpc_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert(id, tx);
-
-        let env = Envelope::LocalRpc {
-            version: 1,
-            id,
-            method,
-            params,
-        };
-
-        let outbox = {
-            let guard = self.outbox.lock().await;
-            guard
-                .as_ref()
-                .cloned()
-                .ok_or_else(|| MinosError::Disconnected {
-                    reason: "mobile: no live outbound channel".into(),
-                })?
-        };
-        outbox
-            .send(env)
-            .await
-            .map_err(|_| MinosError::Disconnected {
-                reason: "mobile: outbound mpsc closed".into(),
-            })?;
-
-        let resp = tokio::time::timeout(LOCAL_RPC_TIMEOUT, rx)
-            .await
-            .map_err(|_| MinosError::RpcCallFailed {
-                method: "local_rpc".into(),
-                message: "timed out after 15s".into(),
-            })?
-            .map_err(|_| MinosError::Disconnected {
-                reason: "mobile: oneshot dropped before response".into(),
-            })?;
-
-        match resp {
-            Envelope::LocalRpcResponse { outcome, .. } => match outcome {
-                LocalRpcOutcome::Ok { result } => Ok(result),
-                LocalRpcOutcome::Err { error } => Err(from_rpc_error(&error)),
-            },
-            other => Err(MinosError::RpcCallFailed {
-                method: "local_rpc".into(),
-                message: format!("unexpected envelope in local_rpc response: {other:?}"),
-            }),
-        }
     }
 }
 
-/// Inbound read loop. Decodes each text frame as `Envelope`, routes
-/// `LocalRpcResponse` to its pending oneshot, and surfaces
-/// `UiEventMessage` events to the broadcast channel.
+/// Inbound read loop. Decodes each text frame as `Envelope` and surfaces
+/// `UiEventMessage` events to the broadcast channel; presence and
+/// pairing-state events update the connection-state watch.
 async fn recv_loop<S>(
     mut read: S,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
-    pending: Arc<DashMap<u64, oneshot::Sender<Envelope>>>,
     state_tx: watch::Sender<ConnectionState>,
 ) where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
@@ -540,7 +462,7 @@ async fn recv_loop<S>(
         match msg {
             Ok(Message::Text(t)) => {
                 let text: &str = t.as_ref();
-                handle_text_frame(text, &ui_events_tx, &pending, &state_tx);
+                handle_text_frame(text, &ui_events_tx, &state_tx);
             }
             Ok(Message::Close(_)) => {
                 let _ = state_tx.send(ConnectionState::Disconnected);
@@ -559,7 +481,6 @@ async fn recv_loop<S>(
 fn handle_text_frame(
     text: &str,
     ui_events_tx: &broadcast::Sender<UiEventFrame>,
-    pending: &DashMap<u64, oneshot::Sender<Envelope>>,
     state_tx: &watch::Sender<ConnectionState>,
 ) {
     let env = match serde_json::from_str::<Envelope>(text) {
@@ -570,13 +491,6 @@ fn handle_text_frame(
         }
     };
     match env {
-        Envelope::LocalRpcResponse { id, .. } if pending.contains_key(&id) => {
-            if let Some((_, sink)) = pending.remove(&id) {
-                if let Ok(env) = serde_json::from_str::<Envelope>(text) {
-                    let _ = sink.send(env);
-                }
-            }
-        }
         Envelope::Event { event, .. } => match event {
             EventKind::UiEventMessage {
                 thread_id,
@@ -597,27 +511,6 @@ fn handle_text_frame(
             _ => tracing::debug!(?event, "mobile: ignored event"),
         },
         other => tracing::debug!(?other, "mobile: ignored inbound envelope"),
-    }
-}
-
-/// Map a backend-reported RPC error code into a typed `MinosError`.
-/// Unknown codes fall through to `RpcCallFailed` so the localization table
-/// still produces something the UI can render.
-// Phase C migrated all callers to HTTP; Task D4 deletes this helper.
-#[allow(dead_code)]
-fn from_rpc_error(err: &RpcError) -> MinosError {
-    match err.code.as_str() {
-        "pairing_token_invalid" => MinosError::PairingTokenInvalid,
-        "unauthorized" => MinosError::Unauthorized {
-            reason: err.message.clone(),
-        },
-        "thread_not_found" => MinosError::ThreadNotFound {
-            thread_id: err.message.clone(),
-        },
-        _ => MinosError::RpcCallFailed {
-            method: err.code.clone(),
-            message: err.message.clone(),
-        },
     }
 }
 

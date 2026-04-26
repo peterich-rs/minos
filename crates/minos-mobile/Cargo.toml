@@ -24,7 +24,6 @@ mars-xlog = { workspace = true }
 url = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
-dashmap = { workspace = true }
 uuid = { workspace = true }
 # Optional CLI deps for the fake-peer dev binary (gated on the `cli` feature).
 # tokio-tungstenite and futures-util are always-on (the envelope client
