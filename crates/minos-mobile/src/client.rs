@@ -153,7 +153,7 @@ impl MobileClient {
             .as_ref()
             .map(|(id, _)| *id)
             .or_else(|| restored_device_id_only(&state))
-            .unwrap_or_else(DeviceId::new);
+            .unwrap_or_default();
         let auth_persisted = restored_auth(&state);
         let store = Arc::new(InMemoryPairingStore::from_parts(
             state.backend_url.clone(),
@@ -168,12 +168,11 @@ impl MobileClient {
         // tests call from #[tokio::test]; only the latter has a runtime).
         let live_auth = auth_persisted.map(|a| {
             let now_ms = chrono::Utc::now().timestamp_millis();
-            let remaining_ms = (a.access_expires_at_ms - now_ms).max(0);
+            let remaining_ms = u64::try_from((a.access_expires_at_ms - now_ms).max(0)).unwrap_or(0);
             AuthSession {
                 access_token: a.access_token,
                 access_expires_at_ms: a.access_expires_at_ms,
-                access_expires_at: Instant::now()
-                    + Duration::from_millis(remaining_ms as u64),
+                access_expires_at: Instant::now() + Duration::from_millis(remaining_ms),
                 refresh_token: a.refresh_token,
                 account: AuthSummary {
                     account_id: a.account_id,
@@ -402,13 +401,8 @@ impl MobileClient {
         // Step 2: now open the WS with the freshly-issued secret. From here
         // on every connect carries `X-Device-Secret` and `Authorization:
         // Bearer` (the latter required by Phase 2 for ios-client uploads).
-        self.connect(
-            &qr.backend_url,
-            device_secret.as_str(),
-            cf,
-            Some(&access),
-        )
-        .await?;
+        self.connect(&qr.backend_url, device_secret.as_str(), cf, Some(&access))
+            .await?;
 
         let _ = self.state_tx.send(ConnectionState::Connected);
         Ok(())
@@ -521,7 +515,7 @@ impl MobileClient {
             &outbox,
             "minos_start_agent",
             req,
-            Duration::from_secs(60),
+            Duration::from_mins(1),
         )
         .await?;
         let send_req = SendUserMessageRequest {
@@ -615,11 +609,7 @@ impl MobileClient {
     /// Log into an existing account on the backend. Same shape as
     /// `register` modulo the create-vs-find behaviour on the server. Spec
     /// §5.4.
-    pub async fn login(
-        &self,
-        email: String,
-        password: String,
-    ) -> Result<AuthSummary, MinosError> {
+    pub async fn login(&self, email: String, password: String) -> Result<AuthSummary, MinosError> {
         let http = self.http_client_no_secret().await?;
         let resp = http.login(&email, &password).await?;
         let summary = self.adopt_auth_response(resp).await;
@@ -633,19 +623,17 @@ impl MobileClient {
     /// summary), on failure the session is wiped and the watch publishes
     /// `RefreshFailed`. Spec §5.4 / §6.1.
     pub async fn refresh_session(&self) -> Result<(), MinosError> {
-        let session = self
-            .auth_session
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| MinosError::AuthRefreshFailed {
+        let session = self.auth_session.read().await.clone().ok_or_else(|| {
+            MinosError::AuthRefreshFailed {
                 message: "no session".into(),
-            })?;
+            }
+        })?;
         let _ = self.auth_state_tx.send(AuthStateFrame::Refreshing);
         let http = self.http_client_no_secret().await?;
         match http.refresh(&session.refresh_token).await {
             Ok(r) => {
-                self.adopt_refresh_response(session.account.clone(), r).await;
+                self.adopt_refresh_response(session.account.clone(), r)
+                    .await;
                 Ok(())
             }
             Err(e) => {
@@ -691,12 +679,14 @@ impl MobileClient {
     /// surface (real builds always have the URL set from a prior QR
     /// scan or a hard-coded default).
     async fn http_client_no_secret(&self) -> Result<crate::http::MobileHttpClient, MinosError> {
-        let backend_url = self.store.load_backend_url().await?.ok_or_else(|| {
-            MinosError::StoreCorrupt {
-                path: "backend_url".into(),
-                message: "missing backend_url for auth call".into(),
-            }
-        })?;
+        let backend_url =
+            self.store
+                .load_backend_url()
+                .await?
+                .ok_or_else(|| MinosError::StoreCorrupt {
+                    path: "backend_url".into(),
+                    message: "missing backend_url for auth call".into(),
+                })?;
         let cf = self.store.load_cf_access().await?;
         crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)
     }
@@ -704,16 +694,14 @@ impl MobileClient {
     /// Apply a fresh `AuthResponse` onto the live + durable stores and
     /// emit the `Authenticated` frame. Returns the account summary so
     /// callers can hand it back to Dart.
-    async fn adopt_auth_response(
-        &self,
-        resp: minos_protocol::AuthResponse,
-    ) -> AuthSummary {
+    async fn adopt_auth_response(&self, resp: minos_protocol::AuthResponse) -> AuthSummary {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let exp_ms = now_ms + (resp.expires_in * 1000);
         let session = AuthSession {
             access_token: resp.access_token.clone(),
             access_expires_at_ms: exp_ms,
-            access_expires_at: Instant::now() + Duration::from_secs(resp.expires_in.max(0) as u64),
+            access_expires_at: Instant::now()
+                + Duration::from_secs(u64::try_from(resp.expires_in.max(0)).unwrap_or(0)),
             refresh_token: resp.refresh_token.clone(),
             account: resp.account.clone(),
         };
@@ -770,21 +758,17 @@ impl MobileClient {
     /// Apply a fresh `RefreshResponse` onto the live session in place,
     /// preserving the bound account. Emits `Authenticated` again so
     /// observers see a state transition (Refreshing → Authenticated).
-    async fn adopt_refresh_response(
-        &self,
-        account: AuthSummary,
-        r: RefreshResponse,
-    ) {
+    async fn adopt_refresh_response(&self, account: AuthSummary, r: RefreshResponse) {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let exp_ms = now_ms + (r.expires_in * 1000);
+        let secs = u64::try_from(r.expires_in.max(0)).unwrap_or(0);
         {
             let mut guard = self.auth_session.write().await;
             if let Some(s) = guard.as_mut() {
-                s.access_token = r.access_token.clone();
+                s.access_token.clone_from(&r.access_token);
                 s.access_expires_at_ms = exp_ms;
-                s.access_expires_at =
-                    Instant::now() + Duration::from_secs(r.expires_in.max(0) as u64);
-                s.refresh_token = r.refresh_token.clone();
+                s.access_expires_at = Instant::now() + Duration::from_secs(secs);
+                s.refresh_token.clone_from(&r.refresh_token);
             }
         }
         let _ = self
@@ -980,8 +964,8 @@ impl MobileClient {
     async fn shutdown_outbound(&self) {
         let mut guard = self.outbox.lock().await;
         *guard = None; // drops the Sender; send task exits when channel closes
-        // Drain pending so any in-flight forward_rpc callers see
-        // RequestDropped instead of waiting until their per-call timeout.
+                       // Drain pending so any in-flight forward_rpc callers see
+                       // RequestDropped instead of waiting until their per-call timeout.
         drain_pending(&self.pending);
     }
 }
@@ -1057,7 +1041,7 @@ fn handle_text_frame(
             // Spec §6.2: JSON-RPC `{id, method, params/result/error}` rides
             // inside Envelope::Forwarded.payload; correlation id is the
             // inner `id`, not the envelope.
-            let Some(id) = payload.get("id").and_then(|v| v.as_u64()) else {
+            let Some(id) = payload.get("id").and_then(serde_json::Value::as_u64) else {
                 tracing::debug!(?payload, "mobile: Forwarded missing inner JSON-RPC id");
                 return;
             };
@@ -1070,8 +1054,9 @@ fn handle_text_frame(
             } else if let Some(err) = payload.get("error") {
                 let code = err
                     .get("code")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(-32000) as i32;
+                    .and_then(serde_json::Value::as_i64)
+                    .and_then(|v| i32::try_from(v).ok())
+                    .unwrap_or(-32000);
                 let message = err
                     .get("message")
                     .and_then(|v| v.as_str())
@@ -1299,14 +1284,10 @@ async fn reconnect_loop(ctx: ReconnectContext) {
         // backend URL, a device-secret (post-pair), and an active
         // session. The loop will idle here until pair_with_qr_json
         // completes.
-        let (Some(backend_url), Some((_, device_secret))) =
-            (match ctx.store.load_backend_url().await {
-                Ok(v) => v,
-                Err(_) => None,
-            }, match ctx.store.load_device().await {
-                Ok(v) => v,
-                Err(_) => None,
-            }) else {
+        let backend_url_opt: Option<String> =
+            ctx.store.load_backend_url().await.unwrap_or_default();
+        let device_opt = ctx.store.load_device().await.unwrap_or_default();
+        let (Some(backend_url), Some((_, device_secret))) = (backend_url_opt, device_opt) else {
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         };
@@ -1320,64 +1301,13 @@ async fn reconnect_loop(ctx: ReconnectContext) {
             let guard = ctx.auth_session.read().await;
             guard
                 .as_ref()
-                .map(|s| s.access_expires_at <= Instant::now() + Duration::from_secs(120))
-                .unwrap_or(false)
+                .is_some_and(|s| s.access_expires_at <= Instant::now() + Duration::from_mins(2))
         };
-        if needs_refresh {
-            // Best-effort. If refresh fails, the public refresh_session
-            // path emits RefreshFailed and clears the loop, so we don't
-            // need to handle it here beyond not connecting this round.
-            let _ = ctx.auth_state_tx.send(AuthStateFrame::Refreshing);
-            // Trigger via a separate path: the public method needs &self
-            // but we only have ctx. Instead, do the refresh inline.
-            let session_clone = ctx.auth_session.read().await.clone();
-            if let Some(session) = session_clone {
-                let cf_access = ctx.store.load_cf_access().await.ok().flatten();
-                if let Ok(http) =
-                    crate::http::MobileHttpClient::new(&backend_url, ctx.device_id, cf_access)
-                {
-                    match http.refresh(&session.refresh_token).await {
-                        Ok(r) => {
-                            let now_ms = chrono::Utc::now().timestamp_millis();
-                            let exp_ms = now_ms + r.expires_in * 1000;
-                            {
-                                let mut guard = ctx.auth_session.write().await;
-                                if let Some(s) = guard.as_mut() {
-                                    s.access_token = r.access_token.clone();
-                                    s.access_expires_at_ms = exp_ms;
-                                    s.access_expires_at = Instant::now()
-                                        + Duration::from_secs(r.expires_in.max(0) as u64);
-                                    s.refresh_token = r.refresh_token.clone();
-                                }
-                            }
-                            let _ = ctx.store.save_auth(
-                                r.access_token,
-                                exp_ms,
-                                r.refresh_token,
-                                session.account.account_id.clone(),
-                                session.account.email.clone(),
-                            ).await;
-                            let _ = ctx.auth_state_tx.send(AuthStateFrame::Authenticated {
-                                account: session.account.clone(),
-                            });
-                        }
-                        Err(e) => {
-                            // Refresh failure: publish RefreshFailed
-                            // and exit the loop. The clearing of
-                            // auth_session is the public refresh path's
-                            // job; we just stop here.
-                            let _ = ctx.auth_state_tx.send(AuthStateFrame::RefreshFailed {
-                                error: Arc::new(MinosError::AuthRefreshFailed {
-                                    message: e.to_string(),
-                                }),
-                            });
-                            *ctx.auth_session.write().await = None;
-                            let _ = ctx.store.clear_auth().await;
-                            return;
-                        }
-                    }
-                }
-            }
+        if needs_refresh && !refresh_inline(&ctx, &backend_url).await {
+            // refresh_inline returns false on failure; it has already
+            // published RefreshFailed and cleared the auth state. Exit
+            // the loop entirely.
+            return;
         }
 
         // Snapshot the access token now that we may have refreshed.
@@ -1431,6 +1361,60 @@ async fn reconnect_loop(ctx: ReconnectContext) {
 
         let delay = ctx.reconnect.next_delay().await;
         tokio::time::sleep(delay).await;
+    }
+}
+
+/// Inline-refresh path used by [`reconnect_loop`]. Returns `true` on
+/// success (or when there's no session to refresh), `false` on failure
+/// (publishes RefreshFailed and clears auth state). Spec §6.3.
+async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
+    let _ = ctx.auth_state_tx.send(AuthStateFrame::Refreshing);
+    let Some(session) = ctx.auth_session.read().await.clone() else {
+        return true; // Nothing to refresh.
+    };
+    let cf_access = ctx.store.load_cf_access().await.ok().flatten();
+    let Ok(http) = crate::http::MobileHttpClient::new(backend_url, ctx.device_id, cf_access) else {
+        return true; // Couldn't build the client; try again next iteration.
+    };
+    match http.refresh(&session.refresh_token).await {
+        Ok(r) => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let exp_ms = now_ms + r.expires_in * 1000;
+            let secs = u64::try_from(r.expires_in.max(0)).unwrap_or(0);
+            {
+                let mut guard = ctx.auth_session.write().await;
+                if let Some(s) = guard.as_mut() {
+                    s.access_token.clone_from(&r.access_token);
+                    s.access_expires_at_ms = exp_ms;
+                    s.access_expires_at = Instant::now() + Duration::from_secs(secs);
+                    s.refresh_token.clone_from(&r.refresh_token);
+                }
+            }
+            let _ = ctx
+                .store
+                .save_auth(
+                    r.access_token,
+                    exp_ms,
+                    r.refresh_token,
+                    session.account.account_id.clone(),
+                    session.account.email.clone(),
+                )
+                .await;
+            let _ = ctx.auth_state_tx.send(AuthStateFrame::Authenticated {
+                account: session.account,
+            });
+            true
+        }
+        Err(e) => {
+            let _ = ctx.auth_state_tx.send(AuthStateFrame::RefreshFailed {
+                error: Arc::new(MinosError::AuthRefreshFailed {
+                    message: e.to_string(),
+                }),
+            });
+            *ctx.auth_session.write().await = None;
+            let _ = ctx.store.clear_auth().await;
+            false
+        }
     }
 }
 
@@ -1774,7 +1758,9 @@ mod tests {
     #[tokio::test]
     async fn send_user_message_returns_not_connected_when_disconnected() {
         let client = MobileClient::new_with_in_memory_store("iPhone".into());
-        let res = client.send_user_message("thr_1".into(), "ping".into()).await;
+        let res = client
+            .send_user_message("thr_1".into(), "ping".into())
+            .await;
         assert!(matches!(res, Err(MinosError::NotConnected)));
     }
 

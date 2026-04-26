@@ -131,10 +131,7 @@ fn make_qr_for_real_backend(addr: std::net::SocketAddr, token: &str) -> String {
 /// rehydrating the client from a PersistedPairingState that includes the
 /// minted tokens. `new_with_persisted_state` populates the live
 /// auth_session so `pair_with_qr_json` finds the Bearer in place.
-async fn authenticated_client(
-    backend: &RealBackend,
-    email: &str,
-) -> MobileClient {
+async fn authenticated_client(backend: &RealBackend, email: &str) -> MobileClient {
     let device_id = minos_domain::DeviceId::new();
     let http = minos_mobile::http::MobileHttpClient::new(
         &format!("ws://{}/devices", backend.addr),

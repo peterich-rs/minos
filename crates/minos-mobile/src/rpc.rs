@@ -59,10 +59,9 @@ pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
     let (tx, rx) = oneshot::channel();
     pending.insert(id, tx);
 
-    let params_value =
-        serde_json::to_value(&params).map_err(|e| MinosError::BackendInternal {
-            message: format!("serialize {method} params: {e}"),
-        })?;
+    let params_value = serde_json::to_value(&params).map_err(|e| MinosError::BackendInternal {
+        message: format!("serialize {method} params: {e}"),
+    })?;
     let payload = json!({
         "jsonrpc": "2.0",
         "id": id,

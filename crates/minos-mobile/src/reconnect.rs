@@ -35,7 +35,7 @@ struct ReconnectState {
 
 const INITIAL_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(30);
-const STABLE_THRESHOLD: Duration = Duration::from_secs(60);
+const STABLE_THRESHOLD: Duration = Duration::from_mins(1);
 
 impl ReconnectController {
     #[must_use]
@@ -73,7 +73,7 @@ impl ReconnectController {
         let mut s = self.state.write().await;
         let stable = s
             .last_connected_at
-            .map_or(true, |t| t.elapsed() > STABLE_THRESHOLD);
+            .is_none_or(|t| t.elapsed() > STABLE_THRESHOLD);
         if stable {
             s.delay = INITIAL_DELAY;
         }

@@ -217,11 +217,7 @@ impl MobileHttpClient {
     ///
     /// The pairing-rail `x-device-*` headers still authenticate the device;
     /// the new account-rail bearer/refresh tokens come back in the body.
-    pub async fn register(
-        &self,
-        email: &str,
-        password: &str,
-    ) -> Result<AuthResponse, MinosError> {
+    pub async fn register(&self, email: &str, password: &str) -> Result<AuthResponse, MinosError> {
         let url = format!("{}/v1/auth/register", self.base);
         let body = AuthRequest {
             email: email.into(),
@@ -370,11 +366,12 @@ async fn decode_error(status: reqwest::StatusCode, resp: reqwest::Response) -> M
 async fn decode_auth_response(resp: reqwest::Response) -> Result<AuthResponse, MinosError> {
     let status = resp.status();
     if status.is_success() {
-        return resp.json::<AuthResponse>().await.map_err(|e| {
-            MinosError::BackendInternal {
+        return resp
+            .json::<AuthResponse>()
+            .await
+            .map_err(|e| MinosError::BackendInternal {
                 message: format!("decode AuthResponse: {e}"),
-            }
-        });
+            });
     }
     Err(decode_kind_error(status, resp).await)
 }
@@ -384,21 +381,19 @@ async fn decode_auth_response(resp: reqwest::Response) -> Result<AuthResponse, M
 async fn decode_refresh_response(resp: reqwest::Response) -> Result<RefreshResponse, MinosError> {
     let status = resp.status();
     if status.is_success() {
-        return resp.json::<RefreshResponse>().await.map_err(|e| {
-            MinosError::BackendInternal {
+        return resp
+            .json::<RefreshResponse>()
+            .await
+            .map_err(|e| MinosError::BackendInternal {
                 message: format!("decode RefreshResponse: {e}"),
-            }
-        });
+            });
     }
     Err(decode_kind_error(status, resp).await)
 }
 
 /// Map an HTTP error response that carries a `{ "kind": "..." }` body to
 /// a typed `MinosError`. Used by every `/v1/auth/*` endpoint. Spec §8.1.
-async fn decode_kind_error(
-    status: reqwest::StatusCode,
-    resp: reqwest::Response,
-) -> MinosError {
+async fn decode_kind_error(status: reqwest::StatusCode, resp: reqwest::Response) -> MinosError {
     let retry_after = resp
         .headers()
         .get("retry-after")
