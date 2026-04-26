@@ -5,15 +5,20 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use minos_domain::DeviceRole;
-use minos_protocol::{PairingQrPayload, RequestPairingQrParams, RequestPairingQrResponse};
+use minos_protocol::{
+    Envelope, EventKind, PairConsumeRequest, PairResponse, PairingQrPayload,
+    RequestPairingQrParams, RequestPairingQrResponse,
+};
 use serde::Serialize;
 
+use crate::error::BackendError;
 use crate::http::auth;
 use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
-    Router::new().route("/pairing/tokens", post(post_tokens))
-    // pairing/consume + DELETE /pairing added in Tasks B1/B2
+    Router::new()
+        .route("/pairing/tokens", post(post_tokens))
+        .route("/pairing/consume", post(post_consume))
 }
 
 #[derive(Debug, Serialize)]
@@ -74,4 +79,115 @@ async fn post_tokens(
         cf_access_client_secret: state.public_cfg.cf_access_client_secret.clone(),
     };
     Ok(Json(RequestPairingQrResponse { qr_payload }))
+}
+
+async fn post_consume(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Json(params): Json<PairConsumeRequest>,
+) -> Result<Json<PairResponse>, (StatusCode, Json<ErrorEnvelope>)> {
+    let outcome = auth::authenticate_role(&state.store, &headers, DeviceRole::IosClient)
+        .await
+        .map_err(|e| match e {
+            auth::AuthError::Unauthorized(m) => {
+                (StatusCode::UNAUTHORIZED, err_body("unauthorized", m))
+            }
+            auth::AuthError::Internal(m) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, err_body("internal", m))
+            }
+        })?;
+    let consumer_id = outcome.device_id;
+
+    let pairing_outcome = match state
+        .pairing
+        .consume_token(&params.token, consumer_id, params.device_name.clone())
+        .await
+    {
+        Ok(o) => o,
+        Err(BackendError::PairingTokenInvalid) => {
+            return Err((
+                StatusCode::CONFLICT,
+                err_body(
+                    "pairing_token_invalid",
+                    "pairing token is unknown, expired, or already consumed",
+                ),
+            ));
+        }
+        Err(BackendError::PairingStateMismatch { actual }) => {
+            let msg = if actual == "self" {
+                "device cannot pair with itself".to_string()
+            } else {
+                format!("peer already paired (state: {actual})")
+            };
+            return Err((
+                StatusCode::CONFLICT,
+                err_body("pairing_state_mismatch", msg),
+            ));
+        }
+        Err(e) => {
+            tracing::warn!(target: "minos_backend::v1::pairing", error = %e, "consume_token failed");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err_body("internal", e.to_string()),
+            ));
+        }
+    };
+
+    let issuer_id = pairing_outcome.issuer_device_id;
+    let consumer_secret = pairing_outcome.consumer_secret.clone();
+
+    let mac_name = match crate::store::devices::get_device(&state.store, issuer_id).await {
+        Ok(Some(row)) => row.display_name,
+        _ => "Mac".to_string(),
+    };
+
+    // Push Event::Paired to the issuer's live WS, if any. If issuer is offline
+    // OR the queue rejects, compensate (clear the pairing) — same as the WS
+    // `envelope::local_rpc::handle_pair` reference implementation.
+    if let Some(issuer_handle) = state.registry.get(issuer_id) {
+        let frame = Envelope::Event {
+            version: 1,
+            event: EventKind::Paired {
+                peer_device_id: consumer_id,
+                peer_name: params.device_name.clone(),
+                your_device_secret: pairing_outcome.issuer_secret.clone(),
+            },
+        };
+        *issuer_handle.paired_with.write().await = Some(consumer_id);
+        if let Err(e) = state.registry.try_send_current(&issuer_handle, frame) {
+            tracing::warn!(
+                target: "minos_backend::v1::pairing",
+                error = ?e,
+                issuer = %issuer_id,
+                "Event::Paired delivery failed; compensating",
+            );
+            *issuer_handle.paired_with.write().await = None;
+            let _ = state.pairing.forget_pair(consumer_id).await;
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err_body(
+                    "internal",
+                    "failed to deliver pairing secret to issuer; pairing rolled back",
+                ),
+            ));
+        }
+    } else {
+        tracing::warn!(
+            target: "minos_backend::v1::pairing",
+            issuer = %issuer_id,
+            consumer = %consumer_id,
+            "issuer offline at pair time; compensating",
+        );
+        let _ = state.pairing.forget_pair(consumer_id).await;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err_body("internal", "issuer is offline; pairing rolled back"),
+        ));
+    }
+
+    Ok(Json(PairResponse {
+        peer_device_id: issuer_id,
+        peer_name: mac_name,
+        your_device_secret: consumer_secret,
+    }))
 }

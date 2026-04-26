@@ -23,6 +23,15 @@ pub struct PairResponse {
     pub your_device_secret: DeviceSecret,
 }
 
+/// Request body for `POST /v1/pairing/consume`. Distinct from
+/// [`PairRequest`] because the HTTP route derives `device_id` from the
+/// `X-Device-Id` header, not the body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairConsumeRequest {
+    pub token: PairingToken,
+    pub device_name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HealthResponse {
     pub version: String,

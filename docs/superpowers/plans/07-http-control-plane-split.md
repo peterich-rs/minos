@@ -923,7 +923,7 @@ The handler also must push `Event::Paired` to the issuer (Mac) over its live WS 
 - Modify: `crates/minos-backend/tests/v1_pairing.rs`
 - Add type: `crates/minos-protocol/src/messages.rs` — a `PairConsumeRequest` and reuse-by-extension of `PairResponse`.
 
-- [ ] **Step 1: Add request/response types in `minos-protocol`**
+- [x] **Step 1: Add request/response types in `minos-protocol`**
 
 In `crates/minos-protocol/src/messages.rs`, append:
 
@@ -946,7 +946,7 @@ pub use messages::PairConsumeRequest;
 
 `PairResponse` is already defined and is the right success shape.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Append to `crates/minos-backend/tests/v1_pairing.rs`:
 
@@ -1036,7 +1036,7 @@ async fn post_pairing_consume_rejects_agent_host_role() {
 }
 ```
 
-- [ ] **Step 3: Run — must fail**
+- [x] **Step 3: Run — must fail**
 
 ```bash
 cargo test -p minos-backend --test v1_pairing post_pairing_consume
@@ -1044,7 +1044,7 @@ cargo test -p minos-backend --test v1_pairing post_pairing_consume
 
 Expected: 404 / not found.
 
-- [ ] **Step 4: Implement the handler**
+- [x] **Step 4: Implement the handler**
 
 In `crates/minos-backend/src/http/v1/pairing.rs`:
 
@@ -1135,7 +1135,7 @@ async fn post_consume(
 }
 ```
 
-- [ ] **Step 5: Run — must pass**
+- [x] **Step 5: Run — must pass**
 
 ```bash
 cargo test -p minos-backend --test v1_pairing
@@ -1176,13 +1176,13 @@ Re-run; expected: PASS.
 
 If `SessionHandle::new` is private to the `session` module, mark it `pub` (or expose a `pub(crate)` constructor — check the current visibility in `crates/minos-backend/src/session/mod.rs` and tighten as needed). The same struct is already used by `ws_devices.rs`, so visibility tweaks should be local.
 
-- [ ] **Step 6: Workspace acceptance**
+- [x] **Step 6: Workspace acceptance**
 
 ```bash
 cargo xtask check-all
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/minos-backend/src/http/v1/pairing.rs \
