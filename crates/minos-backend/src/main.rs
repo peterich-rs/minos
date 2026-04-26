@@ -84,11 +84,20 @@ async fn main() -> Result<()> {
 
     let registry = Arc::new(SessionRegistry::new());
     let pairing = Arc::new(PairingService::new(pool.clone()));
+    // `cfg.validate()` already enforced presence + length above. Unwrap is
+    // load-bearing here: a missing secret should never reach BackendState
+    // construction, and panicking surfaces the bug loudly in dev runs that
+    // somehow skipped validation.
+    let jwt_secret = cfg
+        .jwt_secret
+        .clone()
+        .expect("MINOS_JWT_SECRET must be set after Config::validate");
     let mut state = BackendState::new(
         registry.clone(),
         pairing.clone(),
         pool.clone(),
         cfg.token_ttl(),
+        jwt_secret,
     );
     // Override the default public-cfg with env-sourced values from cfg.
     state.public_cfg = Arc::new(crate::http::BackendPublicConfig {

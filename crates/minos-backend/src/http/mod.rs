@@ -74,6 +74,11 @@ pub struct BackendState {
     /// by `RequestPairingQr` to assemble the QR payload. `Arc` so
     /// `BackendState::clone` is still cheap.
     pub public_cfg: Arc<BackendPublicConfig>,
+    /// HS256 secret used by the bearer-token rail (`crate::auth::jwt`).
+    /// `Arc<String>` because every signed/verified bearer borrows the
+    /// bytes — sharing one heap copy across the request lifecycle keeps
+    /// `BackendState::clone` cheap.
+    pub jwt_secret: Arc<String>,
     /// Crate version string; exposed via `/health`.
     ///
     /// Stored here rather than read from `env!("CARGO_PKG_VERSION")` at the
@@ -93,6 +98,7 @@ impl BackendState {
         pairing: Arc<PairingService>,
         store: SqlitePool,
         token_ttl: Duration,
+        jwt_secret: String,
     ) -> Self {
         Self {
             registry,
@@ -105,6 +111,7 @@ impl BackendState {
                 cf_access_client_id: None,
                 cf_access_client_secret: None,
             }),
+            jwt_secret: Arc::new(jwt_secret),
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -138,9 +145,16 @@ pub mod test_support {
     use std::sync::Arc;
     use std::time::Duration;
 
+    /// Deterministic 32-byte JWT secret used by every test that needs to
+    /// sign/verify a bearer token. Long enough to satisfy
+    /// `Config::validate`; the literal is fine because tests never hit a
+    /// real network.
+    pub const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
+
     /// Build a `BackendState` against a fresh in-memory pool, with a
-    /// 5-minute pairing-token TTL and a stub `BackendPublicConfig` whose
-    /// `public_url` matches the dev default.
+    /// 5-minute pairing-token TTL, the deterministic test JWT secret, and
+    /// a stub `BackendPublicConfig` whose `public_url` matches the dev
+    /// default.
     pub async fn backend_state() -> BackendState {
         let pool = memory_pool().await;
         let registry = Arc::new(SessionRegistry::new());
@@ -156,6 +170,7 @@ pub mod test_support {
                 cf_access_client_id: None,
                 cf_access_client_secret: None,
             }),
+            jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
             version: env!("CARGO_PKG_VERSION"),
         }
     }

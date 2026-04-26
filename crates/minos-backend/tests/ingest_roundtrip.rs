@@ -63,6 +63,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
             cf_access_client_id: None,
             cf_access_client_secret: None,
         }),
+        jwt_secret: Arc::new("test-jwt-secret-32-bytes-padding".to_string()),
         version: "ingest-roundtrip-test",
     };
     let app = router(state);

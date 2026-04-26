@@ -91,6 +91,16 @@ pub struct Config {
     /// longer require backend-held CF token env vars.
     #[arg(long, env = "MINOS_BACKEND_ALLOW_DEV", default_value_t = false)]
     pub allow_dev: bool,
+
+    /// HS256 secret used to sign account-auth bearer tokens (spec §5.3).
+    ///
+    /// Required at boot in the binary. Optional at the CLI level so the
+    /// crate's own unit tests / `BackendState::new()` can assemble a
+    /// state without forcing every test to set the env var.
+    /// `validate()` enforces presence + ≥32-byte length when invoked from
+    /// `main.rs`.
+    #[arg(long, env = "MINOS_JWT_SECRET")]
+    pub jwt_secret: Option<String>,
 }
 
 impl Config {
@@ -127,6 +137,13 @@ impl Config {
                 "MINOS_BACKEND_CF_ACCESS_CLIENT_ID and ..._SECRET must be set together or both left unset"
                     .into(),
             );
+        }
+        let secret = self
+            .jwt_secret
+            .as_ref()
+            .ok_or_else(|| "MINOS_JWT_SECRET is required".to_string())?;
+        if secret.as_bytes().len() < 32 {
+            return Err("MINOS_JWT_SECRET must be >=32 bytes".into());
         }
         Ok(())
     }
@@ -178,6 +195,7 @@ mod tests {
             "MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET",
             "MINOS_BACKEND_PUBLIC_URL",
             "MINOS_BACKEND_ALLOW_DEV",
+            "MINOS_JWT_SECRET",
             "RUST_LOG",
         ] {
             std::env::remove_var(key);
@@ -322,9 +340,13 @@ mod tests {
         assert!(!cfg.allow_dev);
     }
 
+    /// Deterministic 32-byte secret for tests that exercise `validate`.
+    const TEST_JWT_SECRET: &str = "01234567890123456789012345678901";
+
     #[test]
     fn validate_ok_for_local_ws_without_cf_tokens() {
         let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         cfg.validate()
             .expect("local ws:// must not require CF tokens");
@@ -337,6 +359,7 @@ mod tests {
             "MINOS_BACKEND_PUBLIC_URL",
             "wss://tunnel.example.com/devices",
         );
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
 
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         cfg.validate()
@@ -351,6 +374,7 @@ mod tests {
             "wss://tunnel.example.com/devices",
         );
         std::env::set_var("MINOS_BACKEND_ALLOW_DEV", "true");
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
 
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         cfg.validate()
@@ -361,9 +385,31 @@ mod tests {
     fn validate_requires_both_cf_tokens_together() {
         let _g = env_scope();
         std::env::set_var("MINOS_BACKEND_CF_ACCESS_CLIENT_ID", "id-only");
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
 
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         let err = cfg.validate().expect_err("half-set pair must fail");
         assert!(err.contains("must be set together"), "{err}");
+    }
+
+    #[test]
+    fn validate_requires_jwt_secret_to_be_set() {
+        let _g = env_scope();
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
+        let err = cfg
+            .validate()
+            .expect_err("missing MINOS_JWT_SECRET must fail");
+        assert!(err.contains("MINOS_JWT_SECRET"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_short_jwt_secret() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", "tiny");
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
+        let err = cfg
+            .validate()
+            .expect_err("short MINOS_JWT_SECRET must fail");
+        assert!(err.contains(">=32"), "{err}");
     }
 }
