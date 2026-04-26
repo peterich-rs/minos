@@ -1207,7 +1207,7 @@ Headers: X-Device-Id, X-Device-Role, X-Device-Secret (required, must verify)
 
 We choose 204 over 200 because the response body conveys nothing the client doesn't already know; the server-side state is what matters. Keeping the same JSON-error body for the 404 case so error parsing is uniform.
 
-- [ ] **Step 1: Tests**
+- [x] **Step 1: Tests**
 
 Append to `crates/minos-backend/tests/v1_pairing.rs`:
 
@@ -1271,13 +1271,13 @@ async fn delete_pairing_when_unpaired_returns_404() {
 }
 ```
 
-- [ ] **Step 2: Run — must fail**
+- [x] **Step 2: Run — must fail**
 
 ```bash
 cargo test -p minos-backend --test v1_pairing delete_pairing
 ```
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `crates/minos-backend/src/http/v1/pairing.rs`:
 
@@ -1331,13 +1331,13 @@ async fn delete_pairing(
 }
 ```
 
-- [ ] **Step 4: Run — must pass**
+- [x] **Step 4: Run — must pass**
 
 ```bash
 cargo test -p minos-backend --test v1_pairing
 ```
 
-- [ ] **Step 5: Workspace acceptance + commit**
+- [x] **Step 5: Workspace acceptance + commit**
 
 ```bash
 cargo xtask check-all

@@ -2,7 +2,7 @@
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::post;
+use axum::routing::{delete, post};
 use axum::{Json, Router};
 use minos_domain::DeviceRole;
 use minos_protocol::{
@@ -19,6 +19,7 @@ pub fn router() -> Router<BackendState> {
     Router::new()
         .route("/pairing/tokens", post(post_tokens))
         .route("/pairing/consume", post(post_consume))
+        .route("/pairing", delete(delete_pairing))
 }
 
 #[derive(Debug, Serialize)]
@@ -190,4 +191,68 @@ async fn post_consume(
         peer_name: mac_name,
         your_device_secret: consumer_secret,
     }))
+}
+
+async fn delete_pairing(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
+    let outcome = auth::authenticate(&state.store, &headers)
+        .await
+        .map_err(|e| match e {
+            auth::AuthError::Unauthorized(m) => {
+                (StatusCode::UNAUTHORIZED, err_body("unauthorized", m))
+            }
+            auth::AuthError::Internal(m) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, err_body("internal", m))
+            }
+        })?;
+    if !outcome.authenticated_with_secret {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            err_body("unauthorized", "X-Device-Secret required for forget"),
+        ));
+    }
+
+    let peer = match state.pairing.forget_pair(outcome.device_id).await {
+        Ok(Some(peer)) => peer,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                err_body(
+                    "pairing_state_mismatch",
+                    "session is not paired; nothing to forget",
+                ),
+            ));
+        }
+        Err(e) => {
+            tracing::warn!(target: "minos_backend::v1::pairing", error = %e, "forget_pair failed");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err_body("internal", e.to_string()),
+            ));
+        }
+    };
+
+    let unpaired = Envelope::Event {
+        version: 1,
+        event: EventKind::Unpaired,
+    };
+
+    // Caller's own live session (if any).
+    if let Some(self_handle) = state.registry.get(outcome.device_id) {
+        *self_handle.paired_with.write().await = None;
+        let _ = state
+            .registry
+            .try_send_current(&self_handle, unpaired.clone());
+    }
+    // Peer's live session (if any). ORDER MATTERS: clear paired_with BEFORE
+    // pushing Event::Unpaired so the peer dispatcher cannot route one last
+    // Forward off stale state.
+    if let Some(peer_handle) = state.registry.get(peer) {
+        *peer_handle.paired_with.write().await = None;
+        let _ = state.registry.try_send_current(&peer_handle, unpaired);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
