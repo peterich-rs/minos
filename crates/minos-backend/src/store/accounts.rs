@@ -1,5 +1,14 @@
 //! `accounts` table CRUD. Account ids are UUIDv4 strings; emails are
 //! lowercased before lookup (the table is `COLLATE NOCASE` for defence).
+//!
+//! Uses runtime `sqlx::query` / `sqlx::query_as` rather than the macro
+//! form deliberately. The macro variants need a populated dev DB during
+//! `cargo build` and add a `cargo sqlx prepare` step to every CI run per
+//! migration. The schema here is small (one table, four columns) and is
+//! exercised by integration tests in `tests/auth_endpoints.rs`. If this
+//! file ever grows complex queries that benefit from compile-time
+//! checking, migrate to the macro form alongside the existing
+//! `devices.rs` / `tokens.rs` / `pairings.rs` callers.
 
 use chrono::Utc;
 use sqlx::SqlitePool;

@@ -1,6 +1,14 @@
 //! `refresh_tokens` table. Tokens are stored as SHA-256 hex of the
 //! 32-byte random plaintext; plaintext is only ever in transit. Same
 //! pattern as `pairing_tokens`.
+//!
+//! Uses runtime `sqlx::query` / `sqlx::query_as` rather than the macro
+//! form deliberately. The macro variants require a populated dev DB
+//! during `cargo build` and an extra `cargo sqlx prepare` step in CI per
+//! migration. The schema is small and the contract here is covered by
+//! integration tests in `tests/auth_endpoints.rs`. If this file grows
+//! complex queries that benefit from compile-time checking, migrate to
+//! the macro form alongside `devices.rs` / `tokens.rs` / `pairings.rs`.
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
