@@ -171,9 +171,7 @@ impl ErrorKind {
             (Self::RequestDropped, Lang::Zh) => "连接中断，请重试",
             (Self::RequestDropped, Lang::En) => "Connection dropped; please retry",
             (Self::AuthRefreshFailed, Lang::Zh) => "另一台设备登录，请重新登录",
-            (Self::AuthRefreshFailed, Lang::En) => {
-                "Session refresh failed; please log in again"
-            }
+            (Self::AuthRefreshFailed, Lang::En) => "Session refresh failed; please log in again",
             (Self::EmailTaken, Lang::Zh) => "该邮箱已注册，请直接登录",
             (Self::EmailTaken, Lang::En) => "Email already registered; please log in",
             (Self::WeakPassword, Lang::Zh) => "密码强度不足，至少 8 位",
