@@ -19,8 +19,10 @@
 //! the `Arc<dyn MobilePairingStore>` trait object across the frb boundary
 //! (real Keychain persistence lives on the Dart side; see plan D5).
 
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{ConnectionState, DeviceId, DeviceSecret, MinosError};
 use minos_protocol::{
@@ -28,13 +30,15 @@ use minos_protocol::{
     ListThreadsResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
 };
 use minos_ui_protocol::UiEventMessage;
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, RwLock};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
+use crate::auth::{AuthSession, AuthStateFrame};
+use crate::rpc::{drain_pending, RpcReply};
 use crate::store::{InMemoryPairingStore, MobilePairingStore, PersistedPairingState};
 
 /// One live UI event pushed from backend fan-out. Mobile layers consume
@@ -58,6 +62,22 @@ pub struct MobileClient {
     self_name: String,
     #[allow(dead_code)] // held so drop closes the inbound loop
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Outstanding forward-RPC oneshots, keyed by the JSON-RPC id we
+    /// allocated. The recv-loop drains this on every disconnect via
+    /// [`crate::rpc::drain_pending`].
+    pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>>,
+    /// Monotonic id allocator for outbound forward-RPCs. Process-local;
+    /// re-issued from 1 on each new MobileClient (a fresh client = a
+    /// fresh paired/auth session in practice).
+    next_id: Arc<AtomicU64>,
+    /// Watch channel publishing the latest [`AuthStateFrame`] to UI /
+    /// reconnect-loop subscribers.
+    auth_state_tx: watch::Sender<AuthStateFrame>,
+    auth_state_rx: watch::Receiver<AuthStateFrame>,
+    /// Live auth tuple. `Some` between login/refresh and logout/refresh-
+    /// failure. The reconnect loop and the bearer-stamping helpers read
+    /// it; only the auth public methods write.
+    auth_session: Arc<RwLock<Option<AuthSession>>>,
 }
 
 impl MobileClient {
@@ -74,6 +94,7 @@ impl MobileClient {
     ) -> Self {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
         let (ui_events_tx, _) = broadcast::channel(256);
+        let (auth_state_tx, auth_state_rx) = watch::channel(AuthStateFrame::Unauthenticated);
         Self {
             store,
             state_tx,
@@ -83,6 +104,11 @@ impl MobileClient {
             device_id,
             self_name,
             tasks: Mutex::new(Vec::new()),
+            pending: Arc::new(DashMap::new()),
+            next_id: Arc::new(AtomicU64::new(1)),
+            auth_state_tx,
+            auth_state_rx,
+            auth_session: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -440,6 +466,7 @@ impl MobileClient {
             read,
             self.ui_events_tx.clone(),
             self.state_tx.clone(),
+            self.pending.clone(),
         ));
 
         *self.outbox.lock().await = Some(tx);
@@ -452,6 +479,9 @@ impl MobileClient {
     async fn shutdown_outbound(&self) {
         let mut guard = self.outbox.lock().await;
         *guard = None; // drops the Sender; send task exits when channel closes
+        // Drain pending so any in-flight forward_rpc callers see
+        // RequestDropped instead of waiting until their per-call timeout.
+        drain_pending(&self.pending);
     }
 }
 
@@ -462,6 +492,7 @@ async fn recv_loop<S>(
     mut read: S,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
     state_tx: watch::Sender<ConnectionState>,
+    pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>>,
 ) where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
@@ -469,16 +500,18 @@ async fn recv_loop<S>(
         match msg {
             Ok(Message::Text(t)) => {
                 let text: &str = t.as_ref();
-                handle_text_frame(text, &ui_events_tx, &state_tx);
+                handle_text_frame(text, &ui_events_tx, &state_tx, &pending);
             }
             Ok(Message::Close(_)) => {
                 let _ = state_tx.send(ConnectionState::Disconnected);
+                drain_pending(&pending);
                 break;
             }
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(?e, "mobile: WS read error; inbound loop exiting");
                 let _ = state_tx.send(ConnectionState::Disconnected);
+                drain_pending(&pending);
                 break;
             }
         }
@@ -489,6 +522,7 @@ fn handle_text_frame(
     text: &str,
     ui_events_tx: &broadcast::Sender<UiEventFrame>,
     state_tx: &watch::Sender<ConnectionState>,
+    pending: &DashMap<u64, oneshot::Sender<RpcReply>>,
 ) {
     let env = match serde_json::from_str::<Envelope>(text) {
         Ok(e) => e,
@@ -514,9 +548,43 @@ fn handle_text_frame(
             }
             EventKind::Unpaired | EventKind::ServerShutdown => {
                 let _ = state_tx.send(ConnectionState::Disconnected);
+                drain_pending(pending);
             }
             _ => tracing::debug!(?event, "mobile: ignored event"),
         },
+        Envelope::Forwarded { payload, .. } => {
+            // Spec §6.2: JSON-RPC `{id, method, params/result/error}` rides
+            // inside Envelope::Forwarded.payload; correlation id is the
+            // inner `id`, not the envelope.
+            let Some(id) = payload.get("id").and_then(|v| v.as_u64()) else {
+                tracing::debug!(?payload, "mobile: Forwarded missing inner JSON-RPC id");
+                return;
+            };
+            let Some((_, tx)) = pending.remove(&id) else {
+                tracing::debug!(id, "mobile: Forwarded with no pending entry");
+                return;
+            };
+            let reply = if let Some(result) = payload.get("result") {
+                RpcReply::Ok(result.clone())
+            } else if let Some(err) = payload.get("error") {
+                let code = err
+                    .get("code")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(-32000) as i32;
+                let message = err
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                RpcReply::Err { code, message }
+            } else {
+                RpcReply::Err {
+                    code: -32700,
+                    message: "malformed jsonrpc reply".into(),
+                }
+            };
+            let _ = tx.send(reply);
+        }
         other => tracing::debug!(?other, "mobile: ignored inbound envelope"),
     }
 }
@@ -817,5 +885,107 @@ mod tests {
             }
             other => panic!("expected ConnectFailed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn handle_text_frame_routes_forwarded_result_to_pending_oneshot() {
+        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
+        let (tx, rx) = oneshot::channel::<RpcReply>();
+        pending.insert(42, tx);
+        let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
+
+        let from = DeviceId::new();
+        let env = Envelope::Forwarded {
+            version: 1,
+            from,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 42,
+                "result": {"session_id": "thr_1", "cwd": "/workdir"}
+            }),
+        };
+        let text = serde_json::to_string(&env).unwrap();
+        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+
+        let reply = rx.await.unwrap();
+        match reply {
+            RpcReply::Ok(value) => {
+                assert_eq!(value["session_id"], "thr_1");
+                assert_eq!(value["cwd"], "/workdir");
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+        assert!(pending.is_empty(), "pending entry must be removed");
+    }
+
+    #[tokio::test]
+    async fn handle_text_frame_routes_forwarded_error_to_pending_oneshot() {
+        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
+        let (tx, rx) = oneshot::channel::<RpcReply>();
+        pending.insert(7, tx);
+        let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
+
+        let env = Envelope::Forwarded {
+            version: 1,
+            from: DeviceId::new(),
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "error": {"code": -32002, "message": "agent already running"}
+            }),
+        };
+        let text = serde_json::to_string(&env).unwrap();
+        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+
+        let reply = rx.await.unwrap();
+        match reply {
+            RpcReply::Err { code, message } => {
+                assert_eq!(code, -32002);
+                assert_eq!(message, "agent already running");
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_text_frame_drops_forwarded_with_unknown_id() {
+        // Pending starts empty: a Forwarded with id=99 must be a no-op.
+        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
+        let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
+
+        let env = Envelope::Forwarded {
+            version: 1,
+            from: DeviceId::new(),
+            payload: serde_json::json!({"jsonrpc": "2.0", "id": 99, "result": {}}),
+        };
+        let text = serde_json::to_string(&env).unwrap();
+        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_text_frame_unpaired_event_drains_pending() {
+        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
+        let (tx, rx) = oneshot::channel::<RpcReply>();
+        pending.insert(1, tx);
+        let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (state_tx, _state_rx) = watch::channel(ConnectionState::Connected);
+
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::Unpaired,
+        };
+        let text = serde_json::to_string(&env).unwrap();
+        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+
+        let reply = rx.await.unwrap();
+        match reply {
+            RpcReply::Err { code, .. } => assert_eq!(code, crate::rpc::REQUEST_DROPPED_CODE),
+            other => panic!("expected RequestDropped err, got {other:?}"),
+        }
+        assert!(pending.is_empty());
     }
 }
