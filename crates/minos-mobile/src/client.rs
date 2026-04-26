@@ -96,8 +96,8 @@ impl MobileClient {
 
     /// Rehydrate a client from a previously persisted snapshot. Missing or
     /// malformed device credentials fall back to a fresh device id; any valid
-    /// backend URL / CF Access headers are still restored into the in-memory
-    /// pairing store.
+    /// backend URL / CF Access headers / persisted auth are still restored
+    /// into the in-memory pairing store.
     #[must_use]
     pub fn new_with_persisted_state(self_name: String, state: PersistedPairingState) -> Self {
         let device = restored_device(&state);
@@ -106,6 +106,7 @@ impl MobileClient {
             state.backend_url.clone(),
             restored_cf_access(&state),
             device,
+            restored_auth(&state),
         ));
         Self::new_with_device_id(store, self_name, device_id)
     }
@@ -143,6 +144,7 @@ impl MobileClient {
         let backend_url = self.store.load_backend_url().await?;
         let cf_access = self.store.load_cf_access().await?;
         let device = self.store.load_device().await?;
+        let auth = self.store.load_auth().await?;
 
         Ok(PersistedPairingState {
             backend_url,
@@ -152,6 +154,11 @@ impl MobileClient {
                 .map(|(_, secret)| secret.as_str().to_string()),
             cf_access_client_id: cf_access.as_ref().map(|(id, _)| id.clone()),
             cf_access_client_secret: cf_access.as_ref().map(|(_, secret)| secret.clone()),
+            access_token: auth.as_ref().map(|a| a.access_token.clone()),
+            access_expires_at_ms: auth.as_ref().map(|a| a.access_expires_at_ms),
+            refresh_token: auth.as_ref().map(|a| a.refresh_token.clone()),
+            account_id: auth.as_ref().map(|a| a.account_id.clone()),
+            account_email: auth.as_ref().map(|a| a.account_email.clone()),
         })
     }
 
@@ -622,6 +629,27 @@ fn restored_cf_access(state: &PersistedPairingState) -> Option<(String, String)>
     }
 }
 
+fn restored_auth(state: &PersistedPairingState) -> Option<crate::store::PersistedAuth> {
+    match (
+        state.access_token.as_ref(),
+        state.access_expires_at_ms,
+        state.refresh_token.as_ref(),
+        state.account_id.as_ref(),
+        state.account_email.as_ref(),
+    ) {
+        (Some(access), Some(exp), Some(refresh), Some(account_id), Some(email)) => {
+            Some(crate::store::PersistedAuth {
+                access_token: access.clone(),
+                access_expires_at_ms: exp,
+                refresh_token: refresh.clone(),
+                account_id: account_id.clone(),
+                account_email: email.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
 fn restored_device(state: &PersistedPairingState) -> Option<(DeviceId, DeviceSecret)> {
     let (Some(device_id), Some(device_secret)) =
         (state.device_id.as_deref(), state.device_secret.as_deref())
@@ -660,6 +688,11 @@ mod tests {
             device_secret: Some(DeviceSecret::generate().as_str().to_string()),
             cf_access_client_id: Some("cf-id".into()),
             cf_access_client_secret: Some("cf-secret".into()),
+            access_token: Some("access".into()),
+            access_expires_at_ms: Some(123_456),
+            refresh_token: Some("refresh".into()),
+            account_id: Some("acct-1".into()),
+            account_email: Some("a@b.com".into()),
         };
 
         let client = MobileClient::new_with_persisted_state("test".into(), persisted.clone());

@@ -71,6 +71,11 @@ async fn spawn_backend_with_paired_mac() -> RealBackend {
             cf_access_client_id: None,
             cf_access_client_secret: None,
         }),
+        jwt_secret: Arc::new("a".repeat(32)),
+        auth_login_per_email: minos_backend::http::default_login_per_email(),
+        auth_login_per_ip: minos_backend::http::default_login_per_ip(),
+        auth_register_per_ip: minos_backend::http::default_register_per_ip(),
+        auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
         version: "mobile-envelope-test",
     };
 
@@ -235,6 +240,11 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
         device_secret: Some(secret),
         cf_access_client_id: None,
         cf_access_client_secret: None,
+        access_token: None,
+        access_expires_at_ms: None,
+        refresh_token: None,
+        account_id: None,
+        account_email: None,
     };
     assert_eq!(restored, expected);
 }
@@ -339,6 +349,11 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
             device_secret: Some("sec_revoked".into()),
             cf_access_client_id: None,
             cf_access_client_secret: None,
+            access_token: None,
+            access_expires_at_ms: None,
+            refresh_token: None,
+            account_id: None,
+            account_email: None,
         },
     );
 
@@ -381,6 +396,11 @@ async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
             device_secret: Some("sec_resume".into()),
             cf_access_client_id: Some("cf-id".into()),
             cf_access_client_secret: Some("cf-secret".into()),
+            access_token: None,
+            access_expires_at_ms: None,
+            refresh_token: None,
+            account_id: None,
+            account_email: None,
         },
     );
 
