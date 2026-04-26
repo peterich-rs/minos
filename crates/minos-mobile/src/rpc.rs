@@ -314,4 +314,82 @@ mod tests {
             other => panic!("expected RpcCallFailed, got {other:?}"),
         }
     }
+
+    /// Regression: hitting the in-flight-RPC cap must surface
+    /// `MinosError::NotConnected` rather than allocating a new pending
+    /// entry. The cap is `PENDING_CAP` (1024); if we let it grow further
+    /// the recv-loop drain on disconnect could trigger a long lock-storm
+    /// over DashMap's shards.
+    #[tokio::test]
+    async fn forward_rpc_returns_not_connected_when_pending_is_full() {
+        let pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>> = Arc::new(DashMap::new());
+        for k in 0..(PENDING_CAP as u64) {
+            let (tx, _rx) = oneshot::channel::<RpcReply>();
+            pending.insert(k, tx);
+        }
+        assert_eq!(pending.len(), PENDING_CAP);
+
+        let next_id = Arc::new(AtomicU64::new(PENDING_CAP as u64 + 1));
+        let (tx, _rx) = mpsc::channel::<Envelope>(8);
+        let res: Result<Value, _> = forward_rpc(
+            &pending,
+            &next_id,
+            &tx,
+            "minos_health",
+            serde_json::Value::Null,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(matches!(res, Err(MinosError::NotConnected)));
+        assert_eq!(
+            pending.len(),
+            PENDING_CAP,
+            "cap-rejected request must not allocate a pending entry"
+        );
+    }
+
+    /// Regression: when `drain_pending` runs while a `forward_rpc` is
+    /// still awaiting its oneshot, the future must resolve with
+    /// `MinosError::RequestDropped` (the drain path's mapped error), not
+    /// fall through to `Timeout`. The per-call timeout in this test is
+    /// well above the time `drain_pending` takes so a Timeout result
+    /// would indicate a regression in the drain wiring.
+    #[tokio::test]
+    async fn forward_rpc_returns_request_dropped_when_pending_is_drained_externally() {
+        let pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>> = Arc::new(DashMap::new());
+        let next_id = Arc::new(AtomicU64::new(1));
+        let (tx, _rx) = mpsc::channel::<Envelope>(8);
+
+        let pending_for_call = pending.clone();
+        let next_id_for_call = next_id.clone();
+        let join = tokio::spawn(async move {
+            // 5s is plenty above the time drain_pending takes; if the
+            // future resolves with Timeout it indicates a regression in
+            // the drain wiring, not a too-short timeout.
+            let res: Result<Value, _> = forward_rpc(
+                &pending_for_call,
+                &next_id_for_call,
+                &tx,
+                "minos_health",
+                serde_json::Value::Null,
+                Duration::from_secs(5),
+            )
+            .await;
+            res
+        });
+
+        // Yield until forward_rpc has parked itself in the pending map.
+        for _ in 0..100 {
+            if !pending.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(!pending.is_empty(), "forward_rpc must park before drain");
+
+        drain_pending(&pending);
+
+        let res = join.await.unwrap();
+        assert!(matches!(res, Err(MinosError::RequestDropped)));
+    }
 }
