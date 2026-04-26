@@ -256,11 +256,12 @@ async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> 
     // the legacy host-assembled shape; the new flow returns v=2.
     assert_eq!(qr.v, 2);
     assert_eq!(qr.backend_url, backend_url);
-    assert_eq!(qr.mac_display_name, mac_name);
+    assert_eq!(qr.host_display_name, mac_name);
+    assert!(qr.expires_at_ms > 0, "expected epoch-ms expiry");
     assert!(
-        !qr.token.as_str().is_empty(),
+        !qr.pairing_token.as_str().is_empty(),
         "expected non-empty pairing token, got {:?}",
-        qr.token
+        qr.pairing_token
     );
 
     client.stop().await;

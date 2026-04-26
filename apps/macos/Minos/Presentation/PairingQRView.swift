@@ -60,7 +60,7 @@ struct PairingQRView: View {
 
             Text("有效期 5 分钟 · 在手机上扫描")
                 .font(.headline)
-            Text(pairingPayload.macDisplayName)
+            Text(pairingPayload.hostDisplayName)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

@@ -22,7 +22,7 @@ final class AppStateBootTests: XCTestCase {
             peerName: "Existing iPhone",
             online: true
         )
-        appState.currentQr = MockDaemon.makeQrPayload(macDisplayName: "Old Mac")
+        appState.currentQr = MockDaemon.makeQrPayload(hostDisplayName: "Old Mac")
         appState.currentQrGeneratedAt = Date(timeIntervalSince1970: 123)
         appState.trustedDevice = MockDaemon.makeTrustedDevice(name: "Existing Device")
         appState.bootError = .StoreIo(path: "/tmp/state.json", message: "missing")

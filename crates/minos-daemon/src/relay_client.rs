@@ -107,6 +107,10 @@ struct Inner {
     /// The Mac's display name — sent to the backend in `RequestPairingQr`
     /// so the assembled QR carries it through to the iPhone.
     mac_name: String,
+    /// Runtime CF Access credentials used by the Mac itself. If the backend
+    /// does not embed CF fields in the QR, we can still hand the phone the
+    /// same edge credentials that allowed the host to connect.
+    config: RelayConfig,
 }
 
 pub struct RelayClient {
@@ -153,6 +157,7 @@ impl RelayClient {
 
         let pending: Arc<Mutex<Pending>> = Arc::new(Mutex::new(HashMap::new()));
 
+        let inner_config = config.clone();
         let dispatch_ctx = DispatchCtx {
             config,
             self_device_id,
@@ -179,6 +184,7 @@ impl RelayClient {
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             task: Mutex::new(Some(task)),
             mac_name,
+            config: inner_config,
         });
 
         (Arc::new(Self { inner }), link_rx, peer_rx)
@@ -260,11 +266,20 @@ impl RelayClient {
             })?;
         let qr = response.qr_payload;
 
+        let (cf_access_client_id, cf_access_client_secret) = qr_cf_access_or_host_env(
+            qr.cf_access_client_id,
+            qr.cf_access_client_secret,
+            &self.inner.config,
+        );
+
         Ok(RelayQrPayload {
             v: qr.v,
             backend_url: qr.backend_url,
-            token: minos_domain::PairingToken(qr.pairing_token),
-            mac_display_name: qr.host_display_name,
+            host_display_name: qr.host_display_name,
+            pairing_token: minos_domain::PairingToken(qr.pairing_token),
+            expires_at_ms: qr.expires_at_ms,
+            cf_access_client_id,
+            cf_access_client_secret,
         })
     }
 
@@ -857,6 +872,21 @@ fn build_headers(
     headers
 }
 
+fn qr_cf_access_or_host_env(
+    qr_id: Option<String>,
+    qr_secret: Option<String>,
+    config: &RelayConfig,
+) -> (Option<String>, Option<String>) {
+    match (qr_id, qr_secret) {
+        (Some(id), Some(secret)) => (Some(id), Some(secret)),
+        _ if !config.cf_client_id.is_empty() && !config.cf_client_secret.is_empty() => (
+            Some(config.cf_client_id.clone()),
+            Some(config.cf_client_secret.clone()),
+        ),
+        _ => (None, None),
+    }
+}
+
 /// Assemble the tungstenite request with all auth headers stamped. The URI
 /// is expected to be a `ws://` or `wss://` URL pointing at `/devices`.
 fn build_request(
@@ -950,5 +980,22 @@ mod tests {
             .find(|(k, _)| *k == "X-Device-Secret")
             .expect("X-Device-Secret stamped");
         assert_eq!(entry.1, "sentinel-123");
+    }
+
+    #[test]
+    fn qr_cf_access_prefers_backend_payload() {
+        let cfg = RelayConfig::new("host-id".into(), "host-secret".into());
+        let (id, secret) =
+            qr_cf_access_or_host_env(Some("qr-id".into()), Some("qr-secret".into()), &cfg);
+        assert_eq!(id.as_deref(), Some("qr-id"));
+        assert_eq!(secret.as_deref(), Some("qr-secret"));
+    }
+
+    #[test]
+    fn qr_cf_access_falls_back_to_host_env() {
+        let cfg = RelayConfig::new("host-id".into(), "host-secret".into());
+        let (id, secret) = qr_cf_access_or_host_env(None, None, &cfg);
+        assert_eq!(id.as_deref(), Some("host-id"));
+        assert_eq!(secret.as_deref(), Some("host-secret"));
     }
 }
