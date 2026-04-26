@@ -1,5 +1,7 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use minos_backend::auth::jwt;
+use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
 use minos_backend::store::{devices::insert_device, pairings::insert_pairing};
 use minos_domain::{AgentName, DeviceId, DeviceRole};
@@ -7,9 +9,18 @@ use minos_protocol::ListThreadsResponse;
 
 mod common;
 
-async fn paired_pair(
+/// Seed an account and a paired (Mac, iOS) where both device rows are
+/// linked to the new account_id. Returns
+/// `(mac_id, ios_id, ios_secret, account_id)`.
+async fn paired_pair_with_account(
     state: &minos_backend::http::BackendState,
-) -> (DeviceId, DeviceId, minos_domain::DeviceSecret) {
+    email: &str,
+) -> (
+    DeviceId,
+    DeviceId,
+    minos_domain::DeviceSecret,
+    String,
+) {
     let mac = DeviceId::new();
     let ios = DeviceId::new();
     insert_device(&state.store, mac, "Mac", DeviceRole::AgentHost, 0)
@@ -25,13 +36,45 @@ async fn paired_pair(
         .await
         .unwrap();
     insert_pairing(&state.store, mac, ios, 0).await.unwrap();
-    (mac, ios, secret)
+
+    // Phase 2 Task 2.6: link both device rows to a real account_id so the
+    // /v1/threads handler's account-scoped query returns the seeded
+    // threads.
+    let account =
+        minos_backend::store::accounts::create(&state.store, email, "phc")
+            .await
+            .unwrap();
+    minos_backend::store::devices::set_account_id(&state.store, &mac, &account.account_id)
+        .await
+        .unwrap();
+    minos_backend::store::devices::set_account_id(&state.store, &ios, &account.account_id)
+        .await
+        .unwrap();
+
+    (mac, ios, secret, account.account_id)
+}
+
+/// Convenience: signed bearer JWT bound to the given (account_id, device_id).
+fn bearer_for(account_id: &str, device_id: DeviceId) -> String {
+    jwt::sign(TEST_JWT_SECRET.as_bytes(), account_id, &device_id.to_string())
+        .expect("test bearer signs cleanly")
+}
+
+/// Backwards-compat shim used by the tests that don't care about
+/// account scoping; they still need a paired pair + bearer to satisfy
+/// the new threads-route requirements.
+async fn paired_pair(
+    state: &minos_backend::http::BackendState,
+) -> (DeviceId, DeviceId, minos_domain::DeviceSecret, String) {
+    paired_pair_with_account(state, "threads-test@example.com").await
 }
 
 #[tokio::test]
 async fn get_threads_returns_owner_scoped_list() {
     let state = backend_state().await;
-    let (mac_id, ios_id, secret) = paired_pair(&state).await;
+    let (mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
     // Seed two threads owned by the Mac.
     minos_backend::store::threads::upsert(
         &state.store,
@@ -59,6 +102,7 @@ async fn get_threads_returns_owner_scoped_list() {
         .header("x-device-id", ios_id.to_string())
         .header("x-device-role", "ios-client")
         .header("x-device-secret", secret.as_str())
+        .header("authorization", &auth_hdr)
         .body(Body::empty())
         .unwrap();
     let (status, body) = common::send(&mut app, req).await;
@@ -70,7 +114,9 @@ async fn get_threads_returns_owner_scoped_list() {
 #[tokio::test]
 async fn get_thread_events_paginates() {
     let state = backend_state().await;
-    let (mac_id, ios_id, secret) = paired_pair(&state).await;
+    let (mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
     minos_backend::store::threads::upsert(
         &state.store,
         "thr_a",
@@ -104,6 +150,7 @@ async fn get_thread_events_paginates() {
         .header("x-device-id", ios_id.to_string())
         .header("x-device-role", "ios-client")
         .header("x-device-secret", secret.as_str())
+        .header("authorization", &auth_hdr)
         .body(Body::empty())
         .unwrap();
     let (status, body) = common::send(&mut app, req).await;
@@ -115,7 +162,9 @@ async fn get_thread_events_paginates() {
 #[tokio::test]
 async fn get_thread_last_seq_returns_max() {
     let state = backend_state().await;
-    let (mac_id, ios_id, secret) = paired_pair(&state).await;
+    let (mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
     minos_backend::store::threads::upsert(
         &state.store,
         "thr_a",
@@ -143,12 +192,77 @@ async fn get_thread_last_seq_returns_max() {
         .header("x-device-id", ios_id.to_string())
         .header("x-device-role", "ios-client")
         .header("x-device-secret", secret.as_str())
+        .header("authorization", &auth_hdr)
         .body(Body::empty())
         .unwrap();
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::OK);
     let resp: minos_protocol::GetThreadLastSeqResponse = serde_json::from_value(body).unwrap();
     assert_eq!(resp.last_seq, 7);
+}
+
+#[tokio::test]
+async fn routing_threads_filtered_by_account() {
+    // Phase 2 Task 2.6: list_threads must scope by the bearer's
+    // account_id. With two paired pairs on two distinct accounts, an iOS
+    // bearer for account A only sees threads owned by A's Mac.
+    let state = backend_state().await;
+    let (mac_a, ios_a, secret_a, account_a) =
+        paired_pair_with_account(&state, "alice@example.com").await;
+    let (mac_b, _ios_b, _secret_b, _account_b) =
+        paired_pair_with_account(&state, "bob@example.com").await;
+    // Seed threads for both Macs.
+    minos_backend::store::threads::upsert(
+        &state.store,
+        "thr_a1",
+        AgentName::Codex,
+        &mac_a.to_string(),
+        100,
+    )
+    .await
+    .unwrap();
+    minos_backend::store::threads::upsert(
+        &state.store,
+        "thr_a2",
+        AgentName::Claude,
+        &mac_a.to_string(),
+        300,
+    )
+    .await
+    .unwrap();
+    minos_backend::store::threads::upsert(
+        &state.store,
+        "thr_b1",
+        AgentName::Codex,
+        &mac_b.to_string(),
+        500,
+    )
+    .await
+    .unwrap();
+
+    let bearer_a = bearer_for(&account_a, ios_a);
+    let auth_hdr = format!("Bearer {bearer_a}");
+    let mut app = router(state);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/threads?limit=50")
+        .header("x-device-id", ios_a.to_string())
+        .header("x-device-role", "ios-client")
+        .header("x-device-secret", secret_a.as_str())
+        .header("authorization", &auth_hdr)
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = common::send(&mut app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    let resp: ListThreadsResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(resp.threads.len(), 2, "iOS A must see only A's threads");
+    let ids: Vec<&str> = resp.threads.iter().map(|t| t.thread_id.as_str()).collect();
+    assert!(ids.contains(&"thr_a1"));
+    assert!(ids.contains(&"thr_a2"));
+    assert!(
+        !ids.contains(&"thr_b1"),
+        "B's thread must not leak across accounts"
+    );
 }
 
 #[tokio::test]

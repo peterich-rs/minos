@@ -13,6 +13,7 @@ use minos_protocol::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::auth::bearer;
 use crate::http::auth;
 use crate::http::BackendState;
 
@@ -45,11 +46,13 @@ fn err(code: &'static str, message: impl Into<String>) -> Json<ErrorEnvelope> {
 
 /// Resolve the caller's authenticated session AND assert it is paired.
 /// Returns the *peer* `DeviceId` (the host who owns the threads being
-/// read), so handlers can scope queries to `owner_device_id = peer`.
+/// read) and the bearer's `account_id`, so handlers can scope queries to
+/// `owner_device_id = peer` AND `owner_device.account_id = account_id`
+/// (Phase 2 Task 2.6 / spec §5.5).
 async fn require_paired_session(
     state: &BackendState,
     headers: &HeaderMap,
-) -> Result<minos_domain::DeviceId, (StatusCode, Json<ErrorEnvelope>)> {
+) -> Result<(minos_domain::DeviceId, String), (StatusCode, Json<ErrorEnvelope>)> {
     let outcome = auth::authenticate(&state.store, headers)
         .await
         .map_err(|e| match e {
@@ -62,6 +65,12 @@ async fn require_paired_session(
             err("unauthorized", "X-Device-Secret required"),
         ));
     }
+    // Phase 2 Task 2.6: require a bearer JWT bound to the same device id;
+    // the resolved `account_id` scopes the thread list / read.
+    let bearer_outcome = bearer::require(state, headers).map_err(|e| {
+        let (s, m) = e.into_response_tuple();
+        (s, err("unauthorized", m))
+    })?;
     let owner = crate::store::pairings::get_pair(&state.store, outcome.device_id)
         .await
         .map_err(|e| {
@@ -76,7 +85,7 @@ async fn require_paired_session(
                 err("unauthorized", "session is not paired"),
             )
         })?;
-    Ok(owner)
+    Ok((owner, bearer_outcome.account_id))
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,7 +100,7 @@ async fn list_threads(
     headers: HeaderMap,
     Query(q): Query<ListThreadsQuery>,
 ) -> Result<Json<ListThreadsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let owner = require_paired_session(&state, &headers).await?;
+    let (owner, account_id) = require_paired_session(&state, &headers).await?;
     let owner_s = Some(owner.to_string());
     let threads = crate::store::threads::list(
         &state.store,
@@ -99,6 +108,7 @@ async fn list_threads(
         q.agent,
         q.before_ts_ms,
         q.limit.min(500),
+        Some(&account_id),
     )
     .await
     .map_err(|e| {
@@ -126,7 +136,7 @@ async fn read_thread(
     Path(thread_id): Path<String>,
     Query(q): Query<ReadThreadQuery>,
 ) -> Result<Json<ReadThreadResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let owner = require_paired_session(&state, &headers).await?;
+    let (owner, _account_id) = require_paired_session(&state, &headers).await?;
     let params = ReadThreadParams {
         thread_id: thread_id.clone(),
         from_seq: q.from_seq,

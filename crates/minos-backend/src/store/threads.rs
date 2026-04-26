@@ -103,6 +103,10 @@ pub async fn update_title(
 /// - `agent`            — restrict to a single CLI agent.
 /// - `before_ts_ms`     — only threads whose `last_ts_ms` is strictly less
 ///   than this (exclusive cursor for pagination).
+/// - `account_id`       — restrict to threads whose `owner_device_id`
+///   belongs to a device row with this `account_id`. Spec §5.5; Phase 2
+///   Task 2.6. The check uses an `EXISTS` clause against `devices` rather
+///   than a `JOIN` so the optional-cursor + ordering plan stays simple.
 ///
 /// Ordering: `last_ts_ms DESC` — most-recently-active first. Capped at
 /// `limit` rows; the caller pins the upper bound in the dispatch layer.
@@ -112,6 +116,7 @@ pub async fn list(
     agent: Option<AgentName>,
     before_ts_ms: Option<i64>,
     limit: u32,
+    account_id: Option<&str>,
 ) -> Result<Vec<minos_protocol::ThreadSummary>, BackendError> {
     let agent_s = agent.map(agent_str);
     let rows = sqlx::query_as::<
@@ -132,6 +137,14 @@ pub async fn list(
            WHERE (?1 IS NULL OR owner_device_id = ?1)
              AND (?2 IS NULL OR agent = ?2)
              AND (?3 IS NULL OR last_ts_ms < ?3)
+             AND (
+                 ?5 IS NULL
+                 OR EXISTS (
+                     SELECT 1 FROM devices d
+                     WHERE d.device_id = threads.owner_device_id
+                       AND d.account_id = ?5
+                 )
+             )
            ORDER BY last_ts_ms DESC
            LIMIT ?4",
     )
@@ -139,6 +152,7 @@ pub async fn list(
     .bind(agent_s)
     .bind(before_ts_ms)
     .bind(i64::from(limit))
+    .bind(account_id)
     .fetch_all(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -325,7 +339,7 @@ mod tests {
             .unwrap();
         }
 
-        let r = list(&pool, Some("dev1"), None, None, 3).await.unwrap();
+        let r = list(&pool, Some("dev1"), None, None, 3, None).await.unwrap();
         assert_eq!(r.len(), 3);
         assert_eq!(r[0].thread_id, "thr4");
         assert_eq!(r[1].thread_id, "thr3");
@@ -351,9 +365,69 @@ mod tests {
             .await
             .unwrap();
 
-        let r = list(&pool, Some("dev1"), None, None, 50).await.unwrap();
+        let r = list(&pool, Some("dev1"), None, None, 50, None).await.unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].thread_id, "mine");
+    }
+
+    #[tokio::test]
+    async fn list_filters_by_account_id() {
+        // Phase 2 Task 2.6: when an `account_id` is supplied, only
+        // threads whose owner device row carries that account_id are
+        // returned. Threads owned by devices on a different account, or
+        // by devices with no account_id, must be excluded.
+        let pool = memory_pool().await;
+        // Account A + device owning thread "mine".
+        let acct_a = crate::store::accounts::create(&pool, "alice@example.com", "phc")
+            .await
+            .unwrap();
+        let acct_b = crate::store::accounts::create(&pool, "bob@example.com", "phc")
+            .await
+            .unwrap();
+        sqlx::query(
+            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at, account_id)
+               VALUES ('a-mac','Mac-A','agent-host',0,0,?1)",
+        )
+        .bind(&acct_a.account_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at, account_id)
+               VALUES ('b-mac','Mac-B','agent-host',0,0,?1)",
+        )
+        .bind(&acct_b.account_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
+               VALUES ('orphan','Mac-O','agent-host',0,0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        upsert(&pool, "thr-a", AgentName::Codex, "a-mac", 1000)
+            .await
+            .unwrap();
+        upsert(&pool, "thr-b", AgentName::Codex, "b-mac", 2000)
+            .await
+            .unwrap();
+        upsert(&pool, "thr-orphan", AgentName::Codex, "orphan", 3000)
+            .await
+            .unwrap();
+
+        // Filtering by account A should return only thr-a.
+        let r = list(&pool, None, None, None, 50, Some(&acct_a.account_id))
+            .await
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].thread_id, "thr-a");
+
+        // No account filter: all three.
+        let r = list(&pool, None, None, None, 50, None).await.unwrap();
+        assert_eq!(r.len(), 3);
     }
 
     #[tokio::test]
@@ -373,7 +447,7 @@ mod tests {
         }
 
         // before_ts_ms = 3000 must strictly exclude last_ts_ms = 3000.
-        let r = list(&pool, Some("dev1"), None, Some(3000), 50)
+        let r = list(&pool, Some("dev1"), None, Some(3000), 50, None)
             .await
             .unwrap();
         assert_eq!(r.len(), 3);
