@@ -69,6 +69,7 @@ use minos_protocol::{Envelope, EventKind};
 
 use super::BackendState;
 use crate::{
+    auth::bearer,
     envelope::run_session,
     http::auth::{self, AuthError, Classification},
     session::{SessionHandle, SessionRegistry},
@@ -107,7 +108,22 @@ pub async fn upgrade(
     // a fresh error for a stale header read.
     let requested_role = auth::extract_device_role(&headers).ok().flatten();
 
+    // Spec §5.5 / Phase 2 Task 2.2: iOS clients must present a valid
+    // bearer JWT bound to the same `X-Device-Id` for the WS upgrade. The
+    // Mac (`AgentHost`) rail keeps the device-secret-only path so existing
+    // pairings continue to authenticate without an account-side token.
+    let account_id: Option<String> = if role == DeviceRole::IosClient {
+        let bearer_outcome = bearer::require(&state, &headers)
+            .map_err(bearer::BearerError::into_response_tuple)?;
+        Some(bearer_outcome.account_id)
+    } else {
+        None
+    };
+
     let (handle, outbox_rx) = SessionHandle::new(device_id, role);
+    if let Some(aid) = account_id.as_ref() {
+        handle.set_account_id(aid.clone());
+    }
 
     // Perform the upgrade; `run_session` owns the socket for its lifetime.
     let registry = Arc::clone(&state.registry);

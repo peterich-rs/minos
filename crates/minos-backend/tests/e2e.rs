@@ -27,11 +27,15 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
+    auth::jwt,
     http::{router, BackendState},
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
     store,
 };
+
+/// Fixed JWT secret used by the test relay; mirrors `test_support::TEST_JWT_SECRET`.
+const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
 use minos_protocol::{Envelope, EventKind};
 use sqlx::SqlitePool;
@@ -82,7 +86,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
             cf_access_client_id: None,
             cf_access_client_secret: None,
         }),
-        jwt_secret: Arc::new("test-jwt-secret-32-bytes-padding".to_string()),
+        jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
         auth_register_per_ip: minos_backend::http::default_register_per_ip(),
@@ -115,6 +119,25 @@ async fn connect_client(
     secret: Option<&str>,
     name: Option<&str>,
 ) -> Result<WsClient, WsError> {
+    // Phase 2 Task 2.2: iOS upgrades require a bearer JWT. The e2e tests
+    // pre-date the account model so they don't have a "real" account to
+    // log in as — synthesise a token bound to the same `device_id` here so
+    // the existing scenarios still exercise the post-upgrade behaviour.
+    let token = (role == DeviceRole::IosClient).then(|| {
+        jwt::sign(TEST_JWT_SECRET.as_bytes(), "e2e-acct", &device_id.to_string())
+            .expect("test bearer signs cleanly")
+    });
+    connect_client_with_bearer(relay, device_id, role, secret, name, token.as_deref()).await
+}
+
+async fn connect_client_with_bearer(
+    relay: &Relay,
+    device_id: DeviceId,
+    role: DeviceRole,
+    secret: Option<&str>,
+    name: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<WsClient, WsError> {
     let url: Uri = format!("ws://{}/devices", relay.addr).parse().unwrap();
     let mut builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", device_id.to_string())
@@ -124,6 +147,9 @@ async fn connect_client(
     }
     if let Some(n) = name {
         builder = builder.with_header("X-Device-Name", n.to_string());
+    }
+    if let Some(t) = bearer {
+        builder = builder.with_header("Authorization", format!("Bearer {t}"));
     }
     let (ws, _resp) = tokio_tungstenite::connect_async(builder).await?;
     Ok(ws)

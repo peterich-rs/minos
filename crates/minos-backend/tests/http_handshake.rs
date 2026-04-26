@@ -8,6 +8,7 @@
 use std::{sync::Arc, time::Duration};
 
 use minos_backend::{
+    auth::jwt,
     http::{router, BackendState},
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
@@ -19,6 +20,9 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::{
     client::ClientRequestBuilder, http::Uri, protocol::Message, Error as WsError,
 };
+
+/// Fixed JWT secret used by the test relay; mirrors `test_support::TEST_JWT_SECRET`.
+const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 
 /// Bring up a relay on an ephemeral port and return `(base_url, server_task)`.
 ///
@@ -39,7 +43,7 @@ async fn spawn_relay() -> (String, tokio::task::JoinHandle<()>, sqlx::SqlitePool
             cf_access_client_id: None,
             cf_access_client_secret: None,
         }),
-        jwt_secret: Arc::new("test-jwt-secret-32-bytes-padding".to_string()),
+        jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
         auth_register_per_ip: minos_backend::http::default_register_per_ip(),
@@ -104,10 +108,16 @@ async fn devices_first_connect_emits_unpaired_event() {
     let (base, _task, pool) = spawn_relay().await;
     let url: Uri = format!("{}/devices", http_to_ws(&base)).parse().unwrap();
     let id = DeviceId::new();
+    // iOS upgrades require a bearer post-Phase-2 Task 2.2; sign one bound
+    // to this device id so the first-connect path still surfaces the
+    // initial Event::Unpaired we want to assert here.
+    let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-first-connect", &id.to_string())
+        .expect("sign test bearer");
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", id.to_string())
         .with_header("X-Device-Role", DeviceRole::IosClient.to_string())
-        .with_header("X-Device-Name", "my-phone".to_string());
+        .with_header("X-Device-Name", "my-phone".to_string())
+        .with_header("Authorization", format!("Bearer {token}"));
 
     let (mut ws, _resp) = tokio_tungstenite::connect_async(builder)
         .await
@@ -253,6 +263,49 @@ async fn devices_wrong_secret_rejects_with_401() {
         .await
         .expect_err("wrong secret must fail");
     assert_http_status(&err, 401, "wrong X-Device-Secret");
+}
+
+// ── /devices: ios upgrade without bearer → 401 ─────────────────────────
+
+/// iOS upgrades must present a bearer; missing the `Authorization` header
+/// rejects the upgrade with 401 (Phase 2 Task 2.2). The Mac (`AgentHost`)
+/// path keeps device-secret-only auth — exercised by
+/// `devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not_live`.
+#[tokio::test]
+async fn devices_ios_upgrade_without_bearer_rejects_with_401() {
+    let (base, _task, _pool) = spawn_relay().await;
+    let url: Uri = format!("{}/devices", http_to_ws(&base)).parse().unwrap();
+    let id = DeviceId::new();
+    // iOS role + valid X-Device-Id but no Authorization header.
+    let builder = ClientRequestBuilder::new(url)
+        .with_header("X-Device-Id", id.to_string())
+        .with_header("X-Device-Role", DeviceRole::IosClient.to_string());
+    let err = tokio_tungstenite::connect_async(builder)
+        .await
+        .expect_err("ios upgrade without bearer must fail");
+    assert_http_status(&err, 401, "missing bearer on iOS upgrade");
+}
+
+// ── /devices: ios upgrade with bearer-did-mismatch → 401 ───────────────
+
+/// JWT `did` claim must equal the `X-Device-Id` header. If they disagree,
+/// the upgrade rejects with 401 (Phase 2 Task 2.2).
+#[tokio::test]
+async fn devices_ios_upgrade_with_did_mismatch_rejects_with_401() {
+    let (base, _task, _pool) = spawn_relay().await;
+    let url: Uri = format!("{}/devices", http_to_ws(&base)).parse().unwrap();
+    let header_id = DeviceId::new();
+    let token_did = DeviceId::new(); // different device baked into token
+    let token =
+        jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &token_did.to_string()).unwrap();
+    let builder = ClientRequestBuilder::new(url)
+        .with_header("X-Device-Id", header_id.to_string())
+        .with_header("X-Device-Role", DeviceRole::IosClient.to_string())
+        .with_header("Authorization", format!("Bearer {token}"));
+    let err = tokio_tungstenite::connect_async(builder)
+        .await
+        .expect_err("did mismatch must fail");
+    assert_http_status(&err, 401, "bearer did mismatch on iOS upgrade");
 }
 
 // ── /devices: row-with-hash but NO secret → 401 ─────────────────────────

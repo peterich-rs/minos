@@ -11,12 +11,16 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
+    auth::jwt,
     http::{router, BackendState},
     ingest::translate::ThreadTranslators,
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
     store,
 };
+
+/// Fixed JWT secret used by the test relay; mirrors `test_support::TEST_JWT_SECRET`.
+const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 use minos_domain::{AgentName, DeviceId, DeviceRole, DeviceSecret};
 use minos_protocol::{Envelope, EventKind};
 use minos_ui_protocol::UiEventMessage;
@@ -63,7 +67,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
             cf_access_client_id: None,
             cf_access_client_secret: None,
         }),
-        jwt_secret: Arc::new("test-jwt-secret-32-bytes-padding".to_string()),
+        jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
         auth_register_per_ip: minos_backend::http::default_register_per_ip(),
@@ -103,6 +107,16 @@ async fn connect_client(
     }
     if let Some(n) = name {
         builder = builder.with_header("X-Device-Name", n.to_string());
+    }
+    // Phase 2 Task 2.2: iOS upgrades require a bearer JWT bound to the
+    // same `X-Device-Id`. Synthesise one here so the ingest scenarios stay
+    // focused on translate/fan-out behaviour without dragging the auth
+    // endpoints into every test.
+    if role == DeviceRole::IosClient {
+        let token =
+            jwt::sign(TEST_JWT_SECRET.as_bytes(), "ingest-acct", &device_id.to_string())
+                .expect("test bearer signs cleanly");
+        builder = builder.with_header("Authorization", format!("Bearer {token}"));
     }
     let (ws, _resp) = tokio_tungstenite::connect_async(builder).await?;
     Ok(ws)
