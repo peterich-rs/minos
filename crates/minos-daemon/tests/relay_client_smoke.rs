@@ -8,9 +8,7 @@
 //!
 //! 1. `connect_becomes_connected` — link transitions
 //!    `Connecting{0}` → `Connected` within a bounded window.
-//! 2. `ping_local_rpc_returns_ok_true` — round-trips a `LocalRpc::Ping`
-//!    and gets back `{"ok": true}` with full correlation handling.
-//! 3. `request_pairing_token_returns_qr_with_mac_name` — issues
+//! 2. `request_pairing_token_returns_qr_with_mac_name` — issues
 //!    `RequestPairingToken`, wraps into `RelayQrPayload`, and cross-checks
 //!    the backend URL and mac display name.
 //!
@@ -32,7 +30,6 @@ use minos_backend::{
 use minos_daemon::config::RelayConfig;
 use minos_daemon::relay_client::{PersistenceCtx, RelayClient};
 use minos_domain::{DeviceId, MinosError, RelayLinkState};
-use minos_protocol::envelope::LocalRpcMethod;
 use pretty_assertions::assert_eq;
 use sqlx::SqlitePool;
 use tempfile::{NamedTempFile, TempDir};
@@ -172,48 +169,6 @@ async fn connect_becomes_connected() -> anyhow::Result<()> {
     })
     .await
     .expect("relay link did not reach Connected within timeout");
-
-    client.stop().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn ping_local_rpc_returns_ok_true() -> anyhow::Result<()> {
-    let relay = spawn_relay().await?;
-    let backend_url = relay_url(&relay);
-    let (persistence, _tmp) = test_persistence();
-
-    let (client, mut link_rx, _peer_rx) = RelayClient::spawn(
-        test_config(),
-        DeviceId::new(),
-        None,
-        None,
-        "Fan's Mac".to_string(),
-        backend_url,
-        None,
-        persistence,
-    );
-
-    // Wait until the link is up so the Ping isn't racing the handshake.
-    timeout(STEP_TIMEOUT, async {
-        loop {
-            if matches!(*link_rx.borrow_and_update(), RelayLinkState::Connected) {
-                return;
-            }
-            link_rx.changed().await.expect("link sender alive");
-        }
-    })
-    .await
-    .expect("relay link did not reach Connected within timeout");
-
-    let result = timeout(
-        STEP_TIMEOUT,
-        client.send_local_rpc(LocalRpcMethod::Ping, serde_json::json!({})),
-    )
-    .await
-    .expect("ping did not complete within timeout")?;
-
-    assert_eq!(result, serde_json::json!({"ok": true}));
 
     client.stop().await;
     Ok(())

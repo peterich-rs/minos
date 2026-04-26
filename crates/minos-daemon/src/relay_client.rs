@@ -9,9 +9,13 @@
 //!      so UI can react to connect/disconnect / reconnect attempts;
 //!   3. publishes peer-state transitions (`Paired` → `PeerOnline` → `PeerOffline`
 //!      / `Unpaired`) onto a `watch::Receiver<PeerState>`;
-//!   4. serializes in-flight `LocalRpc` traffic behind an id-correlated
-//!      pending map so `send_local_rpc` can be called concurrently from
-//!      multiple awaiters.
+//!   4. relays `Envelope::Forwarded` peer payloads to the local jsonrpsee
+//!      surface (`RpcServerImpl`) and pushes the response back over the
+//!      WebSocket so the iPhone sees a paired-RPC round trip.
+//!
+//! Pairing token issuance and `forget_peer` go through the backend's HTTP
+//! `/v1/*` control plane on a separate [`RelayHttpClient`] handle; this
+//! module no longer carries an in-flight `LocalRpc` correlation table.
 //!
 //! The module intentionally does NOT touch `DaemonHandle`. Plan 05 Phase F
 //! wires the handle to this client; Phase E (this module) only has to stand
@@ -33,10 +37,6 @@
 //!   link on the next cycle.
 //! - All other errors fall back to exponential-backoff reconnect
 //!   (1s → 2s → 4s → 8s → 16s → 30s cap, no max attempts).
-//! - `send_local_rpc` has a 10-second timeout. On timeout or on a dropped
-//!   dispatch task the entry is cleaned out of the pending map and
-//!   `MinosError::BackendInternal { message: "local rpc timeout" }` is
-//!   returned.
 //!
 //! # Persistence on `EventKind::Paired`
 //!
@@ -48,21 +48,17 @@
 //! update — the user still sees "paired" in the UI even if persistence
 //! is transiently broken.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
 
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, PeerState, RelayLinkState};
-use minos_protocol::envelope::{Envelope, EventKind, LocalRpcMethod, LocalRpcOutcome, RpcError};
+use minos_protocol::envelope::{Envelope, EventKind};
 use minos_transport::auth::{AuthHeaders, CfAccessToken};
 use minos_transport::backoff::delay_for_attempt;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::ClientRequestBuilder;
 use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
@@ -74,32 +70,12 @@ use crate::relay_http::RelayHttpClient;
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
 use crate::rpc_server::{invoke_forwarded, wrap_response_envelope, RpcServerImpl};
 
-/// Timeout applied to every pending `LocalRpc` response. Matches the
-/// dispatch-loop jitter we saw in the Phase D e2e runs (well under 5s) with
-/// enough margin to survive a lossy mobile network round trip.
-const LOCAL_RPC_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Bounded queue for outbound envelopes — deep enough to absorb a brief
 /// handshake pause without back-pressuring callers. The dispatch loop
 /// drains continuously, so the steady-state depth is effectively zero.
 const OUTBOUND_QUEUE_DEPTH: usize = 64;
 
-/// Correlation table for outbound `LocalRpc`. The dispatch task inserts
-/// arriving `LocalRpcResponse` outcomes by id; `send_local_rpc` removes
-/// on timeout / success. Using a plain `HashMap` (not `DashMap`) is fine
-/// here — the send path is the sole writer and contention is low.
-type Pending = HashMap<u64, oneshot::Sender<LocalRpcOutcome>>;
-
 struct Inner {
-    /// Correlation ids for outbound `LocalRpc`. Starts at 1, monotonic for
-    /// the lifetime of the client; relay treats these as opaque.
-    next_id: AtomicU64,
-    /// Awaiters keyed by correlation id. Shared with the dispatch task via
-    /// `Arc<Mutex<_>>`; the task inserts `LocalRpcResponse` outcomes by
-    /// looking up the id and this handle removes on timeout / success.
-    pending: Arc<Mutex<Pending>>,
-    /// Producer side of the dispatcher's outbound queue.
-    out_tx: mpsc::Sender<Envelope>,
     /// Shutdown signal — one-shot, captured behind a `Mutex` so a repeat
     /// `stop()` after the first call is a benign no-op.
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
@@ -162,8 +138,6 @@ impl RelayClient {
         let (out_tx, out_rx) = mpsc::channel::<Envelope>(OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-        let pending: Arc<Mutex<Pending>> = Arc::new(Mutex::new(HashMap::new()));
-
         let inner_config = config.clone();
         let inner_secret = secret.clone();
         let http = match RelayHttpClient::new(
@@ -201,9 +175,8 @@ impl RelayClient {
             backend_url: backend_url.clone(),
             link_tx,
             peer_tx,
-            out_tx: out_tx.clone(),
+            out_tx,
             out_rx,
-            pending: pending.clone(),
             rpc_server,
             peer_store: persistence.peer_store,
             local_state_path: persistence.local_state_path,
@@ -213,9 +186,6 @@ impl RelayClient {
         let task = tokio::spawn(run_dispatch(dispatch_ctx, shutdown_rx));
 
         let inner = Arc::new(Inner {
-            next_id: AtomicU64::new(1),
-            pending,
-            out_tx,
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             task: Mutex::new(Some(task)),
             mac_name,
@@ -225,64 +195,6 @@ impl RelayClient {
         });
 
         (Arc::new(Self { inner }), link_rx, peer_rx)
-    }
-
-    /// Correlation-id allocator. Public only within the crate for tests
-    /// that want to check monotonicity; steady-state callers always go
-    /// through [`Self::send_local_rpc`].
-    fn alloc_id(&self) -> u64 {
-        self.inner.next_id.fetch_add(1, Ordering::Relaxed)
-    }
-
-    /// Send a `LocalRpc` envelope and await its correlated response.
-    ///
-    /// Maps a `LocalRpcOutcome::Err` whose code is otherwise unknown to
-    /// `MinosError::BackendInternal`. See [`rpc_error_to_minos`].
-    pub async fn send_local_rpc(
-        &self,
-        method: LocalRpcMethod,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, MinosError> {
-        let id = self.alloc_id();
-        let (tx, rx) = oneshot::channel::<LocalRpcOutcome>();
-
-        // Register first so a racing response isn't lost if the dispatcher
-        // drains quickly.
-        {
-            let mut pending = self.pending_map().lock().await;
-            pending.insert(id, tx);
-        }
-
-        let envelope = Envelope::LocalRpc {
-            version: 1,
-            id,
-            method: method.clone(),
-            params,
-        };
-
-        if let Err(e) = self.inner.out_tx.send(envelope).await {
-            self.pending_map().lock().await.remove(&id);
-            return Err(MinosError::BackendInternal {
-                message: format!("relay dispatch task stopped: {e}"),
-            });
-        }
-
-        match timeout(LOCAL_RPC_TIMEOUT, rx).await {
-            Ok(Ok(LocalRpcOutcome::Ok { result })) => Ok(result),
-            Ok(Ok(LocalRpcOutcome::Err { error })) => Err(rpc_error_to_minos(&error)),
-            Ok(Err(_dropped)) => {
-                self.pending_map().lock().await.remove(&id);
-                Err(MinosError::BackendInternal {
-                    message: "local rpc timeout".into(),
-                })
-            }
-            Err(_elapsed) => {
-                self.pending_map().lock().await.remove(&id);
-                Err(MinosError::BackendInternal {
-                    message: "local rpc timeout".into(),
-                })
-            }
-        }
     }
 
     /// Issue `request_pairing_qr` against the backend's HTTP control plane
@@ -341,10 +253,6 @@ impl RelayClient {
             let _ = task.await;
         }
     }
-
-    fn pending_map(&self) -> &Arc<Mutex<Pending>> {
-        &self.inner.pending
-    }
 }
 
 /// Shared persistence handles threaded into the dispatcher.
@@ -384,7 +292,6 @@ struct DispatchCtx {
     /// without going through the public [`RelayClient`] handle.
     out_tx: mpsc::Sender<Envelope>,
     out_rx: mpsc::Receiver<Envelope>,
-    pending: Arc<Mutex<Pending>>,
     /// Local jsonrpsee surface invoked when the relay delivers an
     /// `Envelope::Forwarded`. `None` in tests that don't exercise the
     /// peer-RPC path; production wires the daemon's `RpcServerImpl` here.
@@ -620,22 +527,10 @@ async fn handle_inbound_text(text: &str, ctx: &DispatchCtx) -> Result<(), serde_
     Ok(())
 }
 
-/// Route a parsed envelope to the pending map (responses), watch channels
-/// (events), or the debug log (unexpected / not-yet-wired kinds).
+/// Route a parsed envelope to the watch channels (events), the local
+/// jsonrpsee surface (forwarded RPC), or the debug log (unexpected kinds).
 async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
     match envelope {
-        Envelope::LocalRpcResponse { id, outcome, .. } => {
-            let entry = { ctx.pending.lock().await.remove(&id) };
-            if let Some(tx) = entry {
-                let _ = tx.send(outcome);
-            } else {
-                tracing::warn!(
-                    target: "minos_daemon::relay_client",
-                    id,
-                    "local rpc response for unknown id — dropping"
-                );
-            }
-        }
         Envelope::Event { event, .. } => route_event(event, ctx),
         Envelope::Forwarded { from, payload, .. } => {
             let Some(rpc_server) = ctx.rpc_server.clone() else {
@@ -660,7 +555,7 @@ async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
                 );
             }
         }
-        Envelope::LocalRpc { .. } | Envelope::Forward { .. } | Envelope::Ingest { .. } => {
+        Envelope::Forward { .. } | Envelope::Ingest { .. } => {
             // These are client → relay frames; the relay never emits them
             // to us. A misbehaving peer is the only way we'd see one.
             tracing::warn!(
@@ -875,20 +770,6 @@ fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
     }
 }
 
-/// Map a relay `RpcError` code onto the closest typed `MinosError` variant.
-/// Unknown codes collapse to `BackendInternal`.
-fn rpc_error_to_minos(error: &RpcError) -> MinosError {
-    match error.code.as_str() {
-        "pairing_token_invalid" => MinosError::PairingTokenInvalid,
-        "unauthorized" => MinosError::Unauthorized {
-            reason: error.message.clone(),
-        },
-        _ => MinosError::BackendInternal {
-            message: format!("{}: {}", error.code, error.message),
-        },
-    }
-}
-
 /// Build the outbound auth-header bundle. Role is always `AgentHost` here —
 /// this module is the Mac-side client by construction.
 fn build_headers(
@@ -948,44 +829,6 @@ fn build_request(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-
-    #[test]
-    fn rpc_error_known_codes_map_to_typed_variants() {
-        let tok = RpcError {
-            code: "pairing_token_invalid".into(),
-            message: "token expired".into(),
-        };
-        assert!(matches!(
-            rpc_error_to_minos(&tok),
-            MinosError::PairingTokenInvalid
-        ));
-
-        let unauth = RpcError {
-            code: "unauthorized".into(),
-            message: "nope".into(),
-        };
-        match rpc_error_to_minos(&unauth) {
-            MinosError::Unauthorized { reason } => assert_eq!(reason, "nope"),
-            other => panic!("expected Unauthorized, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn rpc_error_unknown_code_collapses_to_relay_internal() {
-        let e = RpcError {
-            code: "bogus_new_code".into(),
-            message: "reason".into(),
-        };
-        match rpc_error_to_minos(&e) {
-            MinosError::BackendInternal { message } => {
-                assert!(
-                    message.contains("bogus_new_code") && message.contains("reason"),
-                    "expected code+message in message, got {message}"
-                );
-            }
-            other => panic!("expected BackendInternal, got {other:?}"),
-        }
-    }
 
     #[test]
     fn build_headers_without_cf_omits_cf_headers() {

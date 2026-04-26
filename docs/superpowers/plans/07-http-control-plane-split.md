@@ -2500,7 +2500,7 @@ git commit -m "refactor(backend): remove WS LocalRpc dispatcher"
 **Files:**
 - Modify: `crates/minos-daemon/src/relay_client.rs`
 
-- [ ] **Step 1**
+- [x] **Step 1**
 
 Delete:
 - `Inner.next_id`, `Inner.pending`, `RelayClient::alloc_id`, `RelayClient::pending_map`, `RelayClient::send_local_rpc`
@@ -2513,14 +2513,14 @@ Keep:
 - `Inner.out_tx`, the dispatcher itself (it still relays `Forward`, `Forwarded`, `Ingest`, `Event`)
 - Reconnect/backoff/auth logic — none of that depends on `LocalRpc`
 
-- [ ] **Step 2: Run**
+- [x] **Step 2: Run**
 
 ```bash
 cargo test -p minos-daemon
 cargo xtask check-all
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/minos-daemon/src/relay_client.rs
