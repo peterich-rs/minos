@@ -52,6 +52,16 @@ pub enum ErrorKind {
     TranslationNotImplemented,
     TranslationFailed,
     PairingQrVersionUnsupported,
+    Timeout,
+    NotConnected,
+    RequestDropped,
+    AuthRefreshFailed,
+    EmailTaken,
+    WeakPassword,
+    RateLimited,
+    InvalidCredentials,
+    AgentStartFailed,
+    PairingTokenExpired,
 }
 
 impl ErrorKind {
@@ -152,6 +162,30 @@ impl ErrorKind {
             (Self::PairingQrVersionUnsupported, Lang::Zh) => "二维码版本过旧，请升级应用",
             (Self::PairingQrVersionUnsupported, Lang::En) => {
                 "QR code version not supported; please update the app"
+            }
+            (Self::Timeout, Lang::Zh) => "请求超时，请重试",
+            (Self::Timeout, Lang::En) => "Request timed out; please retry",
+            (Self::NotConnected, Lang::Zh) => "尚未连接到服务，请稍候",
+            (Self::NotConnected, Lang::En) => "Not connected to backend; please wait",
+            (Self::RequestDropped, Lang::Zh) => "连接中断，请重试",
+            (Self::RequestDropped, Lang::En) => "Connection dropped; please retry",
+            (Self::AuthRefreshFailed, Lang::Zh) => "另一台设备登录，请重新登录",
+            (Self::AuthRefreshFailed, Lang::En) => {
+                "Session refresh failed; please log in again"
+            }
+            (Self::EmailTaken, Lang::Zh) => "该邮箱已注册，请直接登录",
+            (Self::EmailTaken, Lang::En) => "Email already registered; please log in",
+            (Self::WeakPassword, Lang::Zh) => "密码强度不足，至少 8 位",
+            (Self::WeakPassword, Lang::En) => "Password too weak; minimum 8 characters",
+            (Self::RateLimited, Lang::Zh) => "操作过于频繁，请稍后再试",
+            (Self::RateLimited, Lang::En) => "Too many requests; please try again later",
+            (Self::InvalidCredentials, Lang::Zh) => "邮箱或密码错误",
+            (Self::InvalidCredentials, Lang::En) => "Invalid email or password",
+            (Self::AgentStartFailed, Lang::Zh) => "Agent 启动失败，请重试",
+            (Self::AgentStartFailed, Lang::En) => "Agent failed to start; please retry",
+            (Self::PairingTokenExpired, Lang::Zh) => "二维码已过期，请在 Mac 上重新生成",
+            (Self::PairingTokenExpired, Lang::En) => {
+                "Pairing token expired; please regenerate on the Mac"
             }
         }
     }
@@ -260,6 +294,37 @@ pub enum MinosError {
 
     #[error("pairing QR payload version unsupported: {version}")]
     PairingQrVersionUnsupported { version: u8 },
+
+    // ── auth + dispatch + lifecycle (spec §8.1, §8.3) ──
+    #[error("request timed out")]
+    Timeout,
+
+    #[error("not connected to backend")]
+    NotConnected,
+
+    #[error("request dropped (connection closed)")]
+    RequestDropped,
+
+    #[error("auth refresh failed: {message}")]
+    AuthRefreshFailed { message: String },
+
+    #[error("email already registered")]
+    EmailTaken,
+
+    #[error("password too weak (min 8 chars)")]
+    WeakPassword,
+
+    #[error("rate limited (retry after {retry_after_s}s)")]
+    RateLimited { retry_after_s: u32 },
+
+    #[error("invalid credentials")]
+    InvalidCredentials,
+
+    #[error("agent start failed: {reason}")]
+    AgentStartFailed { reason: String },
+
+    #[error("pairing token expired")]
+    PairingTokenExpired,
 }
 
 impl MinosError {
@@ -297,6 +362,16 @@ impl MinosError {
             Self::TranslationNotImplemented { .. } => ErrorKind::TranslationNotImplemented,
             Self::TranslationFailed { .. } => ErrorKind::TranslationFailed,
             Self::PairingQrVersionUnsupported { .. } => ErrorKind::PairingQrVersionUnsupported,
+            Self::Timeout => ErrorKind::Timeout,
+            Self::NotConnected => ErrorKind::NotConnected,
+            Self::RequestDropped => ErrorKind::RequestDropped,
+            Self::AuthRefreshFailed { .. } => ErrorKind::AuthRefreshFailed,
+            Self::EmailTaken => ErrorKind::EmailTaken,
+            Self::WeakPassword => ErrorKind::WeakPassword,
+            Self::RateLimited { .. } => ErrorKind::RateLimited,
+            Self::InvalidCredentials => ErrorKind::InvalidCredentials,
+            Self::AgentStartFailed { .. } => ErrorKind::AgentStartFailed,
+            Self::PairingTokenExpired => ErrorKind::PairingTokenExpired,
         }
     }
 
@@ -511,10 +586,39 @@ mod tests {
                 MinosError::PairingQrVersionUnsupported { version: 1 },
                 ErrorKind::PairingQrVersionUnsupported,
             ),
+            (MinosError::Timeout, ErrorKind::Timeout),
+            (MinosError::NotConnected, ErrorKind::NotConnected),
+            (MinosError::RequestDropped, ErrorKind::RequestDropped),
+            (
+                MinosError::AuthRefreshFailed {
+                    message: String::new(),
+                },
+                ErrorKind::AuthRefreshFailed,
+            ),
+            (MinosError::EmailTaken, ErrorKind::EmailTaken),
+            (MinosError::WeakPassword, ErrorKind::WeakPassword),
+            (
+                MinosError::RateLimited { retry_after_s: 0 },
+                ErrorKind::RateLimited,
+            ),
+            (
+                MinosError::InvalidCredentials,
+                ErrorKind::InvalidCredentials,
+            ),
+            (
+                MinosError::AgentStartFailed {
+                    reason: String::new(),
+                },
+                ErrorKind::AgentStartFailed,
+            ),
+            (
+                MinosError::PairingTokenExpired,
+                ErrorKind::PairingTokenExpired,
+            ),
         ];
         assert_eq!(
             cases.len(),
-            30,
+            40,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -555,13 +659,23 @@ mod tests {
         ErrorKind::TranslationNotImplemented,
         ErrorKind::TranslationFailed,
         ErrorKind::PairingQrVersionUnsupported,
+        ErrorKind::Timeout,
+        ErrorKind::NotConnected,
+        ErrorKind::RequestDropped,
+        ErrorKind::AuthRefreshFailed,
+        ErrorKind::EmailTaken,
+        ErrorKind::WeakPassword,
+        ErrorKind::RateLimited,
+        ErrorKind::InvalidCredentials,
+        ErrorKind::AgentStartFailed,
+        ErrorKind::PairingTokenExpired,
     ];
 
     #[test]
     fn every_error_kind_has_user_message_in_both_langs() {
         assert_eq!(
             ALL_KINDS.len(),
-            30,
+            40,
             "add a kind when you add an ErrorKind variant"
         );
         for k in ALL_KINDS {
