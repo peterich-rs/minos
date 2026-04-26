@@ -1,9 +1,8 @@
-//! Pure history-read helper extracted from `envelope::local_rpc::handle_read_thread`.
+//! Pure history-read helper backing HTTP `GET /v1/threads/{id}/events`.
 //!
-//! Used by HTTP `GET /v1/threads/{id}/events`. During the Phase-C → Phase-D
-//! migration window the WS `LocalRpcMethod::ReadThread` handler keeps its
-//! own copy of the body in `envelope/local_rpc.rs`; Phase D deletes the
-//! WS handler entirely.
+//! Originally extracted from the now-deleted WS `LocalRpcMethod::ReadThread`
+//! handler during the Phase-C → Phase-D migration; the HTTP route is now
+//! the single canonical entry point.
 
 use minos_protocol::{ReadThreadParams, ReadThreadResponse};
 

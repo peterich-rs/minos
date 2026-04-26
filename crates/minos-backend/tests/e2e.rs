@@ -1,57 +1,27 @@
-//! End-to-end integration test for the Minos backend.
+//! End-to-end integration tests for the Minos backend's WebSocket
+//! lifecycle.
 //!
 //! Spawns a real axum server on an ephemeral port with a `tempfile`-backed
-//! SQLite DB, drives it with two raw `tokio-tungstenite` clients, and walks
-//! the full spec §7.1 pairing + forward + forget_peer loop. The test is the
-//! capstone correctness proof for the backend crate — if this passes, the
-//! envelope protocol, session registry, local-RPC dispatcher, pairing
-//! service, and WS handshake all round-trip together over real sockets.
+//! SQLite DB, drives it with raw `tokio-tungstenite` clients, and exercises
+//! the parts of the WS contract that survive after the LocalRpc dispatcher
+//! has been retired (HTTP `/v1/*` routes now own the pairing + threads
+//! surface; see `tests/v1_pairing.rs` and `tests/v1_threads.rs`).
 //!
 //! # Test layout
 //!
-//! 1. `e2e_pair_forward_forget` — happy path:
-//!    - Two fresh clients connect (agent-host A, ios-client B) and each
-//!      observes `Event::Unpaired` as their first server frame.
-//!    - A calls `request_pairing_qr`; receives a `PairingQrPayload` v2
-//!      (C4 replaced the legacy `{ token, expires_at }` shape with the
-//!      full QR envelope). We extract `qr_payload.pairing_token` to
-//!      drive the subsequent `pair` call.
-//!    - B calls `pair(token, device_name)`; receives
-//!      `{ peer_device_id, peer_name, your_device_secret }` and A observes
-//!      `Event::Paired` with B's info plus its own fresh device secret.
-//!      **Note**: the implementation only pushes `Event::Paired` to the
-//!      issuer (A); B learns about the pairing via its own RPC response.
-//!      This matches `handle_pair` in `envelope::local_rpc` — the plan's
-//!      "both sides observe Paired" bullet over-states what step 8 ships.
-//!    - A `Forward`s a JSON-RPC-shaped payload; B observes `Forwarded`.
-//!    - B `Forward`s a response; A observes `Forwarded`.
-//!    - A calls `forget_peer`; both sides observe `Event::Unpaired`.
-//!    - Assertion: `devices` has 2 rows, `pairings` has 0, `pairing_tokens`
-//!      has one row with `consumed_at` non-null.
-//!
-//! 2. `e2e_pair_rejects_invalid_token` — B connects and sends `pair` with a
-//!    bogus token. Asserts `LocalRpcOutcome::Err` with code
-//!    `"pairing_token_invalid"`.
-//!
-//! 3. `e2e_reconnect_with_wrong_secret_returns_401` — a device paired once,
-//!    then reconnects with a bogus secret. Step 9 rejects this
-//!    **pre-upgrade** with HTTP 401 (not WS close 4401); the plan's §12
-//!    bullet says "close 4401" but defers to step 9's actual design. See
-//!    `src/http/ws_devices.rs` module header for why (saves a round trip).
-//! 4. `e2e_reconnect_supersedes_old_socket` — a second authenticated socket
-//!    for the same device actively revokes the first one, and the new socket
-//!    still answers LocalRpc traffic after the old cleanup runs.
-//! 5. `e2e_presence_tracks_live_peer_membership` — paired reconnects surface
-//!    `PeerOffline` / `PeerOnline` from actual live sessions, notify the
-//!    opposite live peer on connect, and emit `PeerOffline` on disconnect.
-//!
-//! # Timing
-//!
-//! Each test uses short `tokio::time::timeout` wrappers around `recv` so a
-//! hang surfaces as a clear failure instead of stalling the CI run. Total
-//! wall-clock for all three tests is well under 2s.
+//! 1. `e2e_reconnect_with_wrong_secret_returns_401` — a device row exists
+//!    with a known secret hash; reconnecting with a bogus secret is rejected
+//!    pre-upgrade with HTTP 401 (see `src/http/ws_devices.rs` module
+//!    header).
+//! 2. `e2e_reconnect_supersedes_old_socket` — a second authenticated socket
+//!    for the same `DeviceId` actively revokes the first, and the
+//!    replacement keeps serving traffic (verified by sending a `Forward`
+//!    frame and receiving a synthesised peer-offline `Forwarded` reply).
+//! 3. `e2e_presence_tracks_live_peer_membership` — paired devices observe
+//!    `Event::PeerOnline` / `Event::PeerOffline` on each other's connect
+//!    and disconnect.
 
-#![allow(clippy::too_many_lines)] // happy-path test narrates a full sequence; splitting it hides the flow.
+#![allow(clippy::too_many_lines)]
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
@@ -63,7 +33,7 @@ use minos_backend::{
     store,
 };
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
-use minos_protocol::{Envelope, EventKind, LocalRpcMethod, LocalRpcOutcome};
+use minos_protocol::{Envelope, EventKind};
 use sqlx::SqlitePool;
 use tempfile::NamedTempFile;
 use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
@@ -72,10 +42,8 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
 };
 
-/// Short timeout for individual `recv` calls. Keep this comfortably above
-/// the whole-file parallel test jitter while still failing fast on hangs.
-/// Sized for slow shared CI runners (GHA Linux occasionally takes >1.5s
-/// per round-trip under load); local runs complete well under the bound.
+/// Short timeout for individual `recv` calls. Sized for slow shared CI
+/// runners; local runs complete well under the bound.
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_TOKEN_TTL: Duration = Duration::from_mins(5);
 
@@ -83,14 +51,9 @@ type WsClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 // ── relay harness ────────────────────────────────────────────────────────
 
-/// A live in-process relay bound to 127.0.0.1 on an ephemeral port with a
-/// per-test `tempfile` SQLite database.
 struct Relay {
     addr: SocketAddr,
     pool: SqlitePool,
-    /// Kept alive (not dropped) for the duration of the test so the file
-    /// isn't removed out from under the running pool. `NamedTempFile` auto-
-    /// cleans on drop.
     _db_file: NamedTempFile,
     _db_path: PathBuf,
     task: JoinHandle<()>,
@@ -98,23 +61,11 @@ struct Relay {
 
 impl Drop for Relay {
     fn drop(&mut self) {
-        // Abort the serve task so parallel tests don't leak tokio resources.
-        // The server is local-only and short-lived; a hard abort here is
-        // safe because each test owns its own relay instance.
         self.task.abort();
     }
 }
 
-/// Boot a fresh relay on an ephemeral port backed by a tempfile DB.
 async fn spawn_relay() -> anyhow::Result<Relay> {
-    spawn_relay_with_token_ttl(DEFAULT_TOKEN_TTL).await
-}
-
-/// Boot a fresh relay using an explicit pairing-token TTL.
-async fn spawn_relay_with_token_ttl(token_ttl: Duration) -> anyhow::Result<Relay> {
-    // Create + immediately close the tempfile so SQLite can reopen it.
-    // `NamedTempFile` is kept alive in the returned `Relay` so Drop will
-    // unlink the file when the test ends.
     let tmp = NamedTempFile::new()?;
     let tmp_path = tmp.path().to_path_buf();
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
@@ -124,7 +75,7 @@ async fn spawn_relay_with_token_ttl(token_ttl: Duration) -> anyhow::Result<Relay
         registry: Arc::new(SessionRegistry::new()),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
-        token_ttl,
+        token_ttl: DEFAULT_TOKEN_TTL,
         translators: minos_backend::ingest::translate::ThreadTranslators::new(),
         public_cfg: Arc::new(minos_backend::http::BackendPublicConfig {
             public_url: "ws://127.0.0.1:8787/devices".into(),
@@ -152,9 +103,6 @@ async fn spawn_relay_with_token_ttl(token_ttl: Duration) -> anyhow::Result<Relay
 
 // ── client helpers ───────────────────────────────────────────────────────
 
-/// Open a WS client to the given relay `/devices` endpoint with the
-/// supplied auth headers. Returns the upgraded stream; errors propagate
-/// the `tungstenite::Error` so handshake-level failures (401) are testable.
 async fn connect_client(
     relay: &Relay,
     device_id: DeviceId,
@@ -199,14 +147,12 @@ async fn recv_envelope(ws: &mut WsClient) -> anyhow::Result<Envelope> {
     }
 }
 
-/// Send an already-constructed `Envelope` over the client socket.
 async fn send_envelope(ws: &mut WsClient, env: &Envelope) -> anyhow::Result<()> {
     let text = serde_json::to_string(env)?;
     ws.send(Message::Text(text.into())).await?;
     Ok(())
 }
 
-/// Wait for the relay to actively close a superseded socket.
 async fn expect_close_frame(ws: &mut WsClient) -> anyhow::Result<()> {
     loop {
         let next = timeout(RECV_TIMEOUT, ws.next())
@@ -231,8 +177,6 @@ async fn expect_close_frame(ws: &mut WsClient) -> anyhow::Result<()> {
     }
 }
 
-/// Await the first frame and assert it's `Event::Unpaired`. Used right
-/// after a first-time connect.
 async fn expect_unpaired_event(ws: &mut WsClient) -> anyhow::Result<()> {
     match recv_envelope(ws).await? {
         Envelope::Event {
@@ -245,372 +189,7 @@ async fn expect_unpaired_event(ws: &mut WsClient) -> anyhow::Result<()> {
     }
 }
 
-/// Receive until we get a `LocalRpcResponse` matching `expected_id`. Any
-/// intervening `Event` frames are returned in the second tuple field so
-/// callers can cross-check ordering without prescribing it. A bounded
-/// buffer (at most 4 events) is enforced to catch runaway chatter.
-async fn recv_response_matching(
-    ws: &mut WsClient,
-    expected_id: u64,
-) -> anyhow::Result<(LocalRpcOutcome, Vec<EventKind>)> {
-    let mut events = Vec::new();
-    loop {
-        match recv_envelope(ws).await? {
-            Envelope::LocalRpcResponse { id, outcome, .. } if id == expected_id => {
-                return Ok((outcome, events));
-            }
-            Envelope::Event { event, .. } => {
-                events.push(event);
-                if events.len() > 4 {
-                    return Err(anyhow::anyhow!(
-                        "too many events before response id={expected_id}: {events:?}"
-                    ));
-                }
-            }
-            other => return Err(anyhow::anyhow!("unexpected envelope: {other:?}")),
-        }
-    }
-}
-
-// ── happy path ───────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn e2e_pair_forward_forget() -> anyhow::Result<()> {
-    let relay = spawn_relay().await?;
-
-    // --- step 2: connect both clients ------------------------------------
-    let a_id = DeviceId::new();
-    let b_id = DeviceId::new();
-
-    let mut a =
-        connect_client(&relay, a_id, DeviceRole::AgentHost, None, Some("Fan's Mac")).await?;
-    let mut b = connect_client(
-        &relay,
-        b_id,
-        DeviceRole::IosClient,
-        None,
-        Some("Fan's iPhone"),
-    )
-    .await?;
-
-    expect_unpaired_event(&mut a).await?;
-    expect_unpaired_event(&mut b).await?;
-
-    // --- step 3: A requests a pairing QR (C4: QR payload, not bare token) ----
-    send_envelope(
-        &mut a,
-        &Envelope::LocalRpc {
-            version: 1,
-            id: 1,
-            method: LocalRpcMethod::RequestPairingQr,
-            params: serde_json::json!({"host_display_name": "Fan's Mac"}),
-        },
-    )
-    .await?;
-
-    let (outcome, stray_events) = recv_response_matching(&mut a, 1).await?;
-    assert!(
-        stray_events.is_empty(),
-        "unexpected events before token response: {stray_events:?}"
-    );
-    let token = match outcome {
-        LocalRpcOutcome::Ok { result } => {
-            let qr = &result["qr_payload"];
-            assert_eq!(qr["v"], 2, "QR payload version must be 2: {qr:?}");
-            assert!(
-                qr["expires_at_ms"].is_i64(),
-                "missing expires_at_ms: {qr:?}"
-            );
-            qr["pairing_token"]
-                .as_str()
-                .expect("pairing_token is a string")
-                .to_owned()
-        }
-        other => panic!("expected Ok for request_pairing_qr, got {other:?}"),
-    };
-
-    // --- step 4: B pairs with the token ----------------------------------
-    send_envelope(
-        &mut b,
-        &Envelope::LocalRpc {
-            version: 1,
-            id: 1,
-            method: LocalRpcMethod::Pair,
-            params: serde_json::json!({
-                "token": token,
-                "device_name": "Fan's iPhone",
-            }),
-        },
-    )
-    .await?;
-
-    // B's RPC response carries the Mac's info + B's own fresh secret.
-    let (b_pair_outcome, b_stray) = recv_response_matching(&mut b, 1).await?;
-    assert!(
-        b_stray.is_empty(),
-        "B received stray events before pair response: {b_stray:?}"
-    );
-    let b_secret = match b_pair_outcome {
-        LocalRpcOutcome::Ok { result } => {
-            assert_eq!(
-                result["peer_device_id"].as_str().unwrap(),
-                a_id.to_string(),
-                "peer_device_id should be A's id"
-            );
-            assert_eq!(result["peer_name"], "Fan's Mac");
-            result["your_device_secret"]
-                .as_str()
-                .expect("your_device_secret is a string")
-                .to_owned()
-        }
-        other => panic!("expected Ok for pair, got {other:?}"),
-    };
-
-    // --- step 5: A observes Event::Paired with B's info ------------------
-    // The implementation only pushes Event::Paired to the issuer (A).
-    let a_paired = recv_envelope(&mut a).await?;
-    let a_secret = match a_paired {
-        Envelope::Event {
-            event:
-                EventKind::Paired {
-                    peer_device_id,
-                    peer_name,
-                    your_device_secret,
-                },
-            ..
-        } => {
-            assert_eq!(peer_device_id, b_id, "A's Paired event should name B");
-            assert_eq!(peer_name, "Fan's iPhone");
-            your_device_secret.as_str().to_owned()
-        }
-        other => panic!("expected Event::Paired on A, got {other:?}"),
-    };
-    assert_ne!(a_secret, b_secret, "each device gets its own fresh secret");
-
-    // --- step 6: A Forwards a JSON-RPC call ------------------------------
-    let payload_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "list_clis",
-        "id": 1,
-    });
-    send_envelope(
-        &mut a,
-        &Envelope::Forward {
-            version: 1,
-            payload: payload_req.clone(),
-        },
-    )
-    .await?;
-
-    // --- step 7: B receives Forwarded and sends a response back ----------
-    let forwarded_to_b = recv_envelope(&mut b).await?;
-    match forwarded_to_b {
-        Envelope::Forwarded { from, payload, .. } => {
-            assert_eq!(from, a_id, "Forwarded should name A as the sender");
-            assert_eq!(payload, payload_req, "payload must round-trip verbatim");
-        }
-        other => panic!("expected Forwarded on B, got {other:?}"),
-    }
-
-    let payload_resp = serde_json::json!({
-        "jsonrpc": "2.0",
-        "result": ["claude-code", "codex"],
-        "id": 1,
-    });
-    send_envelope(
-        &mut b,
-        &Envelope::Forward {
-            version: 1,
-            payload: payload_resp.clone(),
-        },
-    )
-    .await?;
-
-    // --- step 8: A receives the Forwarded response -----------------------
-    let forwarded_to_a = recv_envelope(&mut a).await?;
-    match forwarded_to_a {
-        Envelope::Forwarded { from, payload, .. } => {
-            assert_eq!(from, b_id, "Forwarded should name B as the sender");
-            assert_eq!(payload, payload_resp, "response payload must round-trip");
-        }
-        other => panic!("expected Forwarded on A, got {other:?}"),
-    }
-
-    // --- step 9: A calls forget_peer; both observe Event::Unpaired -------
-    send_envelope(
-        &mut a,
-        &Envelope::LocalRpc {
-            version: 1,
-            id: 2,
-            method: LocalRpcMethod::ForgetPeer,
-            params: serde_json::json!({}),
-        },
-    )
-    .await?;
-
-    let (forget_outcome, a_forget_events) = recv_response_matching(&mut a, 2).await?;
-    match forget_outcome {
-        LocalRpcOutcome::Ok { result } => {
-            assert_eq!(result, serde_json::json!({"ok": true}));
-        }
-        other => panic!("expected Ok for forget_peer, got {other:?}"),
-    }
-
-    // A should have received Event::Unpaired either before or after the
-    // response. Accept either order.
-    let a_saw_unpaired = a_forget_events
-        .iter()
-        .any(|e| matches!(e, EventKind::Unpaired));
-    let a_saw_unpaired = if a_saw_unpaired {
-        true
-    } else {
-        match recv_envelope(&mut a).await? {
-            Envelope::Event {
-                event: EventKind::Unpaired,
-                ..
-            } => true,
-            other => panic!("A expected Event::Unpaired after forget_peer, got {other:?}"),
-        }
-    };
-    assert!(a_saw_unpaired, "A must observe Event::Unpaired");
-
-    // B also observes Event::Unpaired (peer-side push).
-    match recv_envelope(&mut b).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("B expected Event::Unpaired after peer forget, got {other:?}"),
-    }
-
-    // --- step 10: tear down the sockets ---------------------------------
-    a.send(Message::Close(None)).await.ok();
-    b.send(Message::Close(None)).await.ok();
-    drop(a);
-    drop(b);
-
-    // --- step 11: DB assertions -----------------------------------------
-    let devices_count: i64 = sqlx::query_scalar("SELECT count(*) FROM devices")
-        .fetch_one(&relay.pool)
-        .await?;
-    assert_eq!(devices_count, 2, "two devices must remain");
-
-    let pairings_count: i64 = sqlx::query_scalar("SELECT count(*) FROM pairings")
-        .fetch_one(&relay.pool)
-        .await?;
-    assert_eq!(pairings_count, 0, "pairings row gone after forget_peer");
-
-    let consumed_tokens: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM pairing_tokens WHERE consumed_at IS NOT NULL")
-            .fetch_one(&relay.pool)
-            .await?;
-    assert_eq!(
-        consumed_tokens, 1,
-        "the pair token is consumed exactly once"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn e2e_request_pairing_token_respects_configured_ttl() -> anyhow::Result<()> {
-    let token_ttl = Duration::from_secs(42);
-    let relay = spawn_relay_with_token_ttl(token_ttl).await?;
-
-    let mac_id = DeviceId::new();
-    let mut mac = connect_client(
-        &relay,
-        mac_id,
-        DeviceRole::AgentHost,
-        None,
-        Some("Fan's Mac"),
-    )
-    .await?;
-    expect_unpaired_event(&mut mac).await?;
-
-    let before = chrono::Utc::now();
-    send_envelope(
-        &mut mac,
-        &Envelope::LocalRpc {
-            version: 1,
-            id: 1,
-            method: LocalRpcMethod::RequestPairingQr,
-            params: serde_json::json!({"host_display_name": "Fan's Mac"}),
-        },
-    )
-    .await?;
-
-    let (outcome, stray_events) = recv_response_matching(&mut mac, 1).await?;
-    assert!(
-        stray_events.is_empty(),
-        "unexpected events before token response: {stray_events:?}"
-    );
-
-    let after = chrono::Utc::now();
-    // QR v2 returns expires_at_ms (unix epoch ms) rather than an RFC3339
-    // string — C4 renamed the field.
-    let expires_at_ms = match outcome {
-        LocalRpcOutcome::Ok { result } => result["qr_payload"]["expires_at_ms"]
-            .as_i64()
-            .expect("expires_at_ms is an i64"),
-        other => panic!("expected Ok for request_pairing_qr, got {other:?}"),
-    };
-    let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(expires_at_ms)
-        .expect("expires_at_ms within chrono range");
-
-    let ttl = chrono::Duration::from_std(token_ttl).unwrap();
-    // QR v2 carries `expires_at_ms`; we lose sub-millisecond precision on
-    // the conversion, so accept a 1ms slack on the lower bound.
-    let lower_bound = before + ttl - chrono::Duration::milliseconds(1);
-    let upper_bound = after + ttl;
-    assert!(
-        expires_at >= lower_bound && expires_at <= upper_bound,
-        "configured TTL not applied: expires_at={expires_at:?}, expected between {lower_bound:?} and {upper_bound:?}"
-    );
-
-    Ok(())
-}
-
-// ── negative: invalid pairing token ──────────────────────────────────────
-
-#[tokio::test]
-async fn e2e_pair_rejects_invalid_token() -> anyhow::Result<()> {
-    let relay = spawn_relay().await?;
-
-    let b_id = DeviceId::new();
-    let mut b = connect_client(&relay, b_id, DeviceRole::IosClient, None, Some("ios")).await?;
-    expect_unpaired_event(&mut b).await?;
-
-    send_envelope(
-        &mut b,
-        &Envelope::LocalRpc {
-            version: 1,
-            id: 1,
-            method: LocalRpcMethod::Pair,
-            params: serde_json::json!({
-                "token": "bogus_token_no_match",
-                "device_name": "ios",
-            }),
-        },
-    )
-    .await?;
-
-    let (outcome, stray) = recv_response_matching(&mut b, 1).await?;
-    assert!(stray.is_empty(), "unexpected events: {stray:?}");
-    match outcome {
-        LocalRpcOutcome::Err { error } => {
-            assert_eq!(
-                error.code, "pairing_token_invalid",
-                "wrong error code: {error:?}"
-            );
-        }
-        other => panic!("expected Err for bogus token, got {other:?}"),
-    }
-
-    Ok(())
-}
-
-// ── negative: wrong X-Device-Secret ──────────────────────────────────────
+// ── tests ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn e2e_reconnect_with_wrong_secret_returns_401() -> anyhow::Result<()> {
@@ -628,7 +207,6 @@ async fn e2e_reconnect_with_wrong_secret_returns_401() -> anyhow::Result<()> {
     store::devices::insert_device(&relay.pool, id, "seeded", DeviceRole::IosClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, id, &good_hash).await?;
 
-    // Now reconnect with a wrong secret.
     let err = connect_client(
         &relay,
         id,
@@ -679,24 +257,30 @@ async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
 
     expect_close_frame(&mut first).await?;
 
+    // Confirm the replacement socket is still alive by sending a `Forward`
+    // frame from the unpaired session and asserting the relay synthesises
+    // the spec §7.3 peer-offline JSON-RPC error back over the same socket.
+    let payload_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "list_clis",
+        "id": 7,
+    });
     send_envelope(
         &mut second,
-        &Envelope::LocalRpc {
+        &Envelope::Forward {
             version: 1,
-            id: 7,
-            method: LocalRpcMethod::Ping,
-            params: serde_json::json!({}),
+            payload: payload_req.clone(),
         },
     )
     .await?;
-    let (outcome, stray) = recv_response_matching(&mut second, 7).await?;
-    assert!(
-        stray.is_empty(),
-        "unexpected events before ping response: {stray:?}"
-    );
-    match outcome {
-        LocalRpcOutcome::Ok { result } => assert_eq!(result, serde_json::json!({"ok": true})),
-        other => panic!("expected Ok ping response on replacement socket, got {other:?}"),
+    match recv_envelope(&mut second).await? {
+        Envelope::Forwarded { from, payload, .. } => {
+            assert_eq!(from, id, "synthesised Forwarded should name the sender");
+            assert_eq!(payload["error"]["code"], -32001);
+            assert_eq!(payload["error"]["message"], "peer offline");
+            assert_eq!(payload["id"], 7);
+        }
+        other => panic!("expected synthesised Forwarded on replacement socket, got {other:?}"),
     }
 
     second.send(Message::Close(None)).await.ok();

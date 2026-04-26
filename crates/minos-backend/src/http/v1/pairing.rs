@@ -143,8 +143,8 @@ async fn post_consume(
     };
 
     // Push Event::Paired to the issuer's live WS, if any. If issuer is offline
-    // OR the queue rejects, compensate (clear the pairing) — same as the WS
-    // `envelope::local_rpc::handle_pair` reference implementation.
+    // OR the queue rejects, compensate (clear the pairing) — guarantees the
+    // §7.1 invariant that a Paired DB row implies the Mac saw Event::Paired.
     if let Some(issuer_handle) = state.registry.get(issuer_id) {
         let frame = Envelope::Event {
             version: 1,

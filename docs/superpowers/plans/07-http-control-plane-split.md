@@ -2471,7 +2471,7 @@ git commit -m "refactor(protocol): remove LocalRpc envelope types"
 - Delete: `crates/minos-backend/src/envelope/local_rpc.rs`
 - Modify: `crates/minos-backend/src/envelope/mod.rs` — delete the `LocalRpc` arm in the dispatch loop, delete `pub mod local_rpc;`, delete unused imports
 
-- [ ] **Step 1**
+- [x] **Step 1**
 
 ```bash
 rm crates/minos-backend/src/envelope/local_rpc.rs
@@ -2479,7 +2479,7 @@ rm crates/minos-backend/src/envelope/local_rpc.rs
 
 In `envelope/mod.rs`, find the `match envelope { ... }` block in `dispatch_envelope` (or wherever the `LocalRpc` arm currently lives) and delete that arm. Remove `pub mod local_rpc;` and any `use local_rpc::handle;` imports.
 
-- [ ] **Step 2: Run**
+- [x] **Step 2: Run**
 
 ```bash
 cargo test -p minos-backend
@@ -2487,7 +2487,7 @@ cargo test -p minos-backend
 
 The integration tests `tests/v1_pairing.rs` and `tests/v1_threads.rs` continue to cover the same behaviour through HTTP. WS-level integration tests for `LocalRpc{Ping,RequestPairingQr,Pair,ForgetPeer,ListThreads,ReadThread,GetThreadLastSeq}` are deleted with the dispatcher.
 
-- [ ] **Step 3: Workspace + commit**
+- [x] **Step 3: Workspace + commit**
 
 ```bash
 cargo xtask check-all

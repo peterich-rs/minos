@@ -114,11 +114,8 @@ pub async fn upgrade(
 
     // Perform the upgrade; `run_session` owns the socket for its lifetime.
     let registry = Arc::clone(&state.registry);
-    let pairing = Arc::clone(&state.pairing);
     let store = state.store.clone();
-    let token_ttl = state.token_ttl;
     let translators = Arc::clone(&state.translators);
-    let public_cfg = Arc::clone(&state.public_cfg);
     Ok(ws.on_upgrade(move |mut socket| async move {
         match revalidate_live_session_auth(
             &store,
@@ -166,11 +163,8 @@ pub async fn upgrade(
             handle,
             outbox_rx,
             registry,
-            pairing,
             store,
-            token_ttl,
             translators,
-            public_cfg,
         )
         .await
         {

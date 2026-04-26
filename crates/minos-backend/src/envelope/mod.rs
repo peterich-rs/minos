@@ -6,8 +6,8 @@
 //! drives three concurrent branches via `tokio::select!`:
 //!
 //! 1. **Read**: `ws.next()` → decode one [`Envelope`] → dispatch
-//!    ([`LocalRpc`] → [`local_rpc::handle`] / [`Forward`] →
-//!    [`handle_forward`]) → write the response envelope back.
+//!    ([`Forward`] → [`handle_forward`] / [`Ingest`] →
+//!    `crate::ingest::dispatch`) → write any synthesised response back.
 //! 2. **Write**: drain the `SessionHandle`'s outbox
 //!    ([`mpsc::Receiver<Envelope>`]) onto the wire. Anything that
 //!    originates server-side (peer forwards, events) lands here.
@@ -22,9 +22,9 @@
 //! harness (heavy) or a generic trait gate (intrusive). Per the plan's
 //! "recommended simplification", we leave the full loop's e2e coverage to
 //! step 12 (which uses a real `tokio-tungstenite::connect_async` against
-//! a real axum router). This module's tests cover the PURE handlers —
-//! `local_rpc::*` and [`handle_forward`] — which contain the actual
-//! business logic; the loop itself is just glue.
+//! a real axum router). This module's tests cover the PURE handler
+//! [`handle_forward`] — which contains the actual business logic; the loop
+//! itself is just glue.
 //!
 //! # Heartbeat policy
 //!
@@ -50,19 +50,15 @@ use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures::StreamExt;
-use minos_protocol::{Envelope, EventKind, LocalRpcOutcome, RpcError};
+use minos_protocol::{Envelope, EventKind};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
 use crate::{
     error::BackendError,
-    http::BackendPublicConfig,
     ingest::translate::ThreadTranslators,
-    pairing::PairingService,
     session::{ServerFrame, SessionHandle, SessionRegistry},
 };
-
-pub mod local_rpc;
 
 /// Cadence of the heartbeat tick. Spec / plan §8 name 15s as the ping
 /// interval; this is the lower of our two timeout windows' granularity.
@@ -98,28 +94,21 @@ const CLOSE_CODE_BAD_REQUEST: u16 = 4400;
 /// that callers would plausibly surface; normal socket-close paths are
 /// `Ok(())`. Step 10 wires a [`From<BackendError>`] into the outer error
 /// surface at the axum handler layer.
-#[allow(clippy::too_many_arguments)] // Pipes state through; each arg is used.
 pub async fn run_session(
     mut ws: WebSocket,
     session: SessionHandle,
     mut outbox_rx: mpsc::Receiver<ServerFrame>,
     registry: Arc<SessionRegistry>,
-    pairing: Arc<PairingService>,
     store: SqlitePool,
-    token_ttl: Duration,
     translators: Arc<ThreadTranslators>,
-    public_cfg: Arc<BackendPublicConfig>,
 ) -> Result<(), BackendError> {
     let result = run_session_inner(
         &mut ws,
         &session,
         &mut outbox_rx,
         &registry,
-        &pairing,
         &store,
-        token_ttl,
         &translators,
-        &public_cfg,
     )
     .await;
 
@@ -141,17 +130,13 @@ pub async fn run_session(
 /// Inner loop kept separate so `run_session` can guarantee cleanup on
 /// every exit arm (including `?` short-circuits).
 #[allow(clippy::too_many_lines)] // Central select! loop; splitting obscures the control flow.
-#[allow(clippy::too_many_arguments)]
 async fn run_session_inner(
     ws: &mut WebSocket,
     session: &SessionHandle,
     outbox_rx: &mut mpsc::Receiver<ServerFrame>,
     registry: &SessionRegistry,
-    pairing: &PairingService,
     store: &SqlitePool,
-    token_ttl: Duration,
     translators: &ThreadTranslators,
-    public_cfg: &BackendPublicConfig,
 ) -> Result<(), BackendError> {
     let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
     let mut revocation_rx = session.subscribe_revocation();
@@ -203,8 +188,7 @@ async fn run_session_inner(
                         match serde_json::from_str::<Envelope>(&text) {
                             Ok(env) => {
                                 if !dispatch_envelope(
-                                    ws, session, registry, pairing, store, token_ttl,
-                                    translators, public_cfg, env,
+                                    ws, session, registry, store, translators, env,
                                 )
                                 .await
                                 {
@@ -217,7 +201,6 @@ async fn run_session_inner(
                                     error = %e,
                                     "malformed envelope; closing 4400"
                                 );
-                                send_version_unsupported(ws, 0).await;
                                 close_with(ws, CLOSE_CODE_BAD_REQUEST, "envelope_decode").await;
                                 break;
                             }
@@ -228,7 +211,6 @@ async fn run_session_inner(
                             target: "minos_backend::envelope",
                             "binary frame rejected; closing 4400"
                         );
-                        send_version_unsupported(ws, 0).await;
                         close_with(ws, CLOSE_CODE_BAD_REQUEST, "binary_unsupported").await;
                         break;
                     }
@@ -331,51 +313,17 @@ async fn send_envelope(ws: &mut WebSocket, env: &Envelope) -> bool {
 }
 
 /// Dispatch a parsed envelope. Returns `false` to signal "break the loop".
-#[allow(clippy::too_many_arguments)] // Pipes state through; each arg is used.
 async fn dispatch_envelope(
     ws: &mut WebSocket,
     session: &SessionHandle,
     registry: &SessionRegistry,
-    pairing: &PairingService,
     store: &SqlitePool,
-    token_ttl: Duration,
     translators: &ThreadTranslators,
-    public_cfg: &BackendPublicConfig,
     env: Envelope,
 ) -> bool {
     match env {
-        Envelope::LocalRpc {
-            version,
-            id,
-            method,
-            params,
-        } => {
-            if version != 1 {
-                send_version_unsupported(ws, id).await;
-                close_with(ws, CLOSE_CODE_BAD_REQUEST, "version_unsupported").await;
-                return false;
-            }
-            let ctx = local_rpc::LocalRpcContext {
-                session,
-                registry,
-                pairing,
-                store,
-                token_ttl,
-                public_url: &public_cfg.public_url,
-                cf_access_client_id: public_cfg.cf_access_client_id.as_deref(),
-                cf_access_client_secret: public_cfg.cf_access_client_secret.as_deref(),
-            };
-            let outcome = local_rpc::handle(&ctx, &method, &params).await;
-            let resp = Envelope::LocalRpcResponse {
-                version: 1,
-                id,
-                outcome,
-            };
-            send_envelope(ws, &resp).await
-        }
         Envelope::Forward { version, payload } => {
             if version != 1 {
-                send_version_unsupported(ws, 0).await;
                 close_with(ws, CLOSE_CODE_BAD_REQUEST, "version_unsupported").await;
                 return false;
             }
@@ -384,15 +332,14 @@ async fn dispatch_envelope(
             }
             true
         }
-        // The following four variants are server → client only; a client
+        // The following two variants are server → client only; a client
         // that sends one is behaving incorrectly. Treat them as malformed
         // and close with 4400, same as an unknown kind.
-        Envelope::LocalRpcResponse { .. } | Envelope::Forwarded { .. } | Envelope::Event { .. } => {
+        Envelope::Forwarded { .. } | Envelope::Event { .. } => {
             tracing::warn!(
                 target: "minos_backend::envelope",
                 "server-only envelope kind from client; closing 4400"
             );
-            send_version_unsupported(ws, 0).await;
             close_with(ws, CLOSE_CODE_BAD_REQUEST, "client_sent_server_frame").await;
             false
         }
@@ -411,7 +358,6 @@ async fn dispatch_envelope(
             ts_ms,
         } => {
             if version != 1 {
-                // Ingest is not an RPC, so no LocalRpcResponse frame here.
                 close_with(ws, CLOSE_CODE_BAD_REQUEST, "version_unsupported").await;
                 return false;
             }
@@ -421,10 +367,6 @@ async fn dispatch_envelope(
                     role = ?session.role,
                     "ingest from non-agent-host role; closing 4400"
                 );
-                // Do NOT emit a LocalRpcResponse here: Ingest is not an RPC,
-                // and a spurious `envelope_version_unsupported` frame would
-                // both mislabel the failure and leak role-gate telemetry to
-                // the caller. The close frame alone is the signal.
                 close_with(ws, CLOSE_CODE_BAD_REQUEST, "ingest_forbidden_role").await;
                 return false;
             }
@@ -543,23 +485,6 @@ fn synth_forward_error(
         from,
         payload: err_payload,
     }
-}
-
-/// Send an [`Envelope::LocalRpcResponse`] with the
-/// `envelope_version_unsupported` error code. Used when decode fails or
-/// when `v != 1`.
-async fn send_version_unsupported(ws: &mut WebSocket, id: u64) {
-    let env = Envelope::LocalRpcResponse {
-        version: 1,
-        id,
-        outcome: LocalRpcOutcome::Err {
-            error: RpcError {
-                code: "envelope_version_unsupported".to_string(),
-                message: "unknown envelope kind or unsupported version".to_string(),
-            },
-        },
-    };
-    let _ = send_envelope(ws, &env).await;
 }
 
 /// Send a WS Close frame with the given code and reason, best-effort.
