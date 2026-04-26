@@ -63,13 +63,24 @@ impl MobileHttpClient {
         })
     }
 
-    pub async fn pair_consume(&self, req: PairConsumeRequest) -> Result<PairResponse, MinosError> {
+    /// Redeem a pairing token (the QR's one-shot secret) into a long-lived
+    /// `DeviceSecret`. Phase 2 made the `ios-client` rail bearer-gated, so
+    /// callers must supply a valid `access_token` minted by `register` /
+    /// `login`. The bearer is bound to the device id by the JWT `did`
+    /// claim, so the same token must come from the same MobileClient that
+    /// is performing the pair.
+    pub async fn pair_consume(
+        &self,
+        req: PairConsumeRequest,
+        access_token: &str,
+    ) -> Result<PairResponse, MinosError> {
         let url = format!("{}/v1/pairing/consume", self.base);
         let r = self
             .client
             .post(&url)
             .header("x-device-id", self.device_id.to_string())
-            .header("x-device-role", self.device_role);
+            .header("x-device-role", self.device_role)
+            .header("authorization", format!("Bearer {access_token}"));
         let r = stamp_cf(r, self.cf_access.as_ref());
         let resp = r
             .json(&req)
@@ -104,9 +115,14 @@ impl MobileHttpClient {
         }
     }
 
+    /// Phase 2 added a bearer requirement to `/v1/threads`. Callers must
+    /// supply both the device-secret and the access-token; the device-
+    /// secret authenticates the WS-paired device, the bearer scopes the
+    /// query to the caller's account.
     pub async fn list_threads(
         &self,
         secret: &DeviceSecret,
+        access_token: &str,
         params: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
         let mut url = format!("{}/v1/threads?limit={}", self.base, params.limit);
@@ -123,7 +139,8 @@ impl MobileHttpClient {
             .get(&url)
             .header("x-device-id", self.device_id.to_string())
             .header("x-device-role", self.device_role)
-            .header("x-device-secret", secret.as_str());
+            .header("x-device-secret", secret.as_str())
+            .header("authorization", format!("Bearer {access_token}"));
         let r = stamp_cf(r, self.cf_access.as_ref());
         let resp = r.send().await.map_err(|e| connect_err(&url, &e))?;
         let status = resp.status();
@@ -139,6 +156,7 @@ impl MobileHttpClient {
     pub async fn read_thread(
         &self,
         secret: &DeviceSecret,
+        access_token: &str,
         params: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
         let mut url = format!(
@@ -153,7 +171,8 @@ impl MobileHttpClient {
             .get(&url)
             .header("x-device-id", self.device_id.to_string())
             .header("x-device-role", self.device_role)
-            .header("x-device-secret", secret.as_str());
+            .header("x-device-secret", secret.as_str())
+            .header("authorization", format!("Bearer {access_token}"));
         let r = stamp_cf(r, self.cf_access.as_ref());
         let resp = r.send().await.map_err(|e| connect_err(&url, &e))?;
         let status = resp.status();
@@ -169,6 +188,7 @@ impl MobileHttpClient {
     pub async fn get_thread_last_seq(
         &self,
         secret: &DeviceSecret,
+        access_token: &str,
         thread_id: &str,
     ) -> Result<GetThreadLastSeqResponse, MinosError> {
         let url = format!("{}/v1/threads/{}/last_seq", self.base, thread_id);
@@ -177,7 +197,8 @@ impl MobileHttpClient {
             .get(&url)
             .header("x-device-id", self.device_id.to_string())
             .header("x-device-role", self.device_role)
-            .header("x-device-secret", secret.as_str());
+            .header("x-device-secret", secret.as_str())
+            .header("authorization", format!("Bearer {access_token}"));
         let r = stamp_cf(r, self.cf_access.as_ref());
         let resp = r.send().await.map_err(|e| connect_err(&url, &e))?;
         let status = resp.status();

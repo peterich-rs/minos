@@ -39,11 +39,22 @@ async fn pair_consume_round_trips_against_real_backend() {
 
     let consumer_id = DeviceId::new();
     let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), consumer_id, None).unwrap();
+
+    // Phase 2 made `/v1/pairing/consume` bearer-gated. Register an account
+    // bound to this device id so we can stamp the Bearer.
+    let auth = client
+        .register("pairsmoke@example.com", "testpass1")
+        .await
+        .unwrap();
+
     let resp = client
-        .pair_consume(PairConsumeRequest {
-            token,
-            device_name: "iPhone".into(),
-        })
+        .pair_consume(
+            PairConsumeRequest {
+                token,
+                device_name: "iPhone".into(),
+            },
+            &auth.access_token,
+        )
         .await
         .unwrap();
 

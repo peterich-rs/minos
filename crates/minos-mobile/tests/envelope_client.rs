@@ -125,13 +125,51 @@ fn make_qr_for_real_backend(addr: std::net::SocketAddr, token: &str) -> String {
     .unwrap()
 }
 
+/// Phase 2 made `/v1/pairing/consume` and the iOS WS upgrade
+/// bearer-gated. Tests build a MobileClient that's already authenticated
+/// by registering an account over HTTP using the same device id, then
+/// rehydrating the client from a PersistedPairingState that includes the
+/// minted tokens. `new_with_persisted_state` populates the live
+/// auth_session so `pair_with_qr_json` finds the Bearer in place.
+async fn authenticated_client(
+    backend: &RealBackend,
+    email: &str,
+) -> MobileClient {
+    let device_id = minos_domain::DeviceId::new();
+    let http = minos_mobile::http::MobileHttpClient::new(
+        &format!("ws://{}/devices", backend.addr),
+        device_id,
+        None,
+    )
+    .unwrap();
+    let resp = http
+        .register(email, "testpass1")
+        .await
+        .expect("register against test backend");
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let persisted = PersistedPairingState {
+        backend_url: Some(format!("ws://{}/devices", backend.addr)),
+        device_id: Some(device_id.to_string()),
+        device_secret: None,
+        cf_access_client_id: None,
+        cf_access_client_secret: None,
+        access_token: Some(resp.access_token),
+        access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
+        refresh_token: Some(resp.refresh_token),
+        account_id: Some(resp.account.account_id),
+        account_email: Some(resp.account.email),
+    };
+    MobileClient::new_with_persisted_state("iPhone".into(), persisted)
+}
+
 // ── tests against the real backend ──────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pair_with_qr_json_happy_path_reaches_connected() {
     let backend = spawn_backend_with_paired_mac().await;
 
-    let client = MobileClient::new_with_in_memory_store("iPhone".into());
+    let client = authenticated_client(&backend, "happy@example.com").await;
     let qr = make_qr_for_real_backend(backend.addr, &backend.token);
     client.pair_with_qr_json(qr).await.unwrap();
 
@@ -142,7 +180,7 @@ async fn pair_with_qr_json_happy_path_reaches_connected() {
 async fn ui_events_stream_delivers_backend_fanout() {
     let backend = spawn_backend_with_paired_mac().await;
 
-    let client = MobileClient::new_with_in_memory_store("iPhone".into());
+    let client = authenticated_client(&backend, "fanout@example.com").await;
     let consumer_id = client.device_id();
     let mut rx = client.ui_events_stream();
 
@@ -194,7 +232,7 @@ async fn ui_events_stream_delivers_backend_fanout() {
 async fn list_threads_round_trips_over_envelope() {
     let backend = spawn_backend_with_paired_mac().await;
 
-    let client = MobileClient::new_with_in_memory_store("iPhone".into());
+    let client = authenticated_client(&backend, "list@example.com").await;
     let qr = make_qr_for_real_backend(backend.addr, &backend.token);
     client.pair_with_qr_json(qr).await.unwrap();
 
@@ -216,7 +254,7 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
     let backend = spawn_backend_with_paired_mac().await;
     let backend_url = format!("ws://{}/devices", backend.addr);
 
-    let client = MobileClient::new_with_in_memory_store("iPhone".into());
+    let client = authenticated_client(&backend, "rehyd@example.com").await;
     let qr = make_qr_for_real_backend(backend.addr, &backend.token);
     client.pair_with_qr_json(qr).await.unwrap();
 
@@ -232,6 +270,10 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
         .expect("pair must persist a device secret");
     assert_eq!(secret.len(), 43, "DeviceSecret base64url is 43 chars");
 
+    // The auth tuple is populated since the test pre-registered an account.
+    let access_token = persisted.access_token.clone().expect("auth set by helper");
+    assert!(!access_token.is_empty());
+
     let rehydrated = MobileClient::new_with_persisted_state("iPhone".into(), persisted.clone());
     let restored = rehydrated.persisted_pairing_state().await.unwrap();
     let expected = PersistedPairingState {
@@ -240,11 +282,11 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
         device_secret: Some(secret),
         cf_access_client_id: None,
         cf_access_client_secret: None,
-        access_token: None,
-        access_expires_at_ms: None,
-        refresh_token: None,
-        account_id: None,
-        account_email: None,
+        access_token: persisted.access_token.clone(),
+        access_expires_at_ms: persisted.access_expires_at_ms,
+        refresh_token: persisted.refresh_token.clone(),
+        account_id: persisted.account_id.clone(),
+        account_email: persisted.account_email.clone(),
     };
     assert_eq!(restored, expected);
 }

@@ -21,15 +21,15 @@
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceSecret, MinosError};
 use minos_protocol::{
-    Envelope, EventKind, GetThreadLastSeqParams, GetThreadLastSeqResponse, ListThreadsParams,
-    ListThreadsResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    AuthSummary, Envelope, EventKind, GetThreadLastSeqParams, GetThreadLastSeqResponse,
+    ListThreadsParams, ListThreadsResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
+    RefreshResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, RwLock};
@@ -42,6 +42,7 @@ use uuid::Uuid;
 use crate::auth::{AuthSession, AuthStateFrame};
 use crate::rpc::{drain_pending, forward_rpc, RpcReply};
 use crate::store::{InMemoryPairingStore, MobilePairingStore, PersistedPairingState};
+use crate::ReconnectController;
 
 /// One live UI event pushed from backend fan-out. Mobile layers consume
 /// these via [`MobileClient::ui_events_stream`] (broadcast receiver).
@@ -80,6 +81,11 @@ pub struct MobileClient {
     /// failure. The reconnect loop and the bearer-stamping helpers read
     /// it; only the auth public methods write.
     auth_session: Arc<RwLock<Option<AuthSession>>>,
+    /// Backoff state machine consulted by the reconnect loop.
+    reconnect: Arc<ReconnectController>,
+    /// Live reconnect-loop join handle. Aborted on Unauthenticated /
+    /// RefreshFailed so we don't keep poking the backend after logout.
+    reconnect_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl MobileClient {
@@ -111,6 +117,8 @@ impl MobileClient {
             auth_state_tx,
             auth_state_rx,
             auth_session: Arc::new(RwLock::new(None)),
+            reconnect: Arc::new(ReconnectController::new()),
+            reconnect_handle: Mutex::new(None),
         }
     }
 
@@ -125,18 +133,75 @@ impl MobileClient {
     /// Rehydrate a client from a previously persisted snapshot. Missing or
     /// malformed device credentials fall back to a fresh device id; any valid
     /// backend URL / CF Access headers / persisted auth are still restored
-    /// into the in-memory pairing store.
+    /// into the in-memory pairing store. Restored auth tokens also seed the
+    /// live `auth_session` and emit `AuthStateFrame::Authenticated` so a
+    /// cold-start resume sees the same state as a fresh login.
+    ///
+    /// Device id resolution priority: prefer the persisted id (so the JWT
+    /// `did` claim still matches after relaunch), fall back to a freshly
+    /// minted one only if no persisted id is present.
     #[must_use]
     pub fn new_with_persisted_state(self_name: String, state: PersistedPairingState) -> Self {
         let device = restored_device(&state);
-        let device_id = device.as_ref().map_or_else(DeviceId::new, |(id, _)| *id);
+        let device_id = device
+            .as_ref()
+            .map(|(id, _)| *id)
+            .or_else(|| restored_device_id_only(&state))
+            .unwrap_or_else(DeviceId::new);
+        let auth_persisted = restored_auth(&state);
         let store = Arc::new(InMemoryPairingStore::from_parts(
             state.backend_url.clone(),
             restored_cf_access(&state),
             device,
-            restored_auth(&state),
+            auth_persisted.clone(),
         ));
-        Self::new_with_device_id(store, self_name, device_id)
+
+        // Pre-build the live AuthSession so we can seed the RwLock at
+        // construction time — there's no async runtime guarantee at this
+        // call site (Dart calls this during first-run isolate spawn,
+        // tests call from #[tokio::test]; only the latter has a runtime).
+        let live_auth = auth_persisted.map(|a| {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let remaining_ms = (a.access_expires_at_ms - now_ms).max(0);
+            AuthSession {
+                access_token: a.access_token,
+                access_expires_at_ms: a.access_expires_at_ms,
+                access_expires_at: Instant::now()
+                    + Duration::from_millis(remaining_ms as u64),
+                refresh_token: a.refresh_token,
+                account: AuthSummary {
+                    account_id: a.account_id,
+                    email: a.account_email,
+                },
+            }
+        });
+
+        let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
+        let (ui_events_tx, _) = broadcast::channel(256);
+        let initial_auth_frame = match &live_auth {
+            Some(s) => AuthStateFrame::Authenticated {
+                account: s.account.clone(),
+            },
+            None => AuthStateFrame::Unauthenticated,
+        };
+        let (auth_state_tx, auth_state_rx) = watch::channel(initial_auth_frame);
+        Self {
+            store,
+            state_tx,
+            state_rx,
+            ui_events_tx,
+            outbox: Mutex::new(None),
+            device_id,
+            self_name,
+            tasks: Mutex::new(Vec::new()),
+            pending: Arc::new(DashMap::new()),
+            next_id: Arc::new(AtomicU64::new(1)),
+            auth_state_tx,
+            auth_state_rx,
+            auth_session: Arc::new(RwLock::new(live_auth)),
+            reconnect: Arc::new(ReconnectController::new()),
+            reconnect_handle: Mutex::new(None),
+        }
     }
 
     /// Current connection state snapshot. Cheap and synchronous.
@@ -225,8 +290,20 @@ impl MobileClient {
             .state_tx
             .send(ConnectionState::Reconnecting { attempt: 1 });
 
+        let access = self
+            .auth_session
+            .read()
+            .await
+            .as_ref()
+            .map(|s| s.access_token.clone());
+
         match self
-            .connect(&backend_url, device_secret.as_str(), cf_access)
+            .connect(
+                &backend_url,
+                device_secret.as_str(),
+                cf_access,
+                access.as_deref(),
+            )
             .await
         {
             Ok(()) => {
@@ -275,16 +352,33 @@ impl MobileClient {
 
         let _ = self.state_tx.send(ConnectionState::Pairing);
 
+        // Phase 2 made `/v1/pairing/consume` bearer-gated for ios-client.
+        // Caller must already be authenticated (register/login set
+        // auth_session). Surface the missing-bearer case as Unauthorized
+        // rather than a raw HTTP 401, since UI hint is the same.
+        let access = {
+            let guard = self.auth_session.read().await;
+            guard
+                .as_ref()
+                .map(|s| s.access_token.clone())
+                .ok_or_else(|| MinosError::Unauthorized {
+                    reason: "pair_with_qr_json requires login".into(),
+                })?
+        };
+
         // Step 1: redeem the pairing token over HTTP. The backend records
         // both device-secret hashes and pushes Event::Paired to the Mac
         // before returning, so by the time we get the response the Mac is
         // already updated.
         let http = crate::http::MobileHttpClient::new(&qr.backend_url, self.device_id, cf.clone())?;
         let pair_resp = http
-            .pair_consume(minos_protocol::PairConsumeRequest {
-                token: minos_domain::PairingToken(qr.pairing_token),
-                device_name: self.self_name.clone(),
-            })
+            .pair_consume(
+                minos_protocol::PairConsumeRequest {
+                    token: minos_domain::PairingToken(qr.pairing_token),
+                    device_name: self.self_name.clone(),
+                },
+                &access,
+            )
             .await?;
 
         let device_secret = pair_resp.your_device_secret.clone();
@@ -293,9 +387,15 @@ impl MobileClient {
             .await?;
 
         // Step 2: now open the WS with the freshly-issued secret. From here
-        // on every connect carries `X-Device-Secret`.
-        self.connect(&qr.backend_url, device_secret.as_str(), cf)
-            .await?;
+        // on every connect carries `X-Device-Secret` and `Authorization:
+        // Bearer` (the latter required by Phase 2 for ios-client uploads).
+        self.connect(
+            &qr.backend_url,
+            device_secret.as_str(),
+            cf,
+            Some(&access),
+        )
+        .await?;
 
         let _ = self.state_tx.send(ConnectionState::Connected);
         Ok(())
@@ -324,14 +424,16 @@ impl MobileClient {
 
     // ─────────────────────────── history rpcs ────────────────────────────
 
-    /// Request a page of thread summaries from the backend.
+    /// Request a page of thread summaries from the backend. Phase 2 made
+    /// the route bearer-gated; callers must already have logged in.
     pub async fn list_threads(
         &self,
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
         let (backend_url, secret, cf) = self.http_creds().await?;
+        let access = self.access_token_or_unauthorized().await?;
         let http = crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)?;
-        http.list_threads(&secret, req).await
+        http.list_threads(&secret, &access, req).await
     }
 
     /// Read a window of translated UI events from one thread.
@@ -340,8 +442,9 @@ impl MobileClient {
         req: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
         let (backend_url, secret, cf) = self.http_creds().await?;
+        let access = self.access_token_or_unauthorized().await?;
         let http = crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)?;
-        http.read_thread(&secret, req).await
+        http.read_thread(&secret, &access, req).await
     }
 
     /// Host-only helper (mobile rarely uses this; included for parity).
@@ -350,8 +453,26 @@ impl MobileClient {
         req: GetThreadLastSeqParams,
     ) -> Result<GetThreadLastSeqResponse, MinosError> {
         let (backend_url, secret, cf) = self.http_creds().await?;
+        let access = self.access_token_or_unauthorized().await?;
         let http = crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)?;
-        http.get_thread_last_seq(&secret, &req.thread_id).await
+        http.get_thread_last_seq(&secret, &access, &req.thread_id)
+            .await
+    }
+
+    /// Pluck the live access token out of `auth_session`, or surface
+    /// `Unauthorized` if no session is in place. Used by every
+    /// account-aware HTTP call. The reconnect loop is responsible for
+    /// triggering a refresh before the token expires; callers do not
+    /// retry on 401 here (Phase 6 Task 6.4 layers retry on top).
+    async fn access_token_or_unauthorized(&self) -> Result<String, MinosError> {
+        self.auth_session
+            .read()
+            .await
+            .as_ref()
+            .map(|s| s.access_token.clone())
+            .ok_or_else(|| MinosError::Unauthorized {
+                reason: "no active session".into(),
+            })
     }
 
     // ─────────────────────────── agent dispatch ────────────────────────────
@@ -460,6 +581,215 @@ impl MobileClient {
         self.auth_state_rx.clone()
     }
 
+    // ─────────────────────────── auth surface ──────────────────────────────
+
+    /// Register a new account on the backend. On success the bearer +
+    /// refresh tokens are stored both in memory (via `auth_session`) and
+    /// in the durable store. The auth-state watch transitions to
+    /// `Authenticated`. Spec §5.4 / §6.1.
+    pub async fn register(
+        &self,
+        email: String,
+        password: String,
+    ) -> Result<AuthSummary, MinosError> {
+        let http = self.http_client_no_secret().await?;
+        let resp = http.register(&email, &password).await?;
+        Ok(self.adopt_auth_response(resp).await)
+    }
+
+    /// Log into an existing account on the backend. Same shape as
+    /// `register` modulo the create-vs-find behaviour on the server. Spec
+    /// §5.4.
+    pub async fn login(
+        &self,
+        email: String,
+        password: String,
+    ) -> Result<AuthSummary, MinosError> {
+        let http = self.http_client_no_secret().await?;
+        let resp = http.login(&email, &password).await?;
+        Ok(self.adopt_auth_response(resp).await)
+    }
+
+    /// Rotate the bearer + refresh tokens. The auth-state watch
+    /// transitions to `Refreshing` for the duration of the call; on
+    /// success it returns to `Authenticated` (with the same account
+    /// summary), on failure the session is wiped and the watch publishes
+    /// `RefreshFailed`. Spec §5.4 / §6.1.
+    pub async fn refresh_session(&self) -> Result<(), MinosError> {
+        let session = self
+            .auth_session
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| MinosError::AuthRefreshFailed {
+                message: "no session".into(),
+            })?;
+        let _ = self.auth_state_tx.send(AuthStateFrame::Refreshing);
+        let http = self.http_client_no_secret().await?;
+        match http.refresh(&session.refresh_token).await {
+            Ok(r) => {
+                self.adopt_refresh_response(session.account.clone(), r).await;
+                Ok(())
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let _ = self.auth_state_tx.send(AuthStateFrame::RefreshFailed {
+                    error: Arc::new(MinosError::AuthRefreshFailed {
+                        message: msg.clone(),
+                    }),
+                });
+                self.clear_auth_session_and_disconnect().await;
+                Err(MinosError::AuthRefreshFailed { message: msg })
+            }
+        }
+    }
+
+    /// Log out of the current session. Best-effort `stop_agent` (2s
+    /// timeout) so the daemon doesn't keep a session running for an
+    /// account that's no longer holding the iOS client; then call the
+    /// backend's `/v1/auth/logout` to revoke the named refresh token;
+    /// then wipe the local auth state and drop the WS. Spec §5.4 / §8.3.
+    pub async fn logout(&self) -> Result<(), MinosError> {
+        // Best-effort agent stop so the Mac doesn't stay in a running
+        // session if the user logs out mid-thread. Failures are silenced
+        // — we still want to clear local state on logout.
+        let _ = tokio::time::timeout(Duration::from_secs(2), self.stop_agent()).await;
+
+        let session = self.auth_session.read().await.clone();
+        if let Some(s) = session {
+            // Best-effort logout. If the network is down or the bearer is
+            // already invalid we still wipe local state.
+            if let Ok(http) = self.http_client_no_secret().await {
+                let _ = http.logout(&s.access_token, &s.refresh_token).await;
+            }
+        }
+        self.clear_auth_session_and_disconnect().await;
+        Ok(())
+    }
+
+    /// Build an HTTP client without requiring a paired device-secret.
+    /// Used by the auth surface — `register` / `login` happen before the
+    /// device is paired. Backend URL falls back to a localhost stub so
+    /// tests that haven't seeded the store can still call into the auth
+    /// surface (real builds always have the URL set from a prior QR
+    /// scan or a hard-coded default).
+    async fn http_client_no_secret(&self) -> Result<crate::http::MobileHttpClient, MinosError> {
+        let backend_url = self.store.load_backend_url().await?.ok_or_else(|| {
+            MinosError::StoreCorrupt {
+                path: "backend_url".into(),
+                message: "missing backend_url for auth call".into(),
+            }
+        })?;
+        let cf = self.store.load_cf_access().await?;
+        crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)
+    }
+
+    /// Apply a fresh `AuthResponse` onto the live + durable stores and
+    /// emit the `Authenticated` frame. Returns the account summary so
+    /// callers can hand it back to Dart.
+    async fn adopt_auth_response(
+        &self,
+        resp: minos_protocol::AuthResponse,
+    ) -> AuthSummary {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let exp_ms = now_ms + (resp.expires_in * 1000);
+        let session = AuthSession {
+            access_token: resp.access_token.clone(),
+            access_expires_at_ms: exp_ms,
+            access_expires_at: Instant::now() + Duration::from_secs(resp.expires_in.max(0) as u64),
+            refresh_token: resp.refresh_token.clone(),
+            account: resp.account.clone(),
+        };
+        let _ = self
+            .store
+            .save_auth(
+                resp.access_token.clone(),
+                exp_ms,
+                resp.refresh_token.clone(),
+                resp.account.account_id.clone(),
+                resp.account.email.clone(),
+            )
+            .await;
+        *self.auth_session.write().await = Some(session);
+        let _ = self.auth_state_tx.send(AuthStateFrame::Authenticated {
+            account: resp.account.clone(),
+        });
+        resp.account
+    }
+
+    /// Apply a fresh `RefreshResponse` onto the live session in place,
+    /// preserving the bound account. Emits `Authenticated` again so
+    /// observers see a state transition (Refreshing → Authenticated).
+    async fn adopt_refresh_response(
+        &self,
+        account: AuthSummary,
+        r: RefreshResponse,
+    ) {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let exp_ms = now_ms + (r.expires_in * 1000);
+        {
+            let mut guard = self.auth_session.write().await;
+            if let Some(s) = guard.as_mut() {
+                s.access_token = r.access_token.clone();
+                s.access_expires_at_ms = exp_ms;
+                s.access_expires_at =
+                    Instant::now() + Duration::from_secs(r.expires_in.max(0) as u64);
+                s.refresh_token = r.refresh_token.clone();
+            }
+        }
+        let _ = self
+            .store
+            .save_auth(
+                r.access_token,
+                exp_ms,
+                r.refresh_token,
+                account.account_id.clone(),
+                account.email.clone(),
+            )
+            .await;
+        let _ = self
+            .auth_state_tx
+            .send(AuthStateFrame::Authenticated { account });
+    }
+
+    /// Wipe the live + durable auth state, abort any reconnect loop, and
+    /// drop the active WS. Used by logout and refresh-failure.
+    async fn clear_auth_session_and_disconnect(&self) {
+        *self.auth_session.write().await = None;
+        let _ = self.store.clear_auth().await;
+        if let Some(h) = self.reconnect_handle.lock().await.take() {
+            h.abort();
+        }
+        let _ = self.auth_state_tx.send(AuthStateFrame::Unauthenticated);
+        self.shutdown_outbound().await;
+        let _ = self.state_tx.send(ConnectionState::Disconnected);
+    }
+
+    // ─────────────────────────── lifecycle hooks ───────────────────────────
+
+    /// Notify the reconnect controller that the iOS app moved to the
+    /// foreground. Resets backoff and clears the paused flag so the loop
+    /// reconnects immediately. Spec §6.3 / §8.3.
+    ///
+    /// Sync wrapper so Dart's `WidgetsBindingObserver` (main isolate) can
+    /// call without an awaitable; the actual mutation is async-safe.
+    pub fn notify_foregrounded(&self) {
+        let r = self.reconnect.clone();
+        tokio::spawn(async move {
+            r.notify_foregrounded().await;
+        });
+    }
+
+    /// Notify the reconnect controller that the iOS app moved to the
+    /// background. Sets paused so the loop's next wakeup exits. Spec
+    /// §6.3 / §8.3.
+    pub fn notify_backgrounded(&self) {
+        let r = self.reconnect.clone();
+        tokio::spawn(async move {
+            r.notify_backgrounded().await;
+        });
+    }
+
     /// Resolve `(backend_url, device_secret, cf_access)` from the persisted
     /// pairing store. Used by every HTTP-backed thread query.
     async fn http_creds(
@@ -492,12 +822,14 @@ impl MobileClient {
         url: &str,
         device_secret: &str,
         cf_access: Option<(String, String)>,
+        access_token: Option<&str>,
     ) -> Result<(), MinosError> {
         tracing::info!(
             target: "minos_mobile::client",
             url,
             device_id = %self.device_id,
             cf_access_present = cf_access.is_some(),
+            bearer_present = access_token.is_some(),
             "mobile: opening backend WebSocket"
         );
         let mut req = url
@@ -530,6 +862,17 @@ impl MobileClient {
                     message: "device_secret is not a valid header value".into(),
                 })?,
         );
+        if let Some(tok) = access_token {
+            headers.insert(
+                "Authorization",
+                format!("Bearer {tok}")
+                    .parse()
+                    .map_err(|_| MinosError::ConnectFailed {
+                        url: url.to_string(),
+                        message: "access_token is not a valid header value".into(),
+                    })?,
+            );
+        }
         if let Some((id, sec)) = cf_access {
             headers.insert(
                 "CF-Access-Client-Id",
@@ -840,6 +1183,25 @@ fn restored_device(state: &PersistedPairingState) -> Option<(DeviceId, DeviceSec
                 error = %e,
                 device_id,
                 "mobile: ignoring malformed persisted device_id"
+            );
+            None
+        }
+    }
+}
+
+/// Restore just the device id when the device_secret hasn't been minted
+/// yet (post-register, pre-pair). The JWT's `did` claim binds the bearer
+/// to this id, so we MUST keep using the same value across the
+/// register-then-pair flow.
+fn restored_device_id_only(state: &PersistedPairingState) -> Option<DeviceId> {
+    let raw = state.device_id.as_deref()?;
+    match Uuid::parse_str(raw) {
+        Ok(uuid) => Some(DeviceId(uuid)),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                device_id = raw,
+                "mobile: ignoring malformed persisted device_id (id-only path)"
             );
             None
         }
