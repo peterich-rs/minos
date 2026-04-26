@@ -11,6 +11,7 @@ use minos_protocol::{
 };
 use serde::Serialize;
 
+use crate::auth::bearer;
 use crate::error::BackendError;
 use crate::http::auth;
 use crate::http::BackendState;
@@ -99,6 +100,17 @@ async fn post_consume(
         })?;
     let consumer_id = outcome.device_id;
 
+    // Phase 2 Task 2.3: pairing/consume must come from a logged-in iOS
+    // session. The bearer's `account_id` becomes the account that owns
+    // both ends of the pair — the iOS row gets it (in case the row carried
+    // a stale value) and the issuing Mac inherits it post-consume so
+    // Mac→iOS routing can later filter by `account_id`.
+    let bearer_outcome = bearer::require(&state, &headers).map_err(|e| {
+        let (s, m) = e.into_response_tuple();
+        (s, err_body("unauthorized", m))
+    })?;
+    let account_id = bearer_outcome.account_id;
+
     let pairing_outcome = match state
         .pairing
         .consume_token(&params.token, consumer_id, params.device_name.clone())
@@ -137,6 +149,40 @@ async fn post_consume(
     let issuer_id = pairing_outcome.issuer_device_id;
     let consumer_secret = pairing_outcome.consumer_secret.clone();
 
+    // Phase 2 Task 2.3: copy the bearer's account onto BOTH device rows.
+    // - iOS: re-write in case the prior account changed (login swap).
+    // - Mac: inherit the iOS-side account so subsequent Mac→iOS routing
+    //   can scope to one account (Task 2.4) and so login-time
+    //   `close_account_sessions` can find the issuing pair (Task 2.5).
+    if let Err(e) =
+        crate::store::devices::set_account_id(&state.store, &consumer_id, &account_id).await
+    {
+        tracing::warn!(
+            target: "minos_backend::v1::pairing",
+            error = %e,
+            consumer = %consumer_id,
+            "set_account_id (consumer) failed",
+        );
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err_body("internal", e.to_string()),
+        ));
+    }
+    if let Err(e) =
+        crate::store::devices::set_account_id(&state.store, &issuer_id, &account_id).await
+    {
+        tracing::warn!(
+            target: "minos_backend::v1::pairing",
+            error = %e,
+            issuer = %issuer_id,
+            "set_account_id (issuer) failed",
+        );
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err_body("internal", e.to_string()),
+        ));
+    }
+
     let mac_name = match crate::store::devices::get_device(&state.store, issuer_id).await {
         Ok(Some(row)) => row.display_name,
         _ => "Mac".to_string(),
@@ -155,6 +201,10 @@ async fn post_consume(
             },
         };
         *issuer_handle.paired_with.write().await = Some(consumer_id);
+        // Phase 2 Task 2.3: also seed the live Mac handle's `account_id`
+        // so Mac→iOS routing (Task 2.4) does not have to wait for the Mac
+        // to reconnect before routing scopes by account.
+        issuer_handle.set_account_id(account_id.clone());
         if let Err(e) = state.registry.try_send_current(&issuer_handle, frame) {
             tracing::warn!(
                 target: "minos_backend::v1::pairing",
