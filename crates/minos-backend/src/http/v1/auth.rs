@@ -189,16 +189,21 @@ pub async fn post_login(
     headers: HeaderMap,
     Json(req): Json<LoginReq>,
 ) -> Response {
+    // Bucket ordering: IP-keyed buckets fire pre-`authenticate` because
+    // the IP is the abuse axis we want to throttle even on bogus requests.
+    // Identity-keyed buckets (per-email here) fire post-`authenticate` so
+    // an attacker spamming `email=victim@x.com` with garbage device
+    // headers cannot lock the victim's bucket.
     if let Some(resp) = check_bucket(&state.auth_login_per_ip, &client_ip(&headers)) {
-        return resp;
-    }
-    if let Some(resp) = check_bucket(&state.auth_login_per_email, &req.email.to_lowercase()) {
         return resp;
     }
     let Ok(outcome) = authenticate(&state.store, &headers).await else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
     let device_id = outcome.device_id;
+    if let Some(resp) = check_bucket(&state.auth_login_per_email, &req.email.to_lowercase()) {
+        return resp;
+    }
 
     let account = match accounts::find_by_email(&state.store, &req.email).await {
         Ok(Some(a)) => a,
