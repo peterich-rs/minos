@@ -5,10 +5,14 @@
 //! `/v1/pairing`). The post-pair `Forward`/`Forwarded` and event push
 //! traffic still flows over the WebSocket.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
-use minos_protocol::{PairConsumeRequest, PairResponse};
+use minos_protocol::{
+    GetThreadLastSeqResponse, ListThreadsParams, ListThreadsResponse, PairConsumeRequest,
+    PairResponse, ReadThreadParams, ReadThreadResponse,
+};
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -99,7 +103,91 @@ impl MobileHttpClient {
         }
     }
 
-    // list_threads / read_thread / get_thread_last_seq added in Task C4.
+    pub async fn list_threads(
+        &self,
+        secret: &DeviceSecret,
+        params: ListThreadsParams,
+    ) -> Result<ListThreadsResponse, MinosError> {
+        let mut url = format!("{}/v1/threads?limit={}", self.base, params.limit);
+        if let Some(before) = params.before_ts_ms {
+            let _ = write!(url, "&before_ts_ms={before}");
+        }
+        if let Some(agent) = params.agent {
+            let agent_str = serde_json::to_string(&agent).unwrap_or_default();
+            let agent_str = agent_str.trim_matches('"');
+            let _ = write!(url, "&agent={agent_str}");
+        }
+        let r = self
+            .client
+            .get(&url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .header("x-device-secret", secret.as_str());
+        let r = stamp_cf(r, self.cf_access.as_ref());
+        let resp = r.send().await.map_err(|e| connect_err(&url, &e))?;
+        let status = resp.status();
+        if status.is_success() {
+            resp.json().await.map_err(|e| MinosError::BackendInternal {
+                message: format!("decode ListThreadsResponse: {e}"),
+            })
+        } else {
+            Err(decode_error(status, resp).await)
+        }
+    }
+
+    pub async fn read_thread(
+        &self,
+        secret: &DeviceSecret,
+        params: ReadThreadParams,
+    ) -> Result<ReadThreadResponse, MinosError> {
+        let mut url = format!(
+            "{}/v1/threads/{}/events?limit={}",
+            self.base, params.thread_id, params.limit
+        );
+        if let Some(from) = params.from_seq {
+            let _ = write!(url, "&from_seq={from}");
+        }
+        let r = self
+            .client
+            .get(&url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .header("x-device-secret", secret.as_str());
+        let r = stamp_cf(r, self.cf_access.as_ref());
+        let resp = r.send().await.map_err(|e| connect_err(&url, &e))?;
+        let status = resp.status();
+        if status.is_success() {
+            resp.json().await.map_err(|e| MinosError::BackendInternal {
+                message: format!("decode ReadThreadResponse: {e}"),
+            })
+        } else {
+            Err(decode_error(status, resp).await)
+        }
+    }
+
+    pub async fn get_thread_last_seq(
+        &self,
+        secret: &DeviceSecret,
+        thread_id: &str,
+    ) -> Result<GetThreadLastSeqResponse, MinosError> {
+        let url = format!("{}/v1/threads/{}/last_seq", self.base, thread_id);
+        let r = self
+            .client
+            .get(&url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .header("x-device-secret", secret.as_str());
+        let r = stamp_cf(r, self.cf_access.as_ref());
+        let resp = r.send().await.map_err(|e| connect_err(&url, &e))?;
+        let status = resp.status();
+        if status.is_success() {
+            resp.json().await.map_err(|e| MinosError::BackendInternal {
+                message: format!("decode GetThreadLastSeqResponse: {e}"),
+            })
+        } else {
+            Err(decode_error(status, resp).await)
+        }
+    }
 }
 
 fn stamp_cf(

@@ -2292,7 +2292,7 @@ git commit -m "test(backend): cover /v1/threads/{id}/{events,last_seq}"
 
 ### Task C3: Mobile switches thread reads to HTTP
 
-- [ ] **Step 1: Extend `MobileHttpClient` with the three thread methods**
+- [x] **Step 1: Extend `MobileHttpClient` with the three thread methods**
 
 In `crates/minos-mobile/src/http.rs`:
 
@@ -2353,7 +2353,7 @@ impl MobileHttpClient {
 }
 ```
 
-- [ ] **Step 2: Switch `MobileClient::{list_threads, read_thread, get_thread_last_seq}`**
+- [x] **Step 2: Switch `MobileClient::{list_threads, read_thread, get_thread_last_seq}`**
 
 In `crates/minos-mobile/src/client.rs`, replace the bodies (lines 306-354):
 
@@ -2386,7 +2386,7 @@ async fn http_creds(&self) -> Result<(String, minos_domain::DeviceSecret, Option
 }
 ```
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 ```bash
 cargo test -p minos-mobile
@@ -2394,7 +2394,7 @@ cargo test -p minos-mobile
 
 Existing tests for `list_threads`/`read_thread`/`get_thread_last_seq` need to spin up an HTTP backend (same pattern as `http_smoke`). Update or replace.
 
-- [ ] **Step 4: Workspace + commit**
+- [x] **Step 4: Workspace + commit**
 
 ```bash
 cargo xtask check-all

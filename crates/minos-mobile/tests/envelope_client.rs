@@ -25,10 +25,7 @@ use minos_backend::session::{SessionHandle, SessionRegistry};
 use minos_backend::store::test_support::memory_pool;
 use minos_domain::{ConnectionState, DeviceId, DeviceRole};
 use minos_mobile::{MobileClient, PersistedPairingState};
-use minos_protocol::{
-    Envelope, EventKind, ListThreadsParams, ListThreadsResponse, LocalRpcMethod, LocalRpcOutcome,
-    PairingQrPayload,
-};
+use minos_protocol::{Envelope, EventKind, ListThreadsParams, PairingQrPayload};
 use minos_ui_protocol::UiEventMessage;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_hdr_async;
@@ -244,7 +241,11 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
 
 // ── resume_persisted_session: WS-only fake backend ──────────────────────
 
-async fn fake_backend_resume_then_list_threads(
+/// Accept the resume WS handshake, assert expected `X-Device-*` and
+/// CF-Access headers were forwarded, then keep the socket open until the
+/// client closes. After Phase C the `list_threads` query rides HTTP, so
+/// the fake doesn't need to handle any envelope frames here.
+async fn fake_backend_resume_handshake(
     listener: TcpListener,
     expected_device_id: String,
     expected_device_secret: String,
@@ -292,35 +293,18 @@ async fn fake_backend_resume_then_list_threads(
     .expect("handshake");
     let (mut write, mut read) = ws.split();
 
-    while let Some(msg) = read.next().await {
-        let Ok(Message::Text(text)) = msg else { break };
-        let Ok(env) = serde_json::from_str::<Envelope>(text.as_ref()) else {
-            continue;
-        };
-        if let Envelope::LocalRpc {
-            id,
-            method: LocalRpcMethod::ListThreads,
-            ..
-        } = env
-        {
-            let resp = Envelope::LocalRpcResponse {
-                version: 1,
-                id,
-                outcome: LocalRpcOutcome::Ok {
-                    result: serde_json::to_value(&ListThreadsResponse {
-                        threads: vec![],
-                        next_before_ts_ms: None,
-                    })
-                    .unwrap(),
-                },
-            };
-            write
-                .send(Message::Text(serde_json::to_string(&resp).unwrap().into()))
-                .await
-                .unwrap();
-            return;
-        }
-    }
+    // The test only cares about the headers asserted during the upgrade
+    // closure above. After Phase C the `list_threads` query rides HTTP, so
+    // the fake doesn't need to handle any envelope frames here. Close the
+    // socket cleanly so the client-side reader returns and the test can
+    // join the backend without hanging.
+    let _ = write
+        .send(Message::Close(Some(CloseFrame {
+            code: CloseCode::Normal,
+            reason: "test_done".into(),
+        })))
+        .await;
+    while read.next().await.is_some() {}
 }
 
 /// Accept one client, immediately close the socket with code 4401 to
@@ -378,11 +362,11 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resume_persisted_session_reconnects_and_supports_list_threads() {
+async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let device_id = DeviceId::new();
-    let backend = tokio::spawn(fake_backend_resume_then_list_threads(
+    let backend = tokio::spawn(fake_backend_resume_handshake(
         listener,
         device_id.to_string(),
         "sec_resume".into(),
@@ -403,16 +387,10 @@ async fn resume_persisted_session_reconnects_and_supports_list_threads() {
     client.resume_persisted_session().await.unwrap();
     assert_eq!(client.current_state(), ConnectionState::Connected);
 
-    let resp = client
-        .list_threads(ListThreadsParams {
-            limit: 50,
-            before_ts_ms: None,
-            agent: None,
-        })
-        .await
-        .unwrap();
-    assert!(resp.threads.is_empty());
-    assert!(resp.next_before_ts_ms.is_none());
-
+    // The fake backend asserted the resume handshake's X-Device-* and
+    // CF-Access headers; nothing more to verify on the WS side. The
+    // post-Phase-C `list_threads` round-trip lives in
+    // `list_threads_round_trips_over_envelope` (real backend, HTTP-backed).
+    drop(client);
     backend.await.unwrap();
 }

@@ -61,6 +61,9 @@ pub struct MobileClient {
     state_rx: watch::Receiver<ConnectionState>,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
     outbox: Mutex<Option<mpsc::Sender<Envelope>>>,
+    // Phase C HTTP migration left this unused; Task D4 deletes it together
+    // with `local_rpc`. Silence the warning until that cleanup lands.
+    #[allow(dead_code)]
     next_rpc_id: AtomicU64,
     pending: Arc<DashMap<u64, oneshot::Sender<Envelope>>>,
     device_id: DeviceId,
@@ -70,6 +73,8 @@ pub struct MobileClient {
 }
 
 /// Timeout for one local-RPC round trip. Generous; typical RTT < 100ms.
+// Phase C HTTP migration retired the only user; Task D4 deletes this.
+#[allow(dead_code)]
 const LOCAL_RPC_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl MobileClient {
@@ -308,16 +313,9 @@ impl MobileClient {
         &self,
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
-        let value = self
-            .local_rpc(
-                LocalRpcMethod::ListThreads,
-                serde_json::to_value(&req).expect("ListThreadsParams is always serializable"),
-            )
-            .await?;
-        serde_json::from_value(value).map_err(|e| MinosError::RpcCallFailed {
-            method: "list_threads".into(),
-            message: e.to_string(),
-        })
+        let (backend_url, secret, cf) = self.http_creds().await?;
+        let http = crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)?;
+        http.list_threads(&secret, req).await
     }
 
     /// Read a window of translated UI events from one thread.
@@ -325,16 +323,9 @@ impl MobileClient {
         &self,
         req: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
-        let value = self
-            .local_rpc(
-                LocalRpcMethod::ReadThread,
-                serde_json::to_value(&req).expect("ReadThreadParams is always serializable"),
-            )
-            .await?;
-        serde_json::from_value(value).map_err(|e| MinosError::RpcCallFailed {
-            method: "read_thread".into(),
-            message: e.to_string(),
-        })
+        let (backend_url, secret, cf) = self.http_creds().await?;
+        let http = crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)?;
+        http.read_thread(&secret, req).await
     }
 
     /// Host-only helper (mobile rarely uses this; included for parity).
@@ -342,16 +333,34 @@ impl MobileClient {
         &self,
         req: GetThreadLastSeqParams,
     ) -> Result<GetThreadLastSeqResponse, MinosError> {
-        let value = self
-            .local_rpc(
-                LocalRpcMethod::GetThreadLastSeq,
-                serde_json::to_value(&req).expect("GetThreadLastSeqParams is always serializable"),
-            )
-            .await?;
-        serde_json::from_value(value).map_err(|e| MinosError::RpcCallFailed {
-            method: "get_thread_last_seq".into(),
-            message: e.to_string(),
-        })
+        let (backend_url, secret, cf) = self.http_creds().await?;
+        let http = crate::http::MobileHttpClient::new(&backend_url, self.device_id, cf)?;
+        http.get_thread_last_seq(&secret, &req.thread_id).await
+    }
+
+    /// Resolve `(backend_url, device_secret, cf_access)` from the persisted
+    /// pairing store. Used by every HTTP-backed thread query.
+    async fn http_creds(
+        &self,
+    ) -> Result<(String, DeviceSecret, Option<(String, String)>), MinosError> {
+        let backend_url =
+            self.store
+                .load_backend_url()
+                .await?
+                .ok_or_else(|| MinosError::StoreCorrupt {
+                    path: "backend_url".into(),
+                    message: "missing backend_url".into(),
+                })?;
+        let (_, secret) =
+            self.store
+                .load_device()
+                .await?
+                .ok_or_else(|| MinosError::StoreCorrupt {
+                    path: "device".into(),
+                    message: "missing device secret".into(),
+                })?;
+        let cf = self.store.load_cf_access().await?;
+        Ok((backend_url, secret, cf))
     }
 
     // ─────────────────────────── internals ────────────────────────────
@@ -459,6 +468,8 @@ impl MobileClient {
         self.pending.clear();
     }
 
+    // Phase C migrated all callers to HTTP; Task D4 deletes this method.
+    #[allow(dead_code)]
     async fn local_rpc(
         &self,
         method: LocalRpcMethod,
@@ -592,6 +603,8 @@ fn handle_text_frame(
 /// Map a backend-reported RPC error code into a typed `MinosError`.
 /// Unknown codes fall through to `RpcCallFailed` so the localization table
 /// still produces something the UI can render.
+// Phase C migrated all callers to HTTP; Task D4 deletes this helper.
+#[allow(dead_code)]
 fn from_rpc_error(err: &RpcError) -> MinosError {
     match err.code.as_str() {
         "pairing_token_invalid" => MinosError::PairingTokenInvalid,
@@ -796,7 +809,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_threads_without_outbound_errors_disconnected() {
+    async fn list_threads_without_persisted_state_errors_store_corrupt() {
+        // After Phase C, list_threads is HTTP-backed: with no persisted
+        // backend_url / device-secret it surfaces StoreCorrupt rather than
+        // the legacy "no live outbound channel" Disconnected error.
         let client = MobileClient::new_with_in_memory_store("test".into());
         let err = client
             .list_threads(ListThreadsParams {
@@ -805,9 +821,9 @@ mod tests {
                 agent: None,
             })
             .await
-            .expect_err("RPC with no connection must error");
+            .expect_err("HTTP query with no creds must error");
         assert!(
-            matches!(err, MinosError::Disconnected { .. }),
+            matches!(err, MinosError::StoreCorrupt { ref path, .. } if path == "backend_url"),
             "unexpected error: {err:?}"
         );
     }
