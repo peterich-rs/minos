@@ -89,6 +89,11 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
             cf_access_client_secret: None,
         }),
         version: "daemon-smoke-test",
+        jwt_secret: Arc::new("daemon-smoke-test-jwt-secret-32b".to_string()),
+        auth_login_per_email: minos_backend::http::default_login_per_email(),
+        auth_login_per_ip: minos_backend::http::default_login_per_ip(),
+        auth_register_per_ip: minos_backend::http::default_register_per_ip(),
+        auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
     };
     let app = router(state);
 
