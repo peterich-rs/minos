@@ -28,14 +28,20 @@ class _FakeCore implements MinosCoreProtocol {
   Stream<AuthStateFrame> get authStates => _authCtl.stream;
 
   @override
-  Future<AuthSummary> register({required String email, required String password}) async {
+  Future<AuthSummary> register({
+    required String email,
+    required String password,
+  }) async {
     lastRegisterEmail = email;
     lastRegisterPassword = password;
     return AuthSummary(accountId: 'acc-${email.hashCode}', email: email);
   }
 
   @override
-  Future<AuthSummary> login({required String email, required String password}) async {
+  Future<AuthSummary> login({
+    required String email,
+    required String password,
+  }) async {
     lastLoginEmail = email;
     lastLoginPassword = password;
     return AuthSummary(accountId: 'acc-${email.hashCode}', email: email);
@@ -78,11 +84,16 @@ class _FakeCore implements MinosCoreProtocol {
       const ConnectionState.disconnected();
 
   @override
-  Future<StartAgentResponse> startAgent({required AgentName agent, required String prompt}) async =>
-      throw UnimplementedError();
+  Future<StartAgentResponse> startAgent({
+    required AgentName agent,
+    required String prompt,
+  }) async => throw UnimplementedError();
 
   @override
-  Future<void> sendUserMessage({required String sessionId, required String text}) async {}
+  Future<void> sendUserMessage({
+    required String sessionId,
+    required String text,
+  }) async {}
 
   @override
   Future<void> stopAgent() async {}
@@ -115,25 +126,34 @@ void main() {
     expect(container.read(authControllerProvider), const AuthBootstrapping());
   });
 
-  test('Authenticated frame transitions controller to AuthAuthenticated', () async {
-    container.read(authControllerProvider);
-    core.emit(
-      const AuthStateFrame.authenticated(
-        account: AuthSummary(accountId: 'acc-1', email: 'a@b.test'),
-      ),
-    );
-    await pumpEventQueue();
-    final state = container.read(authControllerProvider);
-    expect(state, isA<AuthAuthenticated>());
-    expect((state as AuthAuthenticated).account.accountId, 'acc-1');
-  });
+  test(
+    'Authenticated frame transitions controller to AuthAuthenticated',
+    () async {
+      container.read(authControllerProvider);
+      core.emit(
+        const AuthStateFrame.authenticated(
+          account: AuthSummary(accountId: 'acc-1', email: 'a@b.test'),
+        ),
+      );
+      await pumpEventQueue();
+      final state = container.read(authControllerProvider);
+      expect(state, isA<AuthAuthenticated>());
+      expect((state as AuthAuthenticated).account.accountId, 'acc-1');
+    },
+  );
 
-  test('Unauthenticated frame transitions controller to AuthUnauthenticated', () async {
-    container.read(authControllerProvider);
-    core.emit(const AuthStateFrame.unauthenticated());
-    await pumpEventQueue();
-    expect(container.read(authControllerProvider), const AuthUnauthenticated());
-  });
+  test(
+    'Unauthenticated frame transitions controller to AuthUnauthenticated',
+    () async {
+      container.read(authControllerProvider);
+      core.emit(const AuthStateFrame.unauthenticated());
+      await pumpEventQueue();
+      expect(
+        container.read(authControllerProvider),
+        const AuthUnauthenticated(),
+      );
+    },
+  );
 
   test('Refreshing then RefreshFailed surfaces typed MinosError', () async {
     container.read(authControllerProvider);
@@ -154,38 +174,41 @@ void main() {
     );
   });
 
-  test('first Authenticated frame triggers resumePersistedSession exactly once', () async {
-    container.read(authControllerProvider);
-    expect(core.resumeCount, 0);
+  test(
+    'first Authenticated frame triggers resumePersistedSession exactly once',
+    () async {
+      container.read(authControllerProvider);
+      expect(core.resumeCount, 0);
 
-    core.emit(
-      const AuthStateFrame.authenticated(
-        account: AuthSummary(accountId: 'a1', email: 'x@y.test'),
-      ),
-    );
-    await pumpEventQueue();
-    expect(core.resumeCount, 1);
+      core.emit(
+        const AuthStateFrame.authenticated(
+          account: AuthSummary(accountId: 'a1', email: 'x@y.test'),
+        ),
+      );
+      await pumpEventQueue();
+      expect(core.resumeCount, 1);
 
-    // A second Authenticated for the same session must not double-resume.
-    core.emit(
-      const AuthStateFrame.authenticated(
-        account: AuthSummary(accountId: 'a1', email: 'x2@y.test'),
-      ),
-    );
-    await pumpEventQueue();
-    expect(core.resumeCount, 1);
+      // A second Authenticated for the same session must not double-resume.
+      core.emit(
+        const AuthStateFrame.authenticated(
+          account: AuthSummary(accountId: 'a1', email: 'x2@y.test'),
+        ),
+      );
+      await pumpEventQueue();
+      expect(core.resumeCount, 1);
 
-    // After logout (Unauthenticated), the next Authenticated re-arms.
-    core.emit(const AuthStateFrame.unauthenticated());
-    await pumpEventQueue();
-    core.emit(
-      const AuthStateFrame.authenticated(
-        account: AuthSummary(accountId: 'a2', email: 'z@y.test'),
-      ),
-    );
-    await pumpEventQueue();
-    expect(core.resumeCount, 2);
-  });
+      // After logout (Unauthenticated), the next Authenticated re-arms.
+      core.emit(const AuthStateFrame.unauthenticated());
+      await pumpEventQueue();
+      core.emit(
+        const AuthStateFrame.authenticated(
+          account: AuthSummary(accountId: 'a2', email: 'z@y.test'),
+        ),
+      );
+      await pumpEventQueue();
+      expect(core.resumeCount, 2);
+    },
+  );
 
   test('register/login/logout call through to MinosCoreProtocol', () async {
     final notifier = container.read(authControllerProvider.notifier);

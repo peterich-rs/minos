@@ -83,7 +83,9 @@ class SecurePairingStore {
       accountEmail: accountEmail,
     );
 
-    if (!_isResumable(state) || !_hasCompleteCfAccess(state) || !_hasCompleteAuth(state)) {
+    if (!_isResumable(state) ||
+        !_hasCompleteCfAccess(state) ||
+        !_hasCompleteAuth(state)) {
       // Either core resume is impossible, the CF Access tuple is half-set,
       // or the auth tuple is half-set. Wipe everything so the next launch
       // gets a clean slate; partial state is never useful.
@@ -156,12 +158,14 @@ class SecurePairingStore {
   /// set (logged-in snapshot) or none (paired-but-unauthenticated, e.g.
   /// after a `logout`). A half-set tuple is treated as corruption.
   bool _hasCompleteAuth(PersistedPairingState state) {
-    final allSet = state.accessToken != null &&
+    final allSet =
+        state.accessToken != null &&
         state.accessExpiresAtMs != null &&
         state.refreshToken != null &&
         state.accountId != null &&
         state.accountEmail != null;
-    final allMissing = state.accessToken == null &&
+    final allMissing =
+        state.accessToken == null &&
         state.accessExpiresAtMs == null &&
         state.refreshToken == null &&
         state.accountId == null &&

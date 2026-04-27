@@ -21,27 +21,20 @@ class AccountSettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authControllerProvider);
-    final email = authState is AuthAuthenticated ? authState.account.email : '—';
+    final email = authState is AuthAuthenticated
+        ? authState.account.email
+        : '—';
 
     return Scaffold(
       appBar: AppBar(title: const Text('账户')),
       body: ListView(
         children: [
-          ListTile(
-            title: const Text('邮箱'),
-            subtitle: Text(email),
-          ),
-          ListTile(
-            title: const Text('版本'),
-            subtitle: const Text(_appVersion),
-          ),
+          ListTile(title: const Text('邮箱'), subtitle: Text(email)),
+          ListTile(title: const Text('版本'), subtitle: const Text(_appVersion)),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text(
-              '退出登录',
-              style: TextStyle(color: Colors.red),
-            ),
+            title: const Text('退出登录', style: TextStyle(color: Colors.red)),
             onTap: () => _logout(context, ref),
           ),
         ],

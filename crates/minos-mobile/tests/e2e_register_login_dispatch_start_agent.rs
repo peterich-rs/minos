@@ -124,12 +124,9 @@ fn qr_for(addr: std::net::SocketAddr, token: &str) -> String {
 /// freshly minted auth tuple. Same recipe `envelope_client.rs` uses.
 async fn registered_client(addr: std::net::SocketAddr, email: &str) -> MobileClient {
     let device_id = DeviceId::new();
-    let http = minos_mobile::http::MobileHttpClient::new(
-        &format!("ws://{addr}/devices"),
-        device_id,
-        None,
-    )
-    .unwrap();
+    let http =
+        minos_mobile::http::MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None)
+            .unwrap();
     let resp = http.register(email, "testpass1").await.expect("register");
 
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -175,7 +172,10 @@ fn spawn_fake_mac(
                 .get("method")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
-            let id = payload.get("id").cloned().unwrap_or(serde_json::Value::Null);
+            let id = payload
+                .get("id")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let result = match method {
                 "minos_start_agent" => serde_json::json!({
                     "session_id": SYNTHETIC_SESSION_ID,

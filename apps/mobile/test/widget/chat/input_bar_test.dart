@@ -7,9 +7,7 @@ import 'package:minos/presentation/widgets/chat/input_bar.dart';
 import 'package:minos/src/rust/api/minos.dart' show AgentName;
 
 Widget _wrap(Widget child) {
-  return ShadApp(
-    home: Scaffold(body: child),
-  );
+  return ShadApp(home: Scaffold(body: child));
 }
 
 void main() {
@@ -52,7 +50,7 @@ void main() {
         ),
       );
 
-      await tester.enterText(find.byType(EditableText),'hi');
+      await tester.enterText(find.byType(EditableText), 'hi');
       await tester.pump();
 
       final btn = tester.widget<ShadButton>(
@@ -93,10 +91,7 @@ void main() {
     await tester.pumpWidget(
       _wrap(
         InputBar(
-          session: const SessionStarting(
-            agent: AgentName.codex,
-            prompt: 'hi',
-          ),
+          session: const SessionStarting(agent: AgentName.codex, prompt: 'hi'),
           onSend: (_) {},
           onStop: () {},
         ),
@@ -108,16 +103,12 @@ void main() {
   testWidgets('Send disabled when text exceeds 8000 chars', (tester) async {
     await tester.pumpWidget(
       _wrap(
-        InputBar(
-          session: const SessionIdle(),
-          onSend: (_) {},
-          onStop: () {},
-        ),
+        InputBar(session: const SessionIdle(), onSend: (_) {}, onStop: () {}),
       ),
     );
 
     final huge = 'a' * 8001;
-    await tester.enterText(find.byType(EditableText),huge);
+    await tester.enterText(find.byType(EditableText), huge);
     await tester.pump();
 
     final btn = tester.widget<ShadButton>(
@@ -140,7 +131,7 @@ void main() {
       ),
     );
 
-    await tester.enterText(find.byType(EditableText),'follow up');
+    await tester.enterText(find.byType(EditableText), 'follow up');
     await tester.pump();
 
     final btn = tester.widget<ShadButton>(

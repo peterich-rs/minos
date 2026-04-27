@@ -353,20 +353,25 @@ void main() {
           accountId: 'acc-new',
           accountEmail: 'new@example.com',
         );
-        when(() => secureStore.loadState())
-            .thenAnswer((_) async => pairedFor('acc-new'));
-        when(() => client.login(email: 'new@example.com', password: 'pw'))
-            .thenAnswer((_) async => newAccountSummary);
-        when(() => client.persistedPairingState())
-            .thenAnswer((_) async => fresh);
+        when(
+          () => secureStore.loadState(),
+        ).thenAnswer((_) async => pairedFor('acc-new'));
+        when(
+          () => client.login(email: 'new@example.com', password: 'pw'),
+        ).thenAnswer((_) async => newAccountSummary);
+        when(
+          () => client.persistedPairingState(),
+        ).thenAnswer((_) async => fresh);
         when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
 
         final core = MinosCore.forTesting(
           client: client,
           secureStore: secureStore,
         );
-        final result =
-            await core.login(email: 'new@example.com', password: 'pw');
+        final result = await core.login(
+          email: 'new@example.com',
+          password: 'pw',
+        );
 
         expect(result, newAccountSummary);
         verify(() => secureStore.saveState(fresh)).called(1);
@@ -388,14 +393,17 @@ void main() {
           accountId: 'acc-new',
           accountEmail: 'new@example.com',
         );
-        when(() => secureStore.loadState())
-            .thenAnswer((_) async => pairedFor('acc-prior'));
+        when(
+          () => secureStore.loadState(),
+        ).thenAnswer((_) async => pairedFor('acc-prior'));
         when(() => client.forgetPeer()).thenAnswer((_) async {});
         when(() => secureStore.clearAll()).thenAnswer((_) async {});
-        when(() => client.login(email: 'new@example.com', password: 'pw'))
-            .thenAnswer((_) async => newAccountSummary);
-        when(() => client.persistedPairingState())
-            .thenAnswer((_) async => fresh);
+        when(
+          () => client.login(email: 'new@example.com', password: 'pw'),
+        ).thenAnswer((_) async => newAccountSummary);
+        when(
+          () => client.persistedPairingState(),
+        ).thenAnswer((_) async => fresh);
         when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
 
         final core = MinosCore.forTesting(
@@ -425,10 +433,12 @@ void main() {
         );
         // First-launch case: no persisted state at all.
         when(() => secureStore.loadState()).thenAnswer((_) async => null);
-        when(() => client.register(email: 'new@example.com', password: 'pw'))
-            .thenAnswer((_) async => newAccountSummary);
-        when(() => client.persistedPairingState())
-            .thenAnswer((_) async => fresh);
+        when(
+          () => client.register(email: 'new@example.com', password: 'pw'),
+        ).thenAnswer((_) async => newAccountSummary);
+        when(
+          () => client.persistedPairingState(),
+        ).thenAnswer((_) async => fresh);
         when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
 
         final core = MinosCore.forTesting(
@@ -459,12 +469,15 @@ void main() {
           accountId: 'acc-new',
           accountEmail: 'new@example.com',
         );
-        when(() => secureStore.loadState())
-            .thenAnswer((_) async => pairedFor(null));
-        when(() => client.login(email: 'new@example.com', password: 'pw'))
-            .thenAnswer((_) async => newAccountSummary);
-        when(() => client.persistedPairingState())
-            .thenAnswer((_) async => fresh);
+        when(
+          () => secureStore.loadState(),
+        ).thenAnswer((_) async => pairedFor(null));
+        when(
+          () => client.login(email: 'new@example.com', password: 'pw'),
+        ).thenAnswer((_) async => newAccountSummary);
+        when(
+          () => client.persistedPairingState(),
+        ).thenAnswer((_) async => fresh);
         when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
 
         final core = MinosCore.forTesting(

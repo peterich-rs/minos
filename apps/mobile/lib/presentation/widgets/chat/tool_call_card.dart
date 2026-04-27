@@ -59,9 +59,7 @@ class ToolCallCard extends StatelessWidget {
               ),
             ),
             subtitle: Text(
-              _inFlight
-                  ? 'running…'
-                  : (isError ? 'failed' : 'done'),
+              _inFlight ? 'running…' : (isError ? 'failed' : 'done'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

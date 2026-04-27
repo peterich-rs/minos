@@ -26,7 +26,9 @@ class MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final bg = isUser ? scheme.primaryContainer : scheme.surfaceContainerHighest;
+    final bg = isUser
+        ? scheme.primaryContainer
+        : scheme.surfaceContainerHighest;
     final fg = isUser ? scheme.onPrimaryContainer : scheme.onSurface;
     final align = isUser ? Alignment.centerRight : Alignment.centerLeft;
     final crossAxis = isUser

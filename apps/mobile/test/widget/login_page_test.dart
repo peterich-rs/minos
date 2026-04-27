@@ -30,8 +30,10 @@ class _FakeCore implements MinosCoreProtocol {
   Object? throwOnRegister;
 
   @override
-  Future<AuthSummary> login(
-      {required String email, required String password}) async {
+  Future<AuthSummary> login({
+    required String email,
+    required String password,
+  }) async {
     lastLoginEmail = email;
     lastLoginPassword = password;
     if (throwOnLogin != null) throw throwOnLogin!;
@@ -39,8 +41,10 @@ class _FakeCore implements MinosCoreProtocol {
   }
 
   @override
-  Future<AuthSummary> register(
-      {required String email, required String password}) async {
+  Future<AuthSummary> register({
+    required String email,
+    required String password,
+  }) async {
     lastRegisterEmail = email;
     lastRegisterPassword = password;
     if (throwOnRegister != null) throw throwOnRegister!;
@@ -92,13 +96,16 @@ class _FakeCore implements MinosCoreProtocol {
       const ConnectionState.disconnected();
 
   @override
-  Future<StartAgentResponse> startAgent(
-          {required AgentName agent, required String prompt}) async =>
-      throw UnimplementedError();
+  Future<StartAgentResponse> startAgent({
+    required AgentName agent,
+    required String prompt,
+  }) async => throw UnimplementedError();
 
   @override
-  Future<void> sendUserMessage(
-      {required String sessionId, required String text}) async {}
+  Future<void> sendUserMessage({
+    required String sessionId,
+    required String text,
+  }) async {}
 
   @override
   Future<void> stopAgent() async {}
@@ -120,8 +127,9 @@ String _hostDylibPath() {
   } else {
     suffix = 'so';
   }
-  final release =
-      File('$workspaceRoot/target/release/libminos_ffi_frb.$suffix');
+  final release = File(
+    '$workspaceRoot/target/release/libminos_ffi_frb.$suffix',
+  );
   if (release.existsSync()) return release.path;
   return '$workspaceRoot/target/debug/libminos_ffi_frb.$suffix';
 }
@@ -153,27 +161,27 @@ void main() {
     await RustLib.init(externalLibrary: ExternalLibrary.open(path));
   });
 
-  testWidgets('Submit valid login calls MinosCoreProtocol.login with the input',
-      (tester) async {
-    final core = _FakeCore();
-    await tester.pumpWidget(_harness(core));
-
-    final inputs = find.byType(ShadInput);
-    await tester.enterText(inputs.at(0), 'user@example.com');
-    await tester.enterText(inputs.at(1), 'hunter2hunter2');
-
-    await tester.tap(find.widgetWithText(ShadButton, 'Log in'));
-    await tester.pumpAndSettle();
-
-    expect(core.lastLoginEmail, 'user@example.com');
-    expect(core.lastLoginPassword, 'hunter2hunter2');
-  });
-
   testWidgets(
-      'Submit register that returns EmailTaken switches to login mode '
+    'Submit valid login calls MinosCoreProtocol.login with the input',
+    (tester) async {
+      final core = _FakeCore();
+      await tester.pumpWidget(_harness(core));
+
+      final inputs = find.byType(ShadInput);
+      await tester.enterText(inputs.at(0), 'user@example.com');
+      await tester.enterText(inputs.at(1), 'hunter2hunter2');
+
+      await tester.tap(find.widgetWithText(ShadButton, 'Log in'));
+      await tester.pumpAndSettle();
+
+      expect(core.lastLoginEmail, 'user@example.com');
+      expect(core.lastLoginPassword, 'hunter2hunter2');
+    },
+  );
+
+  testWidgets('Submit register that returns EmailTaken switches to login mode '
       'and shows the banner', (tester) async {
-    final core = _FakeCore()
-      ..throwOnRegister = const MinosError.emailTaken();
+    final core = _FakeCore()..throwOnRegister = const MinosError.emailTaken();
     await tester.pumpWidget(_harness(core));
 
     // Toggle into register mode.
@@ -200,8 +208,9 @@ void main() {
     );
   });
 
-  testWidgets('Login error other than EmailTaken keeps mode and shows banner',
-      (tester) async {
+  testWidgets('Login error other than EmailTaken keeps mode and shows banner', (
+    tester,
+  ) async {
     final core = _FakeCore()
       ..throwOnLogin = const MinosError.invalidCredentials();
     await tester.pumpWidget(_harness(core));
@@ -222,8 +231,9 @@ void main() {
     );
   });
 
-  testWidgets('errorBanner ctor argument is shown on first build',
-      (tester) async {
+  testWidgets('errorBanner ctor argument is shown on first build', (
+    tester,
+  ) async {
     final core = _FakeCore();
     await tester.pumpWidget(
       _harness(core, errorBanner: const MinosError.invalidCredentials()),

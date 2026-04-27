@@ -76,16 +76,19 @@ void main() {
       );
     });
 
-    test('Authenticated + paired + reconnecting -> threadList (banner only)', () {
-      expect(
-        decideRootRoute(
-          authState: AuthAuthenticated(account),
-          connectionState: const ConnectionState.reconnecting(attempt: 3),
-          hasPersistedPairing: true,
-        ),
-        RootRoute.threadList,
-      );
-    });
+    test(
+      'Authenticated + paired + reconnecting -> threadList (banner only)',
+      () {
+        expect(
+          decideRootRoute(
+            authState: AuthAuthenticated(account),
+            connectionState: const ConnectionState.reconnecting(attempt: 3),
+            hasPersistedPairing: true,
+          ),
+          RootRoute.threadList,
+        );
+      },
+    );
 
     test('Authenticated + paired + disconnected -> threadListMacOffline', () {
       expect(
@@ -98,29 +101,35 @@ void main() {
       );
     });
 
-    test('Authenticated + paired + null connection -> threadListMacOffline', () {
-      expect(
-        decideRootRoute(
-          authState: AuthAuthenticated(account),
-          connectionState: null,
-          hasPersistedPairing: true,
-        ),
-        RootRoute.threadListMacOffline,
-      );
-    });
+    test(
+      'Authenticated + paired + null connection -> threadListMacOffline',
+      () {
+        expect(
+          decideRootRoute(
+            authState: AuthAuthenticated(account),
+            connectionState: null,
+            hasPersistedPairing: true,
+          ),
+          RootRoute.threadListMacOffline,
+        );
+      },
+    );
 
-    test('Authenticated + paired + Pairing connection -> threadListMacOffline', () {
-      // The Pairing connection state means the WS is in the QR-handshake
-      // phase, which from the chat surface's perspective is "Mac peer
-      // not yet talking" — show the offline UI.
-      expect(
-        decideRootRoute(
-          authState: AuthAuthenticated(account),
-          connectionState: const ConnectionState.pairing(),
-          hasPersistedPairing: true,
-        ),
-        RootRoute.threadListMacOffline,
-      );
-    });
+    test(
+      'Authenticated + paired + Pairing connection -> threadListMacOffline',
+      () {
+        // The Pairing connection state means the WS is in the QR-handshake
+        // phase, which from the chat surface's perspective is "Mac peer
+        // not yet talking" — show the offline UI.
+        expect(
+          decideRootRoute(
+            authState: AuthAuthenticated(account),
+            connectionState: const ConnectionState.pairing(),
+            hasPersistedPairing: true,
+          ),
+          RootRoute.threadListMacOffline,
+        );
+      },
+    );
   });
 }

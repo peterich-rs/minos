@@ -144,8 +144,9 @@ void main() {
     expect(find.text('退出登录'), findsOneWidget);
   });
 
-  testWidgets('logout tile invokes core.logout and pops the page',
-      (tester) async {
+  testWidgets('logout tile invokes core.logout and pops the page', (
+    tester,
+  ) async {
     final core = _FakeCore(
       initialFrame: const AuthStateFrame.authenticated(
         account: AuthSummary(accountId: 'acc-1', email: 'user@example.com'),
@@ -165,8 +166,9 @@ void main() {
     expect(find.text('open'), findsOneWidget);
   });
 
-  testWidgets('email column is em-dash before any Authenticated frame',
-      (tester) async {
+  testWidgets('email column is em-dash before any Authenticated frame', (
+    tester,
+  ) async {
     final core = _FakeCore();
     await tester.pumpWidget(_harness(core));
     await tester.tap(find.text('open'));

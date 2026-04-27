@@ -98,8 +98,7 @@ class _FakeCore implements MinosCoreProtocol {
   void notifyBackgrounded() {}
 
   @override
-  Stream<AuthStateFrame> get authStates =>
-      const Stream<AuthStateFrame>.empty();
+  Stream<AuthStateFrame> get authStates => const Stream<AuthStateFrame>.empty();
 
   @override
   Future<void> resumePersistedSession() async {}
@@ -169,35 +168,29 @@ void main() {
     },
   );
 
-  testWidgets(
-    'MessageCompleted on assistant clears the streaming flag',
-    (tester) async {
-      final core = _FakeCore(
-        uiEventsForThread: const <UiEventMessage>[
-          UiEventMessage.messageStarted(
-            messageId: 'a1',
-            role: MessageRole.assistant,
-            startedAtMs: 0,
-          ),
-          UiEventMessage.textDelta(messageId: 'a1', text: 'done'),
-          UiEventMessage.messageCompleted(
-            messageId: 'a1',
-            finishedAtMs: 0,
-          ),
-        ],
-      );
+  testWidgets('MessageCompleted on assistant clears the streaming flag', (
+    tester,
+  ) async {
+    final core = _FakeCore(
+      uiEventsForThread: const <UiEventMessage>[
+        UiEventMessage.messageStarted(
+          messageId: 'a1',
+          role: MessageRole.assistant,
+          startedAtMs: 0,
+        ),
+        UiEventMessage.textDelta(messageId: 'a1', text: 'done'),
+        UiEventMessage.messageCompleted(messageId: 'a1', finishedAtMs: 0),
+      ],
+    );
 
-      await tester.pumpWidget(
-        _wrap(const ThreadViewPage(threadId: 'thr1'), core),
-      );
-      await settle(tester);
+    await tester.pumpWidget(
+      _wrap(const ThreadViewPage(threadId: 'thr1'), core),
+    );
+    await settle(tester);
 
-      final streaming = tester.widget<StreamingText>(
-        find.byType(StreamingText),
-      );
-      expect(streaming.isComplete, isTrue);
-    },
-  );
+    final streaming = tester.widget<StreamingText>(find.byType(StreamingText));
+    expect(streaming.isComplete, isTrue);
+  });
 
   testWidgets('ToolCallPlaced renders a ToolCallCard', (tester) async {
     final core = _FakeCore(

@@ -91,8 +91,7 @@ class _FakeCore implements MinosCoreProtocol {
 }
 
 void main() {
-  testWidgets('AppLifecycleState.resumed → notifyForegrounded',
-      (tester) async {
+  testWidgets('AppLifecycleState.resumed → notifyForegrounded', (tester) async {
     final core = _FakeCore();
     final container = ProviderContainer(
       overrides: [minosCoreProvider.overrideWithValue(core)],
@@ -100,10 +99,7 @@ void main() {
     addTearDown(container.dispose);
 
     await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: const MinosApp(),
-      ),
+      UncontrolledProviderScope(container: container, child: const MinosApp()),
     );
     // Prime the splash render so the observer is registered.
     await tester.pump();
@@ -115,9 +111,9 @@ void main() {
     expect(core.backgroundedCount, 0);
   });
 
-  testWidgets(
-      'paused / inactive / detached / hidden → notifyBackgrounded',
-      (tester) async {
+  testWidgets('paused / inactive / detached / hidden → notifyBackgrounded', (
+    tester,
+  ) async {
     final core = _FakeCore();
     final container = ProviderContainer(
       overrides: [minosCoreProvider.overrideWithValue(core)],
@@ -125,10 +121,7 @@ void main() {
     addTearDown(container.dispose);
 
     await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: const MinosApp(),
-      ),
+      UncontrolledProviderScope(container: container, child: const MinosApp()),
     );
     await tester.pump();
 

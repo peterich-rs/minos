@@ -26,22 +26,32 @@ void main() {
       expect(a1, isNot(equals(a2)));
     });
 
-    test('AuthBootstrapping / AuthUnauthenticated / AuthRefreshing are singletons', () {
-      expect(const AuthBootstrapping(), equals(const AuthBootstrapping()));
-      expect(const AuthUnauthenticated(), equals(const AuthUnauthenticated()));
-      expect(const AuthRefreshing(), equals(const AuthRefreshing()));
-      expect(
-        const AuthBootstrapping(),
-        isNot(equals(const AuthUnauthenticated())),
-      );
-    });
+    test(
+      'AuthBootstrapping / AuthUnauthenticated / AuthRefreshing are singletons',
+      () {
+        expect(const AuthBootstrapping(), equals(const AuthBootstrapping()));
+        expect(
+          const AuthUnauthenticated(),
+          equals(const AuthUnauthenticated()),
+        );
+        expect(const AuthRefreshing(), equals(const AuthRefreshing()));
+        expect(
+          const AuthBootstrapping(),
+          isNot(equals(const AuthUnauthenticated())),
+        );
+      },
+    );
 
     test('AuthRefreshFailed equals when underlying error is equal', () {
       const e = MinosError.invalidCredentials();
       expect(const AuthRefreshFailed(e), equals(const AuthRefreshFailed(e)));
       expect(
         const AuthRefreshFailed(e),
-        isNot(equals(const AuthRefreshFailed(MinosError.rateLimited(retryAfterS: 5)))),
+        isNot(
+          equals(
+            const AuthRefreshFailed(MinosError.rateLimited(retryAfterS: 5)),
+          ),
+        ),
       );
     });
   });

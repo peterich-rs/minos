@@ -56,8 +56,9 @@ class AuthController extends _$AuthController {
   void _onFrame(AuthStateFrame frame) {
     state = switch (frame) {
       AuthStateFrame_Unauthenticated() => const AuthUnauthenticated(),
-      AuthStateFrame_Authenticated(:final account) =>
-        AuthAuthenticated(account),
+      AuthStateFrame_Authenticated(:final account) => AuthAuthenticated(
+        account,
+      ),
       AuthStateFrame_Refreshing() => const AuthRefreshing(),
       AuthStateFrame_RefreshFailed(:final error) => AuthRefreshFailed(error),
     };
@@ -65,7 +66,9 @@ class AuthController extends _$AuthController {
       _wsResumed = true;
       // Best-effort: a missing pairing snapshot or an unreachable Mac
       // surfaces on connectionStateProvider — don't block the auth flow.
-      unawaited(ref.read(minosCoreProvider).resumePersistedSession().catchError((_) {}));
+      unawaited(
+        ref.read(minosCoreProvider).resumePersistedSession().catchError((_) {}),
+      );
     } else if (frame is AuthStateFrame_Unauthenticated) {
       _wsResumed = false;
     }
@@ -76,7 +79,9 @@ class AuthController extends _$AuthController {
   /// the same transitions whether the trigger was UI-initiated or
   /// background refresh.
   Future<void> register(String email, String password) async {
-    await ref.read(minosCoreProvider).register(email: email, password: password);
+    await ref
+        .read(minosCoreProvider)
+        .register(email: email, password: password);
   }
 
   /// Log into an existing account. See [register] for state-update

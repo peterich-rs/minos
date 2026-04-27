@@ -44,10 +44,7 @@ abstract class MinosCoreProtocol {
 
   /// Log into an existing account. Same effect on [authStates] as
   /// [register].
-  Future<AuthSummary> login({
-    required String email,
-    required String password,
-  });
+  Future<AuthSummary> login({required String email, required String password});
 
   /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
   /// `Authenticated` / `RefreshFailed` transitions on [authStates].

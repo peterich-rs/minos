@@ -134,9 +134,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
           );
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(threadId == null ? 'New chat' : 'Thread'),
-      ),
+      appBar: AppBar(title: Text(threadId == null ? 'New chat' : 'Thread')),
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -373,10 +371,7 @@ class _GroupedEvents {
         }
         if (reasoning.isNotEmpty) {
           ordered.add(
-            ReasoningSection(
-              messageId: msgId,
-              reasoningText: reasoning,
-            ),
+            ReasoningSection(messageId: msgId, reasoningText: reasoning),
           );
         }
       }
@@ -424,9 +419,7 @@ class _ClosedDivider extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 32),
       child: Row(
         children: [
-          Expanded(
-            child: Divider(color: theme.colorScheme.outlineVariant),
-          ),
+          Expanded(child: Divider(color: theme.colorScheme.outlineVariant)),
           const SizedBox(width: 8),
           Text(
             'session ended',
@@ -435,9 +428,7 @@ class _ClosedDivider extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Expanded(
-            child: Divider(color: theme.colorScheme.outlineVariant),
-          ),
+          Expanded(child: Divider(color: theme.colorScheme.outlineVariant)),
         ],
       ),
     );
@@ -493,4 +484,3 @@ class _ErrorBubble extends StatelessWidget {
     );
   }
 }
-

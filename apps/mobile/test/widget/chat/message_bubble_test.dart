@@ -50,10 +50,7 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
-          body: MessageBubble(
-            isUser: true,
-            markdownContent: 'Hi',
-          ),
+          body: MessageBubble(isUser: true, markdownContent: 'Hi'),
         ),
       ),
     );
@@ -66,10 +63,7 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
-          body: MessageBubble(
-            isUser: false,
-            markdownContent: 'Reply',
-          ),
+          body: MessageBubble(isUser: false, markdownContent: 'Reply'),
         ),
       ),
     );

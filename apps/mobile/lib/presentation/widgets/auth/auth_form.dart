@@ -80,8 +80,9 @@ class _AuthFormState extends State<AuthForm> {
   Widget build(BuildContext context) {
     final isRegister = widget.mode == AuthMode.register;
     final submitLabel = isRegister ? 'Register' : 'Log in';
-    final toggleLabel =
-        isRegister ? 'Have an account? Log in' : 'Create account';
+    final toggleLabel = isRegister
+        ? 'Have an account? Log in'
+        : 'Create account';
     final errorStyle = TextStyle(
       color: Theme.of(context).colorScheme.error,
       fontSize: 12,
@@ -145,8 +146,8 @@ class _AuthFormState extends State<AuthForm> {
           onPressed: widget.inFlight
               ? null
               : () => widget.onModeChanged(
-                    isRegister ? AuthMode.login : AuthMode.register,
-                  ),
+                  isRegister ? AuthMode.login : AuthMode.register,
+                ),
           child: Text(toggleLabel),
         ),
       ],

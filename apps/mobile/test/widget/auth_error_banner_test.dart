@@ -26,14 +26,17 @@ String _hostDylibPath() {
   } else {
     suffix = 'so';
   }
-  final release =
-      File('$workspaceRoot/target/release/libminos_ffi_frb.$suffix');
+  final release = File(
+    '$workspaceRoot/target/release/libminos_ffi_frb.$suffix',
+  );
   if (release.existsSync()) return release.path;
   return '$workspaceRoot/target/debug/libminos_ffi_frb.$suffix';
 }
 
 Widget _harness(MinosError? error) {
-  return ShadApp(home: Scaffold(body: AuthErrorBanner(error: error)));
+  return ShadApp(
+    home: Scaffold(body: AuthErrorBanner(error: error)),
+  );
 }
 
 void main() {

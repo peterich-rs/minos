@@ -66,9 +66,8 @@ class ThreadListPage extends ConsumerWidget {
                           summary: list[i],
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
-                              builder: (_) => ThreadViewPage(
-                                threadId: list[i].threadId,
-                              ),
+                              builder: (_) =>
+                                  ThreadViewPage(threadId: list[i].threadId),
                             ),
                           ),
                         ),
@@ -82,18 +81,14 @@ class ThreadListPage extends ConsumerWidget {
   }
 
   void _openNewChat(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const ThreadViewPage(),
-      ),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const ThreadViewPage()));
   }
 
   void _openAccountSettings(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const AccountSettingsPage(),
-      ),
+      MaterialPageRoute<void>(builder: (_) => const AccountSettingsPage()),
     );
   }
 }

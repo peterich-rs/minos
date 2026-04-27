@@ -7,11 +7,7 @@ import 'package:minos/src/rust/api/minos.dart' show AgentName;
 /// below a user bubble depending on caller layout — the row itself is
 /// alignment-neutral.
 class MessageMetaRow extends StatelessWidget {
-  const MessageMetaRow({
-    super.key,
-    required this.timestamp,
-    this.agent,
-  });
+  const MessageMetaRow({super.key, required this.timestamp, this.agent});
 
   /// Wall-clock time (UTC) the message originated. Rendered as
   /// HH:MM in the local zone for readability.

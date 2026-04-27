@@ -25,14 +25,20 @@ class _FakeCore implements MinosCoreProtocol {
   Stream<UiEventFrame> get uiEvents => _uiCtl.stream;
 
   @override
-  Future<StartAgentResponse> startAgent({required AgentName agent, required String prompt}) async {
+  Future<StartAgentResponse> startAgent({
+    required AgentName agent,
+    required String prompt,
+  }) async {
     if (startError != null) throw startError!;
     return startResponse ??
         const StartAgentResponse(sessionId: 'thr-1', cwd: '/tmp');
   }
 
   @override
-  Future<void> sendUserMessage({required String sessionId, required String text}) async {
+  Future<void> sendUserMessage({
+    required String sessionId,
+    required String text,
+  }) async {
     sendCount += 1;
     lastSendThreadId = sessionId;
     lastSendText = text;
@@ -57,12 +63,16 @@ class _FakeCore implements MinosCoreProtocol {
       const ConnectionState.disconnected();
 
   @override
-  Future<AuthSummary> register({required String email, required String password}) async =>
-      throw UnimplementedError();
+  Future<AuthSummary> register({
+    required String email,
+    required String password,
+  }) async => throw UnimplementedError();
 
   @override
-  Future<AuthSummary> login({required String email, required String password}) async =>
-      throw UnimplementedError();
+  Future<AuthSummary> login({
+    required String email,
+    required String password,
+  }) async => throw UnimplementedError();
 
   @override
   Future<void> refreshSession() async {}
@@ -158,7 +168,10 @@ void main() {
       ),
     );
     await pumpEventQueue();
-    expect(c.read(activeSessionControllerProvider), isA<SessionAwaitingInput>());
+    expect(
+      c.read(activeSessionControllerProvider),
+      isA<SessionAwaitingInput>(),
+    );
   });
 
   test('UiEvent on a different thread is ignored', () async {
@@ -205,49 +218,61 @@ void main() {
     expect((st as SessionStopped).threadId, 'thr-C');
   });
 
-  test('Error frame on matching thread -> SessionError with threadId', () async {
-    final core = _FakeCore()
-      ..startResponse = const StartAgentResponse(sessionId: 'thr-D', cwd: '/w');
-    final c = _container(core);
-    final notifier = c.read(activeSessionControllerProvider.notifier);
-    await notifier.start(agent: AgentName.codex, prompt: 'p');
+  test(
+    'Error frame on matching thread -> SessionError with threadId',
+    () async {
+      final core = _FakeCore()
+        ..startResponse = const StartAgentResponse(
+          sessionId: 'thr-D',
+          cwd: '/w',
+        );
+      final c = _container(core);
+      final notifier = c.read(activeSessionControllerProvider.notifier);
+      await notifier.start(agent: AgentName.codex, prompt: 'p');
 
-    core.emit(
-      UiEventFrame(
-        threadId: 'thr-D',
-        seq: BigInt.zero,
-        ui: UiEventMessage.error(code: 'agent_crash', message: 'boom'),
-        tsMs: 1,
-      ),
-    );
-    await pumpEventQueue();
-    final st = c.read(activeSessionControllerProvider);
-    expect(st, isA<SessionError>());
-    expect((st as SessionError).threadId, 'thr-D');
-  });
+      core.emit(
+        UiEventFrame(
+          threadId: 'thr-D',
+          seq: BigInt.zero,
+          ui: UiEventMessage.error(code: 'agent_crash', message: 'boom'),
+          tsMs: 1,
+        ),
+      );
+      await pumpEventQueue();
+      final st = c.read(activeSessionControllerProvider);
+      expect(st, isA<SessionError>());
+      expect((st as SessionError).threadId, 'thr-D');
+    },
+  );
 
-  test('send() in AwaitingInput forwards to core and re-enters Streaming', () async {
-    final core = _FakeCore()
-      ..startResponse = const StartAgentResponse(sessionId: 'thr-E', cwd: '/w');
-    final c = _container(core);
-    final notifier = c.read(activeSessionControllerProvider.notifier);
-    await notifier.start(agent: AgentName.codex, prompt: 'p');
-    core.emit(
-      UiEventFrame(
-        threadId: 'thr-E',
-        seq: BigInt.zero,
-        ui: UiEventMessage.messageCompleted(messageId: 'm1', finishedAtMs: 1),
-        tsMs: 1,
-      ),
-    );
-    await pumpEventQueue();
+  test(
+    'send() in AwaitingInput forwards to core and re-enters Streaming',
+    () async {
+      final core = _FakeCore()
+        ..startResponse = const StartAgentResponse(
+          sessionId: 'thr-E',
+          cwd: '/w',
+        );
+      final c = _container(core);
+      final notifier = c.read(activeSessionControllerProvider.notifier);
+      await notifier.start(agent: AgentName.codex, prompt: 'p');
+      core.emit(
+        UiEventFrame(
+          threadId: 'thr-E',
+          seq: BigInt.zero,
+          ui: UiEventMessage.messageCompleted(messageId: 'm1', finishedAtMs: 1),
+          tsMs: 1,
+        ),
+      );
+      await pumpEventQueue();
 
-    await notifier.send('follow-up');
-    expect(core.sendCount, 1);
-    expect(core.lastSendThreadId, 'thr-E');
-    expect(core.lastSendText, 'follow-up');
-    expect(c.read(activeSessionControllerProvider), isA<SessionStreaming>());
-  });
+      await notifier.send('follow-up');
+      expect(core.sendCount, 1);
+      expect(core.lastSendThreadId, 'thr-E');
+      expect(core.lastSendText, 'follow-up');
+      expect(c.read(activeSessionControllerProvider), isA<SessionStreaming>());
+    },
+  );
 
   test('send() in Idle is a no-op', () async {
     final core = _FakeCore();

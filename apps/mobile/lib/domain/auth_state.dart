@@ -46,7 +46,8 @@ class AuthAuthenticated extends AuthState {
 
   @override
   bool operator ==(Object other) =>
-      other is AuthAuthenticated && other.account.accountId == account.accountId;
+      other is AuthAuthenticated &&
+      other.account.accountId == account.accountId;
 
   @override
   int get hashCode => account.accountId.hashCode;

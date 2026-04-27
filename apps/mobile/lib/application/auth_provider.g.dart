@@ -15,6 +15,25 @@ part of 'auth_provider.dart';
 /// returns [AuthBootstrapping] from `build()`; the very first frame from
 /// the stream replaces it on the next microtask. Components watching
 /// this provider should treat [AuthBootstrapping] as "show splash".
+///
+/// Phase 8.9: on the first `Authenticated` transition, the controller
+/// also kicks the Rust WS reconnect path via `resumePersistedSession()`
+/// so the chat surface lights up without a separate trigger.
+///
+/// Phase 11.3 — cross-account migration sequence (manual smoke #7+8):
+///   1. `register` / `login` go through [MinosCore.register] /
+///      [MinosCore.login], which compare the freshly minted
+///      `account_id` against the prior persisted snapshot.
+///   2. If the prior `account_id` differs (a different account is
+///      logging in on a previously paired device), `MinosCore` calls
+///      `forgetPeer()` BEFORE persisting the new auth tuple. This wipes
+///      the device-side pairing tuple so the route gate flips to
+///      `pairing` for the new account.
+///   3. The first `Authenticated` frame fires; this controller calls
+///      `resumePersistedSession()` which is a no-op when pairing was
+///      just dropped (and any error is swallowed).
+///   4. The router observes `hasPersistedPairing == false` and shows
+///      [PairingPage] for the new account to scan a fresh QR.
 
 @ProviderFor(AuthController)
 final authControllerProvider = AuthControllerProvider._();
@@ -26,6 +45,25 @@ final authControllerProvider = AuthControllerProvider._();
 /// returns [AuthBootstrapping] from `build()`; the very first frame from
 /// the stream replaces it on the next microtask. Components watching
 /// this provider should treat [AuthBootstrapping] as "show splash".
+///
+/// Phase 8.9: on the first `Authenticated` transition, the controller
+/// also kicks the Rust WS reconnect path via `resumePersistedSession()`
+/// so the chat surface lights up without a separate trigger.
+///
+/// Phase 11.3 — cross-account migration sequence (manual smoke #7+8):
+///   1. `register` / `login` go through [MinosCore.register] /
+///      [MinosCore.login], which compare the freshly minted
+///      `account_id` against the prior persisted snapshot.
+///   2. If the prior `account_id` differs (a different account is
+///      logging in on a previously paired device), `MinosCore` calls
+///      `forgetPeer()` BEFORE persisting the new auth tuple. This wipes
+///      the device-side pairing tuple so the route gate flips to
+///      `pairing` for the new account.
+///   3. The first `Authenticated` frame fires; this controller calls
+///      `resumePersistedSession()` which is a no-op when pairing was
+///      just dropped (and any error is swallowed).
+///   4. The router observes `hasPersistedPairing == false` and shows
+///      [PairingPage] for the new account to scan a fresh QR.
 final class AuthControllerProvider
     extends $NotifierProvider<AuthController, AuthState> {
   /// Mirrors the Rust-side `AuthState` watch-channel into the Dart UI tier.
@@ -35,6 +73,25 @@ final class AuthControllerProvider
   /// returns [AuthBootstrapping] from `build()`; the very first frame from
   /// the stream replaces it on the next microtask. Components watching
   /// this provider should treat [AuthBootstrapping] as "show splash".
+  ///
+  /// Phase 8.9: on the first `Authenticated` transition, the controller
+  /// also kicks the Rust WS reconnect path via `resumePersistedSession()`
+  /// so the chat surface lights up without a separate trigger.
+  ///
+  /// Phase 11.3 — cross-account migration sequence (manual smoke #7+8):
+  ///   1. `register` / `login` go through [MinosCore.register] /
+  ///      [MinosCore.login], which compare the freshly minted
+  ///      `account_id` against the prior persisted snapshot.
+  ///   2. If the prior `account_id` differs (a different account is
+  ///      logging in on a previously paired device), `MinosCore` calls
+  ///      `forgetPeer()` BEFORE persisting the new auth tuple. This wipes
+  ///      the device-side pairing tuple so the route gate flips to
+  ///      `pairing` for the new account.
+  ///   3. The first `Authenticated` frame fires; this controller calls
+  ///      `resumePersistedSession()` which is a no-op when pairing was
+  ///      just dropped (and any error is swallowed).
+  ///   4. The router observes `hasPersistedPairing == false` and shows
+  ///      [PairingPage] for the new account to scan a fresh QR.
   AuthControllerProvider._()
     : super(
         from: null,
@@ -62,7 +119,7 @@ final class AuthControllerProvider
   }
 }
 
-String _$authControllerHash() => r'b003b10b1359ad4475ebaad097469bafad608ab1';
+String _$authControllerHash() => r'3506eef1100b655e5d50d8308afe305401dc8822';
 
 /// Mirrors the Rust-side `AuthState` watch-channel into the Dart UI tier.
 ///
@@ -71,6 +128,25 @@ String _$authControllerHash() => r'b003b10b1359ad4475ebaad097469bafad608ab1';
 /// returns [AuthBootstrapping] from `build()`; the very first frame from
 /// the stream replaces it on the next microtask. Components watching
 /// this provider should treat [AuthBootstrapping] as "show splash".
+///
+/// Phase 8.9: on the first `Authenticated` transition, the controller
+/// also kicks the Rust WS reconnect path via `resumePersistedSession()`
+/// so the chat surface lights up without a separate trigger.
+///
+/// Phase 11.3 — cross-account migration sequence (manual smoke #7+8):
+///   1. `register` / `login` go through [MinosCore.register] /
+///      [MinosCore.login], which compare the freshly minted
+///      `account_id` against the prior persisted snapshot.
+///   2. If the prior `account_id` differs (a different account is
+///      logging in on a previously paired device), `MinosCore` calls
+///      `forgetPeer()` BEFORE persisting the new auth tuple. This wipes
+///      the device-side pairing tuple so the route gate flips to
+///      `pairing` for the new account.
+///   3. The first `Authenticated` frame fires; this controller calls
+///      `resumePersistedSession()` which is a no-op when pairing was
+///      just dropped (and any error is swallowed).
+///   4. The router observes `hasPersistedPairing == false` and shows
+///      [PairingPage] for the new account to scan a fresh QR.
 
 abstract class _$AuthController extends $Notifier<AuthState> {
   AuthState build();
