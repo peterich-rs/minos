@@ -1,0 +1,165 @@
+import 'dart:async';
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:minos/application/auth_provider.dart';
+import 'package:minos/application/minos_providers.dart';
+import 'package:minos/domain/auth_state.dart';
+import 'package:minos/domain/minos_core_protocol.dart';
+import 'package:minos/src/rust/api/minos.dart';
+
+/// Hand-written fake implementing [MinosCoreProtocol]. Emits auth frames
+/// via the [emit] helper so the test can drive the controller through
+/// each state.
+class _FakeCore implements MinosCoreProtocol {
+  final _authCtl = StreamController<AuthStateFrame>.broadcast();
+
+  String? lastRegisterEmail;
+  String? lastRegisterPassword;
+  String? lastLoginEmail;
+  String? lastLoginPassword;
+  int logoutCount = 0;
+
+  void emit(AuthStateFrame frame) => _authCtl.add(frame);
+
+  @override
+  Stream<AuthStateFrame> get authStates => _authCtl.stream;
+
+  @override
+  Future<AuthSummary> register({required String email, required String password}) async {
+    lastRegisterEmail = email;
+    lastRegisterPassword = password;
+    return AuthSummary(accountId: 'acc-${email.hashCode}', email: email);
+  }
+
+  @override
+  Future<AuthSummary> login({required String email, required String password}) async {
+    lastLoginEmail = email;
+    lastLoginPassword = password;
+    return AuthSummary(accountId: 'acc-${email.hashCode}', email: email);
+  }
+
+  @override
+  Future<void> refreshSession() async {}
+
+  @override
+  Future<void> logout() async {
+    logoutCount += 1;
+  }
+
+  @override
+  Future<void> pairWithQrJson(String qrJson) async {}
+
+  @override
+  Future<void> forgetPeer() async {}
+
+  @override
+  Future<bool> hasPersistedPairing() async => false;
+
+  @override
+  Future<ListThreadsResponse> listThreads(ListThreadsParams params) async =>
+      const ListThreadsResponse(threads: []);
+
+  @override
+  Future<ReadThreadResponse> readThread(ReadThreadParams params) async =>
+      const ReadThreadResponse(uiEvents: []);
+
+  @override
+  Stream<ConnectionState> get connectionStates =>
+      const Stream<ConnectionState>.empty();
+
+  @override
+  Stream<UiEventFrame> get uiEvents => const Stream<UiEventFrame>.empty();
+
+  @override
+  ConnectionState get currentConnectionState =>
+      const ConnectionState.disconnected();
+
+  @override
+  Future<StartAgentResponse> startAgent({required AgentName agent, required String prompt}) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> sendUserMessage({required String sessionId, required String text}) async {}
+
+  @override
+  Future<void> stopAgent() async {}
+
+  @override
+  void notifyForegrounded() {}
+
+  @override
+  void notifyBackgrounded() {}
+}
+
+void main() {
+  late _FakeCore core;
+  late ProviderContainer container;
+
+  setUp(() {
+    core = _FakeCore();
+    container = ProviderContainer(
+      overrides: [minosCoreProvider.overrideWithValue(core)],
+    );
+    addTearDown(container.dispose);
+  });
+
+  test('initial build state is AuthBootstrapping', () {
+    expect(container.read(authControllerProvider), const AuthBootstrapping());
+  });
+
+  test('Authenticated frame transitions controller to AuthAuthenticated', () async {
+    container.read(authControllerProvider);
+    core.emit(
+      const AuthStateFrame.authenticated(
+        account: AuthSummary(accountId: 'acc-1', email: 'a@b.test'),
+      ),
+    );
+    await pumpEventQueue();
+    final state = container.read(authControllerProvider);
+    expect(state, isA<AuthAuthenticated>());
+    expect((state as AuthAuthenticated).account.accountId, 'acc-1');
+  });
+
+  test('Unauthenticated frame transitions controller to AuthUnauthenticated', () async {
+    container.read(authControllerProvider);
+    core.emit(const AuthStateFrame.unauthenticated());
+    await pumpEventQueue();
+    expect(container.read(authControllerProvider), const AuthUnauthenticated());
+  });
+
+  test('Refreshing then RefreshFailed surfaces typed MinosError', () async {
+    container.read(authControllerProvider);
+    core.emit(const AuthStateFrame.refreshing());
+    await pumpEventQueue();
+    expect(container.read(authControllerProvider), const AuthRefreshing());
+    core.emit(
+      const AuthStateFrame.refreshFailed(
+        error: MinosError.invalidCredentials(),
+      ),
+    );
+    await pumpEventQueue();
+    final state = container.read(authControllerProvider);
+    expect(state, isA<AuthRefreshFailed>());
+    expect(
+      (state as AuthRefreshFailed).error,
+      const MinosError.invalidCredentials(),
+    );
+  });
+
+  test('register/login/logout call through to MinosCoreProtocol', () async {
+    final notifier = container.read(authControllerProvider.notifier);
+
+    await notifier.register('new@x.test', 'hunter2hunter2');
+    expect(core.lastRegisterEmail, 'new@x.test');
+    expect(core.lastRegisterPassword, 'hunter2hunter2');
+
+    await notifier.login('back@x.test', 'pwpwpwpw');
+    expect(core.lastLoginEmail, 'back@x.test');
+    expect(core.lastLoginPassword, 'pwpwpwpw');
+
+    await notifier.logout();
+    expect(core.logoutCount, 1);
+  });
+}
