@@ -10,12 +10,47 @@ import 'package:minos/presentation/pages/login_page.dart';
 import 'package:minos/presentation/pages/pairing_page.dart';
 import 'package:minos/presentation/pages/thread_list_page.dart';
 
-/// Root of the Minos app. Provides the Shad theme and routes between
-/// the splash / login / pairing / threadList surfaces based on the
-/// joint state of [authControllerProvider], [connectionStateProvider]
-/// and [hasPersistedPairingProvider].
-class MinosApp extends StatelessWidget {
+/// Root of the Minos app. Provides the Shad theme, routes between the
+/// splash / login / pairing / threadList surfaces based on the joint
+/// state of [authControllerProvider], [connectionStateProvider] and
+/// [hasPersistedPairingProvider], and bridges
+/// [WidgetsBindingObserver.didChangeAppLifecycleState] into the Rust
+/// core's `notifyForegrounded` / `notifyBackgrounded` hooks so the WS
+/// reconnect loop respects the OS lifecycle (Phase 11.2).
+class MinosApp extends ConsumerStatefulWidget {
   const MinosApp({super.key});
+
+  @override
+  ConsumerState<MinosApp> createState() => _MinosAppState();
+}
+
+class _MinosAppState extends ConsumerState<MinosApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final core = ref.read(minosCoreProvider);
+    switch (state) {
+      case AppLifecycleState.resumed:
+        core.notifyForegrounded();
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        core.notifyBackgrounded();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
