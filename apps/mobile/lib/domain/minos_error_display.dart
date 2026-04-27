@@ -39,6 +39,16 @@ extension MinosErrorDisplay on MinosError {
     MinosError_TranslationFailed() => ErrorKind.translationFailed,
     MinosError_PairingQrVersionUnsupported() =>
       ErrorKind.pairingQrVersionUnsupported,
+    MinosError_Timeout() => ErrorKind.timeout,
+    MinosError_NotConnected() => ErrorKind.notConnected,
+    MinosError_RequestDropped() => ErrorKind.requestDropped,
+    MinosError_AuthRefreshFailed() => ErrorKind.authRefreshFailed,
+    MinosError_EmailTaken() => ErrorKind.emailTaken,
+    MinosError_WeakPassword() => ErrorKind.weakPassword,
+    MinosError_RateLimited() => ErrorKind.rateLimited,
+    MinosError_InvalidCredentials() => ErrorKind.invalidCredentials,
+    MinosError_AgentStartFailed() => ErrorKind.agentStartFailed,
+    MinosError_PairingTokenExpired() => ErrorKind.pairingTokenExpired,
   };
 
   /// Localized user-facing message for this error, looked up via the Rust
@@ -83,5 +93,15 @@ extension MinosErrorDisplay on MinosError {
     final MinosError_TranslationNotImplemented e => e.agent.toString(),
     final MinosError_TranslationFailed e => '${e.agent}: ${e.message}',
     final MinosError_PairingQrVersionUnsupported e => 'v=${e.version}',
+    MinosError_Timeout() => null,
+    MinosError_NotConnected() => null,
+    MinosError_RequestDropped() => null,
+    final MinosError_AuthRefreshFailed e => e.message,
+    MinosError_EmailTaken() => null,
+    MinosError_WeakPassword() => null,
+    final MinosError_RateLimited e => 'retry after ${e.retryAfterS}s',
+    MinosError_InvalidCredentials() => null,
+    final MinosError_AgentStartFailed e => e.reason,
+    MinosError_PairingTokenExpired() => null,
   };
 }
