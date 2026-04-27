@@ -141,13 +141,21 @@ class MinosCore implements MinosCoreProtocol {
   Future<AuthSummary> register({
     required String email,
     required String password,
-  }) => _client.register(email: email, password: password);
+  }) async {
+    final summary = await _client.register(email: email, password: password);
+    await _onAuthLanded(summary.accountId);
+    return summary;
+  }
 
   @override
   Future<AuthSummary> login({
     required String email,
     required String password,
-  }) => _client.login(email: email, password: password);
+  }) async {
+    final summary = await _client.login(email: email, password: password);
+    await _onAuthLanded(summary.accountId);
+    return summary;
+  }
 
   @override
   Future<void> refreshSession() => _client.refreshSession();
@@ -159,6 +167,44 @@ class MinosCore implements MinosCoreProtocol {
     // doesn't rehydrate the dead session. The pairing tuple is left
     // intact so the next account login on this device can reuse it.
     await _secure.clearAuth();
+  }
+
+  /// Cross-account migration + post-auth persistence (Phase 11.3).
+  ///
+  /// After a successful `register` / `login` we have to:
+  ///
+  /// 1. Drop the existing pairing if the previously persisted snapshot
+  ///    belonged to a *different* account. The Mac-side device row is
+  ///    account-scoped, so reusing the prior `DeviceSecret` against a
+  ///    new account would be rejected on the next WS upgrade — better to
+  ///    force the user through pairing now than surface a confusing 401
+  ///    later.
+  /// 2. Mirror the freshly minted auth tuple from the Rust core into the
+  ///    Dart keychain so a cold relaunch can rehydrate
+  ///    `auth_session` synchronously and the AuthController's first
+  ///    frame is already `Authenticated`.
+  ///
+  /// Best-effort throughout: the Rust side is the source of truth for
+  /// the live session, so a keychain write failure does not invalidate
+  /// the in-memory login. The next pair-or-resume cycle will recover.
+  Future<void> _onAuthLanded(String newAccountId) async {
+    final priorAccountId = (await _secure.loadState())?.accountId;
+    if (priorAccountId != null && priorAccountId != newAccountId) {
+      // Stale pairing belongs to a different account — drop it so the
+      // route gate flips to `pairing` for the new account.
+      try {
+        await forgetPeer();
+      } catch (_) {
+        // Best effort: even if the WS-side teardown fails, the next
+        // pair_consume call mints a fresh device secret.
+      }
+    }
+    try {
+      await _secure.saveState(await _client.persistedPairingState());
+    } catch (_) {
+      // Same rationale as above — the in-memory session is the source
+      // of truth; persistence is a cold-launch optimisation.
+    }
   }
 
   // ---- Agent dispatch forwarders ----

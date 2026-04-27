@@ -323,6 +323,163 @@ void main() {
     );
   });
 
+  group('login / register persistence + cross-account migration', () {
+    const newAccountSummary = AuthSummary(
+      accountId: 'acc-new',
+      email: 'new@example.com',
+    );
+
+    PersistedPairingState pairedFor(String? accountId) => PersistedPairingState(
+      backendUrl: 'ws://127.0.0.1/devices',
+      deviceId: 'dev-old',
+      deviceSecret: 'sec-old',
+      accessToken: accountId == null ? null : 'access',
+      accessExpiresAtMs: accountId == null ? null : 1700000000000,
+      refreshToken: accountId == null ? null : 'refresh',
+      accountId: accountId,
+      accountEmail: accountId == null ? null : 'old@example.com',
+    );
+
+    test(
+      'login on the same account preserves pairing and writes the fresh auth tuple',
+      () async {
+        const fresh = PersistedPairingState(
+          backendUrl: 'ws://127.0.0.1/devices',
+          deviceId: 'dev-old',
+          deviceSecret: 'sec-old',
+          accessToken: 'access-new',
+          accessExpiresAtMs: 1700000099000,
+          refreshToken: 'refresh-new',
+          accountId: 'acc-new',
+          accountEmail: 'new@example.com',
+        );
+        when(() => secureStore.loadState())
+            .thenAnswer((_) async => pairedFor('acc-new'));
+        when(() => client.login(email: 'new@example.com', password: 'pw'))
+            .thenAnswer((_) async => newAccountSummary);
+        when(() => client.persistedPairingState())
+            .thenAnswer((_) async => fresh);
+        when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
+
+        final core = MinosCore.forTesting(
+          client: client,
+          secureStore: secureStore,
+        );
+        final result =
+            await core.login(email: 'new@example.com', password: 'pw');
+
+        expect(result, newAccountSummary);
+        verify(() => secureStore.saveState(fresh)).called(1);
+        verifyNever(() => client.forgetPeer());
+        verifyNever(() => secureStore.clearAll());
+      },
+    );
+
+    test(
+      'login as a different account drops the stale pairing then persists',
+      () async {
+        const fresh = PersistedPairingState(
+          backendUrl: null,
+          deviceId: null,
+          deviceSecret: null,
+          accessToken: 'access-new',
+          accessExpiresAtMs: 1700000099000,
+          refreshToken: 'refresh-new',
+          accountId: 'acc-new',
+          accountEmail: 'new@example.com',
+        );
+        when(() => secureStore.loadState())
+            .thenAnswer((_) async => pairedFor('acc-prior'));
+        when(() => client.forgetPeer()).thenAnswer((_) async {});
+        when(() => secureStore.clearAll()).thenAnswer((_) async {});
+        when(() => client.login(email: 'new@example.com', password: 'pw'))
+            .thenAnswer((_) async => newAccountSummary);
+        when(() => client.persistedPairingState())
+            .thenAnswer((_) async => fresh);
+        when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
+
+        final core = MinosCore.forTesting(
+          client: client,
+          secureStore: secureStore,
+        );
+        await core.login(email: 'new@example.com', password: 'pw');
+
+        verify(() => client.forgetPeer()).called(1);
+        verify(() => secureStore.clearAll()).called(1);
+        verify(() => secureStore.saveState(fresh)).called(1);
+      },
+    );
+
+    test(
+      'register on a fresh device (no prior accountId) skips the migration branch',
+      () async {
+        const fresh = PersistedPairingState(
+          backendUrl: null,
+          deviceId: null,
+          deviceSecret: null,
+          accessToken: 'access-new',
+          accessExpiresAtMs: 1700000099000,
+          refreshToken: 'refresh-new',
+          accountId: 'acc-new',
+          accountEmail: 'new@example.com',
+        );
+        // First-launch case: no persisted state at all.
+        when(() => secureStore.loadState()).thenAnswer((_) async => null);
+        when(() => client.register(email: 'new@example.com', password: 'pw'))
+            .thenAnswer((_) async => newAccountSummary);
+        when(() => client.persistedPairingState())
+            .thenAnswer((_) async => fresh);
+        when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
+
+        final core = MinosCore.forTesting(
+          client: client,
+          secureStore: secureStore,
+        );
+        await core.register(email: 'new@example.com', password: 'pw');
+
+        verifyNever(() => client.forgetPeer());
+        verifyNever(() => secureStore.clearAll());
+        verify(() => secureStore.saveState(fresh)).called(1);
+      },
+    );
+
+    test(
+      'login after a logged-out cold launch (paired but no accountId) keeps the pairing',
+      () async {
+        // Post-logout state: pairing tuple intact, auth tuple missing →
+        // the device is bound to no account in particular, so any new
+        // account's login should reuse the device.
+        const fresh = PersistedPairingState(
+          backendUrl: 'ws://127.0.0.1/devices',
+          deviceId: 'dev-old',
+          deviceSecret: 'sec-old',
+          accessToken: 'access-new',
+          accessExpiresAtMs: 1700000099000,
+          refreshToken: 'refresh-new',
+          accountId: 'acc-new',
+          accountEmail: 'new@example.com',
+        );
+        when(() => secureStore.loadState())
+            .thenAnswer((_) async => pairedFor(null));
+        when(() => client.login(email: 'new@example.com', password: 'pw'))
+            .thenAnswer((_) async => newAccountSummary);
+        when(() => client.persistedPairingState())
+            .thenAnswer((_) async => fresh);
+        when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
+
+        final core = MinosCore.forTesting(
+          client: client,
+          secureStore: secureStore,
+        );
+        await core.login(email: 'new@example.com', password: 'pw');
+
+        verifyNever(() => client.forgetPeer());
+        verifyNever(() => secureStore.clearAll());
+        verify(() => secureStore.saveState(fresh)).called(1);
+      },
+    );
+  });
+
   group('hasPersistedPairing', () {
     test('returns true when secure storage has a resumable snapshot', () async {
       when(() => secureStore.loadState()).thenAnswer(

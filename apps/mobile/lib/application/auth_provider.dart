@@ -25,6 +25,21 @@ part 'auth_provider.g.dart';
 /// Phase 8.9: on the first `Authenticated` transition, the controller
 /// also kicks the Rust WS reconnect path via `resumePersistedSession()`
 /// so the chat surface lights up without a separate trigger.
+///
+/// Phase 11.3 — cross-account migration sequence (manual smoke #7+8):
+///   1. `register` / `login` go through [MinosCore.register] /
+///      [MinosCore.login], which compare the freshly minted
+///      `account_id` against the prior persisted snapshot.
+///   2. If the prior `account_id` differs (a different account is
+///      logging in on a previously paired device), `MinosCore` calls
+///      `forgetPeer()` BEFORE persisting the new auth tuple. This wipes
+///      the device-side pairing tuple so the route gate flips to
+///      `pairing` for the new account.
+///   3. The first `Authenticated` frame fires; this controller calls
+///      `resumePersistedSession()` which is a no-op when pairing was
+///      just dropped (and any error is swallowed).
+///   4. The router observes `hasPersistedPairing == false` and shows
+///      [PairingPage] for the new account to scan a fresh QR.
 @Riverpod(keepAlive: true)
 class AuthController extends _$AuthController {
   StreamSubscription<AuthStateFrame>? _sub;
