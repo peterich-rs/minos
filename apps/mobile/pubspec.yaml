@@ -53,6 +53,13 @@ dependencies:
   flutter_riverpod: ^3.3.1
   riverpod_annotation: ^4.0.2
   shadcn_ui: ^0.54.0
+
+  # Markdown rendering for chat bubbles. flutter_markdown_plus is the
+  # actively-maintained fork of the original (now-deprecated)
+  # flutter_markdown package. flutter_highlight provides syntax highlighting
+  # for fenced code blocks + tool-call argument JSON.
+  flutter_markdown_plus: ^1.0.0
+  flutter_highlight: ^0.7.0
   mobile_scanner: ^7.2.0
   permission_handler: ^12.0.1
   path_provider: ^2.1.5
