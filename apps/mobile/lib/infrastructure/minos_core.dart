@@ -124,6 +124,54 @@ class MinosCore implements MinosCoreProtocol {
   @override
   ConnectionState get currentConnectionState => _client.currentState();
 
+  // ---- Auth forwarders ----
+
+  @override
+  Future<AuthSummary> register({
+    required String email,
+    required String password,
+  }) => _client.register(email: email, password: password);
+
+  @override
+  Future<AuthSummary> login({
+    required String email,
+    required String password,
+  }) => _client.login(email: email, password: password);
+
+  @override
+  Future<void> refreshSession() => _client.refreshSession();
+
+  @override
+  Future<void> logout() => _client.logout();
+
+  // ---- Agent dispatch forwarders ----
+
+  @override
+  Future<StartAgentResponse> startAgent({
+    required AgentName agent,
+    required String prompt,
+  }) => _client.startAgent(agent: agent, prompt: prompt);
+
+  @override
+  Future<void> sendUserMessage({
+    required String sessionId,
+    required String text,
+  }) => _client.sendUserMessage(sessionId: sessionId, text: text);
+
+  @override
+  Future<void> stopAgent() => _client.stopAgent();
+
+  // ---- Lifecycle forwarders ----
+
+  @override
+  void notifyForegrounded() => _client.notifyForegrounded();
+
+  @override
+  void notifyBackgrounded() => _client.notifyBackgrounded();
+
+  @override
+  Stream<AuthStateFrame> get authStates => _client.subscribeAuthState();
+
   Future<void> _rollbackFailedPersistedPairSave() async {
     try {
       await _client.forgetPeer();

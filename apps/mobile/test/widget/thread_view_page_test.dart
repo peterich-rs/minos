@@ -43,6 +43,39 @@ class _FakeCore implements MinosCoreProtocol {
   @override
   ConnectionState get currentConnectionState =>
       const ConnectionState.disconnected();
+
+  @override
+  Future<AuthSummary> register({required String email, required String password}) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<AuthSummary> login({required String email, required String password}) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> refreshSession() async {}
+
+  @override
+  Future<void> logout() async {}
+
+  @override
+  Future<StartAgentResponse> startAgent({required AgentName agent, required String prompt}) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> sendUserMessage({required String sessionId, required String text}) async {}
+
+  @override
+  Future<void> stopAgent() async {}
+
+  @override
+  void notifyForegrounded() {}
+
+  @override
+  void notifyBackgrounded() {}
+
+  @override
+  Stream<AuthStateFrame> get authStates => const Stream<AuthStateFrame>.empty();
 }
 
 void main() {
