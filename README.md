@@ -116,6 +116,45 @@ or `Release` before Product > Run.
 
 During development without a real device: iOS Tier A still uses the pre-relay Tailscale pair flow, so spin up the legacy minos-daemon stack on that side. The Mac-side relay flow has its own dev bin instead — see `cargo run -p minos-mobile --bin fake-peer --features cli`, which drives the relay end-to-end without an iPhone.
 
+## Mobile login + agent session
+
+Plan 08 (`docs/superpowers/plans/08-mobile-auth-and-agent-session.md` + 08a/08b) introduced account-based login and the `start_agent` dispatch surface to the mobile client. End-to-end the flow is:
+
+1. **Register or log in** — the iOS client (or `fake-peer`) calls `POST /v1/auth/register` or `/v1/auth/login` against the backend, which returns an access + refresh token tuple plus an `account_id`.
+2. **Pair** — once authenticated, the iPhone scans the Mac's QR (v2 payload), POSTs `/v1/pairing/consume` with the bearer, and persists the freshly minted `DeviceSecret`. Same-device subsequent runs re-use the secret; switching accounts on a previously-paired device drops the pairing automatically (`MinosCore._onAuthLanded`).
+3. **`start_agent`** — the iPhone opens an authenticated `/devices` WebSocket, then forwards `minos_start_agent` (and follow-up `minos_send_user_message`) to the Mac via `Envelope::Forward`. The daemon replies with a `session_id`; live `EventKind::UiEventMessage` frames stream back over the same socket.
+
+### Backend env
+
+`minos-backend` requires `MINOS_JWT_SECRET` (32+ bytes) at startup — without it the auth surface refuses to mint or verify tokens. The CLI exits early with a clear error if the var is missing.
+
+```bash
+export MINOS_JWT_SECRET=$(openssl rand -base64 48)
+cargo run -p minos-backend -- --listen 127.0.0.1:8787 --db /tmp/relay.db
+```
+
+### Dev smoke without an iPhone
+
+`fake-peer` ships three subcommands (`cargo run -p minos-mobile --bin fake-peer --features cli -- <cmd>`):
+
+- `pair` — login-or-register + pair-only; tails inbound frames until the socket closes.
+- `register` — strict register + pair; surfaces `EmailTaken` instead of falling through to login.
+- `smoke-session` — full register-or-login → pair → `start_agent` loop; tails `UiEventFrame`s on stderr until interrupted.
+
+Example:
+
+```bash
+cargo run -p minos-mobile --bin fake-peer --features cli -- smoke-session \
+    --backend ws://127.0.0.1:8787/devices \
+    --email fan+smoke@example.com \
+    --password Sup3rSecret! \
+    --token <token-from-mac-qr> \
+    --prompt "Hello from fake-peer" \
+    --device-name "Fan's fake iPhone"
+```
+
+The in-process e2e regression for the same path lives in `crates/minos-mobile/tests/e2e_register_login_dispatch_start_agent.rs`.
+
 ## Repository layout
 
 ```
