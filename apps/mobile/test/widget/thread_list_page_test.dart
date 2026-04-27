@@ -7,6 +7,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
+import 'package:minos/presentation/pages/account_settings_page.dart';
 import 'package:minos/presentation/pages/thread_list_page.dart';
 import 'package:minos/presentation/pages/thread_view_page.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -200,7 +201,7 @@ void main() {
     expect(view.threadId, isNull);
   });
 
-  testWidgets('account-settings IconButton opens placeholder dialog', (
+  testWidgets('account-settings IconButton pushes AccountSettingsPage', (
     tester,
   ) async {
     final core = _FakeCore(
@@ -214,7 +215,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.account_circle_outlined));
     await tester.pumpAndSettle();
 
-    expect(find.text('账户设置'), findsAtLeastNWidgets(1));
+    expect(find.byType(AccountSettingsPage), findsOneWidget);
   });
 
   testWidgets('empty list still shows placeholder', (tester) async {

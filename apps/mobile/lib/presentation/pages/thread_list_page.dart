@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/thread_list_provider.dart';
+import 'package:minos/presentation/pages/account_settings_page.dart';
 import 'package:minos/presentation/pages/thread_view_page.dart';
 import 'package:minos/presentation/widgets/thread_list_tile.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -89,20 +90,9 @@ class ThreadListPage extends ConsumerWidget {
   }
 
   void _openAccountSettings(BuildContext context) {
-    // Phase 11 will replace this with `AccountSettingsPage`. We use a
-    // dialog placeholder so the entry-point is testable now without
-    // creating a stub page that would conflict with the upcoming work.
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('账户设置'),
-        content: const Text('TODO: 在阶段 11 中接入 AccountSettingsPage。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const AccountSettingsPage(),
       ),
     );
   }
