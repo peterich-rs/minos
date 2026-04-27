@@ -63,6 +63,26 @@ extension MinosError {
             return .translationFailed
         case .PairingQrVersionUnsupported:
             return .pairingQrVersionUnsupported
+        case .Timeout:
+            return .timeout
+        case .NotConnected:
+            return .notConnected
+        case .RequestDropped:
+            return .requestDropped
+        case .AuthRefreshFailed:
+            return .authRefreshFailed
+        case .EmailTaken:
+            return .emailTaken
+        case .WeakPassword:
+            return .weakPassword
+        case .RateLimited:
+            return .rateLimited
+        case .InvalidCredentials:
+            return .invalidCredentials
+        case .AgentStartFailed:
+            return .agentStartFailed
+        case .PairingTokenExpired:
+            return .pairingTokenExpired
         }
     }
 
