@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1633199874;
+  int get rustContentHash => -776927047;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -89,11 +89,27 @@ abstract class RustLibApi extends BaseApi {
     required ListThreadsParams req,
   });
 
+  Future<AuthSummary> crateApiMinosMobileClientLogin({
+    required MobileClient that,
+    required String email,
+    required String password,
+  });
+
+  Future<void> crateApiMinosMobileClientLogout({required MobileClient that});
+
   MobileClient crateApiMinosMobileClientNew({required String selfName});
 
   MobileClient crateApiMinosMobileClientNewWithPersistedState({
     required String selfName,
     required PersistedPairingState state,
+  });
+
+  void crateApiMinosMobileClientNotifyBackgrounded({
+    required MobileClient that,
+  });
+
+  void crateApiMinosMobileClientNotifyForegrounded({
+    required MobileClient that,
   });
 
   Future<void> crateApiMinosMobileClientPairWithQrJson({
@@ -110,7 +126,35 @@ abstract class RustLibApi extends BaseApi {
     required ReadThreadParams req,
   });
 
+  Future<void> crateApiMinosMobileClientRefreshSession({
+    required MobileClient that,
+  });
+
+  Future<AuthSummary> crateApiMinosMobileClientRegister({
+    required MobileClient that,
+    required String email,
+    required String password,
+  });
+
   Future<void> crateApiMinosMobileClientResumePersistedSession({
+    required MobileClient that,
+  });
+
+  Future<void> crateApiMinosMobileClientSendUserMessage({
+    required MobileClient that,
+    required String sessionId,
+    required String text,
+  });
+
+  Future<StartAgentResponse> crateApiMinosMobileClientStartAgent({
+    required MobileClient that,
+    required AgentName agent,
+    required String prompt,
+  });
+
+  Future<void> crateApiMinosMobileClientStopAgent({required MobileClient that});
+
+  Stream<AuthStateFrame> crateApiMinosMobileClientSubscribeAuthState({
     required MobileClient that,
   });
 
@@ -256,13 +300,84 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<AuthSummary> crateApiMinosMobileClientLogin({
+    required MobileClient that,
+    required String email,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(email, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_auth_summary,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientLoginConstMeta,
+        argValues: [that, email, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientLoginConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_login",
+        argNames: ["that", "email", "password"],
+      );
+
+  @override
+  Future<void> crateApiMinosMobileClientLogout({required MobileClient that}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientLogoutConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientLogoutConstMeta =>
+      const TaskConstMeta(debugName: "MobileClient_logout", argNames: ["that"]);
+
+  @override
   MobileClient crateApiMinosMobileClientNew({required String selfName}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(selfName, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 4)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -293,7 +408,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(selfName, serializer);
           sse_encode_box_autoadd_persisted_pairing_state(state, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -314,6 +429,68 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  void crateApiMinosMobileClientNotifyBackgrounded({
+    required MobileClient that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMinosMobileClientNotifyBackgroundedConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientNotifyBackgroundedConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_notify_backgrounded",
+        argNames: ["that"],
+      );
+
+  @override
+  void crateApiMinosMobileClientNotifyForegrounded({
+    required MobileClient that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMinosMobileClientNotifyForegroundedConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientNotifyForegroundedConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_notify_foregrounded",
+        argNames: ["that"],
+      );
+
+  @override
   Future<void> crateApiMinosMobileClientPairWithQrJson({
     required MobileClient that,
     required String qrJson,
@@ -330,7 +507,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 10,
             port: port_,
           );
         },
@@ -366,7 +543,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 11,
             port: port_,
           );
         },
@@ -404,7 +581,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 12,
             port: port_,
           );
         },
@@ -426,6 +603,82 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiMinosMobileClientRefreshSession({
+    required MobileClient that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientRefreshSessionConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientRefreshSessionConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_refresh_session",
+        argNames: ["that"],
+      );
+
+  @override
+  Future<AuthSummary> crateApiMinosMobileClientRegister({
+    required MobileClient that,
+    required String email,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(email, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_auth_summary,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientRegisterConstMeta,
+        argValues: [that, email, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientRegisterConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_register",
+        argNames: ["that", "email", "password"],
+      );
+
+  @override
   Future<void> crateApiMinosMobileClientResumePersistedSession({
     required MobileClient that,
   }) {
@@ -440,7 +693,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 15,
             port: port_,
           );
         },
@@ -462,6 +715,163 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiMinosMobileClientSendUserMessage({
+    required MobileClient that,
+    required String sessionId,
+    required String text,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(sessionId, serializer);
+          sse_encode_String(text, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 16,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientSendUserMessageConstMeta,
+        argValues: [that, sessionId, text],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientSendUserMessageConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_send_user_message",
+        argNames: ["that", "sessionId", "text"],
+      );
+
+  @override
+  Future<StartAgentResponse> crateApiMinosMobileClientStartAgent({
+    required MobileClient that,
+    required AgentName agent,
+    required String prompt,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_agent_name(agent, serializer);
+          sse_encode_String(prompt, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 17,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_start_agent_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientStartAgentConstMeta,
+        argValues: [that, agent, prompt],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientStartAgentConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_start_agent",
+        argNames: ["that", "agent", "prompt"],
+      );
+
+  @override
+  Future<void> crateApiMinosMobileClientStopAgent({
+    required MobileClient that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 18,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientStopAgentConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientStopAgentConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_stop_agent",
+        argNames: ["that"],
+      );
+
+  @override
+  Stream<AuthStateFrame> crateApiMinosMobileClientSubscribeAuthState({
+    required MobileClient that,
+  }) {
+    final sink = RustStreamSink<AuthStateFrame>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+              that,
+              serializer,
+            );
+            sse_encode_StreamSink_auth_state_frame_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 19,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: null,
+          ),
+          constMeta: kCrateApiMinosMobileClientSubscribeAuthStateConstMeta,
+          argValues: [that, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientSubscribeAuthStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_subscribe_auth_state",
+        argNames: ["that", "sink"],
+      );
+
+  @override
   Stream<ConnectionState> crateApiMinosMobileClientSubscribeState({
     required MobileClient that,
   }) {
@@ -479,7 +889,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 10,
+              funcId: 20,
               port: port_,
             );
           },
@@ -520,7 +930,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 11,
+              funcId: 21,
               port: port_,
             );
           },
@@ -553,7 +963,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 22,
             port: port_,
           );
         },
@@ -582,7 +992,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_error_kind(kind, serializer);
           sse_encode_lang(lang, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -606,7 +1016,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_log_record,
@@ -634,7 +1044,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 15,
+              funcId: 25,
               port: port_,
             );
           },
@@ -699,6 +1109,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<AuthStateFrame> dco_decode_StreamSink_auth_state_frame_Sse(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
   RustStreamSink<ConnectionState> dco_decode_StreamSink_connection_state_Sse(
     dynamic raw,
   ) {
@@ -733,6 +1151,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AuthStateFrame dco_decode_auth_state_frame(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return AuthStateFrame_Unauthenticated();
+      case 1:
+        return AuthStateFrame_Authenticated(
+          account: dco_decode_box_autoadd_auth_summary(raw[1]),
+        );
+      case 2:
+        return AuthStateFrame_Refreshing();
+      case 3:
+        return AuthStateFrame_RefreshFailed(
+          error: dco_decode_box_autoadd_minos_error(raw[1]),
+        );
+      default:
+        throw Exception("unreachable");
+    }
+  }
+
+  @protected
+  AuthSummary dco_decode_auth_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return AuthSummary(
+      accountId: dco_decode_String(arr[0]),
+      email: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
@@ -745,6 +1196,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AuthSummary dco_decode_box_autoadd_auth_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_auth_summary(raw);
+  }
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_i_64(raw);
@@ -754,6 +1211,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ListThreadsParams dco_decode_box_autoadd_list_threads_params(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_list_threads_params(raw);
+  }
+
+  @protected
+  MinosError dco_decode_box_autoadd_minos_error(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_minos_error(raw);
   }
 
   @protected
@@ -1010,6 +1473,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return MinosError_PairingQrVersionUnsupported(
           version: dco_decode_u_8(raw[1]),
         );
+      case 30:
+        return MinosError_Timeout();
+      case 31:
+        return MinosError_NotConnected();
+      case 32:
+        return MinosError_RequestDropped();
+      case 33:
+        return MinosError_AuthRefreshFailed(message: dco_decode_String(raw[1]));
+      case 34:
+        return MinosError_EmailTaken();
+      case 35:
+        return MinosError_WeakPassword();
+      case 36:
+        return MinosError_RateLimited(retryAfterS: dco_decode_u_32(raw[1]));
+      case 37:
+        return MinosError_InvalidCredentials();
+      case 38:
+        return MinosError_AgentStartFailed(reason: dco_decode_String(raw[1]));
+      case 39:
+        return MinosError_PairingTokenExpired();
       default:
         throw Exception("unreachable");
     }
@@ -1055,14 +1538,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PersistedPairingState dco_decode_persisted_pairing_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
     return PersistedPairingState(
       backendUrl: dco_decode_opt_String(arr[0]),
       deviceId: dco_decode_opt_String(arr[1]),
       deviceSecret: dco_decode_opt_String(arr[2]),
       cfAccessClientId: dco_decode_opt_String(arr[3]),
       cfAccessClientSecret: dco_decode_opt_String(arr[4]),
+      accessToken: dco_decode_opt_String(arr[5]),
+      accessExpiresAtMs: dco_decode_opt_box_autoadd_i_64(arr[6]),
+      refreshToken: dco_decode_opt_String(arr[7]),
+      accountId: dco_decode_opt_String(arr[8]),
+      accountEmail: dco_decode_opt_String(arr[9]),
     );
   }
 
@@ -1089,6 +1577,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       uiEvents: dco_decode_list_ui_event_message(arr[0]),
       nextSeq: dco_decode_opt_box_autoadd_u_64(arr[1]),
       threadEndReason: dco_decode_opt_box_autoadd_thread_end_reason(arr[2]),
+    );
+  }
+
+  @protected
+  StartAgentResponse dco_decode_start_agent_response(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return StartAgentResponse(
+      sessionId: dco_decode_String(arr[0]),
+      cwd: dco_decode_String(arr[1]),
     );
   }
 
@@ -1289,6 +1789,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<AuthStateFrame> sse_decode_StreamSink_auth_state_frame_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
   RustStreamSink<ConnectionState> sse_decode_StreamSink_connection_state_Sse(
     SseDeserializer deserializer,
   ) {
@@ -1327,6 +1835,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AuthStateFrame sse_decode_auth_state_frame(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return AuthStateFrame_Unauthenticated();
+      case 1:
+        var var_account = sse_decode_box_autoadd_auth_summary(deserializer);
+        return AuthStateFrame_Authenticated(account: var_account);
+      case 2:
+        return AuthStateFrame_Refreshing();
+      case 3:
+        var var_error = sse_decode_box_autoadd_minos_error(deserializer);
+        return AuthStateFrame_RefreshFailed(error: var_error);
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
+  AuthSummary sse_decode_auth_summary(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_accountId = sse_decode_String(deserializer);
+    var var_email = sse_decode_String(deserializer);
+    return AuthSummary(accountId: var_accountId, email: var_email);
+  }
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
@@ -1336,6 +1873,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AgentName sse_decode_box_autoadd_agent_name(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_agent_name(deserializer));
+  }
+
+  @protected
+  AuthSummary sse_decode_box_autoadd_auth_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_auth_summary(deserializer));
   }
 
   @protected
@@ -1350,6 +1895,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_list_threads_params(deserializer));
+  }
+
+  @protected
+  MinosError sse_decode_box_autoadd_minos_error(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_minos_error(deserializer));
   }
 
   @protected
@@ -1657,6 +2208,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 29:
         var var_version = sse_decode_u_8(deserializer);
         return MinosError_PairingQrVersionUnsupported(version: var_version);
+      case 30:
+        return MinosError_Timeout();
+      case 31:
+        return MinosError_NotConnected();
+      case 32:
+        return MinosError_RequestDropped();
+      case 33:
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_AuthRefreshFailed(message: var_message);
+      case 34:
+        return MinosError_EmailTaken();
+      case 35:
+        return MinosError_WeakPassword();
+      case 36:
+        var var_retryAfterS = sse_decode_u_32(deserializer);
+        return MinosError_RateLimited(retryAfterS: var_retryAfterS);
+      case 37:
+        return MinosError_InvalidCredentials();
+      case 38:
+        var var_reason = sse_decode_String(deserializer);
+        return MinosError_AgentStartFailed(reason: var_reason);
+      case 39:
+        return MinosError_PairingTokenExpired();
       default:
         throw UnimplementedError('');
     }
@@ -1738,12 +2312,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_deviceSecret = sse_decode_opt_String(deserializer);
     var var_cfAccessClientId = sse_decode_opt_String(deserializer);
     var var_cfAccessClientSecret = sse_decode_opt_String(deserializer);
+    var var_accessToken = sse_decode_opt_String(deserializer);
+    var var_accessExpiresAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_refreshToken = sse_decode_opt_String(deserializer);
+    var var_accountId = sse_decode_opt_String(deserializer);
+    var var_accountEmail = sse_decode_opt_String(deserializer);
     return PersistedPairingState(
       backendUrl: var_backendUrl,
       deviceId: var_deviceId,
       deviceSecret: var_deviceSecret,
       cfAccessClientId: var_cfAccessClientId,
       cfAccessClientSecret: var_cfAccessClientSecret,
+      accessToken: var_accessToken,
+      accessExpiresAtMs: var_accessExpiresAtMs,
+      refreshToken: var_refreshToken,
+      accountId: var_accountId,
+      accountEmail: var_accountEmail,
     );
   }
 
@@ -1775,6 +2359,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       nextSeq: var_nextSeq,
       threadEndReason: var_threadEndReason,
     );
+  }
+
+  @protected
+  StartAgentResponse sse_decode_start_agent_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_sessionId = sse_decode_String(deserializer);
+    var var_cwd = sse_decode_String(deserializer);
+    return StartAgentResponse(sessionId: var_sessionId, cwd: var_cwd);
   }
 
   @protected
@@ -2018,6 +2612,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_auth_state_frame_Sse(
+    RustStreamSink<AuthStateFrame> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_auth_state_frame,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_StreamSink_connection_state_Sse(
     RustStreamSink<ConnectionState> self,
     SseSerializer serializer,
@@ -2081,6 +2692,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_auth_state_frame(
+    AuthStateFrame self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case AuthStateFrame_Unauthenticated():
+        sse_encode_i_32(0, serializer);
+      case AuthStateFrame_Authenticated(account: final account):
+        sse_encode_i_32(1, serializer);
+        sse_encode_box_autoadd_auth_summary(account, serializer);
+      case AuthStateFrame_Refreshing():
+        sse_encode_i_32(2, serializer);
+      case AuthStateFrame_RefreshFailed(error: final error):
+        sse_encode_i_32(3, serializer);
+        sse_encode_box_autoadd_minos_error(error, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_auth_summary(AuthSummary self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.accountId, serializer);
+    sse_encode_String(self.email, serializer);
+  }
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self ? 1 : 0);
@@ -2093,6 +2731,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_agent_name(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_auth_summary(
+    AuthSummary self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_auth_summary(self, serializer);
   }
 
   @protected
@@ -2111,6 +2758,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_threads_params(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_minos_error(
+    MinosError self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_minos_error(self, serializer);
   }
 
   @protected
@@ -2400,6 +3056,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case MinosError_PairingQrVersionUnsupported(version: final version):
         sse_encode_i_32(29, serializer);
         sse_encode_u_8(version, serializer);
+      case MinosError_Timeout():
+        sse_encode_i_32(30, serializer);
+      case MinosError_NotConnected():
+        sse_encode_i_32(31, serializer);
+      case MinosError_RequestDropped():
+        sse_encode_i_32(32, serializer);
+      case MinosError_AuthRefreshFailed(message: final message):
+        sse_encode_i_32(33, serializer);
+        sse_encode_String(message, serializer);
+      case MinosError_EmailTaken():
+        sse_encode_i_32(34, serializer);
+      case MinosError_WeakPassword():
+        sse_encode_i_32(35, serializer);
+      case MinosError_RateLimited(retryAfterS: final retryAfterS):
+        sse_encode_i_32(36, serializer);
+        sse_encode_u_32(retryAfterS, serializer);
+      case MinosError_InvalidCredentials():
+        sse_encode_i_32(37, serializer);
+      case MinosError_AgentStartFailed(reason: final reason):
+        sse_encode_i_32(38, serializer);
+        sse_encode_String(reason, serializer);
+      case MinosError_PairingTokenExpired():
+        sse_encode_i_32(39, serializer);
     }
   }
 
@@ -2479,6 +3158,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.deviceSecret, serializer);
     sse_encode_opt_String(self.cfAccessClientId, serializer);
     sse_encode_opt_String(self.cfAccessClientSecret, serializer);
+    sse_encode_opt_String(self.accessToken, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.accessExpiresAtMs, serializer);
+    sse_encode_opt_String(self.refreshToken, serializer);
+    sse_encode_opt_String(self.accountId, serializer);
+    sse_encode_opt_String(self.accountEmail, serializer);
   }
 
   @protected
@@ -2504,6 +3188,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       self.threadEndReason,
       serializer,
     );
+  }
+
+  @protected
+  void sse_encode_start_agent_response(
+    StartAgentResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.sessionId, serializer);
+    sse_encode_String(self.cwd, serializer);
   }
 
   @protected
@@ -2715,6 +3409,32 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
         req: req,
       );
 
+  /// Log into an existing account on the backend. Same shape as
+  /// `register` modulo the create-vs-find behaviour on the server.
+  Future<AuthSummary> login({
+    required String email,
+    required String password,
+  }) => RustLib.instance.api.crateApiMinosMobileClientLogin(
+    that: this,
+    email: email,
+    password: password,
+  );
+
+  /// Log out of the current session. Best-effort `stop_agent`, then
+  /// revoke the refresh token server-side, then wipe local state.
+  Future<void> logout() =>
+      RustLib.instance.api.crateApiMinosMobileClientLogout(that: this);
+
+  /// Mark the app as backgrounded. Pauses the reconnect loop so we
+  /// don't poke the backend while the OS is freezing the process.
+  void notifyBackgrounded() => RustLib.instance.api
+      .crateApiMinosMobileClientNotifyBackgrounded(that: this);
+
+  /// Mark the app as foregrounded. Resets the reconnect backoff so the
+  /// next connect attempt happens promptly.
+  void notifyForegrounded() => RustLib.instance.api
+      .crateApiMinosMobileClientNotifyForegrounded(that: this);
+
   /// Pair using the raw JSON payload extracted from the scanned QR v2
   /// code. Delegates to `MobileClient::pair_with_qr_json`.
   Future<void> pairWithQrJson({required String qrJson}) => RustLib.instance.api
@@ -2732,10 +3452,61 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
         req: req,
       );
 
+  /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
+  /// `Authenticated` / `RefreshFailed` transitions on the auth-state
+  /// stream.
+  Future<void> refreshSession() =>
+      RustLib.instance.api.crateApiMinosMobileClientRefreshSession(that: this);
+
+  /// Register a new account on the backend. On success the bearer +
+  /// refresh tokens are held in memory and surfaced via the auth-state
+  /// stream; the reconnect loop then drives the WS back to `Connected`.
+  Future<AuthSummary> register({
+    required String email,
+    required String password,
+  }) => RustLib.instance.api.crateApiMinosMobileClientRegister(
+    that: this,
+    email: email,
+    password: password,
+  );
+
   /// Reconnect using the durable pairing snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession() => RustLib.instance.api
       .crateApiMinosMobileClientResumePersistedSession(that: this);
+
+  /// Send a follow-up user message to an existing agent session.
+  Future<void> sendUserMessage({
+    required String sessionId,
+    required String text,
+  }) => RustLib.instance.api.crateApiMinosMobileClientSendUserMessage(
+    that: this,
+    sessionId: sessionId,
+    text: text,
+  );
+
+  /// Start a new agent session and deliver the prompt as the first user
+  /// message. Returns the daemon-issued `session_id` (a.k.a.
+  /// `thread_id`) and the resolved workspace path.
+  Future<StartAgentResponse> startAgent({
+    required AgentName agent,
+    required String prompt,
+  }) => RustLib.instance.api.crateApiMinosMobileClientStartAgent(
+    that: this,
+    agent: agent,
+    prompt: prompt,
+  );
+
+  /// Stop the currently-running agent (if any). Idempotent on the
+  /// no-active-session path.
+  Future<void> stopAgent() =>
+      RustLib.instance.api.crateApiMinosMobileClientStopAgent(that: this);
+
+  /// Subscribe to auth-state transitions. Emits the current cached frame
+  /// immediately, then every subsequent change. The spawned task exits
+  /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
+  Stream<AuthStateFrame> subscribeAuthState() => RustLib.instance.api
+      .crateApiMinosMobileClientSubscribeAuthState(that: this);
 
   /// Subscribe to connection-state transitions. Emits the current value
   /// immediately, then every subsequent change. The spawned task exits once

@@ -12,6 +12,383 @@ part of 'minos.dart';
 // dart format off
 T _$identity<T>(T value) => value;
 /// @nodoc
+mixin _$AuthStateFrame {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AuthStateFrame()';
+}
+
+
+}
+
+/// @nodoc
+class $AuthStateFrameCopyWith<$Res>  {
+$AuthStateFrameCopyWith(AuthStateFrame _, $Res Function(AuthStateFrame) __);
+}
+
+
+/// Adds pattern-matching-related methods to [AuthStateFrame].
+extension AuthStateFramePatterns on AuthStateFrame {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( AuthStateFrame_Unauthenticated value)?  unauthenticated,TResult Function( AuthStateFrame_Authenticated value)?  authenticated,TResult Function( AuthStateFrame_Refreshing value)?  refreshing,TResult Function( AuthStateFrame_RefreshFailed value)?  refreshFailed,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated() when unauthenticated != null:
+return unauthenticated(_that);case AuthStateFrame_Authenticated() when authenticated != null:
+return authenticated(_that);case AuthStateFrame_Refreshing() when refreshing != null:
+return refreshing(_that);case AuthStateFrame_RefreshFailed() when refreshFailed != null:
+return refreshFailed(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( AuthStateFrame_Unauthenticated value)  unauthenticated,required TResult Function( AuthStateFrame_Authenticated value)  authenticated,required TResult Function( AuthStateFrame_Refreshing value)  refreshing,required TResult Function( AuthStateFrame_RefreshFailed value)  refreshFailed,}){
+final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated():
+return unauthenticated(_that);case AuthStateFrame_Authenticated():
+return authenticated(_that);case AuthStateFrame_Refreshing():
+return refreshing(_that);case AuthStateFrame_RefreshFailed():
+return refreshFailed(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( AuthStateFrame_Unauthenticated value)?  unauthenticated,TResult? Function( AuthStateFrame_Authenticated value)?  authenticated,TResult? Function( AuthStateFrame_Refreshing value)?  refreshing,TResult? Function( AuthStateFrame_RefreshFailed value)?  refreshFailed,}){
+final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated() when unauthenticated != null:
+return unauthenticated(_that);case AuthStateFrame_Authenticated() when authenticated != null:
+return authenticated(_that);case AuthStateFrame_Refreshing() when refreshing != null:
+return refreshing(_that);case AuthStateFrame_RefreshFailed() when refreshFailed != null:
+return refreshFailed(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  unauthenticated,TResult Function( AuthSummary account)?  authenticated,TResult Function()?  refreshing,TResult Function( MinosError error)?  refreshFailed,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated() when unauthenticated != null:
+return unauthenticated();case AuthStateFrame_Authenticated() when authenticated != null:
+return authenticated(_that.account);case AuthStateFrame_Refreshing() when refreshing != null:
+return refreshing();case AuthStateFrame_RefreshFailed() when refreshFailed != null:
+return refreshFailed(_that.error);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  unauthenticated,required TResult Function( AuthSummary account)  authenticated,required TResult Function()  refreshing,required TResult Function( MinosError error)  refreshFailed,}) {final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated():
+return unauthenticated();case AuthStateFrame_Authenticated():
+return authenticated(_that.account);case AuthStateFrame_Refreshing():
+return refreshing();case AuthStateFrame_RefreshFailed():
+return refreshFailed(_that.error);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  unauthenticated,TResult? Function( AuthSummary account)?  authenticated,TResult? Function()?  refreshing,TResult? Function( MinosError error)?  refreshFailed,}) {final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated() when unauthenticated != null:
+return unauthenticated();case AuthStateFrame_Authenticated() when authenticated != null:
+return authenticated(_that.account);case AuthStateFrame_Refreshing() when refreshing != null:
+return refreshing();case AuthStateFrame_RefreshFailed() when refreshFailed != null:
+return refreshFailed(_that.error);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class AuthStateFrame_Unauthenticated extends AuthStateFrame {
+  const AuthStateFrame_Unauthenticated(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame_Unauthenticated);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AuthStateFrame.unauthenticated()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class AuthStateFrame_Authenticated extends AuthStateFrame {
+  const AuthStateFrame_Authenticated({required this.account}): super._();
+  
+
+ final  AuthSummary account;
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$AuthStateFrame_AuthenticatedCopyWith<AuthStateFrame_Authenticated> get copyWith => _$AuthStateFrame_AuthenticatedCopyWithImpl<AuthStateFrame_Authenticated>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame_Authenticated&&(identical(other.account, account) || other.account == account));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,account);
+
+@override
+String toString() {
+  return 'AuthStateFrame.authenticated(account: $account)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $AuthStateFrame_AuthenticatedCopyWith<$Res> implements $AuthStateFrameCopyWith<$Res> {
+  factory $AuthStateFrame_AuthenticatedCopyWith(AuthStateFrame_Authenticated value, $Res Function(AuthStateFrame_Authenticated) _then) = _$AuthStateFrame_AuthenticatedCopyWithImpl;
+@useResult
+$Res call({
+ AuthSummary account
+});
+
+
+
+
+}
+/// @nodoc
+class _$AuthStateFrame_AuthenticatedCopyWithImpl<$Res>
+    implements $AuthStateFrame_AuthenticatedCopyWith<$Res> {
+  _$AuthStateFrame_AuthenticatedCopyWithImpl(this._self, this._then);
+
+  final AuthStateFrame_Authenticated _self;
+  final $Res Function(AuthStateFrame_Authenticated) _then;
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? account = null,}) {
+  return _then(AuthStateFrame_Authenticated(
+account: null == account ? _self.account : account // ignore: cast_nullable_to_non_nullable
+as AuthSummary,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class AuthStateFrame_Refreshing extends AuthStateFrame {
+  const AuthStateFrame_Refreshing(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame_Refreshing);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AuthStateFrame.refreshing()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class AuthStateFrame_RefreshFailed extends AuthStateFrame {
+  const AuthStateFrame_RefreshFailed({required this.error}): super._();
+  
+
+ final  MinosError error;
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$AuthStateFrame_RefreshFailedCopyWith<AuthStateFrame_RefreshFailed> get copyWith => _$AuthStateFrame_RefreshFailedCopyWithImpl<AuthStateFrame_RefreshFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame_RefreshFailed&&(identical(other.error, error) || other.error == error));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,error);
+
+@override
+String toString() {
+  return 'AuthStateFrame.refreshFailed(error: $error)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $AuthStateFrame_RefreshFailedCopyWith<$Res> implements $AuthStateFrameCopyWith<$Res> {
+  factory $AuthStateFrame_RefreshFailedCopyWith(AuthStateFrame_RefreshFailed value, $Res Function(AuthStateFrame_RefreshFailed) _then) = _$AuthStateFrame_RefreshFailedCopyWithImpl;
+@useResult
+$Res call({
+ MinosError error
+});
+
+
+$MinosErrorCopyWith<$Res> get error;
+
+}
+/// @nodoc
+class _$AuthStateFrame_RefreshFailedCopyWithImpl<$Res>
+    implements $AuthStateFrame_RefreshFailedCopyWith<$Res> {
+  _$AuthStateFrame_RefreshFailedCopyWithImpl(this._self, this._then);
+
+  final AuthStateFrame_RefreshFailed _self;
+  final $Res Function(AuthStateFrame_RefreshFailed) _then;
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? error = null,}) {
+  return _then(AuthStateFrame_RefreshFailed(
+error: null == error ? _self.error : error // ignore: cast_nullable_to_non_nullable
+as MinosError,
+  ));
+}
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$MinosErrorCopyWith<$Res> get error {
+  
+  return $MinosErrorCopyWith<$Res>(_self.error, (value) {
+    return _then(_self.copyWith(error: value));
+  });
+}
+}
+
+/// @nodoc
 mixin _$ConnectionState {
 
 
@@ -389,7 +766,7 @@ extension MinosErrorPatterns on MinosError {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_BackendInternal value)?  backendInternal,TResult Function( MinosError_CfAuthFailed value)?  cfAuthFailed,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_CfAccessMisconfigured value)?  cfAccessMisconfigured,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,TResult Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_BackendInternal value)?  backendInternal,TResult Function( MinosError_CfAuthFailed value)?  cfAuthFailed,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_CfAccessMisconfigured value)?  cfAccessMisconfigured,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,TResult Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult Function( MinosError_Timeout value)?  timeout,TResult Function( MinosError_NotConnected value)?  notConnected,TResult Function( MinosError_RequestDropped value)?  requestDropped,TResult Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult Function( MinosError_EmailTaken value)?  emailTaken,TResult Function( MinosError_WeakPassword value)?  weakPassword,TResult Function( MinosError_RateLimited value)?  rateLimited,TResult Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -422,7 +799,17 @@ return ingestSeqConflict(_that);case MinosError_ThreadNotFound() when threadNotF
 return threadNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
-return pairingQrVersionUnsupported(_that);case _:
+return pairingQrVersionUnsupported(_that);case MinosError_Timeout() when timeout != null:
+return timeout(_that);case MinosError_NotConnected() when notConnected != null:
+return notConnected(_that);case MinosError_RequestDropped() when requestDropped != null:
+return requestDropped(_that);case MinosError_AuthRefreshFailed() when authRefreshFailed != null:
+return authRefreshFailed(_that);case MinosError_EmailTaken() when emailTaken != null:
+return emailTaken(_that);case MinosError_WeakPassword() when weakPassword != null:
+return weakPassword(_that);case MinosError_RateLimited() when rateLimited != null:
+return rateLimited(_that);case MinosError_InvalidCredentials() when invalidCredentials != null:
+return invalidCredentials(_that);case MinosError_AgentStartFailed() when agentStartFailed != null:
+return agentStartFailed(_that);case MinosError_PairingTokenExpired() when pairingTokenExpired != null:
+return pairingTokenExpired(_that);case _:
   return orElse();
 
 }
@@ -440,7 +827,7 @@ return pairingQrVersionUnsupported(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_BackendInternal value)  backendInternal,required TResult Function( MinosError_CfAuthFailed value)  cfAuthFailed,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_CfAccessMisconfigured value)  cfAccessMisconfigured,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_ThreadNotFound value)  threadNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,required TResult Function( MinosError_PairingQrVersionUnsupported value)  pairingQrVersionUnsupported,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_BackendInternal value)  backendInternal,required TResult Function( MinosError_CfAuthFailed value)  cfAuthFailed,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_CfAccessMisconfigured value)  cfAccessMisconfigured,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_ThreadNotFound value)  threadNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,required TResult Function( MinosError_PairingQrVersionUnsupported value)  pairingQrVersionUnsupported,required TResult Function( MinosError_Timeout value)  timeout,required TResult Function( MinosError_NotConnected value)  notConnected,required TResult Function( MinosError_RequestDropped value)  requestDropped,required TResult Function( MinosError_AuthRefreshFailed value)  authRefreshFailed,required TResult Function( MinosError_EmailTaken value)  emailTaken,required TResult Function( MinosError_WeakPassword value)  weakPassword,required TResult Function( MinosError_RateLimited value)  rateLimited,required TResult Function( MinosError_InvalidCredentials value)  invalidCredentials,required TResult Function( MinosError_AgentStartFailed value)  agentStartFailed,required TResult Function( MinosError_PairingTokenExpired value)  pairingTokenExpired,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
@@ -473,7 +860,17 @@ return ingestSeqConflict(_that);case MinosError_ThreadNotFound():
 return threadNotFound(_that);case MinosError_TranslationNotImplemented():
 return translationNotImplemented(_that);case MinosError_TranslationFailed():
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported():
-return pairingQrVersionUnsupported(_that);}
+return pairingQrVersionUnsupported(_that);case MinosError_Timeout():
+return timeout(_that);case MinosError_NotConnected():
+return notConnected(_that);case MinosError_RequestDropped():
+return requestDropped(_that);case MinosError_AuthRefreshFailed():
+return authRefreshFailed(_that);case MinosError_EmailTaken():
+return emailTaken(_that);case MinosError_WeakPassword():
+return weakPassword(_that);case MinosError_RateLimited():
+return rateLimited(_that);case MinosError_InvalidCredentials():
+return invalidCredentials(_that);case MinosError_AgentStartFailed():
+return agentStartFailed(_that);case MinosError_PairingTokenExpired():
+return pairingTokenExpired(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -487,7 +884,7 @@ return pairingQrVersionUnsupported(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_BackendInternal value)?  backendInternal,TResult? Function( MinosError_CfAuthFailed value)?  cfAuthFailed,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_CfAccessMisconfigured value)?  cfAccessMisconfigured,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,TResult? Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_BackendInternal value)?  backendInternal,TResult? Function( MinosError_CfAuthFailed value)?  cfAuthFailed,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_CfAccessMisconfigured value)?  cfAccessMisconfigured,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,TResult? Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult? Function( MinosError_Timeout value)?  timeout,TResult? Function( MinosError_NotConnected value)?  notConnected,TResult? Function( MinosError_RequestDropped value)?  requestDropped,TResult? Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult? Function( MinosError_EmailTaken value)?  emailTaken,TResult? Function( MinosError_WeakPassword value)?  weakPassword,TResult? Function( MinosError_RateLimited value)?  rateLimited,TResult? Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult? Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult? Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -520,7 +917,17 @@ return ingestSeqConflict(_that);case MinosError_ThreadNotFound() when threadNotF
 return threadNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
-return pairingQrVersionUnsupported(_that);case _:
+return pairingQrVersionUnsupported(_that);case MinosError_Timeout() when timeout != null:
+return timeout(_that);case MinosError_NotConnected() when notConnected != null:
+return notConnected(_that);case MinosError_RequestDropped() when requestDropped != null:
+return requestDropped(_that);case MinosError_AuthRefreshFailed() when authRefreshFailed != null:
+return authRefreshFailed(_that);case MinosError_EmailTaken() when emailTaken != null:
+return emailTaken(_that);case MinosError_WeakPassword() when weakPassword != null:
+return weakPassword(_that);case MinosError_RateLimited() when rateLimited != null:
+return rateLimited(_that);case MinosError_InvalidCredentials() when invalidCredentials != null:
+return invalidCredentials(_that);case MinosError_AgentStartFailed() when agentStartFailed != null:
+return agentStartFailed(_that);case MinosError_PairingTokenExpired() when pairingTokenExpired != null:
+return pairingTokenExpired(_that);case _:
   return null;
 
 }
@@ -537,7 +944,7 @@ return pairingQrVersionUnsupported(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  backendInternal,TResult Function( String message)?  cfAuthFailed,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String reason)?  cfAccessMisconfigured,TResult Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult Function( String threadId)?  threadNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,TResult Function( int version)?  pairingQrVersionUnsupported,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  backendInternal,TResult Function( String message)?  cfAuthFailed,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String reason)?  cfAccessMisconfigured,TResult Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult Function( String threadId)?  threadNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,TResult Function( int version)?  pairingQrVersionUnsupported,TResult Function()?  timeout,TResult Function()?  notConnected,TResult Function()?  requestDropped,TResult Function( String message)?  authRefreshFailed,TResult Function()?  emailTaken,TResult Function()?  weakPassword,TResult Function( int retryAfterS)?  rateLimited,TResult Function()?  invalidCredentials,TResult Function( String reason)?  agentStartFailed,TResult Function()?  pairingTokenExpired,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -569,7 +976,17 @@ return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFoun
 return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
-return pairingQrVersionUnsupported(_that.version);case _:
+return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout() when timeout != null:
+return timeout();case MinosError_NotConnected() when notConnected != null:
+return notConnected();case MinosError_RequestDropped() when requestDropped != null:
+return requestDropped();case MinosError_AuthRefreshFailed() when authRefreshFailed != null:
+return authRefreshFailed(_that.message);case MinosError_EmailTaken() when emailTaken != null:
+return emailTaken();case MinosError_WeakPassword() when weakPassword != null:
+return weakPassword();case MinosError_RateLimited() when rateLimited != null:
+return rateLimited(_that.retryAfterS);case MinosError_InvalidCredentials() when invalidCredentials != null:
+return invalidCredentials();case MinosError_AgentStartFailed() when agentStartFailed != null:
+return agentStartFailed(_that.reason);case MinosError_PairingTokenExpired() when pairingTokenExpired != null:
+return pairingTokenExpired();case _:
   return orElse();
 
 }
@@ -587,7 +1004,7 @@ return pairingQrVersionUnsupported(_that.version);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  backendInternal,required TResult Function( String message)  cfAuthFailed,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String reason)  cfAccessMisconfigured,required TResult Function( String threadId,  BigInt seq)  ingestSeqConflict,required TResult Function( String threadId)  threadNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,required TResult Function( int version)  pairingQrVersionUnsupported,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  backendInternal,required TResult Function( String message)  cfAuthFailed,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String reason)  cfAccessMisconfigured,required TResult Function( String threadId,  BigInt seq)  ingestSeqConflict,required TResult Function( String threadId)  threadNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,required TResult Function( int version)  pairingQrVersionUnsupported,required TResult Function()  timeout,required TResult Function()  notConnected,required TResult Function()  requestDropped,required TResult Function( String message)  authRefreshFailed,required TResult Function()  emailTaken,required TResult Function()  weakPassword,required TResult Function( int retryAfterS)  rateLimited,required TResult Function()  invalidCredentials,required TResult Function( String reason)  agentStartFailed,required TResult Function()  pairingTokenExpired,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed():
@@ -619,7 +1036,17 @@ return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFoun
 return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented():
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed():
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported():
-return pairingQrVersionUnsupported(_that.version);}
+return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout():
+return timeout();case MinosError_NotConnected():
+return notConnected();case MinosError_RequestDropped():
+return requestDropped();case MinosError_AuthRefreshFailed():
+return authRefreshFailed(_that.message);case MinosError_EmailTaken():
+return emailTaken();case MinosError_WeakPassword():
+return weakPassword();case MinosError_RateLimited():
+return rateLimited(_that.retryAfterS);case MinosError_InvalidCredentials():
+return invalidCredentials();case MinosError_AgentStartFailed():
+return agentStartFailed(_that.reason);case MinosError_PairingTokenExpired():
+return pairingTokenExpired();}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -633,7 +1060,7 @@ return pairingQrVersionUnsupported(_that.version);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  backendInternal,TResult? Function( String message)?  cfAuthFailed,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String reason)?  cfAccessMisconfigured,TResult? Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String threadId)?  threadNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,TResult? Function( int version)?  pairingQrVersionUnsupported,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  backendInternal,TResult? Function( String message)?  cfAuthFailed,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String reason)?  cfAccessMisconfigured,TResult? Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String threadId)?  threadNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,TResult? Function( int version)?  pairingQrVersionUnsupported,TResult? Function()?  timeout,TResult? Function()?  notConnected,TResult? Function()?  requestDropped,TResult? Function( String message)?  authRefreshFailed,TResult? Function()?  emailTaken,TResult? Function()?  weakPassword,TResult? Function( int retryAfterS)?  rateLimited,TResult? Function()?  invalidCredentials,TResult? Function( String reason)?  agentStartFailed,TResult? Function()?  pairingTokenExpired,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -665,7 +1092,17 @@ return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFoun
 return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
-return pairingQrVersionUnsupported(_that.version);case _:
+return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout() when timeout != null:
+return timeout();case MinosError_NotConnected() when notConnected != null:
+return notConnected();case MinosError_RequestDropped() when requestDropped != null:
+return requestDropped();case MinosError_AuthRefreshFailed() when authRefreshFailed != null:
+return authRefreshFailed(_that.message);case MinosError_EmailTaken() when emailTaken != null:
+return emailTaken();case MinosError_WeakPassword() when weakPassword != null:
+return weakPassword();case MinosError_RateLimited() when rateLimited != null:
+return rateLimited(_that.retryAfterS);case MinosError_InvalidCredentials() when invalidCredentials != null:
+return invalidCredentials();case MinosError_AgentStartFailed() when agentStartFailed != null:
+return agentStartFailed(_that.reason);case MinosError_PairingTokenExpired() when pairingTokenExpired != null:
+return pairingTokenExpired();case _:
   return null;
 
 }
@@ -2540,6 +2977,428 @@ as int,
 
 
 }
+
+/// @nodoc
+
+
+class MinosError_Timeout extends MinosError {
+  const MinosError_Timeout(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_Timeout);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.timeout()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_NotConnected extends MinosError {
+  const MinosError_NotConnected(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_NotConnected);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.notConnected()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_RequestDropped extends MinosError {
+  const MinosError_RequestDropped(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_RequestDropped);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.requestDropped()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_AuthRefreshFailed extends MinosError {
+  const MinosError_AuthRefreshFailed({required this.message}): super._();
+  
+
+ final  String message;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_AuthRefreshFailedCopyWith<MinosError_AuthRefreshFailed> get copyWith => _$MinosError_AuthRefreshFailedCopyWithImpl<MinosError_AuthRefreshFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_AuthRefreshFailed&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,message);
+
+@override
+String toString() {
+  return 'MinosError.authRefreshFailed(message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_AuthRefreshFailedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_AuthRefreshFailedCopyWith(MinosError_AuthRefreshFailed value, $Res Function(MinosError_AuthRefreshFailed) _then) = _$MinosError_AuthRefreshFailedCopyWithImpl;
+@useResult
+$Res call({
+ String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_AuthRefreshFailedCopyWithImpl<$Res>
+    implements $MinosError_AuthRefreshFailedCopyWith<$Res> {
+  _$MinosError_AuthRefreshFailedCopyWithImpl(this._self, this._then);
+
+  final MinosError_AuthRefreshFailed _self;
+  final $Res Function(MinosError_AuthRefreshFailed) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? message = null,}) {
+  return _then(MinosError_AuthRefreshFailed(
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_EmailTaken extends MinosError {
+  const MinosError_EmailTaken(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_EmailTaken);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.emailTaken()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_WeakPassword extends MinosError {
+  const MinosError_WeakPassword(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_WeakPassword);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.weakPassword()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_RateLimited extends MinosError {
+  const MinosError_RateLimited({required this.retryAfterS}): super._();
+  
+
+ final  int retryAfterS;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_RateLimitedCopyWith<MinosError_RateLimited> get copyWith => _$MinosError_RateLimitedCopyWithImpl<MinosError_RateLimited>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_RateLimited&&(identical(other.retryAfterS, retryAfterS) || other.retryAfterS == retryAfterS));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,retryAfterS);
+
+@override
+String toString() {
+  return 'MinosError.rateLimited(retryAfterS: $retryAfterS)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_RateLimitedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_RateLimitedCopyWith(MinosError_RateLimited value, $Res Function(MinosError_RateLimited) _then) = _$MinosError_RateLimitedCopyWithImpl;
+@useResult
+$Res call({
+ int retryAfterS
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_RateLimitedCopyWithImpl<$Res>
+    implements $MinosError_RateLimitedCopyWith<$Res> {
+  _$MinosError_RateLimitedCopyWithImpl(this._self, this._then);
+
+  final MinosError_RateLimited _self;
+  final $Res Function(MinosError_RateLimited) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? retryAfterS = null,}) {
+  return _then(MinosError_RateLimited(
+retryAfterS: null == retryAfterS ? _self.retryAfterS : retryAfterS // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_InvalidCredentials extends MinosError {
+  const MinosError_InvalidCredentials(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_InvalidCredentials);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.invalidCredentials()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_AgentStartFailed extends MinosError {
+  const MinosError_AgentStartFailed({required this.reason}): super._();
+  
+
+ final  String reason;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_AgentStartFailedCopyWith<MinosError_AgentStartFailed> get copyWith => _$MinosError_AgentStartFailedCopyWithImpl<MinosError_AgentStartFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_AgentStartFailed&&(identical(other.reason, reason) || other.reason == reason));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,reason);
+
+@override
+String toString() {
+  return 'MinosError.agentStartFailed(reason: $reason)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_AgentStartFailedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_AgentStartFailedCopyWith(MinosError_AgentStartFailed value, $Res Function(MinosError_AgentStartFailed) _then) = _$MinosError_AgentStartFailedCopyWithImpl;
+@useResult
+$Res call({
+ String reason
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_AgentStartFailedCopyWithImpl<$Res>
+    implements $MinosError_AgentStartFailedCopyWith<$Res> {
+  _$MinosError_AgentStartFailedCopyWithImpl(this._self, this._then);
+
+  final MinosError_AgentStartFailed _self;
+  final $Res Function(MinosError_AgentStartFailed) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
+  return _then(MinosError_AgentStartFailed(
+reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_PairingTokenExpired extends MinosError {
+  const MinosError_PairingTokenExpired(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_PairingTokenExpired);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.pairingTokenExpired()';
+}
+
+
+}
+
+
+
 
 /// @nodoc
 mixin _$ThreadEndReason {

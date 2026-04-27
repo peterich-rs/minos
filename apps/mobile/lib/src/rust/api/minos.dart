@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `spawn_state_forwarder`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -48,6 +48,14 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Request a page of thread summaries.
   Future<ListThreadsResponse> listThreads({required ListThreadsParams req});
 
+  /// Log into an existing account on the backend. Same shape as
+  /// `register` modulo the create-vs-find behaviour on the server.
+  Future<AuthSummary> login({required String email, required String password});
+
+  /// Log out of the current session. Best-effort `stop_agent`, then
+  /// revoke the refresh token server-side, then wipe local state.
+  Future<void> logout();
+
   /// Construct a client backed by the built-in in-memory pairing store.
   /// Synchronous — no I/O happens until a pairing method is called.
   factory MobileClient({required String selfName}) =>
@@ -63,6 +71,14 @@ abstract class MobileClient implements RustOpaqueInterface {
     state: state,
   );
 
+  /// Mark the app as backgrounded. Pauses the reconnect loop so we
+  /// don't poke the backend while the OS is freezing the process.
+  void notifyBackgrounded();
+
+  /// Mark the app as foregrounded. Resets the reconnect backoff so the
+  /// next connect attempt happens promptly.
+  void notifyForegrounded();
+
   /// Pair using the raw JSON payload extracted from the scanned QR v2
   /// code. Delegates to `MobileClient::pair_with_qr_json`.
   Future<void> pairWithQrJson({required String qrJson});
@@ -74,9 +90,45 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Read a window of translated UI events for one thread.
   Future<ReadThreadResponse> readThread({required ReadThreadParams req});
 
+  /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
+  /// `Authenticated` / `RefreshFailed` transitions on the auth-state
+  /// stream.
+  Future<void> refreshSession();
+
+  /// Register a new account on the backend. On success the bearer +
+  /// refresh tokens are held in memory and surfaced via the auth-state
+  /// stream; the reconnect loop then drives the WS back to `Connected`.
+  Future<AuthSummary> register({
+    required String email,
+    required String password,
+  });
+
   /// Reconnect using the durable pairing snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession();
+
+  /// Send a follow-up user message to an existing agent session.
+  Future<void> sendUserMessage({
+    required String sessionId,
+    required String text,
+  });
+
+  /// Start a new agent session and deliver the prompt as the first user
+  /// message. Returns the daemon-issued `session_id` (a.k.a.
+  /// `thread_id`) and the resolved workspace path.
+  Future<StartAgentResponse> startAgent({
+    required AgentName agent,
+    required String prompt,
+  });
+
+  /// Stop the currently-running agent (if any). Idempotent on the
+  /// no-active-session path.
+  Future<void> stopAgent();
+
+  /// Subscribe to auth-state transitions. Emits the current cached frame
+  /// immediately, then every subsequent change. The spawned task exits
+  /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
+  Stream<AuthStateFrame> subscribeAuthState();
 
   /// Subscribe to connection-state transitions. Emits the current value
   /// immediately, then every subsequent change. The spawned task exits once
@@ -90,6 +142,37 @@ abstract class MobileClient implements RustOpaqueInterface {
 }
 
 enum AgentName { codex, claude, gemini }
+
+@freezed
+sealed class AuthStateFrame with _$AuthStateFrame {
+  const AuthStateFrame._();
+
+  const factory AuthStateFrame.unauthenticated() =
+      AuthStateFrame_Unauthenticated;
+  const factory AuthStateFrame.authenticated({required AuthSummary account}) =
+      AuthStateFrame_Authenticated;
+  const factory AuthStateFrame.refreshing() = AuthStateFrame_Refreshing;
+  const factory AuthStateFrame.refreshFailed({required MinosError error}) =
+      AuthStateFrame_RefreshFailed;
+}
+
+class AuthSummary {
+  final String accountId;
+  final String email;
+
+  const AuthSummary({required this.accountId, required this.email});
+
+  @override
+  int get hashCode => accountId.hashCode ^ email.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AuthSummary &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          email == other.email;
+}
 
 @freezed
 sealed class ConnectionState with _$ConnectionState {
@@ -133,6 +216,16 @@ enum ErrorKind {
   translationNotImplemented,
   translationFailed,
   pairingQrVersionUnsupported,
+  timeout,
+  notConnected,
+  requestDropped,
+  authRefreshFailed,
+  emailTaken,
+  weakPassword,
+  rateLimited,
+  invalidCredentials,
+  agentStartFailed,
+  pairingTokenExpired,
 }
 
 enum Lang { zh, en }
@@ -298,17 +391,41 @@ sealed class MinosError with _$MinosError implements FrbException {
   }) = MinosError_TranslationFailed;
   const factory MinosError.pairingQrVersionUnsupported({required int version}) =
       MinosError_PairingQrVersionUnsupported;
+  const factory MinosError.timeout() = MinosError_Timeout;
+  const factory MinosError.notConnected() = MinosError_NotConnected;
+  const factory MinosError.requestDropped() = MinosError_RequestDropped;
+  const factory MinosError.authRefreshFailed({required String message}) =
+      MinosError_AuthRefreshFailed;
+  const factory MinosError.emailTaken() = MinosError_EmailTaken;
+  const factory MinosError.weakPassword() = MinosError_WeakPassword;
+  const factory MinosError.rateLimited({required int retryAfterS}) =
+      MinosError_RateLimited;
+  const factory MinosError.invalidCredentials() = MinosError_InvalidCredentials;
+  const factory MinosError.agentStartFailed({required String reason}) =
+      MinosError_AgentStartFailed;
+  const factory MinosError.pairingTokenExpired() =
+      MinosError_PairingTokenExpired;
 }
 
 enum PairingState { unpaired, awaitingPeer, paired }
 
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
+///
+/// Phase 4 added the five auth fields (access/refresh tokens + bound
+/// account identity) so the Dart-side secure store can rehydrate the full
+/// session on cold launch. All five auth fields are persisted as a tuple —
+/// either every one is present or all are `None`.
 class PersistedPairingState {
   final String? backendUrl;
   final String? deviceId;
   final String? deviceSecret;
   final String? cfAccessClientId;
   final String? cfAccessClientSecret;
+  final String? accessToken;
+  final PlatformInt64? accessExpiresAtMs;
+  final String? refreshToken;
+  final String? accountId;
+  final String? accountEmail;
 
   const PersistedPairingState({
     this.backendUrl,
@@ -316,6 +433,11 @@ class PersistedPairingState {
     this.deviceSecret,
     this.cfAccessClientId,
     this.cfAccessClientSecret,
+    this.accessToken,
+    this.accessExpiresAtMs,
+    this.refreshToken,
+    this.accountId,
+    this.accountEmail,
   });
 
   @override
@@ -324,7 +446,12 @@ class PersistedPairingState {
       deviceId.hashCode ^
       deviceSecret.hashCode ^
       cfAccessClientId.hashCode ^
-      cfAccessClientSecret.hashCode;
+      cfAccessClientSecret.hashCode ^
+      accessToken.hashCode ^
+      accessExpiresAtMs.hashCode ^
+      refreshToken.hashCode ^
+      accountId.hashCode ^
+      accountEmail.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -335,7 +462,12 @@ class PersistedPairingState {
           deviceId == other.deviceId &&
           deviceSecret == other.deviceSecret &&
           cfAccessClientId == other.cfAccessClientId &&
-          cfAccessClientSecret == other.cfAccessClientSecret;
+          cfAccessClientSecret == other.cfAccessClientSecret &&
+          accessToken == other.accessToken &&
+          accessExpiresAtMs == other.accessExpiresAtMs &&
+          refreshToken == other.refreshToken &&
+          accountId == other.accountId &&
+          accountEmail == other.accountEmail;
 }
 
 class ReadThreadParams {
@@ -385,6 +517,24 @@ class ReadThreadResponse {
           uiEvents == other.uiEvents &&
           nextSeq == other.nextSeq &&
           threadEndReason == other.threadEndReason;
+}
+
+class StartAgentResponse {
+  final String sessionId;
+  final String cwd;
+
+  const StartAgentResponse({required this.sessionId, required this.cwd});
+
+  @override
+  int get hashCode => sessionId.hashCode ^ cwd.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is StartAgentResponse &&
+          runtimeType == other.runtimeType &&
+          sessionId == other.sessionId &&
+          cwd == other.cwd;
 }
 
 @freezed

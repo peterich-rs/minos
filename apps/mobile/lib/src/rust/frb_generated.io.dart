@@ -44,6 +44,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<AuthStateFrame> dco_decode_StreamSink_auth_state_frame_Sse(
+    dynamic raw,
+  );
+
+  @protected
   RustStreamSink<ConnectionState> dco_decode_StreamSink_connection_state_Sse(
     dynamic raw,
   );
@@ -63,16 +68,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentName dco_decode_agent_name(dynamic raw);
 
   @protected
+  AuthStateFrame dco_decode_auth_state_frame(dynamic raw);
+
+  @protected
+  AuthSummary dco_decode_auth_summary(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
   AgentName dco_decode_box_autoadd_agent_name(dynamic raw);
 
   @protected
+  AuthSummary dco_decode_box_autoadd_auth_summary(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
   ListThreadsParams dco_decode_box_autoadd_list_threads_params(dynamic raw);
+
+  @protected
+  MinosError dco_decode_box_autoadd_minos_error(dynamic raw);
 
   @protected
   PersistedPairingState dco_decode_box_autoadd_persisted_pairing_state(
@@ -161,6 +178,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReadThreadResponse dco_decode_read_thread_response(dynamic raw);
 
   @protected
+  StartAgentResponse dco_decode_start_agent_response(dynamic raw);
+
+  @protected
   ThreadEndReason dco_decode_thread_end_reason(dynamic raw);
 
   @protected
@@ -209,6 +229,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<AuthStateFrame> sse_decode_StreamSink_auth_state_frame_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RustStreamSink<ConnectionState> sse_decode_StreamSink_connection_state_Sse(
     SseDeserializer deserializer,
   );
@@ -230,10 +255,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentName sse_decode_agent_name(SseDeserializer deserializer);
 
   @protected
+  AuthStateFrame sse_decode_auth_state_frame(SseDeserializer deserializer);
+
+  @protected
+  AuthSummary sse_decode_auth_summary(SseDeserializer deserializer);
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
   AgentName sse_decode_box_autoadd_agent_name(SseDeserializer deserializer);
+
+  @protected
+  AuthSummary sse_decode_box_autoadd_auth_summary(SseDeserializer deserializer);
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
@@ -242,6 +276,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ListThreadsParams sse_decode_box_autoadd_list_threads_params(
     SseDeserializer deserializer,
   );
+
+  @protected
+  MinosError sse_decode_box_autoadd_minos_error(SseDeserializer deserializer);
 
   @protected
   PersistedPairingState sse_decode_box_autoadd_persisted_pairing_state(
@@ -350,6 +387,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  StartAgentResponse sse_decode_start_agent_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ThreadEndReason sse_decode_thread_end_reason(SseDeserializer deserializer);
 
   @protected
@@ -404,6 +446,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_auth_state_frame_Sse(
+    RustStreamSink<AuthStateFrame> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_connection_state_Sse(
     RustStreamSink<ConnectionState> self,
     SseSerializer serializer,
@@ -428,11 +476,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_agent_name(AgentName self, SseSerializer serializer);
 
   @protected
+  void sse_encode_auth_state_frame(
+    AuthStateFrame self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_auth_summary(AuthSummary self, SseSerializer serializer);
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_agent_name(
     AgentName self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_auth_summary(
+    AuthSummary self,
     SseSerializer serializer,
   );
 
@@ -445,6 +508,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_list_threads_params(
     ListThreadsParams self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_minos_error(
+    MinosError self,
     SseSerializer serializer,
   );
 
@@ -577,6 +646,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_read_thread_response(
     ReadThreadResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_start_agent_response(
+    StartAgentResponse self,
     SseSerializer serializer,
   );
 
