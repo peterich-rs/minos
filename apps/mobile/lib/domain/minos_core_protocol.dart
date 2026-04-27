@@ -93,4 +93,13 @@ abstract class MinosCoreProtocol {
   /// cached frame immediately on subscribe (per Rust watch-channel
   /// semantics), then every subsequent change.
   Stream<AuthStateFrame> get authStates;
+
+  /// Re-open the WS using the durable pairing snapshot already loaded
+  /// into the Rust core. Idempotent: a no-op when [currentConnectionState]
+  /// is already `Connected`, and an error when no pairing snapshot exists.
+  ///
+  /// Called by `AuthController` on the first `Authenticated` transition
+  /// (Phase 8.9) so the WS reconnect loop only spawns under an
+  /// authenticated session.
+  Future<void> resumePersistedSession();
 }

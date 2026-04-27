@@ -20,6 +20,7 @@ class _FakeCore implements MinosCoreProtocol {
   String? lastLoginEmail;
   String? lastLoginPassword;
   int logoutCount = 0;
+  int resumeCount = 0;
 
   void emit(AuthStateFrame frame) => _authCtl.add(frame);
 
@@ -91,6 +92,11 @@ class _FakeCore implements MinosCoreProtocol {
 
   @override
   void notifyBackgrounded() {}
+
+  @override
+  Future<void> resumePersistedSession() async {
+    resumeCount += 1;
+  }
 }
 
 void main() {
@@ -146,6 +152,39 @@ void main() {
       (state as AuthRefreshFailed).error,
       const MinosError.invalidCredentials(),
     );
+  });
+
+  test('first Authenticated frame triggers resumePersistedSession exactly once', () async {
+    container.read(authControllerProvider);
+    expect(core.resumeCount, 0);
+
+    core.emit(
+      const AuthStateFrame.authenticated(
+        account: AuthSummary(accountId: 'a1', email: 'x@y.test'),
+      ),
+    );
+    await pumpEventQueue();
+    expect(core.resumeCount, 1);
+
+    // A second Authenticated for the same session must not double-resume.
+    core.emit(
+      const AuthStateFrame.authenticated(
+        account: AuthSummary(accountId: 'a1', email: 'x2@y.test'),
+      ),
+    );
+    await pumpEventQueue();
+    expect(core.resumeCount, 1);
+
+    // After logout (Unauthenticated), the next Authenticated re-arms.
+    core.emit(const AuthStateFrame.unauthenticated());
+    await pumpEventQueue();
+    core.emit(
+      const AuthStateFrame.authenticated(
+        account: AuthSummary(accountId: 'a2', email: 'z@y.test'),
+      ),
+    );
+    await pumpEventQueue();
+    expect(core.resumeCount, 2);
   });
 
   test('register/login/logout call through to MinosCoreProtocol', () async {

@@ -192,6 +192,11 @@ void main() {
         backendUrl: 'ws://127.0.0.1/devices',
         deviceId: 'dev-123',
         deviceSecret: 'sec-456',
+        accessToken: 'access',
+        accessExpiresAtMs: 1700000000000,
+        refreshToken: 'refresh',
+        accountId: 'acc',
+        accountEmail: 'u@example.com',
       );
       final rehydrated = _MockMobileClient();
       when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
@@ -212,12 +217,45 @@ void main() {
     });
 
     test(
+      'skips resumePersistedSession when persisted snapshot has no auth tuple',
+      () async {
+        // Phase 8.9: paired-but-logged-out cold launch must not poke the
+        // WS — let the AuthController drive resume after the user logs in.
+        const persisted = PersistedPairingState(
+          backendUrl: 'ws://127.0.0.1/devices',
+          deviceId: 'dev-paired',
+          deviceSecret: 'sec-paired',
+        );
+        final rehydrated = _MockMobileClient();
+        when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+
+        final result = await MinosCore.resolveClient(
+          secure: secureStore,
+          buildFresh: () => fail('buildFresh must not run when paired'),
+          buildFromPersisted: (state) {
+            expect(state, persisted);
+            return rehydrated;
+          },
+        );
+
+        expect(result, same(rehydrated));
+        verifyNever(() => rehydrated.resumePersistedSession());
+        verifyNever(() => secureStore.clearAll());
+      },
+    );
+
+    test(
       'wipes secure storage and returns a fresh client when resume is revoked',
       () async {
         const persisted = PersistedPairingState(
           backendUrl: 'ws://127.0.0.1/devices',
           deviceId: 'dev-stale',
           deviceSecret: 'sec-revoked',
+          accessToken: 'access',
+          accessExpiresAtMs: 1700000000000,
+          refreshToken: 'refresh',
+          accountId: 'acc',
+          accountEmail: 'u@example.com',
         );
         final rehydrated = _MockMobileClient();
         final freshClient = _MockMobileClient();
@@ -254,6 +292,11 @@ void main() {
           backendUrl: 'ws://127.0.0.1/devices',
           deviceId: 'dev-123',
           deviceSecret: 'sec-456',
+          accessToken: 'access',
+          accessExpiresAtMs: 1700000000000,
+          refreshToken: 'refresh',
+          accountId: 'acc',
+          accountEmail: 'u@example.com',
         );
         final rehydrated = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);

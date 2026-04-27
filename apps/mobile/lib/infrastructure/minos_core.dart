@@ -63,6 +63,12 @@ class MinosCore implements MinosCoreProtocol {
   /// subsequent `pair` would otherwise re-use that identity against an
   /// authenticated row on the backend and be rejected with 401. Dropping
   /// the snapshot lets the next pair attempt mint a fresh device.
+  ///
+  /// Phase 8.9: WS startup is now gated on the persisted auth tuple. If
+  /// the snapshot has paired-device fields but no `accessToken`, we hand
+  /// back the rehydrated client *without* calling `resumePersistedSession`
+  /// — the AuthController's stream listener will trigger the WS resume
+  /// after the user logs in (`AuthAuthenticated`).
   @visibleForTesting
   static Future<MobileClient> resolveClient({
     required SecurePairingStore secure,
@@ -73,6 +79,11 @@ class MinosCore implements MinosCoreProtocol {
     if (persisted == null) return buildFresh();
 
     final client = buildFromPersisted(persisted);
+    if (persisted.accessToken == null) {
+      // Paired but logged out. Don't attempt the WS — let the AuthController
+      // drive resume after the user authenticates.
+      return client;
+    }
     try {
       await client.resumePersistedSession();
       return client;
@@ -177,6 +188,9 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   Stream<AuthStateFrame> get authStates => _client.subscribeAuthState();
+
+  @override
+  Future<void> resumePersistedSession() => _client.resumePersistedSession();
 
   Future<void> _rollbackFailedPersistedPairSave() async {
     try {

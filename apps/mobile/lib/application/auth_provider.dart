@@ -21,9 +21,14 @@ part 'auth_provider.g.dart';
 /// returns [AuthBootstrapping] from `build()`; the very first frame from
 /// the stream replaces it on the next microtask. Components watching
 /// this provider should treat [AuthBootstrapping] as "show splash".
+///
+/// Phase 8.9: on the first `Authenticated` transition, the controller
+/// also kicks the Rust WS reconnect path via `resumePersistedSession()`
+/// so the chat surface lights up without a separate trigger.
 @Riverpod(keepAlive: true)
 class AuthController extends _$AuthController {
   StreamSubscription<AuthStateFrame>? _sub;
+  bool _wsResumed = false;
 
   @override
   AuthState build() {
@@ -41,6 +46,14 @@ class AuthController extends _$AuthController {
       AuthStateFrame_Refreshing() => const AuthRefreshing(),
       AuthStateFrame_RefreshFailed(:final error) => AuthRefreshFailed(error),
     };
+    if (frame is AuthStateFrame_Authenticated && !_wsResumed) {
+      _wsResumed = true;
+      // Best-effort: a missing pairing snapshot or an unreachable Mac
+      // surfaces on connectionStateProvider — don't block the auth flow.
+      unawaited(ref.read(minosCoreProvider).resumePersistedSession().catchError((_) {}));
+    } else if (frame is AuthStateFrame_Unauthenticated) {
+      _wsResumed = false;
+    }
   }
 
   /// Register a fresh account. Errors propagate; the state itself is

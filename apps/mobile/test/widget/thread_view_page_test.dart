@@ -76,6 +76,9 @@ class _FakeCore implements MinosCoreProtocol {
 
   @override
   Stream<AuthStateFrame> get authStates => const Stream<AuthStateFrame>.empty();
+
+  @override
+  Future<void> resumePersistedSession() async {}
 }
 
 void main() {

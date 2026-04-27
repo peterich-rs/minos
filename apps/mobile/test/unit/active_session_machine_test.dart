@@ -92,6 +92,9 @@ class _FakeCore implements MinosCoreProtocol {
 
   @override
   void notifyBackgrounded() {}
+
+  @override
+  Future<void> resumePersistedSession() async {}
 }
 
 ProviderContainer _container(_FakeCore core) {
