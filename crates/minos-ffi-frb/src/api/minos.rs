@@ -31,7 +31,8 @@ use crate::frb_generated::StreamSink;
 // provide the shape metadata the codegen needs.
 pub use minos_domain::{AgentName, ConnectionState, ErrorKind, Lang, MinosError, PairingState};
 pub use minos_protocol::{
-    ListThreadsParams, ListThreadsResponse, ReadThreadParams, ReadThreadResponse, ThreadSummary,
+    AuthSummary, ListThreadsParams, ListThreadsResponse, ReadThreadParams, ReadThreadResponse,
+    StartAgentResponse, ThreadSummary,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
@@ -85,12 +86,22 @@ pub struct UiEventFrame {
 }
 
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
+///
+/// Phase 4 added the five auth fields (access/refresh tokens + bound
+/// account identity) so the Dart-side secure store can rehydrate the full
+/// session on cold launch. All five auth fields are persisted as a tuple —
+/// either every one is present or all are `None`.
 pub struct PersistedPairingState {
     pub backend_url: Option<String>,
     pub device_id: Option<String>,
     pub device_secret: Option<String>,
     pub cf_access_client_id: Option<String>,
     pub cf_access_client_secret: Option<String>,
+    pub access_token: Option<String>,
+    pub access_expires_at_ms: Option<i64>,
+    pub refresh_token: Option<String>,
+    pub account_id: Option<String>,
+    pub account_email: Option<String>,
 }
 
 impl From<minos_mobile::PersistedPairingState> for PersistedPairingState {
@@ -101,6 +112,11 @@ impl From<minos_mobile::PersistedPairingState> for PersistedPairingState {
             device_secret: state.device_secret,
             cf_access_client_id: state.cf_access_client_id,
             cf_access_client_secret: state.cf_access_client_secret,
+            access_token: state.access_token,
+            access_expires_at_ms: state.access_expires_at_ms,
+            refresh_token: state.refresh_token,
+            account_id: state.account_id,
+            account_email: state.account_email,
         }
     }
 }
@@ -113,6 +129,11 @@ impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
             device_secret: state.device_secret,
             cf_access_client_id: state.cf_access_client_id,
             cf_access_client_secret: state.cf_access_client_secret,
+            access_token: state.access_token,
+            access_expires_at_ms: state.access_expires_at_ms,
+            refresh_token: state.refresh_token,
+            account_id: state.account_id,
+            account_email: state.account_email,
         }
     }
 }
@@ -124,6 +145,36 @@ impl From<MobileUiEventFrame> for UiEventFrame {
             seq: f.seq,
             ui: f.ui,
             ts_ms: f.ts_ms,
+        }
+    }
+}
+
+/// Dart-visible auth state frame.
+///
+/// Defined fresh here rather than mirrored from `minos_mobile::auth` because
+/// the inner `RefreshFailed` payload is `Arc<MinosError>` for cheap watch-
+/// channel cloning — frb's `#[frb(mirror)]` codegen would have to round-trip
+/// the Arc, which is awkward. The `From` impl below unwraps the Arc and
+/// clones the inner `MinosError` (cheap, since `MinosError` derives `Clone`)
+/// so the Dart side sees a plain typed-error variant.
+#[derive(Debug, Clone)]
+pub enum AuthStateFrame {
+    Unauthenticated,
+    Authenticated { account: AuthSummary },
+    Refreshing,
+    RefreshFailed { error: MinosError },
+}
+
+impl From<minos_mobile::auth::AuthStateFrame> for AuthStateFrame {
+    fn from(f: minos_mobile::auth::AuthStateFrame) -> Self {
+        use minos_mobile::auth::AuthStateFrame as M;
+        match f {
+            M::Unauthenticated => Self::Unauthenticated,
+            M::Authenticated { account } => Self::Authenticated { account },
+            M::Refreshing => Self::Refreshing,
+            M::RefreshFailed { error } => Self::RefreshFailed {
+                error: (*error).clone(),
+            },
         }
     }
 }
@@ -227,6 +278,105 @@ impl MobileClient {
                         tracing::warn!(skipped = n, "ui_events_stream lagged");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
+    // ─────────────────────────── account auth ──────────────────────────────
+
+    /// Register a new account on the backend. On success the bearer +
+    /// refresh tokens are held in memory and surfaced via the auth-state
+    /// stream; the reconnect loop then drives the WS back to `Connected`.
+    pub async fn register(
+        &self,
+        email: String,
+        password: String,
+    ) -> Result<AuthSummary, MinosError> {
+        self.0.register(email, password).await
+    }
+
+    /// Log into an existing account on the backend. Same shape as
+    /// `register` modulo the create-vs-find behaviour on the server.
+    pub async fn login(&self, email: String, password: String) -> Result<AuthSummary, MinosError> {
+        self.0.login(email, password).await
+    }
+
+    /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
+    /// `Authenticated` / `RefreshFailed` transitions on the auth-state
+    /// stream.
+    pub async fn refresh_session(&self) -> Result<(), MinosError> {
+        self.0.refresh_session().await
+    }
+
+    /// Log out of the current session. Best-effort `stop_agent`, then
+    /// revoke the refresh token server-side, then wipe local state.
+    pub async fn logout(&self) -> Result<(), MinosError> {
+        self.0.logout().await
+    }
+
+    // ─────────────────────────── agent dispatch ────────────────────────────
+
+    /// Start a new agent session and deliver the prompt as the first user
+    /// message. Returns the daemon-issued `session_id` (a.k.a.
+    /// `thread_id`) and the resolved workspace path.
+    pub async fn start_agent(
+        &self,
+        agent: AgentName,
+        prompt: String,
+    ) -> Result<StartAgentResponse, MinosError> {
+        self.0.start_agent(agent, prompt).await
+    }
+
+    /// Send a follow-up user message to an existing agent session.
+    pub async fn send_user_message(
+        &self,
+        session_id: String,
+        text: String,
+    ) -> Result<(), MinosError> {
+        self.0.send_user_message(session_id, text).await
+    }
+
+    /// Stop the currently-running agent (if any). Idempotent on the
+    /// no-active-session path.
+    pub async fn stop_agent(&self) -> Result<(), MinosError> {
+        self.0.stop_agent().await
+    }
+
+    // ─────────────────────────── lifecycle hooks ───────────────────────────
+
+    /// Mark the app as foregrounded. Resets the reconnect backoff so the
+    /// next connect attempt happens promptly.
+    #[frb(sync)]
+    pub fn notify_foregrounded(&self) {
+        self.0.notify_foregrounded();
+    }
+
+    /// Mark the app as backgrounded. Pauses the reconnect loop so we
+    /// don't poke the backend while the OS is freezing the process.
+    #[frb(sync)]
+    pub fn notify_backgrounded(&self) {
+        self.0.notify_backgrounded();
+    }
+
+    // ─────────────────────────── auth subscription ─────────────────────────
+
+    /// Subscribe to auth-state transitions. Emits the current cached frame
+    /// immediately, then every subsequent change. The spawned task exits
+    /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
+    pub fn subscribe_auth_state(&self, sink: StreamSink<AuthStateFrame>) {
+        let mut rx = self.0.subscribe_auth_state();
+        frb_runtime().spawn(async move {
+            // Emit the snapshot visible at subscribe time so late subscribers
+            // aren't stuck on whatever they last rendered.
+            let snapshot = AuthStateFrame::from(rx.borrow_and_update().clone());
+            if sink.add(snapshot).is_err() {
+                return;
+            }
+            while rx.changed().await.is_ok() {
+                let frame = AuthStateFrame::from(rx.borrow().clone());
+                if sink.add(frame).is_err() {
+                    break;
                 }
             }
         });
@@ -401,6 +551,16 @@ pub enum _ErrorKind {
     TranslationNotImplemented,
     TranslationFailed,
     PairingQrVersionUnsupported,
+    Timeout,
+    NotConnected,
+    RequestDropped,
+    AuthRefreshFailed,
+    EmailTaken,
+    WeakPassword,
+    RateLimited,
+    InvalidCredentials,
+    AgentStartFailed,
+    PairingTokenExpired,
 }
 
 #[allow(dead_code)]
@@ -436,6 +596,16 @@ pub enum _MinosError {
     TranslationNotImplemented { agent: AgentName },
     TranslationFailed { agent: AgentName, message: String },
     PairingQrVersionUnsupported { version: u8 },
+    Timeout,
+    NotConnected,
+    RequestDropped,
+    AuthRefreshFailed { message: String },
+    EmailTaken,
+    WeakPassword,
+    RateLimited { retry_after_s: u32 },
+    InvalidCredentials,
+    AgentStartFailed { reason: String },
+    PairingTokenExpired,
 }
 
 // ─────────────────────────── mirrored protocol types ──────────────────────────
@@ -557,6 +727,22 @@ pub enum _UiEventMessage {
         kind: String,
         payload_json: String,
     },
+}
+
+// ─────────────────────── mirrored auth + agent types ─────────────────────────
+
+#[allow(dead_code)]
+#[frb(mirror(AuthSummary))]
+pub struct _AuthSummary {
+    pub account_id: String,
+    pub email: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(StartAgentResponse))]
+pub struct _StartAgentResponse {
+    pub session_id: String,
+    pub cwd: String,
 }
 
 #[cfg(test)]
