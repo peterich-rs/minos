@@ -191,7 +191,7 @@ impl ErrorKind {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum MinosError {
     // ── network / WS layer ──
     #[error("websocket bind failed on {addr}: {message}")]
