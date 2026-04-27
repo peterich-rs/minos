@@ -142,7 +142,13 @@ class MinosCore implements MinosCoreProtocol {
   Future<void> refreshSession() => _client.refreshSession();
 
   @override
-  Future<void> logout() => _client.logout();
+  Future<void> logout() async {
+    await _client.logout();
+    // Mirror the Rust-side wipe into the Dart keychain so a cold relaunch
+    // doesn't rehydrate the dead session. The pairing tuple is left
+    // intact so the next account login on this device can reuse it.
+    await _secure.clearAuth();
+  }
 
   // ---- Agent dispatch forwarders ----
 

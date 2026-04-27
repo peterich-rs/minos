@@ -179,4 +179,99 @@ void main() {
     expect(await store.loadState(), isNull);
     expect(values, isEmpty);
   });
+
+  // ---- Phase 4 auth fields ----
+
+  test('saveState/loadState round-trips full auth tuple', () async {
+    final store = SecurePairingStore(storage: storage);
+    final state = PersistedPairingState(
+      backendUrl: 'wss://example.com/devices',
+      deviceId: 'dev-1',
+      deviceSecret: 'sec-1',
+      accessToken: 'access-token-xyz',
+      accessExpiresAtMs: 1700000000000,
+      refreshToken: 'refresh-token-abc',
+      accountId: 'acc-uuid',
+      accountEmail: 'user@example.com',
+    );
+
+    await store.saveState(state);
+
+    expect(values['minos.access_token'], 'access-token-xyz');
+    expect(values['minos.access_expires_at_ms'], '1700000000000');
+    expect(values['minos.refresh_token'], 'refresh-token-abc');
+    expect(values['minos.account_id'], 'acc-uuid');
+    expect(values['minos.account_email'], 'user@example.com');
+
+    expect(await store.loadState(), state);
+  });
+
+  test('saveState skips auth keys when no auth tuple is present', () async {
+    final store = SecurePairingStore(storage: storage);
+    const state = PersistedPairingState(
+      backendUrl: 'wss://example.com/devices',
+      deviceId: 'dev-1',
+      deviceSecret: 'sec-1',
+    );
+
+    await store.saveState(state);
+
+    expect(values.containsKey('minos.access_token'), isFalse);
+    expect(values.containsKey('minos.refresh_token'), isFalse);
+    expect(values.containsKey('minos.account_id'), isFalse);
+  });
+
+  test('clearAuth wipes only the auth tuple, leaving pairing intact', () async {
+    final store = SecurePairingStore(storage: storage);
+    final state = PersistedPairingState(
+      backendUrl: 'wss://example.com/devices',
+      deviceId: 'dev-1',
+      deviceSecret: 'sec-1',
+      accessToken: 'access',
+      accessExpiresAtMs: 1700000000000,
+      refreshToken: 'refresh',
+      accountId: 'acc',
+      accountEmail: 'u@example.com',
+    );
+    await store.saveState(state);
+
+    await store.clearAuth();
+
+    expect(values['minos.backend_url'], 'wss://example.com/devices');
+    expect(values['minos.device_id'], 'dev-1');
+    expect(values['minos.device_secret'], 'sec-1');
+    expect(values.containsKey('minos.access_token'), isFalse);
+    expect(values.containsKey('minos.access_expires_at_ms'), isFalse);
+    expect(values.containsKey('minos.refresh_token'), isFalse);
+    expect(values.containsKey('minos.account_id'), isFalse);
+    expect(values.containsKey('minos.account_email'), isFalse);
+  });
+
+  test('loadState wipes a half-set auth tuple', () async {
+    final store = SecurePairingStore(storage: storage);
+    values.addAll(<String, String>{
+      'minos.backend_url': 'wss://example.com/devices',
+      'minos.device_id': 'dev-1',
+      'minos.device_secret': 'sec-1',
+      // Missing access_expires_at_ms / refresh_token / account_id /
+      // account_email — half-set tuple must be treated as corruption.
+      'minos.access_token': 'access',
+    });
+
+    expect(await store.loadState(), isNull);
+    expect(values, isEmpty);
+  });
+
+  test('clearAll wipes auth keys too', () async {
+    final store = SecurePairingStore(storage: storage);
+    values.addAll(<String, String>{
+      'minos.access_token': 'access',
+      'minos.access_expires_at_ms': '1700000000000',
+      'minos.refresh_token': 'refresh',
+      'minos.account_id': 'acc',
+      'minos.account_email': 'u@example.com',
+    });
+    await store.clearAll();
+    expect(values, isEmpty);
+  });
 }
