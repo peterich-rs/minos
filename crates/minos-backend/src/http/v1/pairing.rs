@@ -15,6 +15,7 @@ use crate::auth::bearer;
 use crate::error::BackendError;
 use crate::http::auth;
 use crate::http::BackendState;
+use crate::session::SessionHandle;
 
 pub fn router() -> Router<BackendState> {
     Router::new()
@@ -215,8 +216,8 @@ async fn post_consume(
                 issuer = %issuer_id,
                 "Event::Paired delivery failed; compensating",
             );
-            *issuer_handle.paired_with.write().await = None;
             let _ = state.pairing.forget_pair(consumer_id).await;
+            refresh_live_pair_slot(&state, &issuer_handle).await;
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 err_body(
@@ -294,7 +295,7 @@ async fn delete_pairing(
 
     // Caller's own live session (if any).
     if let Some(self_handle) = state.registry.get(outcome.device_id) {
-        *self_handle.paired_with.write().await = None;
+        refresh_live_pair_slot(&state, &self_handle).await;
         let _ = state
             .registry
             .try_send_current(&self_handle, unpaired.clone());
@@ -303,9 +304,25 @@ async fn delete_pairing(
     // pushing Event::Unpaired so the peer dispatcher cannot route one last
     // Forward off stale state.
     if let Some(peer_handle) = state.registry.get(peer) {
-        *peer_handle.paired_with.write().await = None;
+        refresh_live_pair_slot(&state, &peer_handle).await;
         let _ = state.registry.try_send_current(&peer_handle, unpaired);
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn refresh_live_pair_slot(state: &BackendState, handle: &SessionHandle) {
+    let next_peer = match crate::store::pairings::get_peers(&state.store, handle.device_id).await {
+        Ok(peers) => peers.into_iter().next(),
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::v1::pairing",
+                error = %e,
+                device = %handle.device_id,
+                "failed to refresh live paired_with slot"
+            );
+            None
+        }
+    };
+    *handle.paired_with.write().await = next_peer;
 }

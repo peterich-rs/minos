@@ -129,7 +129,9 @@ pub async fn revoke_one(pool: &SqlitePool, plaintext: &str) -> Result<(), Backen
 }
 
 /// Revoke every active refresh token for an account. Used on login to
-/// enforce single-active-iPhone (spec §5.2).
+/// invalidate all devices for that account when an administrative flow needs
+/// it. Normal login uses [`revoke_all_for_device`] so multiple iOS devices can
+/// remain signed in at once.
 pub async fn revoke_all_for_account(
     pool: &SqlitePool,
     account_id: &str,
@@ -144,6 +146,30 @@ pub async fn revoke_all_for_account(
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "refresh_tokens::revoke_all_for_account".into(),
+        message: e.to_string(),
+    })?;
+    Ok(result.rows_affected())
+}
+
+/// Revoke every active refresh token for a single device.
+///
+/// Login mints a fresh token for the current device, but it must not evict
+/// other devices on the same account now that multi-mobile pairing is
+/// supported.
+pub async fn revoke_all_for_device(
+    pool: &SqlitePool,
+    device_id: &str,
+) -> Result<u64, BackendError> {
+    let now = Utc::now().timestamp_millis();
+    let result = sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
+    )
+    .bind(now)
+    .bind(device_id)
+    .execute(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::revoke_all_for_device".into(),
         message: e.to_string(),
     })?;
     Ok(result.rows_affected())
@@ -238,6 +264,26 @@ mod tests {
         // Idempotent: a second call revokes 0.
         let revoked2 = revoke_all_for_account(&pool, &account_id).await.unwrap();
         assert_eq!(revoked2, 0);
+    }
+
+    #[tokio::test]
+    async fn revoke_all_for_device_leaves_other_devices_on_account_active() {
+        let pool = memory_pool().await;
+        let (account_id, device_a) = setup_account_and_device(&pool).await;
+        let device_b = DeviceId::new();
+        insert_device(&pool, device_b, "ipad", DeviceRole::IosClient, T0)
+            .await
+            .unwrap();
+        let device_b = device_b.to_string();
+        let p1 = generate_plaintext();
+        let p2 = generate_plaintext();
+        insert(&pool, &p1, &account_id, &device_a).await.unwrap();
+        insert(&pool, &p2, &account_id, &device_b).await.unwrap();
+
+        let revoked = revoke_all_for_device(&pool, &device_a).await.unwrap();
+        assert_eq!(revoked, 1);
+        assert!(find_active(&pool, &p1).await.unwrap().is_none());
+        assert!(find_active(&pool, &p2).await.unwrap().is_some());
     }
 
     #[tokio::test]

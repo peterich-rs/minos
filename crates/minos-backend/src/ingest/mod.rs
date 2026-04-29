@@ -4,8 +4,8 @@
 //! frame. It:
 //!
 //! 1. Upserts the `threads` row.
-//! 2. `INSERT OR IGNORE`s the raw event, discarding retransmits at the DB
-//!    boundary so seq collisions are not observable to callers.
+//! 2. Persists the raw event, discarding exact retransmits while assigning a
+//!    fresh backend seq when a resumed daemon reuses an old process-local seq.
 //! 3. Runs the per-agent translator. Translator errors surface as a
 //!    synthetic `UiEventMessage::Error` so mobile sees something deterministic
 //!    rather than a silent drop.
@@ -28,7 +28,7 @@ use sqlx::SqlitePool;
 use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
 use crate::session::SessionRegistry;
-use crate::store::{raw_events, threads};
+use crate::store::{pairings, raw_events, threads};
 
 /// Process one `Envelope::Ingest` frame.
 #[allow(clippy::too_many_arguments)] // Single-site dispatcher; splitting obscures the 4-step pipeline.
@@ -46,16 +46,17 @@ pub async fn dispatch(
     // 1. Upsert the thread row (creates on first ingest, bumps last_ts_ms otherwise).
     threads::upsert(pool, thread_id, agent, &owner_device_id.to_string(), ts_ms).await?;
 
-    // 2. Persist raw; dedupe on (thread_id, seq).
-    let inserted =
-        raw_events::insert_if_absent(pool, thread_id, seq, agent, payload, ts_ms).await?;
-    if !inserted {
+    // 2. Persist raw. The backend may assign a fresh seq when the daemon
+    // resumes an existing thread with a process-local counter reset.
+    let Some(persisted_seq) =
+        raw_events::insert_assigning_seq(pool, thread_id, seq, agent, payload, ts_ms).await?
+    else {
         tracing::debug!(
             target: "minos_backend::ingest",
             thread_id, seq, "ingest seq retransmit, dropping"
         );
         return Ok(());
-    }
+    };
 
     // 3. Translate. Translator failures are non-fatal: we emit a synthetic
     // Error UI event so mobile sees a deterministic surface.
@@ -114,7 +115,7 @@ pub async fn dispatch(
             version: 1,
             event: EventKind::UiEventMessage {
                 thread_id: thread_id.to_string(),
-                seq,
+                seq: persisted_seq,
                 ui,
                 ts_ms,
             },
@@ -210,23 +211,23 @@ fn sanitize_title(text: &str) -> Option<String> {
     Some(trimmed.chars().take(80).collect())
 }
 
-/// Look up the pair for `device_id` in the DB, find its live session in the
-/// registry (if any), and try-send `env` on its outbox. Misses (unpaired
-/// device, peer offline, full outbox) are logged at debug/warn and swallowed
-/// — ingest must stay crash-safe.
+/// Look up every peer for `device_id` in the DB, find each live session in
+/// the registry (if any), and try-send `env` on its outbox. Misses
+/// (unpaired device, peer offline, full outbox) are logged at debug/warn and
+/// swallowed — ingest must stay crash-safe.
 async fn broadcast_to_peers_of(
     pool: &SqlitePool,
     registry: &SessionRegistry,
     device_id: minos_domain::DeviceId,
     env: &Envelope,
 ) {
-    let peer = match crate::store::pairings::get_pair(pool, device_id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => {
+    let peers = match pairings::get_peers(pool, device_id).await {
+        Ok(p) if !p.is_empty() => p,
+        Ok(_) => {
             tracing::debug!(
                 target: "minos_backend::ingest",
                 device = %device_id,
-                "no peer paired; dropping ui event"
+                "no peers paired; dropping ui event"
             );
             return;
         }
@@ -234,31 +235,33 @@ async fn broadcast_to_peers_of(
             tracing::warn!(
                 target: "minos_backend::ingest",
                 error = ?e,
-                "failed to look up pair"
+                "failed to look up peers"
             );
             return;
         }
     };
 
-    let Some(handle) = registry.get(peer) else {
-        tracing::debug!(
-            target: "minos_backend::ingest",
-            peer = %peer,
-            "peer not live; dropping ui event"
-        );
-        return;
-    };
+    for peer in peers {
+        let Some(handle) = registry.get(peer) else {
+            tracing::debug!(
+                target: "minos_backend::ingest",
+                peer = %peer,
+                "peer not live; dropping ui event"
+            );
+            continue;
+        };
 
-    // Route through `try_send_current` so a reconnect race (peer reconnects
-    // between `get` and the send) cannot let a superseded socket consume
-    // the live UI event. The replacement session will catch up via the
-    // next ingest tick or via list/read_thread on its own (re)attach.
-    if let Err(e) = registry.try_send_current(&handle, env.clone()) {
-        tracing::warn!(
-            target: "minos_backend::ingest",
-            peer = %peer,
-            error = ?e,
-            "peer outbox full or superseded; dropping ui event"
-        );
+        // Route through `try_send_current` so a reconnect race (peer reconnects
+        // between `get` and the send) cannot let a superseded socket consume
+        // the live UI event. The replacement session will catch up via the
+        // next ingest tick or via list/read_thread on its own (re)attach.
+        if let Err(e) = registry.try_send_current(&handle, env.clone()) {
+            tracing::warn!(
+                target: "minos_backend::ingest",
+                peer = %peer,
+                error = ?e,
+                "peer outbox full or superseded; dropping ui event"
+            );
+        }
     }
 }

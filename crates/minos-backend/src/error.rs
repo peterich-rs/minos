@@ -82,12 +82,11 @@ pub enum BackendError {
     #[error("jwt verify error: {message}")]
     JwtVerify { message: String },
 
-    /// Pairing refused because one side was already paired.
-    ///
-    /// Spec §10.2 R4: MVP policy is "refuse and let the UI confirm replace
-    /// via explicit `forget_peer` + retry". `actual` captures the observed
-    /// state (currently always `"paired"`) so future callers can rely on
-    /// the stringly-typed shape without caring about the domain enum.
+    /// Pairing refused because the candidate state is invalid, for example
+    /// a device trying to pair with itself. `actual` captures the observed
+    /// state (currently `"self"` for the live multi-device path, with
+    /// `"paired"` still possible from legacy single-pair DB triggers during
+    /// upgrade).
     /// Mirrors `MinosError::PairingStateMismatch`.
     #[error("pairing state mismatch: {actual}")]
     PairingStateMismatch { actual: String },

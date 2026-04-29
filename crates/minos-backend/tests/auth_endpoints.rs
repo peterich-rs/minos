@@ -223,10 +223,10 @@ async fn auth_login_revokes_existing_refresh_tokens() {
 }
 
 #[tokio::test]
-async fn auth_login_closes_other_iphone_ws_sessions_for_same_account() {
-    // Phase 2 Task 2.5: when device B logs into the same account that
-    // device A is already logged into, A's live iOS WS session is dropped
-    // from the registry and its `revoked` watch fires.
+async fn auth_login_keeps_other_iphone_ws_sessions_for_same_account() {
+    // Multi-device mode: when device B logs into the same account that
+    // device A is already logged into, A's live iOS WS session and refresh
+    // token remain valid.
     use minos_backend::session::SessionHandle;
     use minos_domain::{DeviceId, DeviceRole};
 
@@ -250,6 +250,7 @@ async fn auth_login_closes_other_iphone_ws_sessions_for_same_account() {
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
     let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
+    let device_a_refresh = body["refresh_token"].as_str().unwrap().to_string();
 
     // Simulate device A's live WS by directly inserting a SessionHandle
     // bound to the account. (The HTTP-only test app doesn't go through
@@ -257,11 +258,10 @@ async fn auth_login_closes_other_iphone_ws_sessions_for_same_account() {
     let (handle_a, mut rx_a) = SessionHandle::new(device_a_id, DeviceRole::IosClient);
     handle_a.set_account_id(account_id.clone());
     state.registry.insert(handle_a.clone());
-    let mut a_revoked = handle_a.subscribe_revocation();
+    let a_revoked = handle_a.subscribe_revocation();
 
-    // Device B logs in with the same credentials. This should:
-    //   1. revoke existing refresh tokens (covered by other test)
-    //   2. close A's live WS session.
+    // Device B logs in with the same credentials. This should rotate only
+    // device B's own tokens and leave device A connected.
     let (status, _body) = post_json(
         &mut app,
         "/v1/auth/login",
@@ -271,22 +271,26 @@ async fn auth_login_closes_other_iphone_ws_sessions_for_same_account() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // A is no longer in the registry.
     assert!(
-        state.registry.get(device_a_id).is_none(),
-        "device A's session must be evicted after device B logs in",
+        state.registry.get(device_a_id).is_some(),
+        "device A's session must remain live after device B logs in",
     );
-    // A's revoke watch fired.
-    a_revoked
-        .changed()
-        .await
-        .expect("device A must observe revocation");
-    assert!(*a_revoked.borrow());
-    // The outbox sender drops with the registry entry; receivers see
-    // the channel close after we drop our local clone.
+    assert!(!*a_revoked.borrow(), "device A must not be revoked");
+    assert!(
+        rx_a.try_recv().is_err(),
+        "device A should not receive a forced-close frame"
+    );
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/refresh",
+        &ios_headers(&device_a_str),
+        json!({"refresh_token": device_a_refresh}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
     drop(handle_a);
-    // After the local clone drops, recv returns None (channel closed).
-    assert!(rx_a.recv().await.is_none());
 }
 
 #[tokio::test]

@@ -311,7 +311,9 @@ async fn notify_live_peer_connected(
     else {
         return;
     };
-    if *peer_handle.paired_with.read().await != Some(device_id) {
+    if peer_handle.role != DeviceRole::AgentHost
+        && *peer_handle.paired_with.read().await != Some(device_id)
+    {
         return;
     }
 

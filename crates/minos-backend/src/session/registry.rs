@@ -116,6 +116,11 @@ pub struct SessionHandle {
     /// `paired_with` but stays sync because no caller `.await`s while
     /// holding the guard.
     pub account_id: Arc<Mutex<Option<String>>>,
+    /// For multi-iOS pairing, Mac replies cannot be routed through a single
+    /// `paired_with` slot. When an iOS request is forwarded to this Mac, the
+    /// backend records JSON-RPC id -> requester here so the response with the
+    /// same id is routed back to the originating device.
+    rpc_reply_targets: Arc<DashMap<u64, DeviceId>>,
 }
 
 impl SessionHandle {
@@ -138,6 +143,7 @@ impl SessionHandle {
             revoked,
             last_pong_at: Arc::new(RwLock::new(Instant::now())),
             account_id: Arc::new(Mutex::new(None)),
+            rpc_reply_targets: Arc::new(DashMap::new()),
         };
         (handle, rx)
     }
@@ -191,6 +197,14 @@ impl SessionHandle {
     #[must_use]
     pub fn subscribe_revocation(&self) -> watch::Receiver<bool> {
         self.revoked.subscribe()
+    }
+
+    pub fn remember_rpc_reply_target(&self, request_id: u64, from: DeviceId) {
+        self.rpc_reply_targets.insert(request_id, from);
+    }
+
+    pub fn take_rpc_reply_target(&self, request_id: u64) -> Option<DeviceId> {
+        self.rpc_reply_targets.remove(&request_id).map(|(_, id)| id)
     }
 
     /// True when `other` refers to the same concrete socket session.
@@ -295,9 +309,9 @@ impl SessionRegistry {
     /// optional `except` device id (provided as a string, matching the
     /// `DeviceId::to_string` representation that bearer claims carry).
     ///
-    /// Used at login time (spec §5.5 single-active-iPhone) to make sure
-    /// only the most-recently-logged-in iPhone session keeps a live WS.
-    /// Mac sessions are not touched — the Mac stays paired and online.
+    /// Retained for administrative/session-revocation flows. Normal login no
+    /// longer calls this because multiple iOS devices on the same account may
+    /// stay connected concurrently. Mac sessions are not touched.
     ///
     /// Returns the number of sessions actually closed.
     pub fn close_account_sessions(&self, account_id: &str, except: Option<&str>) -> usize {
@@ -510,6 +524,7 @@ mod tests {
                 revoked,
                 last_pong_at: Arc::new(RwLock::new(Instant::now())),
                 account_id: Arc::new(Mutex::new(None)),
+                rpc_reply_targets: Arc::new(DashMap::new()),
             },
             rx,
         )

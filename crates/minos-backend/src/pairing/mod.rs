@@ -10,9 +10,11 @@
 //! 2. Consume — the iOS client presents a candidate token; we atomically
 //!    mark the row consumed, mint two fresh `DeviceSecret`s (one for each
 //!    side), hash them with argon2id, and insert the pairing row.
-//! 3. Forget — either side can dissolve the pair; the caller learns the
-//!    peer's `DeviceId` so it can broadcast the `Unpaired` event, and both
-//!    stored device-secret hashes are revoked in the same transaction.
+//! 3. Forget — either side can dissolve one pair; the caller learns the
+//!    peer's `DeviceId` so it can broadcast the `Unpaired` event. iOS-side
+//!    secrets are revoked when the iOS device has no remaining pair; Mac
+//!    host secrets are kept because one host may stay paired with other
+//!    mobile devices.
 //!
 //! # Two hash primitives
 //!
@@ -24,11 +26,9 @@
 //!
 //! # Replacement policy
 //!
-//! Spec §10.2 R4 says "Mac UI confirms replace; iPhone UI: 'Mac is already
-//! paired'". The MVP server-side policy implemented here is to refuse
-//! consumption when either side already has a pairing row, returning
-//! [`BackendError::PairingStateMismatch`] — the UI is expected to resolve it
-//! by calling `forget_peer` and retrying.
+//! Pairing is multi-device: a mobile client may add multiple runtime devices,
+//! and a runtime may be visible to multiple mobile clients. The exact same
+//! pair remains idempotent via the DB uniqueness constraint.
 //!
 //! # Atomicity
 //!
@@ -132,8 +132,8 @@ impl PairingService {
     /// 1. Hash the candidate and atomically mark the matching row
     ///    consumed (via [`tokens::consume_token`]). A missing, expired, or
     ///    already-consumed token surfaces as [`BackendError::PairingTokenInvalid`].
-    /// 2. Refuse if either the consumer or the issuer already has a pairing
-    ///    row ([`BackendError::PairingStateMismatch`]).
+    /// 2. Refuse only self-pairing. Existing pair rows for either side are
+    ///    allowed; the exact same pair remains idempotent at the DB layer.
     /// 3. Mint two fresh `DeviceSecret`s, hash each with argon2id.
     /// 4. Upsert the consumer's device row (no-op if already registered),
     ///    write both `secret_hash` columns, insert the pairing row.
@@ -145,8 +145,7 @@ impl PairingService {
     ///
     /// - [`BackendError::PairingTokenInvalid`] — unknown / expired / already
     ///   consumed candidate.
-    /// - [`BackendError::PairingStateMismatch`] — consumer or issuer already
-    ///   paired.
+    /// - [`BackendError::PairingStateMismatch`] — self-pair attempt.
     /// - [`BackendError::PairingHash`] — argon2 reported an internal error.
     /// - [`BackendError::StoreQuery`] / [`BackendError::DeviceNotFound`] — any
     ///   underlying store write failed.
@@ -175,25 +174,6 @@ impl PairingService {
             if issuer == consumer {
                 return Err(BackendError::PairingStateMismatch {
                     actual: "self".to_string(),
-                });
-            }
-
-            // Spec §10.2 R4: refuse if either side already has a pairing. The
-            // UI confirms replace via `forget_peer` + retry.
-            if pairings::get_pair_with_executor(&mut *tx, consumer)
-                .await?
-                .is_some()
-            {
-                return Err(BackendError::PairingStateMismatch {
-                    actual: "paired".to_string(),
-                });
-            }
-            if pairings::get_pair_with_executor(&mut *tx, issuer)
-                .await?
-                .is_some()
-            {
-                return Err(BackendError::PairingStateMismatch {
-                    actual: "paired".to_string(),
                 });
             }
 
@@ -281,8 +261,8 @@ impl PairingService {
             };
 
             pairings::delete_pair_with_executor(&mut *tx, either_side, peer).await?;
-            devices::clear_secret_hash_with_executor(&mut *tx, either_side).await?;
-            devices::clear_secret_hash_with_executor(&mut *tx, peer).await?;
+            clear_secret_if_unpaired_non_host(&mut tx, either_side).await?;
+            clear_secret_if_unpaired_non_host(&mut tx, peer).await?;
 
             Ok(Some(peer))
         }
@@ -305,6 +285,25 @@ impl PairingService {
             }
         }
     }
+}
+
+async fn clear_secret_if_unpaired_non_host(
+    tx: &mut sqlx::SqliteConnection,
+    device_id: DeviceId,
+) -> Result<(), BackendError> {
+    if pairings::get_pair_with_executor(&mut *tx, device_id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let role = devices::get_device_with_executor(&mut *tx, device_id)
+        .await?
+        .map(|row| row.role);
+    if role != Some(DeviceRole::AgentHost) {
+        devices::clear_secret_hash_with_executor(&mut *tx, device_id).await?;
+    }
+    Ok(())
 }
 
 /// SHA-256 hex digest of a UTF-8 string.
@@ -495,7 +494,7 @@ mod tests {
     // ── integration: state-mismatch cases ──────────────────────────────
 
     #[tokio::test]
-    async fn consume_when_consumer_already_paired_returns_pairing_state_mismatch() {
+    async fn consume_when_consumer_already_paired_allows_second_mac_pair() {
         let pool = memory_pool().await;
         let svc = PairingService::new(pool.clone());
 
@@ -516,14 +515,16 @@ mod tests {
         let issuer = mac_issuer(&pool).await;
         let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
 
-        let err = svc
+        let outcome = svc
             .consume_token(&token, consumer, "iphone".into())
             .await
-            .unwrap_err();
-        match err {
-            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
-            other => panic!("expected PairingStateMismatch, got {other:?}"),
-        }
+            .unwrap();
+        assert_eq!(outcome.issuer_device_id, issuer);
+
+        let peers = pairings::get_peers(&pool, consumer).await.unwrap();
+        assert_eq!(peers.len(), 2);
+        assert!(peers.contains(&third));
+        assert!(peers.contains(&issuer));
     }
 
     #[tokio::test]
@@ -558,7 +559,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn consume_when_issuer_already_paired_returns_pairing_state_mismatch() {
+    async fn consume_when_issuer_already_paired_allows_second_ios_pair() {
         let pool = memory_pool().await;
         let svc = PairingService::new(pool.clone());
 
@@ -575,19 +576,20 @@ mod tests {
         let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
         let consumer = DeviceId::new();
 
-        let err = svc
+        let outcome = svc
             .consume_token(&token, consumer, "iphone".into())
             .await
-            .unwrap_err();
-        match err {
-            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
-            other => panic!("expected PairingStateMismatch, got {other:?}"),
-        }
+            .unwrap();
+        assert_eq!(outcome.issuer_device_id, issuer);
+
+        let peers = pairings::get_peers(&pool, issuer).await.unwrap();
+        assert_eq!(peers.len(), 2);
+        assert!(peers.contains(&prior_peer));
+        assert!(peers.contains(&consumer));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn consume_two_outstanding_tokens_for_same_issuer_yields_one_success_and_one_paired_loser(
-    ) {
+    async fn consume_two_outstanding_tokens_for_same_issuer_can_pair_two_ios_devices() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("pairing-race.db");
         let url = format!("sqlite://{}?mode=rwc", db.display());
@@ -627,37 +629,23 @@ mod tests {
         let first = first.await.unwrap();
         let second = second.await.unwrap();
 
-        let (winner, loser_result) = match (&first, &second) {
-            (Ok((winner, outcome)), Err(err)) | (Err(err), Ok((winner, outcome))) => {
-                assert_eq!(outcome.issuer_device_id, issuer);
-                (*winner, err)
-            }
-            (Ok(_), Ok(_)) => panic!("expected exactly one successful consume"),
-            (Err(left), Err(right)) => {
-                panic!("expected one success, got errors {left:?} and {right:?}")
-            }
-        };
+        let (first_consumer, first_outcome) = first.expect("first consume should succeed");
+        let (second_consumer, second_outcome) = second.expect("second consume should succeed");
+        assert_eq!(first_outcome.issuer_device_id, issuer);
+        assert_eq!(second_outcome.issuer_device_id, issuer);
 
-        match loser_result {
-            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
-            other => panic!("expected PairingStateMismatch, got {other:?}"),
-        }
-
+        let peers = pairings::get_peers(&pool, issuer).await.unwrap();
+        assert_eq!(peers.len(), 2);
+        assert!(peers.contains(&first_consumer));
+        assert!(peers.contains(&second_consumer));
         assert_eq!(
-            pairings::get_pair(&pool, issuer).await.unwrap(),
-            Some(winner)
-        );
-        assert_eq!(
-            pairings::get_pair(&pool, winner).await.unwrap(),
+            pairings::get_pair(&pool, first_consumer).await.unwrap(),
             Some(issuer)
         );
-
-        let loser = if winner == consumer_a {
-            consumer_b
-        } else {
-            consumer_a
-        };
-        assert_eq!(pairings::get_pair(&pool, loser).await.unwrap(), None);
+        assert_eq!(
+            pairings::get_pair(&pool, second_consumer).await.unwrap(),
+            Some(issuer)
+        );
     }
 
     #[tokio::test]

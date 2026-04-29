@@ -272,7 +272,9 @@ async fn notify_live_peer_disconnect(session: &SessionHandle, registry: &Session
     else {
         return;
     };
-    if *peer_handle.paired_with.read().await != Some(session.device_id) {
+    if peer_handle.role != minos_domain::DeviceRole::AgentHost
+        && *peer_handle.paired_with.read().await != Some(session.device_id)
+    {
         return;
     }
 
@@ -409,6 +411,34 @@ pub async fn handle_forward(
     registry: &SessionRegistry,
     payload: serde_json::Value,
 ) -> Option<Envelope> {
+    if session.role == minos_domain::DeviceRole::AgentHost {
+        if let Some(reply_id) = json_rpc_id(&payload) {
+            if let Some(target) = session.take_rpc_reply_target(reply_id) {
+                return match registry
+                    .route(session.device_id, target, payload.clone())
+                    .await
+                {
+                    Ok(()) => None,
+                    Err(BackendError::PeerOffline { .. }) => {
+                        Some(synth_peer_offline_forwarded(session.device_id, &payload))
+                    }
+                    Err(BackendError::PeerBackpressure { .. }) => Some(
+                        synth_peer_backpressure_forwarded(session.device_id, &payload),
+                    ),
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "minos_backend::envelope",
+                            error = %e,
+                            target = %target,
+                            "Mac response route failed"
+                        );
+                        Some(synth_peer_offline_forwarded(session.device_id, &payload))
+                    }
+                };
+            }
+        }
+    }
+
     let peer = *session.paired_with.read().await;
     let Some(peer) = peer else {
         tracing::warn!(
@@ -418,6 +448,12 @@ pub async fn handle_forward(
         );
         return Some(synth_peer_offline_forwarded(session.device_id, &payload));
     };
+
+    if let Some(request_id) = json_rpc_id(&payload) {
+        if let Some(peer_handle) = registry.get(peer) {
+            peer_handle.remember_rpc_reply_target(request_id, session.device_id);
+        }
+    }
 
     match registry
         .route(session.device_id, peer, payload.clone())
@@ -440,6 +476,10 @@ pub async fn handle_forward(
             Some(synth_peer_offline_forwarded(session.device_id, &payload))
         }
     }
+}
+
+fn json_rpc_id(payload: &serde_json::Value) -> Option<u64> {
+    payload.get("id").and_then(serde_json::Value::as_u64)
 }
 
 /// Synthesise a JSON-RPC 2.0 "peer offline" error response (spec §7.3 `(*)`).
@@ -593,6 +633,52 @@ mod tests {
                 assert_eq!(version, 1);
                 assert_eq!(from, a);
                 assert_eq!(p, payload);
+            }
+            other => panic!("expected Forwarded, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_forward_routes_mac_reply_to_original_requester_by_jsonrpc_id() {
+        let registry = SessionRegistry::new();
+        let mac_id = DeviceId::new();
+        let ios_a = DeviceId::new();
+        let ios_b = DeviceId::new();
+        let (mac, _mac_rx) = SessionHandle::new(mac_id, DeviceRole::AgentHost);
+        let (a, _a_rx) = SessionHandle::new(ios_a, DeviceRole::IosClient);
+        let (b, mut b_rx) = SessionHandle::new(ios_b, DeviceRole::IosClient);
+        mac.set_account_id("acct".into());
+        a.set_account_id("acct".into());
+        b.set_account_id("acct".into());
+        *mac.paired_with.write().await = Some(ios_a);
+        *a.paired_with.write().await = Some(mac_id);
+        *b.paired_with.write().await = Some(mac_id);
+        registry.insert(mac.clone());
+        registry.insert(a);
+        registry.insert(b.clone());
+
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "minos_health",
+            "params": {},
+        });
+        let back = handle_forward(&b, &registry, request).await;
+        assert!(back.is_none());
+
+        let reply = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "result": {"ok": true},
+        });
+        let back = handle_forward(&mac, &registry, reply.clone()).await;
+        assert!(back.is_none());
+
+        let frame = b_rx.recv().await.expect("ios_b receives the reply");
+        match frame {
+            Envelope::Forwarded { from, payload, .. } => {
+                assert_eq!(from, mac_id);
+                assert_eq!(payload, reply);
             }
             other => panic!("expected Forwarded, got {other:?}"),
         }

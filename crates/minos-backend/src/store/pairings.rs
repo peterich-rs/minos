@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::error::BackendError;
 
-/// SQLite trigger message used when a device is already present in some
-/// other pairing row.
+/// Legacy SQLite trigger message used by migrations before multi-device
+/// pairing. Kept so older DB errors can still be normalized during upgrades.
 pub(crate) const SINGLE_PAIR_VIOLATION_MARKER: &str = "pairings_device_already_paired";
 
 /// Order `(a, b)` so `first < second` using the same string comparison
@@ -34,11 +34,9 @@ fn canonical(a: DeviceId, b: DeviceId) -> (String, String) {
 ///
 /// Canonicalizes the pair so a caller may pass the two device ids in either
 /// order. Idempotent: re-inserting an existing pair is a silent no-op via
-/// `ON CONFLICT DO NOTHING`. Any different row that reuses either device is
-/// rejected by the migration-installed trigger with
-/// [`SINGLE_PAIR_VIOLATION_MARKER`]. Pairing a device with itself is rejected
-/// by the `CHECK (device_a < device_b)` constraint and surfaces as a
-/// `StoreQuery` error.
+/// `ON CONFLICT DO NOTHING`. Pairing a device with itself is rejected by the
+/// `CHECK (device_a < device_b)` constraint and surfaces as a `StoreQuery`
+/// error.
 pub async fn insert_pairing(
     pool: &SqlitePool,
     a: DeviceId,
@@ -81,11 +79,53 @@ where
 
 /// Look up the peer device paired with `id`.
 ///
-/// Returns `Ok(None)` if `id` has no pairing row. In the MVP a device has
-/// at most one pair (spec §7.2), so any row that touches `id` names the
-/// peer in its other column.
+/// Returns `Ok(None)` if `id` has no pairing row. If the device has multiple
+/// pairings, returns the most recently-created peer. This preserves the old
+/// single-peer call sites as an "active/latest peer" fallback while newer
+/// multi-device flows use [`get_peers`].
 pub async fn get_pair(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceId>, BackendError> {
     get_pair_with_executor(pool, id).await
+}
+
+/// Look up every peer paired with `id`.
+///
+/// This differs from [`get_pair`] for agent-host devices: one Mac can now
+/// have multiple iOS clients paired, and ingest fan-out must reach all live
+/// peers. For single-homed devices the returned vector has at most one item.
+pub async fn get_peers(pool: &SqlitePool, id: DeviceId) -> Result<Vec<DeviceId>, BackendError> {
+    let id_str = id.to_string();
+    let rows = sqlx::query_as::<_, (String, String)>(
+        r"
+        SELECT device_a, device_b
+        FROM pairings
+        WHERE device_a = ? OR device_b = ?
+        ORDER BY created_at ASC
+        ",
+    )
+    .bind(&id_str)
+    .bind(&id_str)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "get_peers".to_string(),
+        message: e.to_string(),
+    })?;
+
+    rows.into_iter()
+        .map(|(device_a, device_b)| {
+            let peer_str = if device_a == id_str {
+                device_b
+            } else {
+                device_a
+            };
+            Uuid::parse_str(&peer_str)
+                .map(DeviceId)
+                .map_err(|e| BackendError::StoreDecode {
+                    column: "pairings.device_a/b".to_string(),
+                    message: e.to_string(),
+                })
+        })
+        .collect()
 }
 
 /// Look up the peer device paired with `id` together with the pairing's
@@ -100,16 +140,17 @@ pub async fn get_pair_with_created_at(
 ) -> Result<Option<(DeviceId, i64)>, BackendError> {
     let id_str = id.to_string();
 
-    let row = sqlx::query!(
-        r#"
+    let row = sqlx::query_as::<_, (String, String, i64)>(
+        r"
         SELECT device_a, device_b, created_at
         FROM pairings
         WHERE device_a = ? OR device_b = ?
+        ORDER BY created_at DESC
         LIMIT 1
-        "#,
-        id_str,
-        id_str,
+        ",
     )
+    .bind(&id_str)
+    .bind(&id_str)
     .fetch_optional(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -121,18 +162,14 @@ pub async fn get_pair_with_created_at(
         return Ok(None);
     };
 
-    let peer_str = if r.device_a == id_str {
-        r.device_b
-    } else {
-        r.device_a
-    };
+    let peer_str = if r.0 == id_str { r.1 } else { r.0 };
     let peer = Uuid::parse_str(&peer_str)
         .map(DeviceId)
         .map_err(|e| BackendError::StoreDecode {
             column: "pairings.device_a/b".to_string(),
             message: e.to_string(),
         })?;
-    Ok(Some((peer, r.created_at)))
+    Ok(Some((peer, r.2)))
 }
 
 pub(crate) async fn get_pair_with_executor<'e, E>(
@@ -144,16 +181,17 @@ where
 {
     let id_str = id.to_string();
 
-    let row = sqlx::query!(
-        r#"
+    let row = sqlx::query_as::<_, (String, String)>(
+        r"
         SELECT device_a, device_b
         FROM pairings
         WHERE device_a = ? OR device_b = ?
+        ORDER BY created_at DESC
         LIMIT 1
-        "#,
-        id_str,
-        id_str,
+        ",
     )
+    .bind(&id_str)
+    .bind(&id_str)
     .fetch_optional(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -165,11 +203,7 @@ where
         return Ok(None);
     };
 
-    let peer_str = if r.device_a == id_str {
-        r.device_b
-    } else {
-        r.device_a
-    };
+    let peer_str = if r.0 == id_str { r.1 } else { r.0 };
 
     let peer = Uuid::parse_str(&peer_str)
         .map(DeviceId)
@@ -267,7 +301,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_pairing_rejects_second_distinct_pair_for_same_device() {
+    async fn insert_pairing_allows_second_distinct_pair_for_agent_host() {
         let pool = memory_pool().await;
         let (a, b) = two_devices(&pool).await;
         let c = DeviceId::new();
@@ -276,15 +310,30 @@ mod tests {
             .unwrap();
 
         insert_pairing(&pool, a, b, T0).await.unwrap();
+        insert_pairing(&pool, a, c, T0 + 1).await.unwrap();
 
-        let err = insert_pairing(&pool, a, c, T0 + 1).await.unwrap_err();
-        match err {
-            BackendError::StoreQuery { operation, message } => {
-                assert_eq!(operation, "insert_pairing");
-                assert!(message.contains(SINGLE_PAIR_VIOLATION_MARKER));
-            }
-            other => panic!("expected StoreQuery, got {other:?}"),
-        }
+        let peers = get_peers(&pool, a).await.unwrap();
+        assert_eq!(peers.len(), 2);
+        assert!(peers.contains(&b));
+        assert!(peers.contains(&c));
+    }
+
+    #[tokio::test]
+    async fn insert_pairing_allows_second_distinct_pair_for_ios_device() {
+        let pool = memory_pool().await;
+        let (a, b) = two_devices(&pool).await;
+        let other_mac = DeviceId::new();
+        insert_device(&pool, other_mac, "mac-2", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+
+        insert_pairing(&pool, a, b, T0).await.unwrap();
+        insert_pairing(&pool, other_mac, b, T0 + 1).await.unwrap();
+
+        let peers = get_peers(&pool, b).await.unwrap();
+        assert_eq!(peers.len(), 2);
+        assert!(peers.contains(&a));
+        assert!(peers.contains(&other_mac));
     }
 
     #[tokio::test]
@@ -295,6 +344,21 @@ mod tests {
 
         assert_eq!(get_pair(&pool, a).await.unwrap(), Some(b));
         assert_eq!(get_pair(&pool, b).await.unwrap(), Some(a));
+    }
+
+    #[tokio::test]
+    async fn get_pair_returns_most_recent_peer_when_multiple_exist() {
+        let pool = memory_pool().await;
+        let (ios, mac_a) = two_devices(&pool).await;
+        let mac_b = DeviceId::new();
+        insert_device(&pool, mac_b, "mac-b", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+
+        insert_pairing(&pool, ios, mac_a, T0).await.unwrap();
+        insert_pairing(&pool, ios, mac_b, T0 + 1).await.unwrap();
+
+        assert_eq!(get_pair(&pool, ios).await.unwrap(), Some(mac_b));
     }
 
     #[tokio::test]
