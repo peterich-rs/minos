@@ -18,6 +18,13 @@ jobs:
     # regress into macOS-only code, and (2) fast feedback — Ubuntu returns
     # red a few minutes before the macOS runner can.
     runs-on: ubuntu-latest
+    env:
+      # Pin the dev-fallback so the new build.rs warn-on-debug stays quiet.
+      # CI does debug-only builds; release builds (when added — see TODO at
+      # the bottom of this file) must pull the production URL from
+      # secrets.MINOS_BACKEND_URL via a `just build-mobile-ios Release`
+      # invocation that propagates the var to xcodebuild.
+      MINOS_BACKEND_URL: ws://127.0.0.1:8787/devices
     steps:
       - uses: actions/checkout@v4
 
@@ -163,6 +170,8 @@ jobs:
       # Pin the macOS lane to the same Xcode major/minor used in local
       # development instead of inheriting the runner default (`Xcode.app`).
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+      # Same dev-fallback as the linux lane; silences build.rs warn-on-debug.
+      MINOS_BACKEND_URL: ws://127.0.0.1:8787/devices
     steps:
       - uses: actions/checkout@v4
 
@@ -221,11 +230,22 @@ jobs:
         # test), and frb codegen drift.
         run: cargo xtask check-all
 
-# TODO (plan 05 follow-up P1.5): release job. Inject
-# `secrets.MINOS_BACKEND_URL` as the `MINOS_BACKEND_URL` env var at
-# `cargo build -p minos-ffi-uniffi --release` time so the staticlib
-# embeds the production wss:// URL via `option_env!`. Then run
-# `cargo xtask gen-uniffi`, `cargo xtask gen-xcode`, `xcodebuild
-# -configuration Release archive`, sign + notarize the .app, and
-# upload to the GitHub release. Tracked in
-# `docs/superpowers/specs/macos-relay-client-migration-design.md` §2.2.
+# TODO (plan 09 follow-up): iOS release job. Per ADR 0018, all build
+# invocations go through `just`. The job should:
+#
+#   env:
+#     MINOS_BACKEND_URL: ${{ secrets.MINOS_BACKEND_URL }}
+#     CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+#     CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+#   steps:
+#     - uses: extractions/setup-just@v2
+#     - run: just build-mobile-ios Release
+#
+# `just build-mobile-ios` sets MINOS_BUILD_VIA_JUST=1 internally, so the
+# Runner target's Pre-Build guard passes; the release-mode build.rs in
+# both minos-mobile and minos-daemon panics if MINOS_BACKEND_URL is
+# unset, which catches the PR-from-fork case where the secret resolves
+# to empty (gate the job with
+# `if: github.event.pull_request.head.repo.full_name == github.repository`).
+# Then sign + notarize + upload as before. Tracked in
+# `docs/superpowers/specs/unified-config-pipeline-design.md` §4.8.
