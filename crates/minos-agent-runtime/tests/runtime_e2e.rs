@@ -6,6 +6,8 @@
 //! See spec §6.1 (start → send → stream → stop), §6.3 (crash path), §6.4
 //! (approval auto-reject).
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use minos_agent_runtime::test_support::{FakeCodexServer, Step};
@@ -13,7 +15,11 @@ use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState, RawInges
 use minos_domain::{AgentName, MinosError};
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::sync::broadcast;
 use url::Url;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 fn make_cfg(ws_url: Url) -> AgentRuntimeConfig {
     let tmp = TempDir::new().expect("tempdir");
@@ -25,6 +31,29 @@ fn make_cfg(ws_url: Url) -> AgentRuntimeConfig {
 
 fn ws_url_for(port: u16) -> Url {
     Url::parse(&format!("ws://127.0.0.1:{port}")).unwrap()
+}
+
+async fn recv_matching<F>(
+    ingest_rx: &mut broadcast::Receiver<RawIngest>,
+    mut predicate: F,
+) -> RawIngest
+where
+    F: FnMut(&RawIngest) -> bool,
+{
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let ingest = tokio::time::timeout(Duration::from_millis(500), ingest_rx.recv())
+            .await
+            .expect("timed out waiting for ingest event")
+            .expect("broadcast receive error");
+        if predicate(&ingest) {
+            return ingest;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "did not observe matching ingest event before deadline",
+        );
+    }
 }
 
 /// Spec §6.1: start → send → stream → stop.
@@ -132,6 +161,186 @@ async fn happy_path_start_send_stream_stop() {
     rt.stop().await.unwrap();
 
     fake.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn default_exec_route_streams_and_resumes_sessions() {
+    let tmp = TempDir::new().expect("tempdir");
+    let workspace_root = tmp.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+
+    let log_path = tmp.path().join("fake-codex-args.log");
+    let script_path = tmp.path().join("fake-codex.sh");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\n\
+printf -- '---\\n' >> \"{}\"\n\
+for arg in \"$@\"; do\n\
+  printf '%s\\n' \"$arg\" >> \"{}\"\n\
+done\n\
+if [ \"$1\" = \"exec\" ] && [ \"$2\" = \"resume\" ]; then\n\
+  printf '%s\\n' '{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"turn-2\"}}}}'\n\
+  printf '%s\\n' '{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\",\"text\":\"Hello two\"}}}}'\n\
+  printf '%s\\n' '{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"turn-2\"}}}}'\n\
+else\n\
+  printf '%s\\n' '{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"ses-test\"}}}}'\n\
+  printf '%s\\n' '{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"turn-1\"}}}}'\n\
+  printf '%s\\n' '{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\",\"text\":\"Hello one\"}}}}'\n\
+  printf '%s\\n' '{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"turn-1\"}}}}'\n\
+fi\n",
+            log_path.display(),
+            log_path.display(),
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script_path, perms).unwrap();
+
+    let mut cfg = AgentRuntimeConfig::new(workspace_root.clone());
+    cfg.codex_bin = Some(script_path);
+    cfg.subprocess_env = Arc::new(HashMap::from([(
+        "HOME".to_string(),
+        tmp.path().display().to_string(),
+    )]));
+
+    let rt = AgentRuntime::new(cfg);
+    let mut ingest_rx = rt.ingest_stream();
+
+    let outcome = rt.start(AgentName::Codex).await.unwrap();
+    assert!(outcome.session_id.starts_with("thr-exec-"));
+
+    let opened = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "thread/started"
+    })
+    .await;
+    assert_eq!(opened.thread_id, outcome.session_id);
+
+    rt.send_user_message(&outcome.session_id, "first prompt")
+        .await
+        .unwrap();
+
+    let user_delta = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "item/userMessage/delta"
+            && ingest.payload["params"]["delta"] == "first prompt"
+    })
+    .await;
+    assert_eq!(user_delta.thread_id, outcome.session_id);
+
+    let assistant_delta_one = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "item/agentMessage/delta"
+            && ingest.payload["params"]["delta"] == "Hello one"
+    })
+    .await;
+    assert_eq!(assistant_delta_one.thread_id, outcome.session_id);
+
+    let first_completed = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "turn/completed"
+            && ingest.payload["params"]["turnId"] == "turn-1"
+    })
+    .await;
+    assert_eq!(first_completed.thread_id, outcome.session_id);
+
+    rt.send_user_message(&outcome.session_id, "second prompt")
+        .await
+        .unwrap();
+
+    let assistant_delta_two = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "item/agentMessage/delta"
+            && ingest.payload["params"]["delta"] == "Hello two"
+    })
+    .await;
+    assert_eq!(assistant_delta_two.thread_id, outcome.session_id);
+
+    let second_completed = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "turn/completed"
+            && ingest.payload["params"]["turnId"] == "turn-2"
+    })
+    .await;
+    assert_eq!(second_completed.thread_id, outcome.session_id);
+
+    rt.stop().await.unwrap();
+
+    let archived = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "thread/archived"
+    })
+    .await;
+    assert_eq!(archived.thread_id, outcome.session_id);
+
+    let logged_args = std::fs::read_to_string(&log_path).unwrap();
+    assert_eq!(logged_args.matches("---\n").count(), 2, "{logged_args}");
+    assert!(logged_args.contains("\nresume\n"), "{logged_args}");
+    assert!(logged_args.contains("\nses-test\n"), "{logged_args}");
+    assert!(logged_args.contains("\nfirst prompt\n"), "{logged_args}");
+    assert!(logged_args.contains("\nsecond prompt\n"), "{logged_args}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_route_uses_latest_subprocess_env_snapshot() {
+    let tmp = TempDir::new().expect("tempdir");
+    let workspace_root = tmp.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+
+    let log_path = tmp.path().join("fake-codex-home.log");
+    let script_path = tmp.path().join("fake-codex-home.sh");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nprintf 'HOME=%s\\n' \"$HOME\" >> \"{}\"\nprintf '%s\\n' '{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"ses-env\"}}}}'\nprintf '%s\\n' '{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"turn-env\"}}}}'\nprintf '%s\\n' '{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"turn-env\"}}}}'\n",
+            log_path.display(),
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script_path, perms).unwrap();
+
+    let stale_home = tmp.path().join("stale-home");
+    let fresh_home = tmp.path().join("fresh-home");
+    std::fs::create_dir_all(&stale_home).unwrap();
+    std::fs::create_dir_all(&fresh_home).unwrap();
+
+    let mut cfg = AgentRuntimeConfig::new(workspace_root);
+    cfg.codex_bin = Some(script_path);
+    cfg.subprocess_env = Arc::new(HashMap::from([(
+        "HOME".to_string(),
+        stale_home.display().to_string(),
+    )]));
+
+    let rt = AgentRuntime::new(cfg);
+    let mut ingest_rx = rt.ingest_stream();
+    let outcome = rt.start(AgentName::Codex).await.unwrap();
+
+    rt.replace_subprocess_env(HashMap::from([(
+        "HOME".to_string(),
+        fresh_home.display().to_string(),
+    )]));
+
+    rt.send_user_message(&outcome.session_id, "prompt")
+        .await
+        .unwrap();
+
+    let completed = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "turn/completed"
+            && ingest.payload["params"]["turnId"] == "turn-env"
+    })
+    .await;
+    assert_eq!(completed.thread_id, outcome.session_id);
+
+    rt.stop().await.unwrap();
+
+    let logged_home = std::fs::read_to_string(&log_path).unwrap();
+    assert!(
+        logged_home.contains(&format!("HOME={}\n", fresh_home.display())),
+        "{logged_home}"
+    );
+    assert!(
+        !logged_home.contains(&format!("HOME={}\n", stale_home.display())),
+        "{logged_home}"
+    );
 }
 
 /// Spec §6.4: approval ServerRequest → auto-reject + Raw broadcast.

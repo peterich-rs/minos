@@ -42,7 +42,7 @@ impl PeerStateObserver for Capture<PeerState> {
 #[tokio::test(flavor = "multi_thread")]
 async fn subscribe_relay_link_and_peer_work_without_current_runtime() {
     let handle = DaemonHandle::start(
-        RelayConfig::new(String::new(), String::new()),
+        RelayConfig::new(String::new(), String::new(), String::new()),
         DeviceId::new(),
         None,
         None,

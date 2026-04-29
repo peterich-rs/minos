@@ -4,12 +4,18 @@ import SwiftUI
 struct MinosApp: App {
     @State private var appState: AppState
 
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
     init() {
         let initialState = AppState()
         _appState = State(initialValue: initialState)
 
-        Task {
-            await DaemonBootstrap.bootstrap(initialState)
+        if !Self.isRunningTests {
+            Task {
+                await DaemonBootstrap.bootstrap(initialState)
+            }
         }
     }
 

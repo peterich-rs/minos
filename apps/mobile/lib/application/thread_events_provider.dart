@@ -16,9 +16,7 @@ class ThreadEvents extends _$ThreadEvents {
   Future<List<UiEventMessage>> build(String threadId) async {
     final core = ref.read(minosCoreProvider);
 
-    final resp = await core.readThread(
-      ReadThreadParams(threadId: threadId, limit: 500),
-    );
+    final resp = await _readInitialPage(core, threadId);
     if (resp.nextSeq != null) {
       _watermark = resp.nextSeq! - BigInt.one;
     } else if (resp.uiEvents.isNotEmpty) {
@@ -39,5 +37,27 @@ class ThreadEvents extends _$ThreadEvents {
     ref.onDispose(sub.cancel);
 
     return resp.uiEvents;
+  }
+
+  Future<ReadThreadResponse> _readInitialPage(
+    dynamic core,
+    String threadId,
+  ) async {
+    const maxAttempts = 8;
+
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await core.readThread(
+          ReadThreadParams(threadId: threadId, limit: 500),
+        );
+      } on MinosError_ThreadNotFound {
+        if (attempt == maxAttempts - 1) {
+          rethrow;
+        }
+        await Future<void>.delayed(Duration(milliseconds: 150 * (attempt + 1)));
+      }
+    }
+
+    throw MinosError.threadNotFound(threadId: threadId);
   }
 }

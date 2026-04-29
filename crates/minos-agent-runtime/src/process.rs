@@ -48,7 +48,9 @@ impl CodexProcess {
     /// Spawn `bin` with `args` and the explicit `env` (parent env is
     /// cleared so the child only sees what the daemon captured from the
     /// user's login shell). Sets up piped stdout/stderr, null stdin, and
-    /// `kill_on_drop(true)` so the child dies with us.
+    /// `kill_on_drop(true)` so the child dies with us. Retained for the
+    /// app-server test seam even though exec/jsonl is now the default route.
+    #[allow(dead_code)]
     pub(crate) fn spawn(
         bin: &Path,
         args: &[&str],
@@ -75,6 +77,9 @@ impl CodexProcess {
     /// emits each line at `tracing::warn!` level under the
     /// `minos_agent_runtime::process` target. Idempotent — a second call is a
     /// no-op so callers don't need to track whether the drain is already up.
+    /// Retained for the app-server test seam even though exec/jsonl is now the
+    /// default route.
+    #[allow(dead_code)]
     pub(crate) fn stderr_drain(&mut self) {
         if self.stderr_task.is_some() {
             return;

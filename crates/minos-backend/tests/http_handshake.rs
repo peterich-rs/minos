@@ -38,11 +38,6 @@ async fn spawn_relay() -> (String, tokio::task::JoinHandle<()>, sqlx::SqlitePool
         store: pool.clone(),
         token_ttl: Duration::from_mins(5),
         translators: minos_backend::ingest::translate::ThreadTranslators::new(),
-        public_cfg: Arc::new(minos_backend::http::BackendPublicConfig {
-            public_url: "ws://127.0.0.1:8787/devices".into(),
-            cf_access_client_id: None,
-            cf_access_client_secret: None,
-        }),
         jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),

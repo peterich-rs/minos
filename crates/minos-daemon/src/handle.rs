@@ -2,13 +2,11 @@
 //! migration (plan 05 Phase F).
 //!
 //! `DaemonInner` owns the outbound [`RelayClient`] plus its two watch
-//! receivers (relay link + peer) and the non-secret local state (self
-//! `DeviceId`, optional `PeerRecord`, on-disk `local-state.json` path).
+//! receivers (relay link + peer) and the current in-memory trusted peer.
 //! Sync FFI methods dispatch onto `rt_handle` so Swift's non-runtime
 //! threads can still enter the Tokio reactor — same trick the old
 //! WS-server façade used.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
@@ -16,8 +14,7 @@ use tokio::runtime::Handle;
 use tokio::sync::watch;
 
 use crate::agent::AgentGlue;
-use crate::config::{RelayConfig, BACKEND_URL};
-use crate::local_state::LocalState;
+use crate::config::RelayConfig;
 use crate::paths;
 use crate::relay_client::{PersistenceCtx, RelayClient};
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
@@ -26,13 +23,11 @@ struct DaemonInner {
     relay: Arc<RelayClient>,
     link_rx: watch::Receiver<minos_domain::RelayLinkState>,
     peer_rx: watch::Receiver<minos_domain::PeerState>,
-    self_device_id: DeviceId,
     /// In-memory mirror of the trusted peer. Shared `Arc` with the
     /// relay-client dispatch task, which updates it on every
     /// `EventKind::Paired` / `Unpaired` so warm reads via
     /// `current_trusted_device` always see the newest record.
     peer: Arc<StdMutex<Option<PeerRecord>>>,
-    local_state_path: PathBuf,
     /// Kept on the inner — future trace logging and eventual UniFFI
     /// getters need the display name that was minted into the relay
     /// handshake.
@@ -45,6 +40,9 @@ struct DaemonInner {
     /// occurrence.
     last_error: Arc<StdMutex<Option<MinosError>>>,
     agent: Arc<AgentGlue>,
+    /// Background task that forwards `RawIngest` from the agent runtime to
+    /// the backend ingest WS. Aborted on `stop()` so the WS tears down.
+    agent_ingest_task: tokio::task::JoinHandle<()>,
     /// Captured under `DaemonHandle::start` (which always runs inside a
     /// Tokio runtime — either the CLI's `#[tokio::main]` or UniFFI's
     /// tokio runtime) so sync FFI methods can spawn onto it from Swift
@@ -60,12 +58,12 @@ pub struct DaemonHandle {
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl DaemonHandle {
     /// Production entry point. Spawns a single `RelayClient` that dials
-    /// the compile-time [`BACKEND_URL`] over WSS and publishes two
+    /// the resolved relay backend URL and publishes two
     /// independent watch channels: relay-link and peer-pairing.
     ///
-    /// `peer` and `secret` are the persisted parts of a prior pairing —
-    /// callers pass `None` for a first run, or the loaded `LocalState`
-    /// + Keychain lookup on warm start.
+    /// `peer` and `secret` are optional warm-start inputs. The macOS app
+    /// now passes `None` for both and starts from a fresh in-memory pairing
+    /// state on every launch.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     pub async fn start(
@@ -75,8 +73,6 @@ impl DaemonHandle {
         secret: Option<DeviceSecret>,
         mac_name: String,
     ) -> Result<Arc<Self>, MinosError> {
-        let local_state_path = LocalState::default_path();
-
         // Capture the user's login-shell env once. Failures fall back to
         // process env internally, so this never blocks bootstrap.
         let subprocess_env = Arc::new(minos_cli_detect::capture_user_shell_env().await);
@@ -104,32 +100,41 @@ impl DaemonHandle {
         let peer_store: Arc<StdMutex<Option<PeerRecord>>> = Arc::new(StdMutex::new(peer.clone()));
         let last_error: Arc<StdMutex<Option<MinosError>>> = Arc::new(StdMutex::new(None));
 
+        let backend_url = config.resolved_backend_url().to_owned();
+
         let (relay, link_rx, peer_rx) = RelayClient::spawn(
             config,
             self_device_id,
             peer.clone(),
             secret,
             mac_name.clone(),
-            BACKEND_URL.to_owned(),
+            backend_url,
             Some(rpc_server),
             PersistenceCtx {
                 peer_store: peer_store.clone(),
-                local_state_path: local_state_path.clone(),
                 last_error: last_error.clone(),
             },
         );
+
+        // Forward agent ingest events into the relay's existing outbound
+        // queue. The single `/devices` WS the dispatcher owns carries
+        // both peer-to-peer `Forward` traffic and host `Ingest` frames —
+        // the backend's session registry is keyed by `DeviceId` alone, so
+        // a second WS handshake from the same id would supersede the
+        // first in a tight loop.
+        let agent_ingest_task =
+            crate::agent_ingest::spawn(relay.outbound_sender(), agent.ingest_stream());
 
         Ok(Arc::new(Self {
             inner: Arc::new(DaemonInner {
                 relay,
                 link_rx,
                 peer_rx,
-                self_device_id,
                 peer: peer_store,
-                local_state_path,
                 mac_name,
                 last_error,
                 agent,
+                agent_ingest_task,
                 rt_handle: Handle::current(),
             }),
         }))
@@ -166,28 +171,13 @@ impl DaemonHandle {
         self.inner.relay.request_pairing_token().await
     }
 
-    /// Forget the currently paired peer. Calls the relay first; on
-    /// success, clears the in-memory mirror, persists an empty
-    /// `local-state.json`, and — on macOS — wipes the Keychain entry.
-    ///
-    /// The relay echoes an `Event::Unpaired` back to us when it finalises,
-    /// and the dispatch task runs its own mirror of this cleanup
-    /// (keychain delete + local-state save). The writes are idempotent,
-    /// so the race between "we wrote it first" and "the echo re-applies"
-    /// is benign.
+    /// Forget the currently paired peer. Calls the relay first and, on
+    /// success, clears the in-memory mirror. The relay will still echo an
+    /// `Event::Unpaired`, which is now just a benign in-memory re-apply.
     #[allow(clippy::missing_errors_doc)]
     pub async fn forget_peer(&self) -> Result<(), MinosError> {
         self.inner.relay.forget_peer().await?;
         *self.inner.peer.lock().unwrap() = None;
-        let ls = LocalState {
-            self_device_id: self.inner.self_device_id,
-            peer: None,
-        };
-        ls.save(&self.inner.local_state_path)?;
-        #[cfg(target_os = "macos")]
-        {
-            let _ = crate::KeychainTrustedDeviceStore.delete();
-        }
         Ok(())
     }
 
@@ -200,6 +190,7 @@ impl DaemonHandle {
             Err(err) => return Err(err),
         }
         self.inner.relay.stop().await;
+        self.inner.agent_ingest_task.abort();
         Ok(())
     }
 

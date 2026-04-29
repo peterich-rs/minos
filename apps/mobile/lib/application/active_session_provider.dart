@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'package:minos/application/minos_providers.dart';
+import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/src/rust/api/minos.dart'
     show
@@ -58,37 +59,46 @@ class ActiveSessionController extends _$ActiveSessionController {
 
   /// Kick off a brand-new agent session. Transitions through
   /// [SessionStarting] before settling into [SessionStreaming] (success)
-  /// or [SessionError] (Rust-side dispatch failure).
-  Future<void> start({required AgentName agent, required String prompt}) async {
+  /// or [SessionError] (Rust-side dispatch failure). The initial user
+  /// message is sent separately after the session id is minted.
+  Future<MinosError?> start({
+    required AgentName agent,
+    required String prompt,
+  }) async {
     state = SessionStarting(agent: agent, prompt: prompt);
     try {
       final resp = await ref
           .read(minosCoreProvider)
           .startAgent(agent: agent, prompt: prompt);
+      ref.invalidate(threadListProvider);
       state = SessionStreaming(threadId: resp.sessionId, agent: agent);
+      return null;
     } on MinosError catch (e) {
       state = SessionError(error: e);
+      return e;
     }
   }
 
   /// Send a follow-up user message into the active session. No-op when
   /// the machine isn't in [SessionStreaming] or [SessionAwaitingInput].
-  Future<void> send(String text) async {
+  Future<MinosError?> send(String text) async {
     final s = state;
     final (String threadId, AgentName agent) = switch (s) {
       SessionStreaming(threadId: final t, agent: final a) => (t, a),
       SessionAwaitingInput(threadId: final t, agent: final a) => (t, a),
       _ => ('', AgentName.codex),
     };
-    if (threadId.isEmpty) return;
+    if (threadId.isEmpty) return null;
 
     state = SessionStreaming(threadId: threadId, agent: agent);
     try {
       await ref
           .read(minosCoreProvider)
           .sendUserMessage(sessionId: threadId, text: text);
+      return null;
     } on MinosError catch (e) {
-      state = SessionError(threadId: threadId, error: e);
+      state = SessionAwaitingInput(threadId: threadId, agent: agent);
+      return e;
     }
   }
 
@@ -110,5 +120,11 @@ class ActiveSessionController extends _$ActiveSessionController {
       // best-effort
     }
     state = SessionStopped(threadId);
+  }
+
+  /// Clear any thread-bound session state before routing the user into a
+  /// fresh chat composer.
+  void reset() {
+    state = const SessionIdle();
   }
 }

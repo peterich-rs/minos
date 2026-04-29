@@ -1,7 +1,11 @@
+import 'dart:async';
+
+import 'package:flutter/cupertino.dart' hide ConnectionState;
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:minos/application/active_session_provider.dart';
+import 'package:minos/application/preferred_agent_provider.dart';
 import 'package:minos/application/thread_events_provider.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/presentation/widgets/chat/input_bar.dart';
@@ -38,11 +42,18 @@ class ThreadViewPage extends ConsumerStatefulWidget {
 
 class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   static const double _stickyThreshold = 120;
+  static const Duration _sendStatusDelay = Duration(milliseconds: 500);
 
   final ScrollController _scroll = ScrollController();
+  final List<_OptimisticUserMessage> _optimisticMessages =
+      <_OptimisticUserMessage>[];
+  final Map<String, Timer> _optimisticTimers = <String, Timer>{};
   bool _stickToBottom = true;
   int _unreadBelow = 0;
   int _lastEventCount = 0;
+  int _nextOptimisticMessageId = 0;
+  int _seenUserMessageCount = 0;
+  String? _trackedThreadId;
 
   @override
   void initState() {
@@ -52,6 +63,9 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
 
   @override
   void dispose() {
+    for (final timer in _optimisticTimers.values) {
+      timer.cancel();
+    }
     _scroll
       ..removeListener(_onScroll)
       ..dispose();
@@ -95,15 +109,110 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     };
   }
 
-  void _onSend(String text, ActiveSession session) {
-    final controller = ref.read(activeSessionControllerProvider.notifier);
-    if (session is SessionIdle ||
-        session is SessionStopped ||
-        session is SessionError) {
-      controller.start(agent: AgentName.codex, prompt: text);
-    } else {
-      controller.send(text);
+  String _enqueueOptimisticMessage(String text) {
+    final message = _OptimisticUserMessage(
+      id: 'optimistic-${_nextOptimisticMessageId++}',
+      text: text,
+      status: _OptimisticMessageStatus.pending,
+    );
+    setState(() => _optimisticMessages.add(message));
+    _optimisticTimers[message.id] = Timer(_sendStatusDelay, () {
+      if (!mounted) return;
+      _updateOptimisticMessage(
+        message.id,
+        (current) => current.status == _OptimisticMessageStatus.pending
+            ? current.copyWith(status: _OptimisticMessageStatus.sending)
+            : current,
+      );
+    });
+    return message.id;
+  }
+
+  void _clearOptimisticTimer(String id) {
+    _optimisticTimers.remove(id)?.cancel();
+  }
+
+  void _updateOptimisticMessage(
+    String id,
+    _OptimisticUserMessage Function(_OptimisticUserMessage current) transform,
+  ) {
+    final index = _optimisticMessages.indexWhere((message) => message.id == id);
+    if (index == -1) return;
+    setState(() {
+      _optimisticMessages[index] = transform(_optimisticMessages[index]);
+    });
+  }
+
+  void _markOptimisticMessageFailed(String id) {
+    _clearOptimisticTimer(id);
+    _updateOptimisticMessage(
+      id,
+      (current) => current.copyWith(status: _OptimisticMessageStatus.failed),
+    );
+  }
+
+  void _consumeConfirmedUserMessages(String threadId, int userMessageCount) {
+    if (_trackedThreadId != threadId) {
+      _trackedThreadId = threadId;
+      _seenUserMessageCount = 0;
     }
+    final confirmedDelta = userMessageCount - _seenUserMessageCount;
+    if (confirmedDelta <= 0) return;
+
+    var remaining = confirmedDelta;
+    var didRemove = false;
+    while (remaining > 0) {
+      final index = _optimisticMessages.indexWhere(
+        (message) => message.status != _OptimisticMessageStatus.failed,
+      );
+      if (index == -1) break;
+      final id = _optimisticMessages[index].id;
+      _clearOptimisticTimer(id);
+      _optimisticMessages.removeAt(index);
+      remaining -= 1;
+      didRemove = true;
+    }
+    _seenUserMessageCount = userMessageCount;
+    if (didRemove && mounted) {
+      setState(() {});
+    }
+  }
+
+  void _handleThreadMetrics(
+    String threadId,
+    int eventCount,
+    int userMessageCount,
+  ) {
+    _consumeConfirmedUserMessages(threadId, userMessageCount);
+    _maybeAutoScroll(eventCount + _optimisticMessages.length);
+  }
+
+  Future<void> _dispatchMessage(String text, ActiveSession session) async {
+    final optimisticId = _enqueueOptimisticMessage(text);
+    final controller = ref.read(activeSessionControllerProvider.notifier);
+    final shouldStart =
+        session is SessionIdle ||
+        session is SessionStopped ||
+        session is SessionError;
+    MinosError? error;
+    if (shouldStart) {
+      error = await controller.start(
+        agent: ref.read(preferredAgentProvider),
+        prompt: text,
+      );
+      error ??= await controller.send(text);
+    } else {
+      error = await controller.send(text);
+    }
+
+    if (!mounted) return;
+    if (error != null) {
+      _markOptimisticMessageFailed(optimisticId);
+    }
+  }
+
+  void _onSend(String text, ActiveSession session) {
+    unawaited(_dispatchMessage(text, session));
   }
 
   @override
@@ -111,13 +220,17 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     final session = ref.watch(activeSessionControllerProvider);
     final threadId = _resolvedThreadId(session);
 
-    final body = threadId == null
+    final body = threadId == null && _optimisticMessages.isEmpty
         ? _NewChatEmptyState()
+        : threadId == null
+        ? _LoadingThreadState(optimisticUserMessages: _optimisticMessages)
         : _ThreadEventStream(
             threadId: threadId,
+            optimisticUserMessages: _optimisticMessages,
             scroll: _scroll,
             stickToBottom: _stickToBottom,
-            onEventCountChanged: _maybeAutoScroll,
+            onMetricsChanged: (eventCount, userMessageCount) =>
+                _handleThreadMetrics(threadId, eventCount, userMessageCount),
             unreadBelow: _unreadBelow,
             onJumpToBottom: () {
               if (!_scroll.hasClients) return;
@@ -133,12 +246,54 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
             },
           );
 
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final scaffoldBg = isDark
+        ? const Color(0xFF000000)
+        : const Color(0xFFF2F2F7);
+    final agent = _sessionAgent(session);
+    final subtitle = _sessionSubtitle(session);
+
     return Scaffold(
-      appBar: AppBar(title: Text(threadId == null ? 'New chat' : 'Thread')),
+      backgroundColor: scaffoldBg,
+      appBar: AppBar(
+        backgroundColor: theme.colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        elevation: 0,
+        shape: Border(
+          bottom: BorderSide(
+            color: theme.dividerColor.withValues(alpha: 0.4),
+            width: 0.5,
+          ),
+        ),
+        titleSpacing: 0,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              threadId == null
+                  ? '新对话'
+                  : (agent == null ? '会话' : _agentLabel(agent)),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (subtitle != null)
+              Text(
+                subtitle,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+          ],
+        ),
+      ),
       body: SafeArea(
         bottom: false,
         child: Column(
-          children: [
+          children: <Widget>[
             Expanded(child: body),
             InputBar(
               session: session,
@@ -153,6 +308,34 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   }
 }
 
+AgentName? _sessionAgent(ActiveSession session) {
+  return switch (session) {
+    SessionStarting(:final agent) => agent,
+    SessionStreaming(:final agent) => agent,
+    SessionAwaitingInput(:final agent) => agent,
+    _ => null,
+  };
+}
+
+String? _sessionSubtitle(ActiveSession session) {
+  return switch (session) {
+    SessionIdle() => null,
+    SessionStarting(:final agent) => '${_agentLabel(agent)} 启动中…',
+    SessionStreaming(:final agent) => '${_agentLabel(agent)} 回复中',
+    SessionAwaitingInput(:final agent) => '${_agentLabel(agent)} 等待输入',
+    SessionStopped() => '已停止',
+    SessionError() => '出错',
+  };
+}
+
+String _agentLabel(AgentName agent) {
+  return switch (agent) {
+    AgentName.codex => 'Codex',
+    AgentName.claude => 'Claude',
+    AgentName.gemini => 'Gemini',
+  };
+}
+
 class _NewChatEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -162,22 +345,22 @@ class _NewChatEmptyState extends StatelessWidget {
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
+          children: <Widget>[
             Icon(
-              Icons.forum_outlined,
-              size: 48,
-              color: theme.colorScheme.onSurfaceVariant,
+              CupertinoIcons.bubble_left_bubble_right,
+              size: 44,
+              color: theme.colorScheme.outline,
             ),
             const SizedBox(height: 12),
             Text(
-              'Start a new conversation',
+              '开始新对话',
               style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              'Type a prompt below — the agent will pick it up.',
+              '在下方输入消息，Agent 会立刻接管。',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -193,17 +376,19 @@ class _NewChatEmptyState extends StatelessWidget {
 class _ThreadEventStream extends ConsumerWidget {
   const _ThreadEventStream({
     required this.threadId,
+    required this.optimisticUserMessages,
     required this.scroll,
     required this.stickToBottom,
-    required this.onEventCountChanged,
+    required this.onMetricsChanged,
     required this.unreadBelow,
     required this.onJumpToBottom,
   });
 
   final String threadId;
+  final List<_OptimisticUserMessage> optimisticUserMessages;
   final ScrollController scroll;
   final bool stickToBottom;
-  final ValueChanged<int> onEventCountChanged;
+  final void Function(int eventCount, int userMessageCount) onMetricsChanged;
   final int unreadBelow;
   final VoidCallback onJumpToBottom;
 
@@ -211,21 +396,26 @@ class _ThreadEventStream extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final eventsAsync = ref.watch(threadEventsProvider(threadId));
     return eventsAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Error: $e')),
+      loading: () =>
+          _LoadingThreadState(optimisticUserMessages: optimisticUserMessages),
+      error: (e, _) => Center(child: Text('加载失败: $e')),
       data: (events) {
-        onEventCountChanged(events.length);
-        if (events.isEmpty) {
-          return const Center(child: Text('No messages yet'));
+        onMetricsChanged(events.length, _countUserMessages(events));
+        if (events.isEmpty && optimisticUserMessages.isEmpty) {
+          return const Center(child: Text('暂无消息'));
         }
         final groups = _GroupedEvents.from(events);
+        final items = <Widget>[
+          ...groups.items,
+          ...optimisticUserMessages.map(_optimisticBubble),
+        ];
         return Stack(
           children: [
             ListView.builder(
               controller: scroll,
               padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: groups.items.length,
-              itemBuilder: (_, i) => groups.items[i],
+              itemCount: items.length,
+              itemBuilder: (_, i) => items[i],
             ),
             if (unreadBelow > 0)
               Positioned(
@@ -242,6 +432,58 @@ class _ThreadEventStream extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+
+  int _countUserMessages(List<UiEventMessage> events) {
+    return events
+        .where(
+          (event) =>
+              event is UiEventMessage_MessageStarted &&
+              event.role == MessageRole.user,
+        )
+        .length;
+  }
+
+  Widget _optimisticBubble(_OptimisticUserMessage message) {
+    return MessageBubble(
+      isUser: true,
+      markdownContent: message.text,
+      deliveryState: switch (message.status) {
+        _OptimisticMessageStatus.sending => MessageDeliveryState.sending,
+        _OptimisticMessageStatus.failed => MessageDeliveryState.failed,
+        _ => MessageDeliveryState.none,
+      },
+    );
+  }
+}
+
+class _LoadingThreadState extends StatelessWidget {
+  const _LoadingThreadState({required this.optimisticUserMessages});
+
+  final List<_OptimisticUserMessage> optimisticUserMessages;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: <Widget>[
+        ...optimisticUserMessages.map(
+          (message) => MessageBubble(
+            isUser: true,
+            markdownContent: message.text,
+            deliveryState: switch (message.status) {
+              _OptimisticMessageStatus.sending => MessageDeliveryState.sending,
+              _OptimisticMessageStatus.failed => MessageDeliveryState.failed,
+              _ => MessageDeliveryState.none,
+            },
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ],
     );
   }
 }
@@ -408,6 +650,28 @@ class _ToolCallEntry {
   final String args;
   String? output;
   bool isError;
+}
+
+enum _OptimisticMessageStatus { pending, sending, failed }
+
+class _OptimisticUserMessage {
+  const _OptimisticUserMessage({
+    required this.id,
+    required this.text,
+    required this.status,
+  });
+
+  final String id;
+  final String text;
+  final _OptimisticMessageStatus status;
+
+  _OptimisticUserMessage copyWith({_OptimisticMessageStatus? status}) {
+    return _OptimisticUserMessage(
+      id: id,
+      text: text,
+      status: status ?? this.status,
+    );
+  }
 }
 
 class _ClosedDivider extends StatelessWidget {

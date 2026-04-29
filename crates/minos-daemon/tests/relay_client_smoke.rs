@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use minos_backend::{
-    http::{router, BackendPublicConfig, BackendState},
+    http::{router, BackendState},
     ingest::translate::ThreadTranslators,
     pairing::PairingService,
     session::SessionRegistry,
@@ -32,7 +32,7 @@ use minos_daemon::relay_client::{PersistenceCtx, RelayClient};
 use minos_domain::{DeviceId, MinosError, RelayLinkState};
 use pretty_assertions::assert_eq;
 use sqlx::SqlitePool;
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::NamedTempFile;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -62,11 +62,6 @@ impl Drop for Relay {
 
 /// Boot a fresh backend on `127.0.0.1:0` backed by a tempfile DB. Mirrors
 /// `minos-backend/tests/e2e.rs::spawn_relay_with_token_ttl`.
-///
-/// The listener is bound BEFORE the `BackendState` is constructed so the
-/// `BackendPublicConfig.public_url` carries the real `ws://HOST:PORT/devices`
-/// address — the QR-assembly path in `RequestPairingQr` echoes that URL back
-/// in the payload, and the smoke test asserts it matches what the client dialed.
 async fn spawn_relay() -> anyhow::Result<Relay> {
     let tmp = NamedTempFile::new()?;
     let tmp_path = tmp.path().to_path_buf();
@@ -75,7 +70,6 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let public_url = format!("ws://{addr}/devices");
 
     let state = BackendState {
         registry: Arc::new(SessionRegistry::new()),
@@ -83,11 +77,6 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
         store: pool.clone(),
         token_ttl: TOKEN_TTL,
         translators: ThreadTranslators::new(),
-        public_cfg: Arc::new(BackendPublicConfig {
-            public_url,
-            cf_access_client_id: None,
-            cf_access_client_secret: None,
-        }),
         version: "daemon-smoke-test",
         jwt_secret: Arc::new("daemon-smoke-test-jwt-secret-32b".to_string()),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
@@ -117,23 +106,15 @@ fn relay_url(relay: &Relay) -> String {
 
 /// Default empty-CF config — the in-process backend is not behind CF Access.
 fn test_config() -> RelayConfig {
-    RelayConfig::new(String::new(), String::new())
+    RelayConfig::new(String::new(), String::new(), String::new())
 }
 
-/// Fresh `PersistenceCtx` backed by a throwaway tempdir.
-///
-/// The returned `TempDir` must stay in scope for the duration of the test
-/// — the dispatch task writes `local-state.json` underneath it on every
-/// `EventKind::Paired` / `Unpaired`. Dropping early would race those
-/// writes against the directory teardown.
-fn test_persistence() -> (PersistenceCtx, TempDir) {
-    let tmp = TempDir::new().expect("tempdir");
-    let ctx = PersistenceCtx {
+/// Fresh in-memory `PersistenceCtx` for relay-client tests.
+fn test_persistence() -> PersistenceCtx {
+    PersistenceCtx {
         peer_store: Arc::new(StdMutex::new(None)),
-        local_state_path: tmp.path().join("local-state.json"),
         last_error: Arc::new(StdMutex::new(None::<MinosError>)),
-    };
-    (ctx, tmp)
+    }
 }
 
 // ── tests ────────────────────────────────────────────────────────────────
@@ -142,7 +123,7 @@ fn test_persistence() -> (PersistenceCtx, TempDir) {
 async fn connect_becomes_connected() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
-    let (persistence, _tmp) = test_persistence();
+    let persistence = test_persistence();
 
     let (client, mut link_rx, _peer_rx) = RelayClient::spawn(
         test_config(),
@@ -183,7 +164,7 @@ async fn connect_becomes_connected() -> anyhow::Result<()> {
 async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
-    let (persistence, _tmp) = test_persistence();
+    let persistence = test_persistence();
 
     let mac_name = "Fan's MacBook Pro".to_string();
     let (client, mut link_rx, _peer_rx) = RelayClient::spawn(
@@ -215,7 +196,6 @@ async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> 
     // QR payload v2: backend assembles the full payload (ADR 0014). v=1 was
     // the legacy host-assembled shape; the new flow returns v=2.
     assert_eq!(qr.v, 2);
-    assert_eq!(qr.backend_url, backend_url);
     assert_eq!(qr.host_display_name, mac_name);
     assert!(qr.expires_at_ms > 0, "expected epoch-ms expiry");
     assert!(

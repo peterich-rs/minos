@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use minos_backend::http::{router as backend_router, BackendPublicConfig, BackendState};
+use minos_backend::http::{router as backend_router, BackendState};
 use minos_backend::pairing::PairingService;
 use minos_backend::session::{SessionHandle, SessionRegistry};
 use minos_backend::store::test_support::memory_pool;
@@ -63,7 +63,6 @@ async fn spawn_backend_with_paired_mac() -> RealBackend {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let public_url = format!("ws://{addr}/devices");
 
     let state = BackendState {
         registry: registry.clone(),
@@ -71,11 +70,6 @@ async fn spawn_backend_with_paired_mac() -> RealBackend {
         store: pool.clone(),
         token_ttl: Duration::from_secs(300),
         translators: minos_backend::ingest::translate::ThreadTranslators::new(),
-        public_cfg: Arc::new(BackendPublicConfig {
-            public_url,
-            cf_access_client_id: None,
-            cf_access_client_secret: None,
-        }),
         jwt_secret: Arc::new("a".repeat(32)),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
@@ -117,15 +111,15 @@ async fn spawn_backend_with_paired_mac() -> RealBackend {
     }
 }
 
-fn make_qr_for_real_backend(addr: std::net::SocketAddr, token: &str) -> String {
+fn make_qr_for_real_backend(_addr: std::net::SocketAddr, token: &str) -> String {
+    // The QR no longer carries the backend URL — the mobile crate's
+    // `build_config::BACKEND_URL` is the source of truth, and tests use
+    // `pair_with_qr_json_at` to inject a per-test address.
     serde_json::to_string(&PairingQrPayload {
         v: 2,
-        backend_url: format!("ws://{addr}/devices"),
         host_display_name: "FakeMac".into(),
         pairing_token: token.into(),
         expires_at_ms: i64::MAX,
-        cf_access_client_id: None,
-        cf_access_client_secret: None,
     })
     .unwrap()
 }
@@ -145,17 +139,14 @@ async fn authenticated_client(backend: &RealBackend, email: &str) -> MobileClien
     )
     .unwrap();
     let resp = http
-        .register(email, "testpass1")
+        .register(email, "testpass1", None)
         .await
         .expect("register against test backend");
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let persisted = PersistedPairingState {
-        backend_url: Some(format!("ws://{}/devices", backend.addr)),
         device_id: Some(device_id.to_string()),
         device_secret: None,
-        cf_access_client_id: None,
-        cf_access_client_secret: None,
         access_token: Some(resp.access_token),
         access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
         refresh_token: Some(resp.refresh_token),
@@ -173,7 +164,8 @@ async fn pair_with_qr_json_happy_path_reaches_connected() {
 
     let client = authenticated_client(&backend, "happy@example.com").await;
     let qr = make_qr_for_real_backend(backend.addr, &backend.token);
-    client.pair_with_qr_json(qr).await.unwrap();
+    let backend_url = format!("ws://{}/devices", backend.addr);
+    client.pair_with_qr_json_at(qr, &backend_url).await.unwrap();
 
     assert_eq!(client.current_state(), ConnectionState::Connected);
 }
@@ -187,7 +179,8 @@ async fn ui_events_stream_delivers_backend_fanout() {
     let mut rx = client.ui_events_stream();
 
     let qr = make_qr_for_real_backend(backend.addr, &backend.token);
-    client.pair_with_qr_json(qr).await.unwrap();
+    let backend_url = format!("ws://{}/devices", backend.addr);
+    client.pair_with_qr_json_at(qr, &backend_url).await.unwrap();
 
     // Push a fan-out event into the iPhone's live session via the registry.
     // Wait briefly for the WS to register the session post-pair.
@@ -236,15 +229,36 @@ async fn list_threads_round_trips_over_envelope() {
 
     let client = authenticated_client(&backend, "list@example.com").await;
     let qr = make_qr_for_real_backend(backend.addr, &backend.token);
-    client.pair_with_qr_json(qr).await.unwrap();
+    let backend_url = format!("ws://{}/devices", backend.addr);
+    client.pair_with_qr_json_at(qr, &backend_url).await.unwrap();
 
-    // The real backend has no threads seeded → expect empty page.
-    let resp = client
-        .list_threads(ListThreadsParams {
-            limit: 50,
-            before_ts_ms: None,
-            agent: None,
-        })
+    // After Phase B+C, MobileClient::list_threads goes through `http_creds`
+    // which now hardcodes `build_config::BACKEND_URL`. The test backend
+    // listens on a per-test ephemeral port, so we drive the round-trip
+    // through `MobileHttpClient` directly using the same secret/access
+    // tuple the rehydrated client persisted post-pair.
+    let persisted = client.persisted_pairing_state().await.unwrap();
+    let device_id = client.device_id();
+    let device_secret = persisted
+        .device_secret
+        .clone()
+        .expect("pair persisted a device secret");
+    let access = persisted
+        .access_token
+        .clone()
+        .expect("authenticated_client seeded the access token");
+
+    let http = minos_mobile::http::MobileHttpClient::new(&backend_url, device_id, None).unwrap();
+    let resp = http
+        .list_threads(
+            &minos_domain::DeviceSecret(device_secret),
+            &access,
+            ListThreadsParams {
+                limit: 50,
+                before_ts_ms: None,
+                agent: None,
+            },
+        )
         .await
         .unwrap();
     assert!(resp.threads.is_empty());
@@ -258,13 +272,11 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
 
     let client = authenticated_client(&backend, "rehyd@example.com").await;
     let qr = make_qr_for_real_backend(backend.addr, &backend.token);
-    client.pair_with_qr_json(qr).await.unwrap();
+    client.pair_with_qr_json_at(qr, &backend_url).await.unwrap();
 
     let persisted = client.persisted_pairing_state().await.unwrap();
-    assert_eq!(persisted.backend_url.as_deref(), Some(backend_url.as_str()));
-    // Real backend has no CF Access tokens, so the QR carried none.
-    assert!(persisted.cf_access_client_id.is_none());
-    assert!(persisted.cf_access_client_secret.is_none());
+    // Backend URL and CF Access fields no longer round-trip through
+    // PersistedPairingState — they live in compile-time build_config.
     assert!(persisted.device_id.is_some());
     let secret = persisted
         .device_secret
@@ -279,11 +291,8 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
     let rehydrated = MobileClient::new_with_persisted_state("iPhone".into(), persisted.clone());
     let restored = rehydrated.persisted_pairing_state().await.unwrap();
     let expected = PersistedPairingState {
-        backend_url: Some(backend_url),
         device_id: persisted.device_id.clone(),
         device_secret: Some(secret),
-        cf_access_client_id: None,
-        cf_access_client_secret: None,
         access_token: persisted.access_token.clone(),
         access_expires_at_ms: persisted.access_expires_at_ms,
         refresh_token: persisted.refresh_token.clone(),
@@ -349,9 +358,10 @@ async fn fake_backend_resume_handshake(
 
     // The test only cares about the headers asserted during the upgrade
     // closure above. After Phase C the `list_threads` query rides HTTP, so
-    // the fake doesn't need to handle any envelope frames here. Close the
-    // socket cleanly so the client-side reader returns and the test can
-    // join the backend without hanging.
+    // the fake doesn't need to handle any envelope frames here. Keep the
+    // socket open briefly so the resume path can observe a stable Connected
+    // state, then close it cleanly so the backend task can terminate.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let _ = write
         .send(Message::Close(Some(CloseFrame {
             code: CloseCode::Normal,
@@ -388,11 +398,8 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
     let client = MobileClient::new_with_persisted_state(
         "iPhone".into(),
         PersistedPairingState {
-            backend_url: Some(format!("ws://{addr}/devices")),
             device_id: Some(device_id.to_string()),
             device_secret: Some("sec_revoked".into()),
-            cf_access_client_id: None,
-            cf_access_client_secret: None,
             access_token: None,
             access_expires_at_ms: None,
             refresh_token: None,
@@ -401,9 +408,13 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
         },
     );
 
-    let resume = tokio::time::timeout(Duration::from_secs(2), client.resume_persisted_session())
-        .await
-        .expect("resume_persisted_session must not hang on a 4401 close");
+    let backend_url = format!("ws://{addr}/devices");
+    let resume = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.resume_persisted_session_at(&backend_url, None),
+    )
+    .await
+    .expect("resume_persisted_session must not hang on a 4401 close");
 
     let _ = resume;
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -435,11 +446,8 @@ async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
     let client = MobileClient::new_with_persisted_state(
         "iPhone".into(),
         PersistedPairingState {
-            backend_url: Some(format!("ws://{addr}/devices")),
             device_id: Some(device_id.to_string()),
             device_secret: Some("sec_resume".into()),
-            cf_access_client_id: Some("cf-id".into()),
-            cf_access_client_secret: Some("cf-secret".into()),
             access_token: None,
             access_expires_at_ms: None,
             refresh_token: None,
@@ -448,7 +456,11 @@ async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
         },
     );
 
-    client.resume_persisted_session().await.unwrap();
+    let backend_url = format!("ws://{addr}/devices");
+    client
+        .resume_persisted_session_at(&backend_url, Some(("cf-id".into(), "cf-secret".into())))
+        .await
+        .unwrap();
     assert_eq!(client.current_state(), ConnectionState::Connected);
 
     // The fake backend asserted the resume handshake's X-Device-* and

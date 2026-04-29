@@ -4,6 +4,25 @@ use minos_domain::{AgentDescriptor, AgentName, DeviceId, DeviceSecret, PairingTo
 use minos_ui_protocol::{ThreadEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
 
+/// Response body for `GET /v1/me/peer` — the backend's view of the
+/// caller's currently paired peer. Returned by the authenticated
+/// pairing-rail (`X-Device-Id` + `X-Device-Secret`) so a freshly
+/// reconnected daemon can refresh its in-memory peer mirror without
+/// reading anything from local disk.
+///
+/// On `200`, the body carries the peer's `device_id`, the peer-side
+/// display name, and the pairing's `created_at` timestamp (epoch ms).
+/// On `404` with `error.code == "not_paired"`, the caller has no row
+/// in the `pairings` table — the response body uses the standard
+/// `{ "error": { "code": ..., "message": ... } }` envelope shared by
+/// every other `/v1/*` route.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MePeerResponse {
+    pub peer_device_id: DeviceId,
+    pub peer_name: String,
+    pub paired_at_ms: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairRequest {
     pub device_id: DeviceId,
@@ -65,27 +84,23 @@ pub struct SendUserMessageRequest {
     pub text: String,
 }
 
-/// Deep-link QR payload minted by the Mac and scanned by iOS. Carries the
-/// backend URL, a display name for the host, a short-lived one-shot
-/// `pairing_token`, its RFC-3339-ish epoch-ms expiry, and — when the
-/// backend sits behind a Cloudflare Access service-token — the two
-/// service-token headers so the iPhone can authenticate against the edge
-/// before the bearer-secret WebSocket handshake.
+/// Deep-link QR payload minted by the Mac and scanned by iOS. Carries a
+/// display name for the host, a short-lived one-shot `pairing_token`, and
+/// its RFC-3339-ish epoch-ms expiry. The backend URL and any Cloudflare
+/// Access service-token headers live in the mobile client's compile-time
+/// build config (see `minos_mobile::build_config`); they are not transit
+/// values and never enter the QR payload, durable storage, or the
+/// post-pair business logic.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PairingQrPayload {
     #[serde(default = "default_pairing_qr_version")]
     pub v: u8,
-    pub backend_url: String,
     #[serde(alias = "mac_display_name")]
     pub host_display_name: String,
     #[serde(alias = "token")]
     pub pairing_token: String,
     #[serde(default)]
     pub expires_at_ms: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cf_access_client_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cf_access_client_secret: Option<String>,
 }
 
 const fn default_pairing_qr_version() -> u8 {
@@ -264,39 +279,11 @@ mod new_type_tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn pairing_qr_payload_round_trip_with_cf() {
-        let p = PairingQrPayload {
-            v: 2,
-            backend_url: "wss://minos.fan-nn.top/devices".into(),
-            host_display_name: "Mac".into(),
-            pairing_token: "tok".into(),
-            expires_at_ms: 1,
-            cf_access_client_id: Some("id".into()),
-            cf_access_client_secret: Some("sec".into()),
-        };
-        let back: PairingQrPayload =
-            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
-        assert_eq!(p, back);
-    }
-
-    #[test]
-    fn pairing_qr_payload_without_cf_omits_fields() {
-        let p = PairingQrPayload {
-            v: 2,
-            backend_url: "x".into(),
-            host_display_name: "x".into(),
-            pairing_token: "t".into(),
-            expires_at_ms: 0,
-            cf_access_client_id: None,
-            cf_access_client_secret: None,
-        };
-        let s = serde_json::to_string(&p).unwrap();
-        assert!(!s.contains("cf_access_client_id"));
-        assert!(!s.contains("cf_access_client_secret"));
-    }
-
-    #[test]
     fn pairing_qr_payload_accepts_legacy_mac_field_names() {
+        // Legacy QR payloads may still carry `backend_url` and CF Access
+        // fields — `serde` ignores unknown fields by default, so this is
+        // a forward-compat read of older Mac builds. The struct itself no
+        // longer carries them.
         let back: PairingQrPayload = serde_json::from_value(serde_json::json!({
             "backend_url": "wss://minos.fan-nn.top/devices",
             "mac_display_name": "Mac",
@@ -305,7 +292,6 @@ mod new_type_tests {
         .unwrap();
 
         assert_eq!(back.v, 2);
-        assert_eq!(back.backend_url, "wss://minos.fan-nn.top/devices");
         assert_eq!(back.host_display_name, "Mac");
         assert_eq!(back.pairing_token, "tok");
         assert_eq!(back.expires_at_ms, 0);
@@ -326,12 +312,9 @@ mod new_type_tests {
         let r = RequestPairingQrResponse {
             qr_payload: PairingQrPayload {
                 v: 1,
-                backend_url: "wss://example.com/devices".into(),
                 host_display_name: "Mac".into(),
                 pairing_token: "tok".into(),
                 expires_at_ms: 42,
-                cf_access_client_id: None,
-                cf_access_client_secret: None,
             },
         };
         let back: RequestPairingQrResponse =
@@ -459,6 +442,28 @@ mod new_type_tests {
         let r = GetThreadLastSeqResponse { last_seq: 42 };
         let back: GetThreadLastSeqResponse =
             serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn me_peer_response_round_trip() {
+        let r = MePeerResponse {
+            peer_device_id: DeviceId::new(),
+            peer_name: "fan's iPhone".into(),
+            paired_at_ms: 1_726_500_000_000,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value["peer_device_id"],
+            serde_json::to_value(r.peer_device_id).unwrap()
+        );
+        assert_eq!(value["peer_name"], serde_json::json!("fan's iPhone"));
+        assert_eq!(
+            value["paired_at_ms"],
+            serde_json::json!(1_726_500_000_000_i64)
+        );
+        let back: MePeerResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
 }

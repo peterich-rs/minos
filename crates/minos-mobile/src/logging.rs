@@ -30,13 +30,13 @@ pub fn init(log_dir: &Path) -> Result<(), MinosError> {
         message: e.to_string(),
     })?;
     let cfg = XlogConfig::new(log_dir.to_string_lossy().to_string(), NAME_PREFIX);
-    let logger = Xlog::init(cfg, LogLevel::Info).map_err(|e| MinosError::StoreIo {
+    let logger = Xlog::init(cfg, LogLevel::Debug).map_err(|e| MinosError::StoreIo {
         path: log_dir.display().to_string(),
         message: e.to_string(),
     })?;
 
     let (layer, handle) =
-        XlogLayer::with_config(logger, XlogLayerConfig::new(LogLevel::Info).enabled(true));
+        XlogLayer::with_config(logger, XlogLayerConfig::new(LogLevel::Debug).enabled(true));
 
     let _ = HANDLE.set(handle);
 

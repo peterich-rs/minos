@@ -34,6 +34,7 @@ impl AgentGlue {
         &self,
         req: StartAgentRequest,
     ) -> Result<StartAgentResponse, MinosError> {
+        self.refresh_subprocess_env().await;
         let out = self.runtime.start(req.agent).await?;
         Ok(StartAgentResponse {
             session_id: out.session_id,
@@ -73,5 +74,10 @@ impl AgentGlue {
 
     pub async fn shutdown(&self) -> Result<(), MinosError> {
         self.runtime.stop().await
+    }
+
+    async fn refresh_subprocess_env(&self) {
+        let env = minos_cli_detect::capture_user_shell_env().await;
+        self.runtime.replace_subprocess_env(env);
     }
 }

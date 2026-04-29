@@ -8,7 +8,9 @@
 use std::time::Duration;
 
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
-use minos_protocol::{PairingQrPayload, RequestPairingQrParams, RequestPairingQrResponse};
+use minos_protocol::{
+    MePeerResponse, PairingQrPayload, RequestPairingQrParams, RequestPairingQrResponse,
+};
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -109,6 +111,56 @@ impl RelayHttpClient {
         } else {
             Err(decode_error(status, resp).await)
         }
+    }
+
+    /// Fetch the backend's view of our currently paired peer.
+    ///
+    /// Returns `Ok(Some(_))` on `200`, `Ok(None)` on `404 not_paired`
+    /// (no row, or row exists but isn't paired), and `Err` for any other
+    /// failure path. Used by the daemon's relay-client right after WS
+    /// handshake to repopulate its in-memory peer mirror without
+    /// persisting anything to disk; pairing facts (who, name, paired_at)
+    /// live on the backend.
+    pub async fn get_me_peer(
+        &self,
+        secret: &DeviceSecret,
+    ) -> Result<Option<MePeerResponse>, MinosError> {
+        let url = format!("{}/v1/me/peer", self.base);
+        let req = self
+            .client
+            .get(&url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .header("x-device-secret", secret.as_str());
+        let req = stamp_cf(req, &self.config);
+        let resp = req.send().await.map_err(|e| connect_err(&url, &e))?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: MePeerResponse =
+                resp.json().await.map_err(|e| MinosError::BackendInternal {
+                    message: format!("decode MePeerResponse: {e}"),
+                })?;
+            return Ok(Some(body));
+        }
+        if status == reqwest::StatusCode::NOT_FOUND {
+            // 404 with `error.code == "not_paired"` is the structured
+            // "no peer" signal. Anything else under 404 is unexpected
+            // (e.g. an unknown route) — surface as an error so the
+            // caller logs it.
+            let body: Result<ErrorEnvelope, _> = resp.json().await;
+            if let Ok(env) = body {
+                if env.error.code == "not_paired" {
+                    return Ok(None);
+                }
+                return Err(MinosError::BackendInternal {
+                    message: format!("backend 404 ({}): {}", env.error.code, env.error.message),
+                });
+            }
+            return Err(MinosError::BackendInternal {
+                message: format!("backend {status}"),
+            });
+        }
+        Err(decode_error(status, resp).await)
     }
 }
 

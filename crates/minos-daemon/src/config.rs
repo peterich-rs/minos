@@ -7,23 +7,36 @@ pub const BACKEND_URL: &str = match option_env!("MINOS_BACKEND_URL") {
     None => "ws://127.0.0.1:8787/devices",
 };
 
-/// Runtime relay config (optional CF Service Token pair). Backend URL is
-/// BACKEND_URL (compile-time).
+/// Runtime relay config. Callers can override the backend URL and optional
+/// CF Service Token pair at bootstrap time; blank values fall back to the
+/// baked-in defaults.
 ///
 /// Derives `uniffi::Record` so Swift can pass it to
-/// `DaemonHandle::start`; the two String fields marshal as plain strings.
+/// `DaemonHandle::start`; the String fields marshal as plain strings.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug)]
 pub struct RelayConfig {
+    pub backend_url: String,
     pub cf_client_id: String,
     pub cf_client_secret: String,
 }
 
 impl RelayConfig {
-    pub fn new(cf_client_id: String, cf_client_secret: String) -> Self {
+    pub fn new(backend_url: String, cf_client_id: String, cf_client_secret: String) -> Self {
         Self {
+            backend_url,
             cf_client_id,
             cf_client_secret,
+        }
+    }
+
+    #[must_use]
+    pub fn resolved_backend_url(&self) -> &str {
+        let trimmed = self.backend_url.trim();
+        if trimmed.is_empty() {
+            BACKEND_URL
+        } else {
+            trimmed
         }
     }
 }
@@ -39,8 +52,15 @@ mod tests {
 
     #[test]
     fn relay_config_ctor_stores_fields() {
-        let c = RelayConfig::new("id".into(), "secret".into());
+        let c = RelayConfig::new("wss://backend/devices".into(), "id".into(), "secret".into());
+        assert_eq!(c.backend_url, "wss://backend/devices");
         assert_eq!(c.cf_client_id, "id");
         assert_eq!(c.cf_client_secret, "secret");
+    }
+
+    #[test]
+    fn relay_config_uses_baked_backend_when_runtime_value_is_blank() {
+        let c = RelayConfig::new("   ".into(), "id".into(), "secret".into());
+        assert_eq!(c.resolved_backend_url(), BACKEND_URL);
     }
 }

@@ -14,6 +14,7 @@ class _FakeCore implements MinosCoreProtocol {
 
   StartAgentResponse? startResponse;
   MinosError? startError;
+  MinosError? sendError;
   int sendCount = 0;
   int stopCount = 0;
   String? lastSendThreadId;
@@ -39,6 +40,7 @@ class _FakeCore implements MinosCoreProtocol {
     required String sessionId,
     required String text,
   }) async {
+    if (sendError != null) throw sendError!;
     sendCount += 1;
     lastSendThreadId = sessionId;
     lastSendText = text;
@@ -145,12 +147,42 @@ void main() {
     final c = _container(core);
     final notifier = c.read(activeSessionControllerProvider.notifier);
 
-    await notifier.start(agent: AgentName.codex, prompt: 'hi');
+    final error = await notifier.start(agent: AgentName.codex, prompt: 'hi');
     final st = c.read(activeSessionControllerProvider);
     expect(st, isA<SessionError>());
     expect((st as SessionError).threadId, isNull);
     expect(st.error, isA<MinosError_AgentStartFailed>());
+    expect(error, isA<MinosError_AgentStartFailed>());
   });
+
+  test(
+    'reset() clears a stale thread-bound error back to SessionIdle',
+    () async {
+      final core = _FakeCore()
+        ..startResponse = const StartAgentResponse(
+          sessionId: 'thr-reset',
+          cwd: '/w',
+        );
+      final c = _container(core);
+      final notifier = c.read(activeSessionControllerProvider.notifier);
+
+      await notifier.start(agent: AgentName.codex, prompt: 'p');
+      core.emit(
+        UiEventFrame(
+          threadId: 'thr-reset',
+          seq: BigInt.zero,
+          ui: UiEventMessage.error(code: 'agent_crash', message: 'boom'),
+          tsMs: 1,
+        ),
+      );
+      await pumpEventQueue();
+      expect(c.read(activeSessionControllerProvider), isA<SessionError>());
+
+      notifier.reset();
+
+      expect(c.read(activeSessionControllerProvider), const SessionIdle());
+    },
+  );
 
   test('MessageCompleted on matching thread -> SessionAwaitingInput', () async {
     final core = _FakeCore()
@@ -266,11 +298,48 @@ void main() {
       );
       await pumpEventQueue();
 
-      await notifier.send('follow-up');
+      final error = await notifier.send('follow-up');
       expect(core.sendCount, 1);
       expect(core.lastSendThreadId, 'thr-E');
       expect(core.lastSendText, 'follow-up');
       expect(c.read(activeSessionControllerProvider), isA<SessionStreaming>());
+      expect(error, isNull);
+    },
+  );
+
+  test(
+    'send() failure restores AwaitingInput instead of poisoning session',
+    () async {
+      final core = _FakeCore()
+        ..startResponse = const StartAgentResponse(
+          sessionId: 'thr-send-fail',
+          cwd: '/w',
+        )
+        ..sendError = const MinosError.timeout();
+      final c = _container(core);
+      final notifier = c.read(activeSessionControllerProvider.notifier);
+
+      await notifier.start(agent: AgentName.codex, prompt: 'p');
+      core.emit(
+        UiEventFrame(
+          threadId: 'thr-send-fail',
+          seq: BigInt.zero,
+          ui: UiEventMessage.messageCompleted(messageId: 'm1', finishedAtMs: 1),
+          tsMs: 1,
+        ),
+      );
+      await pumpEventQueue();
+
+      final error = await notifier.send('follow-up');
+
+      expect(error, isA<MinosError_Timeout>());
+      expect(
+        c.read(activeSessionControllerProvider),
+        const SessionAwaitingInput(
+          threadId: 'thr-send-fail',
+          agent: AgentName.codex,
+        ),
+      );
     },
   );
 

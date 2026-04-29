@@ -61,37 +61,6 @@ pub struct Config {
     #[arg(long)]
     pub exit_after_migrate: bool,
 
-    /// Optional Cloudflare Access `CF-Access-Client-Id` for QR distribution.
-    ///
-    /// Current clients normally receive Access credentials from build-time or
-    /// host env configuration. If these backend env vars are set, the backend
-    /// still embeds them into pairing QR payloads for backwards-compatible
-    /// deployments.
-    #[arg(long, env = "MINOS_BACKEND_CF_ACCESS_CLIENT_ID")]
-    pub cf_access_client_id: Option<String>,
-
-    /// Cloudflare Access `CF-Access-Client-Secret`. Paired with
-    /// `cf_access_client_id`; both must be set or both empty.
-    #[arg(long, env = "MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET")]
-    pub cf_access_client_secret: Option<String>,
-
-    /// Public WebSocket origin the mobile client should connect to.
-    /// Embedded into the pairing QR payload so mobile doesn't need to
-    /// resolve DNS for the backend. Defaults to the local dev address;
-    /// production deploys override via `MINOS_BACKEND_PUBLIC_URL`.
-    #[arg(
-        long,
-        env = "MINOS_BACKEND_PUBLIC_URL",
-        default_value = "ws://127.0.0.1:8787/devices"
-    )]
-    pub public_url: String,
-
-    /// Legacy escape hatch retained for CLI compatibility. Access service
-    /// tokens are now client-side configuration, so `wss://` public URLs no
-    /// longer require backend-held CF token env vars.
-    #[arg(long, env = "MINOS_BACKEND_ALLOW_DEV", default_value_t = false)]
-    pub allow_dev: bool,
-
     /// HS256 secret used to sign account-auth bearer tokens (spec §5.3).
     ///
     /// Required at boot in the binary. Optional at the CLI level so the
@@ -119,25 +88,16 @@ impl Config {
         self.log_dir.clone().unwrap_or_else(default_log_dir)
     }
 
-    /// Validate optional CF Access QR-distribution configuration at startup.
-    ///
-    /// Access service tokens are consumed by clients, not the backend. The
-    /// backend may optionally carry a token pair only to embed it into QR
-    /// payloads for older clients. If one half is set, the other must be set.
+    /// Validate startup configuration. CF Access service tokens and the
+    /// public backend URL are now exclusively client-side build config —
+    /// they no longer enter QR payloads or backend state — so this only
+    /// enforces the JWT-secret invariants.
     ///
     /// # Errors
     /// Returns a human-readable message suitable for surfacing from main
     /// (`eprintln!` + non-zero exit). Callers shouldn't try to interpret
     /// the string programmatically.
     pub fn validate(&self) -> Result<(), String> {
-        let id_set = self.cf_access_client_id.is_some();
-        let secret_set = self.cf_access_client_secret.is_some();
-        if id_set != secret_set {
-            return Err(
-                "MINOS_BACKEND_CF_ACCESS_CLIENT_ID and ..._SECRET must be set together or both left unset"
-                    .into(),
-            );
-        }
         let secret = self
             .jwt_secret
             .as_ref()
@@ -191,10 +151,6 @@ mod tests {
             "MINOS_BACKEND_DB",
             "MINOS_BACKEND_LOG_DIR",
             "MINOS_BACKEND_TOKEN_TTL",
-            "MINOS_BACKEND_CF_ACCESS_CLIENT_ID",
-            "MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET",
-            "MINOS_BACKEND_PUBLIC_URL",
-            "MINOS_BACKEND_ALLOW_DEV",
             "MINOS_JWT_SECRET",
             "RUST_LOG",
         ] {
@@ -328,68 +284,17 @@ mod tests {
         assert_eq!(cfg.token_ttl(), Duration::from_mins(10));
     }
 
-    // ── CF Access validation ──────────────────────────────────────────
-
-    #[test]
-    fn default_public_url_is_local_ws() {
-        let _g = env_scope();
-        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
-        assert_eq!(cfg.public_url, "ws://127.0.0.1:8787/devices");
-        assert!(cfg.cf_access_client_id.is_none());
-        assert!(cfg.cf_access_client_secret.is_none());
-        assert!(!cfg.allow_dev);
-    }
+    // ── JWT-secret validation ─────────────────────────────────────────
 
     /// Deterministic 32-byte secret for tests that exercise `validate`.
     const TEST_JWT_SECRET: &str = "01234567890123456789012345678901";
 
     #[test]
-    fn validate_ok_for_local_ws_without_cf_tokens() {
+    fn validate_ok_with_jwt_secret_set() {
         let _g = env_scope();
         std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
-        cfg.validate()
-            .expect("local ws:// must not require CF tokens");
-    }
-
-    #[test]
-    fn validate_ok_for_wss_without_backend_held_cf_tokens() {
-        let _g = env_scope();
-        std::env::set_var(
-            "MINOS_BACKEND_PUBLIC_URL",
-            "wss://tunnel.example.com/devices",
-        );
-        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
-
-        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
-        cfg.validate()
-            .expect("clients carry CF tokens; backend does not require them");
-    }
-
-    #[test]
-    fn validate_allow_dev_keeps_wss_without_cf_tokens_valid() {
-        let _g = env_scope();
-        std::env::set_var(
-            "MINOS_BACKEND_PUBLIC_URL",
-            "wss://tunnel.example.com/devices",
-        );
-        std::env::set_var("MINOS_BACKEND_ALLOW_DEV", "true");
-        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
-
-        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
-        cfg.validate()
-            .expect("allow-dev remains a no-op compatibility flag");
-    }
-
-    #[test]
-    fn validate_requires_both_cf_tokens_together() {
-        let _g = env_scope();
-        std::env::set_var("MINOS_BACKEND_CF_ACCESS_CLIENT_ID", "id-only");
-        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
-
-        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
-        let err = cfg.validate().expect_err("half-set pair must fail");
-        assert!(err.contains("must be set together"), "{err}");
+        cfg.validate().expect("jwt secret present and long enough");
     }
 
     #[test]

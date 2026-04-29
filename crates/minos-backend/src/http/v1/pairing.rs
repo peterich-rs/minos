@@ -73,12 +73,9 @@ async fn post_tokens(
 
     let qr_payload = PairingQrPayload {
         v: 2,
-        backend_url: state.public_cfg.public_url.clone(),
         host_display_name: params.host_display_name,
         pairing_token: token.as_str().to_string(),
         expires_at_ms: expires.timestamp_millis(),
-        cf_access_client_id: state.public_cfg.cf_access_client_id.clone(),
-        cf_access_client_secret: state.public_cfg.cf_access_client_secret.clone(),
     };
     Ok(Json(RequestPairingQrResponse { qr_payload }))
 }

@@ -21,9 +21,11 @@ pub enum AgentState {
     /// No agent session. Boot default and the resting state after a clean stop.
     #[default]
     Idle,
-    /// Between `start_agent` RPC and the first `thread/started` notification.
+    /// Between `start_agent` RPC and the runtime minting the session/thread id.
     Starting { agent: AgentName },
-    /// Agent child is live and has reported a thread id.
+    /// Agent session is live and has a thread id. For exec/jsonl-backed
+    /// sessions the underlying codex subprocess exists only while a turn is
+    /// actively running; between turns the session remains resumable.
     Running {
         agent: AgentName,
         thread_id: String,

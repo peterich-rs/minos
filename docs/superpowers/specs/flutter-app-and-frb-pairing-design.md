@@ -53,7 +53,6 @@ The scope is deliberately narrower than the architecture spec's "MVP iOS app". T
 | mobile_scanner | `^5.0.0` | Same |
 | permission_handler | `^11.0.0` | Same |
 | path_provider | `^2.1.0` | Same |
-| xlog (Dart) | `^0.1.0` (peterich-rs/xlog — MVP spec §9.4) | Same |
 | mocktail | `^1.0.0` | Dev-only |
 | iOS deployment target | iOS 16 (inherited from MVP spec §3) | `apps/mobile/ios/Runner.xcodeproj` post-scaffold patch |
 | Bundle ID | `ai.minos.mobile` | Mirrors macOS `ai.minos.macos` |

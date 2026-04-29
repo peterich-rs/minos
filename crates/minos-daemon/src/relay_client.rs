@@ -38,17 +38,13 @@
 //! - All other errors fall back to exponential-backoff reconnect
 //!   (1s → 2s → 4s → 8s → 16s → 30s cap, no max attempts).
 //!
-//! # Persistence on `EventKind::Paired`
+//! # Pairing state on `EventKind::Paired`
 //!
-//! When the relay finalises a pair and forwards us `your_device_secret`,
-//! the dispatch task writes it to the macOS Keychain via
-//! [`crate::KeychainTrustedDeviceStore::write`] and persists the matching
-//! [`PeerRecord`] into `local-state.json`. Failures of either side are
-//! logged at `warn` but do not block the in-memory `PeerState::Paired`
-//! update — the user still sees "paired" in the UI even if persistence
-//! is transiently broken.
+//! Pairing is now process-local on the host. When the relay finalises a
+//! pair and forwards us `your_device_secret`, the dispatch task updates its
+//! in-memory peer mirror and publishes `PeerState::Paired`, but it no longer
+//! writes `device-secret` to the macOS Keychain or saves `local-state.json`.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use chrono::Utc;
@@ -65,7 +61,6 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
-use crate::local_state::LocalState;
 use crate::relay_http::RelayHttpClient;
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
 use crate::rpc_server::{invoke_forwarded, wrap_response_envelope, RpcServerImpl};
@@ -84,16 +79,19 @@ struct Inner {
     /// The Mac's display name — sent to the backend in `RequestPairingQr`
     /// so the assembled QR carries it through to the iPhone.
     mac_name: String,
-    /// Runtime CF Access credentials used by the Mac itself. If the backend
-    /// does not embed CF fields in the QR, we can still hand the phone the
-    /// same edge credentials that allowed the host to connect.
-    config: RelayConfig,
     /// Spawn-time snapshot of the device secret. Used by [`Self::forget_peer`]
     /// to authenticate the HTTP `DELETE /v1/pairing` call. `None` until the
     /// daemon respawns the client with a fresh secret post-pairing.
     secret: Option<DeviceSecret>,
     /// HTTP client for the backend's `/v1/*` control plane.
     http: Arc<RelayHttpClient>,
+    /// Cloneable producer side of the dispatcher's outbound queue.
+    /// Other in-process producers (e.g. the agent-ingest forwarder) clone
+    /// this via [`RelayClient::outbound_sender`] so every host-side WS frame
+    /// goes through the single `/devices` socket the dispatcher owns —
+    /// preventing the device-id collision that two parallel WS clients
+    /// would otherwise trigger on the backend.
+    out_tx: mpsc::Sender<Envelope>,
 }
 
 pub struct RelayClient {
@@ -138,7 +136,6 @@ impl RelayClient {
         let (out_tx, out_rx) = mpsc::channel::<Envelope>(OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-        let inner_config = config.clone();
         let inner_secret = secret.clone();
         let http = match RelayHttpClient::new(
             &backend_url,
@@ -175,11 +172,10 @@ impl RelayClient {
             backend_url: backend_url.clone(),
             link_tx,
             peer_tx,
-            out_tx,
+            out_tx: out_tx.clone(),
             out_rx,
             rpc_server,
             peer_store: persistence.peer_store,
-            local_state_path: persistence.local_state_path,
             last_error: persistence.last_error,
         };
 
@@ -189,9 +185,9 @@ impl RelayClient {
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             task: Mutex::new(Some(task)),
             mac_name,
-            config: inner_config,
             secret: inner_secret,
             http,
+            out_tx,
         });
 
         (Arc::new(Self { inner }), link_rx, peer_rx)
@@ -200,9 +196,9 @@ impl RelayClient {
     /// Issue `request_pairing_qr` against the backend's HTTP control plane
     /// and wrap the response into the Mac-side QR payload shape.
     ///
-    /// Per ADR 0014 the backend assembles the full QR payload (backend URL,
-    /// token, and CF Access tokens); we receive a `PairingQrPayload` and
-    /// translate it to the Mac-side `RelayQrPayload` the UI already binds to.
+    /// The QR carries only the host display name, the one-shot token, and
+    /// its expiry. Backend URL and any CF Access edge credentials live in
+    /// the mobile client's compile-time build config — never in the QR.
     pub async fn request_pairing_token(&self) -> Result<RelayQrPayload, MinosError> {
         let qr = self
             .inner
@@ -210,20 +206,11 @@ impl RelayClient {
             .request_pairing_qr(self.inner.mac_name.clone())
             .await?;
 
-        let (cf_access_client_id, cf_access_client_secret) = qr_cf_access_or_host_env(
-            qr.cf_access_client_id,
-            qr.cf_access_client_secret,
-            &self.inner.config,
-        );
-
         Ok(RelayQrPayload {
             v: qr.v,
-            backend_url: qr.backend_url,
             host_display_name: qr.host_display_name,
             pairing_token: minos_domain::PairingToken(qr.pairing_token),
             expires_at_ms: qr.expires_at_ms,
-            cf_access_client_id,
-            cf_access_client_secret,
         })
     }
 
@@ -240,6 +227,20 @@ impl RelayClient {
                 device_id: "(none)".into(),
             })?;
         self.inner.http.forget_pairing(&secret).await
+    }
+
+    /// Clone the producer side of the dispatcher's outbound queue.
+    ///
+    /// Used by in-process forwarders (e.g. `agent_ingest`) to push
+    /// `Envelope::Ingest` / `Envelope::Forward` frames through the same
+    /// `/devices` socket the dispatcher owns. Centralising on a single WS
+    /// per device is required by the backend, whose session registry is
+    /// keyed by `DeviceId` alone and revokes any prior socket on
+    /// reconnect — two parallel WS clients with the same identity would
+    /// supersede each other in a tight loop.
+    #[must_use]
+    pub fn outbound_sender(&self) -> mpsc::Sender<Envelope> {
+        self.inner.out_tx.clone()
     }
 
     /// Signal the dispatch task to exit and await its join. Idempotent:
@@ -265,9 +266,6 @@ pub struct PersistenceCtx {
     /// one in `DaemonInner::peer`. Updated on `EventKind::Paired` /
     /// `Unpaired`; read by `DaemonHandle::current_trusted_device`.
     pub peer_store: Arc<StdMutex<Option<PeerRecord>>>,
-    /// Path to `local-state.json`. Written on `EventKind::Paired` so the
-    /// self/peer device ids and paired-at timestamp survive restarts.
-    pub local_state_path: PathBuf,
     /// Same `Arc` as `DaemonInner::last_error`. Populated on fatal-exit
     /// paths (HTTP 401, WS close 4401/4400). Drained on `DaemonHandle::
     /// last_error`.
@@ -300,9 +298,6 @@ struct DispatchCtx {
     /// / `Unpaired` so warm reads via `current_trusted_device` see the
     /// newest record without round-tripping the watch channel.
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
-    /// Persisted next to `device-secret` in the Keychain (which stores the
-    /// secret) so a warm start can rebuild `DaemonHandle::start`'s inputs.
-    local_state_path: PathBuf,
     /// One-shot fatal-error signal drained by `DaemonHandle::last_error`.
     last_error: Arc<StdMutex<Option<MinosError>>>,
 }
@@ -641,65 +636,16 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
     }
 }
 
-/// Writes `device-secret` to the macOS Keychain and the updated
-/// `PeerRecord` into `local-state.json`. Failures log at `warn` but do
-/// not block the in-memory state transition — the UI still gets to
-/// observe `PeerState::Paired` even if persistence is temporarily broken.
+/// Host pairing is process-local, so paired transitions no longer write to
+/// the macOS Keychain or `local-state.json`.
 fn persist_pairing(record: &PeerRecord, secret: &DeviceSecret, ctx: &DispatchCtx) {
-    #[cfg(target_os = "macos")]
-    if let Err(e) = crate::KeychainTrustedDeviceStore.write(secret) {
-        tracing::warn!(
-            target: "minos_daemon::relay_client",
-            error = %e,
-            "failed to persist device-secret to Keychain on Paired; \
-             continuing with in-memory state so UI still updates"
-        );
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = secret;
-
-    let ls = LocalState {
-        self_device_id: ctx.self_device_id,
-        peer: Some(record.clone()),
-    };
-    if let Err(e) = ls.save(&ctx.local_state_path) {
-        tracing::warn!(
-            target: "minos_daemon::relay_client",
-            error = %e,
-            path = %ctx.local_state_path.display(),
-            "failed to persist local-state.json on Paired; \
-             continuing with in-memory state so UI still updates"
-        );
-    }
+    let _ = (record, secret, ctx);
 }
 
-/// Mirror of [`persist_pairing`] for `Unpaired` — wipes the Keychain
-/// entry and overwrites `local-state.json` with an empty `peer`. Called
-/// when the *peer* initiates a forget; the local `forget_peer` RPC
-/// handler does the same writes itself, so the relay-echoed event is a
-/// (benign) idempotent re-apply.
+/// Mirror of [`persist_pairing`] for `Unpaired`. Host pairing state is
+/// process-local, so the relay echo only clears the in-memory mirror.
 fn clear_pairing(ctx: &DispatchCtx) {
-    #[cfg(target_os = "macos")]
-    if let Err(e) = crate::KeychainTrustedDeviceStore.delete() {
-        tracing::warn!(
-            target: "minos_daemon::relay_client",
-            error = %e,
-            "failed to clear device-secret from Keychain on Unpaired"
-        );
-    }
-
-    let ls = LocalState {
-        self_device_id: ctx.self_device_id,
-        peer: None,
-    };
-    if let Err(e) = ls.save(&ctx.local_state_path) {
-        tracing::warn!(
-            target: "minos_daemon::relay_client",
-            error = %e,
-            path = %ctx.local_state_path.display(),
-            "failed to persist local-state.json on Unpaired"
-        );
-    }
+    let _ = ctx;
 }
 
 /// Map a WS close frame onto the outer `CycleOutcome`, populating
@@ -791,21 +737,6 @@ fn build_headers(
     headers
 }
 
-fn qr_cf_access_or_host_env(
-    qr_id: Option<String>,
-    qr_secret: Option<String>,
-    config: &RelayConfig,
-) -> (Option<String>, Option<String>) {
-    match (qr_id, qr_secret) {
-        (Some(id), Some(secret)) => (Some(id), Some(secret)),
-        _ if !config.cf_client_id.is_empty() && !config.cf_client_secret.is_empty() => (
-            Some(config.cf_client_id.clone()),
-            Some(config.cf_client_secret.clone()),
-        ),
-        _ => (None, None),
-    }
-}
-
 /// Assemble the tungstenite request with all auth headers stamped. The URI
 /// is expected to be a `ws://` or `wss://` URL pointing at `/devices`.
 fn build_request(
@@ -832,7 +763,7 @@ mod tests {
 
     #[test]
     fn build_headers_without_cf_omits_cf_headers() {
-        let cfg = RelayConfig::new(String::new(), String::new());
+        let cfg = RelayConfig::new(String::new(), String::new(), String::new());
         let headers = build_headers(&cfg, DeviceId::new(), None, "my-mac");
         let keys: Vec<_> = headers.iter().map(|(k, _)| k).collect();
         assert!(
@@ -844,7 +775,7 @@ mod tests {
 
     #[test]
     fn build_headers_with_cf_includes_both_cf_headers() {
-        let cfg = RelayConfig::new("cid".into(), "csec".into());
+        let cfg = RelayConfig::new(String::new(), "cid".into(), "csec".into());
         let headers = build_headers(&cfg, DeviceId::new(), None, "my-mac");
         let keys: Vec<_> = headers.iter().map(|(k, _)| k).collect();
         assert!(keys.contains(&"CF-Access-Client-Id"));
@@ -853,7 +784,7 @@ mod tests {
 
     #[test]
     fn build_headers_with_secret_includes_x_device_secret() {
-        let cfg = RelayConfig::new(String::new(), String::new());
+        let cfg = RelayConfig::new(String::new(), String::new(), String::new());
         let secret = DeviceSecret("sentinel-123".into());
         let headers = build_headers(&cfg, DeviceId::new(), Some(&secret), "my-mac");
         let entry = headers
@@ -861,22 +792,5 @@ mod tests {
             .find(|(k, _)| *k == "X-Device-Secret")
             .expect("X-Device-Secret stamped");
         assert_eq!(entry.1, "sentinel-123");
-    }
-
-    #[test]
-    fn qr_cf_access_prefers_backend_payload() {
-        let cfg = RelayConfig::new("host-id".into(), "host-secret".into());
-        let (id, secret) =
-            qr_cf_access_or_host_env(Some("qr-id".into()), Some("qr-secret".into()), &cfg);
-        assert_eq!(id.as_deref(), Some("qr-id"));
-        assert_eq!(secret.as_deref(), Some("qr-secret"));
-    }
-
-    #[test]
-    fn qr_cf_access_falls_back_to_host_env() {
-        let cfg = RelayConfig::new("host-id".into(), "host-secret".into());
-        let (id, secret) = qr_cf_access_or_host_env(None, None, &cfg);
-        assert_eq!(id.as_deref(), Some("host-id"));
-        assert_eq!(secret.as_deref(), Some("host-secret"));
     }
 }

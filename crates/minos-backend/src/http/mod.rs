@@ -44,17 +44,6 @@ pub mod health;
 pub mod v1;
 pub mod ws_devices;
 
-/// Backend-public config snapshot shared by every WS session. Bundles the
-/// pieces of [`crate::config::Config`] the `RequestPairingQr` handler
-/// needs so the envelope dispatcher doesn't have to thread three separate
-/// arguments through `run_session` / `dispatch_envelope`.
-#[derive(Debug, Clone)]
-pub struct BackendPublicConfig {
-    pub public_url: String,
-    pub cf_access_client_id: Option<String>,
-    pub cf_access_client_secret: Option<String>,
-}
-
 /// Shared state for every HTTP handler.
 ///
 /// Cheap to clone: the service types are `Arc`-wrapped, and [`SqlitePool`]
@@ -71,10 +60,6 @@ pub struct BackendState {
     pub token_ttl: Duration,
     /// Per-thread translator-state cache for the live ingest path.
     pub translators: Arc<ThreadTranslators>,
-    /// Public-facing config snapshot (public URL + CF Access tokens) used
-    /// by `RequestPairingQr` to assemble the QR payload. `Arc` so
-    /// `BackendState::clone` is still cheap.
-    pub public_cfg: Arc<BackendPublicConfig>,
     /// HS256 secret used by the bearer-token rail (`crate::auth::jwt`).
     /// `Arc<String>` because every signed/verified bearer borrows the
     /// bytes — sharing one heap copy across the request lifecycle keeps
@@ -115,11 +100,6 @@ impl BackendState {
             store,
             token_ttl,
             translators: ThreadTranslators::new(),
-            public_cfg: Arc::new(BackendPublicConfig {
-                public_url: "ws://127.0.0.1:8787/devices".into(),
-                cf_access_client_id: None,
-                cf_access_client_secret: None,
-            }),
             jwt_secret: Arc::new(jwt_secret),
             auth_login_per_email: default_login_per_email(),
             auth_login_per_ip: default_login_per_ip(),
@@ -175,7 +155,7 @@ pub fn router(state: BackendState) -> Router {
 /// [`BackendState`] backed by an in-memory SQLite pool.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support {
-    use super::{BackendPublicConfig, BackendState};
+    use super::BackendState;
     use crate::pairing::PairingService;
     use crate::session::SessionRegistry;
     use crate::store::test_support::memory_pool;
@@ -189,9 +169,7 @@ pub mod test_support {
     pub const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 
     /// Build a `BackendState` against a fresh in-memory pool, with a
-    /// 5-minute pairing-token TTL, the deterministic test JWT secret, and
-    /// a stub `BackendPublicConfig` whose `public_url` matches the dev
-    /// default.
+    /// 5-minute pairing-token TTL and the deterministic test JWT secret.
     pub async fn backend_state() -> BackendState {
         let pool = memory_pool().await;
         let registry = Arc::new(SessionRegistry::new());
@@ -202,11 +180,6 @@ pub mod test_support {
             store: pool,
             token_ttl: Duration::from_mins(5),
             translators: crate::ingest::translate::ThreadTranslators::new(),
-            public_cfg: Arc::new(BackendPublicConfig {
-                public_url: "ws://127.0.0.1:8787/devices".into(),
-                cf_access_client_id: None,
-                cf_access_client_secret: None,
-            }),
             jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
             auth_login_per_email: super::default_login_per_email(),
             auth_login_per_ip: super::default_login_per_ip(),

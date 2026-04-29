@@ -7,8 +7,9 @@
 //! session's outbox. Whenever a `minos_start_agent` JSON-RPC request
 //! lands, the handler echoes a synthetic `Forwarded` reply with a
 //! deterministic `session_id` so the iPhone's `start_agent` future
-//! resolves with that same id. `minos_send_user_message` is replied to
-//! with `null` so the start-then-prompt composition completes.
+//! resolves with that same id. `minos_send_user_message` is handled
+//! separately so we can prove the session bootstrap no longer waits for
+//! first-message delivery.
 //!
 //! What this test guards:
 //!
@@ -25,7 +26,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use minos_backend::http::{router as backend_router, BackendPublicConfig, BackendState};
+use minos_backend::http::{router as backend_router, BackendState};
 use minos_backend::pairing::PairingService;
 use minos_backend::session::{SessionHandle, SessionRegistry};
 use minos_backend::store::test_support::memory_pool;
@@ -55,7 +56,6 @@ async fn spawn_backend() -> Backend {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let public_url = format!("ws://{addr}/devices");
 
     let state = BackendState {
         registry: registry.clone(),
@@ -63,11 +63,6 @@ async fn spawn_backend() -> Backend {
         store: pool.clone(),
         token_ttl: Duration::from_secs(300),
         translators: minos_backend::ingest::translate::ThreadTranslators::new(),
-        public_cfg: Arc::new(BackendPublicConfig {
-            public_url,
-            cf_access_client_id: None,
-            cf_access_client_secret: None,
-        }),
         jwt_secret: Arc::new("a".repeat(32)),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
@@ -107,15 +102,15 @@ async fn spawn_backend() -> Backend {
     }
 }
 
-fn qr_for(addr: std::net::SocketAddr, token: &str) -> String {
+fn qr_for(_addr: std::net::SocketAddr, token: &str) -> String {
+    // The QR no longer carries the backend URL — the mobile crate's
+    // `build_config::BACKEND_URL` is the source of truth, and tests use
+    // `pair_with_qr_json_at` to inject a per-test address.
     serde_json::to_string(&PairingQrPayload {
         v: 2,
-        backend_url: format!("ws://{addr}/devices"),
         host_display_name: "FakeMac".into(),
         pairing_token: token.into(),
         expires_at_ms: i64::MAX,
-        cf_access_client_id: None,
-        cf_access_client_secret: None,
     })
     .unwrap()
 }
@@ -127,15 +122,15 @@ async fn registered_client(addr: std::net::SocketAddr, email: &str) -> MobileCli
     let http =
         minos_mobile::http::MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None)
             .unwrap();
-    let resp = http.register(email, "testpass1").await.expect("register");
+    let resp = http
+        .register(email, "testpass1", None)
+        .await
+        .expect("register");
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let persisted = PersistedPairingState {
-        backend_url: Some(format!("ws://{addr}/devices")),
         device_id: Some(device_id.to_string()),
         device_secret: None,
-        cf_access_client_id: None,
-        cf_access_client_secret: None,
         access_token: Some(resp.access_token),
         access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
         refresh_token: Some(resp.refresh_token),
@@ -162,6 +157,7 @@ fn spawn_fake_mac(
     registry: Arc<SessionRegistry>,
     mac_id: DeviceId,
     mut mac_outbox: mpsc::Receiver<Envelope>,
+    send_delay: Option<Duration>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(env) = mac_outbox.recv().await {
@@ -176,6 +172,11 @@ fn spawn_fake_mac(
                 .get("id")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
+            if method == "minos_send_user_message" {
+                if let Some(delay) = send_delay {
+                    tokio::time::sleep(delay).await;
+                }
+            }
             let result = match method {
                 "minos_start_agent" => serde_json::json!({
                     "session_id": SYNTHETIC_SESSION_ID,
@@ -223,12 +224,16 @@ async fn register_pair_start_agent_round_trips_synthetic_session_id() {
 
     // The mac_outbox has to live somewhere; move it into the fake-Mac
     // task. We can't keep both a receiver here AND in the task.
-    let mac_handler = spawn_fake_mac(registry.clone(), mac_id, mac_outbox);
+    let mac_handler = spawn_fake_mac(registry.clone(), mac_id, mac_outbox, None);
 
     let client = registered_client(addr, "dispatch@example.com").await;
 
     let qr = qr_for(addr, &token);
-    client.pair_with_qr_json(qr).await.expect("pair");
+    let backend_url = format!("ws://{addr}/devices");
+    client
+        .pair_with_qr_json_at(qr, &backend_url)
+        .await
+        .expect("pair");
 
     // Wait briefly for the iPhone WS activation to register the session
     // (paired_with is set during activation, after pair_consume returns).
@@ -254,6 +259,66 @@ async fn register_pair_start_agent_round_trips_synthetic_session_id() {
 
     assert_eq!(resp.session_id, SYNTHETIC_SESSION_ID);
     assert_eq!(resp.cwd, SYNTHETIC_CWD);
+
+    drop(client);
+    mac_handler.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_agent_returns_before_first_message_delivery_round_trip() {
+    let Backend {
+        addr,
+        token,
+        state,
+        mac_id,
+        mac_outbox,
+    } = spawn_backend().await;
+    let registry = state.registry.clone();
+    let mac_handler = spawn_fake_mac(
+        registry.clone(),
+        mac_id,
+        mac_outbox,
+        Some(Duration::from_secs(2)),
+    );
+
+    let client = registered_client(addr, "dispatch-fast-start@example.com").await;
+
+    let qr = qr_for(addr, &token);
+    let backend_url = format!("ws://{addr}/devices");
+    client
+        .pair_with_qr_json_at(qr, &backend_url)
+        .await
+        .expect("pair");
+
+    let consumer_id = client.device_id();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if registry.get(consumer_id).is_some() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("iPhone session registers within 2s");
+
+    let resp = tokio::time::timeout(
+        Duration::from_millis(500),
+        client.start_agent(AgentName::Codex, "Hello from e2e".into()),
+    )
+    .await
+    .expect("start_agent should resolve before first-message delivery")
+    .expect("start_agent returns Ok");
+
+    assert_eq!(resp.session_id, SYNTHETIC_SESSION_ID);
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        client.send_user_message(resp.session_id.clone(), "Hello from e2e".into()),
+    )
+    .await
+    .expect("send_user_message must complete within 5s")
+    .expect("send_user_message returns Ok");
 
     drop(client);
     mac_handler.abort();

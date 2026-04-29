@@ -32,9 +32,10 @@
 //!   `Arc<CodexClient>` — every operation goes through the pump task's
 //!   mpsc, so concurrent writers don't contend on the WS.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::{Duration, SystemTime};
 
 use minos_domain::{AgentName, MinosError};
@@ -46,6 +47,7 @@ use url::Url;
 
 use crate::approvals::{build_auto_reject, APPROVAL_METHODS};
 use crate::codex_client::{CodexClient, Inbound};
+use crate::exec_jsonl;
 use crate::process::{reason_from_exit, CodexProcess};
 use crate::state::AgentState;
 
@@ -151,16 +153,22 @@ pub struct AgentRuntime {
 
 struct Inner {
     cfg: AgentRuntimeConfig,
+    subprocess_env: StdRwLock<Arc<HashMap<String, String>>>,
     state_tx: watch::Sender<AgentState>,
     _state_rx_guard: watch::Receiver<AgentState>,
     ingest_tx: broadcast::Sender<RawIngest>,
     active: Mutex<Option<Active>>,
 }
 
-/// The live session state — client for outbound calls, the task handles for
-/// the supervisor + event pump, and the signal that distinguishes expected
-/// from unexpected termination.
-struct Active {
+enum Active {
+    AppServer(AppServerActive),
+    Exec(ExecActive),
+}
+
+/// The live app-server-backed session state — client for outbound calls, the
+/// task handles for the supervisor + event pump, and the signal that
+/// distinguishes expected from unexpected termination.
+struct AppServerActive {
     client: Arc<CodexClient>,
     thread_id: String,
     #[allow(dead_code)]
@@ -173,6 +181,19 @@ struct Active {
     event_pump_task: Option<JoinHandle<()>>,
 }
 
+/// The live exec/jsonl-backed session state. The codex subprocess exists only
+/// while a turn is actively running; between turns the session is resumable via
+/// the captured codex session id.
+struct ExecActive {
+    thread_id: String,
+    #[allow(dead_code)]
+    started_at: SystemTime,
+    #[allow(dead_code)]
+    agent: AgentName,
+    codex_session_id: Arc<Mutex<Option<String>>>,
+    turn_task: Option<JoinHandle<()>>,
+}
+
 impl AgentRuntime {
     /// Build a runtime in the `Idle` state. Returns an `Arc` so downstream
     /// observers can share the handle cheaply.
@@ -182,6 +203,7 @@ impl AgentRuntime {
         let ingest_tx = broadcast::Sender::new(cfg.event_buffer.max(1));
         Arc::new(Self {
             inner: Arc::new(Inner {
+                subprocess_env: StdRwLock::new(Arc::clone(&cfg.subprocess_env)),
                 cfg,
                 state_tx,
                 _state_rx_guard: state_rx_guard,
@@ -217,6 +239,17 @@ impl AgentRuntime {
     #[must_use]
     pub fn ingest_stream(&self) -> broadcast::Receiver<RawIngest> {
         self.inner.ingest_tx.subscribe()
+    }
+
+    /// Replace the env snapshot that future `codex exec` turns inherit.
+    /// Existing child processes keep their already-spawned environment.
+    pub fn replace_subprocess_env(&self, env: HashMap<String, String>) {
+        let mut slot = self.inner.subprocess_env.write().unwrap();
+        *slot = Arc::new(env);
+    }
+
+    fn subprocess_env_snapshot(&self) -> Arc<HashMap<String, String>> {
+        self.inner.subprocess_env.read().unwrap().clone()
     }
 
     /// Start a codex session. See spec §5.1 "Start sequence" for the
@@ -255,41 +288,48 @@ impl AgentRuntime {
             return self.start_on_url(agent, url.clone(), None).await;
         }
 
-        // --- Production path: canonicalise workspace_root, spawn codex, connect WS ---
-        let workspace_root = ensure_workspace_dir(&self.inner.cfg.workspace_root)?;
-        let workspace_display = workspace_root.display().to_string();
+        self.start_exec_session(agent).await
+    }
 
-        let port = pick_free_port(self.inner.cfg.ws_port_range.clone())?;
-        let url =
-            Url::parse(&format!("ws://127.0.0.1:{port}")).expect("127.0.0.1:<port> is a valid URL");
+    async fn start_exec_session(&self, agent: AgentName) -> Result<StartAgentOutcome, MinosError> {
+        ensure_workspace_dir(&self.inner.cfg.workspace_root)?;
 
-        let bin = self
-            .inner
-            .cfg
-            .codex_bin
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(agent.bin_name()));
+        let thread_id = exec_jsonl::synthetic_thread_id();
+        let started_at = SystemTime::now();
+        let active = Active::Exec(ExecActive {
+            thread_id: thread_id.clone(),
+            started_at,
+            agent,
+            codex_session_id: Arc::new(Mutex::new(None)),
+            turn_task: None,
+        });
+        {
+            let mut slot = self.inner.active.lock().await;
+            *slot = Some(active);
+        }
 
-        let sandbox_arg = format!(
-            "sandbox_permissions=['disk-full-read-access','disk-write-folder={workspace_display}']"
+        let _ = self.inner.state_tx.send(AgentState::Running {
+            agent,
+            thread_id: thread_id.clone(),
+            started_at,
+        });
+        exec_jsonl::emit_thread_started(
+            &self.inner.ingest_tx,
+            agent,
+            &thread_id,
+            current_unix_ms(),
         );
-        let listen_arg = format!("ws://127.0.0.1:{port}");
-        let args: Vec<&str> = vec![
-            "app-server",
-            "--listen",
-            &listen_arg,
-            "-c",
-            "approval_policy=never",
-            "-c",
-            &sandbox_arg,
-            "-c",
-            "shell_environment_policy.inherit=all",
-        ];
-        let mut process = CodexProcess::spawn(&bin, &args, &self.inner.cfg.subprocess_env)?;
-        process.stderr_drain();
-        info!(bin = %bin.display(), port, "spawned codex app-server");
+        info!(
+            target: "minos_agent_runtime::runtime",
+            agent = agent.bin_name(),
+            thread_id = %thread_id,
+            "agent session opened",
+        );
 
-        self.start_on_url(agent, url, Some(process)).await
+        Ok(StartAgentOutcome {
+            session_id: thread_id,
+            cwd: self.cwd_for_session(),
+        })
     }
 
     /// Shared tail of the start sequence: connect WS, initialize + thread/start,
@@ -387,7 +427,7 @@ impl AgentRuntime {
         ));
 
         let started_at = SystemTime::now();
-        let active = Active {
+        let active = Active::AppServer(AppServerActive {
             client: Arc::clone(&client),
             thread_id: thread_id.clone(),
             started_at,
@@ -396,7 +436,7 @@ impl AgentRuntime {
             stop_signal_tx: Some(stop_signal_tx),
             supervisor_task: Some(supervisor_task),
             event_pump_task: Some(event_pump_task),
-        };
+        });
         {
             let mut slot = self.inner.active.lock().await;
             *slot = Some(active);
@@ -436,27 +476,97 @@ impl AgentRuntime {
             _ => return Err(MinosError::AgentNotRunning),
         }
 
-        let client = {
-            let guard = self.inner.active.lock().await;
-            match guard.as_ref() {
-                Some(a) if a.thread_id == session_id => Arc::clone(&a.client),
-                Some(_) => return Err(MinosError::AgentSessionIdMismatch),
+        loop {
+            let mut guard = self.inner.active.lock().await;
+            match guard.as_mut() {
+                Some(Active::AppServer(active)) => {
+                    if active.thread_id != session_id {
+                        return Err(MinosError::AgentSessionIdMismatch);
+                    }
+
+                    let client = Arc::clone(&active.client);
+                    drop(guard);
+
+                    let params = serde_json::json!({
+                        "threadId": session_id,
+                        "input": [{ "type": "text", "text": text }],
+                    });
+                    let res =
+                        tokio::time::timeout(TURN_START_TIMEOUT, client.call("turn/start", params))
+                            .await;
+                    return match res {
+                        Ok(Ok(_)) => Ok(()),
+                        Ok(Err(e)) => Err(e),
+                        Err(_elapsed) => Err(MinosError::CodexProtocolError {
+                            method: "turn/start".into(),
+                            message: format!("timeout after {}s", TURN_START_TIMEOUT.as_secs()),
+                        }),
+                    };
+                }
+                Some(Active::Exec(active)) => {
+                    if active.thread_id != session_id {
+                        return Err(MinosError::AgentSessionIdMismatch);
+                    }
+                    if let Some(mut finished) = active.turn_task.take() {
+                        drop(guard);
+                        if !finished.is_finished() {
+                            match tokio::time::timeout(Duration::from_millis(250), &mut finished)
+                                .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => {
+                                    warn!(error = %e, "exec turn task join failed");
+                                }
+                                Err(_) => {
+                                    let mut guard = self.inner.active.lock().await;
+                                    if let Some(Active::Exec(active)) = guard.as_mut() {
+                                        if active.thread_id == session_id
+                                            && active.turn_task.is_none()
+                                        {
+                                            active.turn_task = Some(finished);
+                                        }
+                                    }
+                                    return Err(MinosError::CodexProtocolError {
+                                        method: "turn/start".into(),
+                                        message: "codex exec turn already running".into(),
+                                    });
+                                }
+                            }
+                        } else if let Err(e) = finished.await {
+                            warn!(error = %e, "exec turn task join failed");
+                        }
+                        continue;
+                    }
+
+                    let bin = self
+                        .inner
+                        .cfg
+                        .codex_bin
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from(active.agent.bin_name()));
+                    info!(
+                        target: "minos_agent_runtime::runtime",
+                        agent = active.agent.bin_name(),
+                        thread_id = %active.thread_id,
+                        text = %text,
+                        "user message received",
+                    );
+                    let task = exec_jsonl::spawn_exec_turn(exec_jsonl::ExecTurnRequest {
+                        bin: &bin,
+                        workspace_root: &self.inner.cfg.workspace_root,
+                        subprocess_env: self.subprocess_env_snapshot(),
+                        agent: active.agent,
+                        thread_id: active.thread_id.clone(),
+                        prompt: text.to_string(),
+                        codex_session_id: Arc::clone(&active.codex_session_id),
+                        ingest_tx: self.inner.ingest_tx.clone(),
+                    })
+                    .await?;
+                    active.turn_task = Some(task);
+                    return Ok(());
+                }
                 None => return Err(MinosError::AgentNotRunning),
             }
-        };
-
-        let params = serde_json::json!({
-            "threadId": session_id,
-            "input": [{ "type": "text", "text": text }],
-        });
-        let res = tokio::time::timeout(TURN_START_TIMEOUT, client.call("turn/start", params)).await;
-        match res {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(e)) => Err(e),
-            Err(_elapsed) => Err(MinosError::CodexProtocolError {
-                method: "turn/start".into(),
-                message: format!("timeout after {}s", TURN_START_TIMEOUT.as_secs()),
-            }),
         }
     }
 
@@ -480,68 +590,77 @@ impl AgentRuntime {
             let mut guard = self.inner.active.lock().await;
             guard.take()
         };
-        let Some(mut active) = active_opt else {
+        let Some(active) = active_opt else {
             // Lost the race; still transition to Idle for the caller.
             let _ = self.inner.state_tx.send(AgentState::Idle);
             return Ok(());
         };
 
-        // Mark the exit as expected so the supervisor broadcasts Idle, not Crashed.
-        active.expected_exit.store(true, Ordering::SeqCst);
+        match active {
+            Active::Exec(mut active) => {
+                if let Some(task) = active.turn_task.take() {
+                    task.abort();
+                    let _ = task.await;
+                }
+                exec_jsonl::emit_thread_archived(
+                    &self.inner.ingest_tx,
+                    active.agent,
+                    &active.thread_id,
+                    current_unix_ms(),
+                );
+                let _ = self.inner.state_tx.send(AgentState::Idle);
+                Ok(())
+            }
+            Active::AppServer(mut active) => {
+                // Mark the exit as expected so the supervisor broadcasts Idle, not Crashed.
+                active.expected_exit.store(true, Ordering::SeqCst);
 
-        // Best-effort polite goodbyes (bounded).
-        let thread_id = active.thread_id.clone();
-        let polite_client = Arc::clone(&active.client);
-        let _ = tokio::time::timeout(
-            STOP_POLITE_TIMEOUT,
-            polite_client.call("turn/interrupt", thread_id_request_params(&thread_id)),
-        )
-        .await;
-        let _ = tokio::time::timeout(
-            STOP_POLITE_TIMEOUT,
-            polite_client.call("thread/archive", thread_id_request_params(&thread_id)),
-        )
-        .await;
+                // Best-effort polite goodbyes (bounded).
+                let thread_id = active.thread_id.clone();
+                let polite_client = Arc::clone(&active.client);
+                let _ = tokio::time::timeout(
+                    STOP_POLITE_TIMEOUT,
+                    polite_client.call("turn/interrupt", thread_id_request_params(&thread_id)),
+                )
+                .await;
+                let _ = tokio::time::timeout(
+                    STOP_POLITE_TIMEOUT,
+                    polite_client.call("thread/archive", thread_id_request_params(&thread_id)),
+                )
+                .await;
 
-        // Signal the supervisor to tear down the child.
-        if let Some(tx) = active.stop_signal_tx.take() {
-            let _ = tx.send(());
+                // Signal the supervisor to tear down the child.
+                if let Some(tx) = active.stop_signal_tx.take() {
+                    let _ = tx.send(());
+                }
+
+                // Wait for the supervisor task to finish (bounded). The supervisor
+                // sends `state_tx.send(Idle)` on expected exit; we don't need to
+                // send it again ourselves. Keep a ceiling so a pathological
+                // supervisor doesn't hang `stop()`.
+                if let Some(sup) = active.supervisor_task.take() {
+                    let _ = tokio::time::timeout(Duration::from_secs(5), sup).await;
+                }
+
+                // Drain the event pump (it'll exit once the client observes the WS
+                // close from the killed child).
+                if let Some(pump) = active.event_pump_task.take() {
+                    pump.abort();
+                    let _ = pump.await;
+                }
+
+                drop(polite_client);
+                drop(active);
+                let _ = self.inner.state_tx.send(AgentState::Idle);
+                Ok(())
+            }
         }
-
-        // Wait for the supervisor task to finish (bounded). The supervisor
-        // sends `state_tx.send(Idle)` on expected exit; we don't need to
-        // send it again ourselves. Keep a ceiling so a pathological
-        // supervisor doesn't hang `stop()`.
-        if let Some(sup) = active.supervisor_task.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), sup).await;
-        }
-
-        // Drain the event pump (it'll exit once the client observes the WS
-        // close from the killed child).
-        if let Some(pump) = active.event_pump_task.take() {
-            pump.abort();
-            let _ = pump.await;
-        }
-
-        // Shut down the client. Dropping the Arc is insufficient because the
-        // event pump held a clone; aborting pump above releases its clone,
-        // so our remaining clone (in `polite_client`) + `active.client` get
-        // dropped together below.
-        drop(polite_client);
-        // `active.client` is the last Arc holder at this point; on drop it
-        // closes the outbound channel and the internal pump exits.
-        drop(active);
-
-        // Ensure the state lands on Idle (supervisor may have already
-        // transitioned, but re-sending Idle on already-Idle is a no-op watch
-        // write).
-        let _ = self.inner.state_tx.send(AgentState::Idle);
-        Ok(())
     }
 }
 
 /// Choose the first free port in `range` by bind-probing. Mirrors
 /// `minos-daemon::handle::start_on_port_range`.
+#[cfg(test)]
 fn pick_free_port(range: std::ops::RangeInclusive<u16>) -> Result<u16, MinosError> {
     let (first, last) = (*range.start(), *range.end());
     for port in range {

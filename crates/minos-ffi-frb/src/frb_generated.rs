@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -776927047;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1625468573;
 
 // Section: executor
 
@@ -1200,6 +1200,37 @@ fn wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
         },
     )
 }
+fn wire__crate__api__minos__clear_request_traces_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "clear_request_traces",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::minos::clear_request_traces();
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__minos__init_logging_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1294,6 +1325,35 @@ fn wire__crate__api__minos__recent_log_records_impl(
         },
     )
 }
+fn wire__crate__api__minos__recent_request_traces_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "recent_request_traces",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::minos::recent_request_traces())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__minos__subscribe_log_records_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1325,6 +1385,44 @@ fn wire__crate__api__minos__subscribe_log_records_impl(
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok({
                         crate::api::minos::subscribe_log_records(api_sink);
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__minos__subscribe_request_traces_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "subscribe_request_traces",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_sink = <StreamSink<
+                crate::api::minos::RequestTraceRecord,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::minos::subscribe_request_traces(api_sink);
                     })?;
                     Ok(output_ok)
                 })())
@@ -1662,6 +1760,19 @@ impl SseDecode
 }
 
 impl SseDecode
+    for StreamSink<
+        crate::api::minos::RequestTraceRecord,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
     for StreamSink<crate::api::minos::UiEventFrame, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -1861,6 +1972,20 @@ impl SseDecode for Vec<u8> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<u8>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::minos::RequestTraceRecord> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::minos::RequestTraceRecord>::sse_decode(
+                deserializer,
+            ));
         }
         return ans_;
     }
@@ -2239,6 +2364,28 @@ impl SseDecode for Option<crate::api::minos::ThreadEndReason> {
     }
 }
 
+impl SseDecode for Option<u16> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<u16>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<u32>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<u64> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2266,22 +2413,16 @@ impl SseDecode for crate::api::minos::PairingState {
 impl SseDecode for crate::api::minos::PersistedPairingState {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_backendUrl = <Option<String>>::sse_decode(deserializer);
         let mut var_deviceId = <Option<String>>::sse_decode(deserializer);
         let mut var_deviceSecret = <Option<String>>::sse_decode(deserializer);
-        let mut var_cfAccessClientId = <Option<String>>::sse_decode(deserializer);
-        let mut var_cfAccessClientSecret = <Option<String>>::sse_decode(deserializer);
         let mut var_accessToken = <Option<String>>::sse_decode(deserializer);
         let mut var_accessExpiresAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_refreshToken = <Option<String>>::sse_decode(deserializer);
         let mut var_accountId = <Option<String>>::sse_decode(deserializer);
         let mut var_accountEmail = <Option<String>>::sse_decode(deserializer);
         return crate::api::minos::PersistedPairingState {
-            backend_url: var_backendUrl,
             device_id: var_deviceId,
             device_secret: var_deviceSecret,
-            cf_access_client_id: var_cfAccessClientId,
-            cf_access_client_secret: var_cfAccessClientSecret,
             access_token: var_accessToken,
             access_expires_at_ms: var_accessExpiresAtMs,
             refresh_token: var_refreshToken,
@@ -2316,6 +2457,66 @@ impl SseDecode for crate::api::minos::ReadThreadResponse {
             ui_events: var_uiEvents,
             next_seq: var_nextSeq,
             thread_end_reason: var_threadEndReason,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::RequestTraceRecord {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <u64>::sse_decode(deserializer);
+        let mut var_transport =
+            <crate::api::minos::RequestTraceTransport>::sse_decode(deserializer);
+        let mut var_method = <String>::sse_decode(deserializer);
+        let mut var_target = <String>::sse_decode(deserializer);
+        let mut var_threadId = <Option<String>>::sse_decode(deserializer);
+        let mut var_requestSummary = <Option<String>>::sse_decode(deserializer);
+        let mut var_responseSummary = <Option<String>>::sse_decode(deserializer);
+        let mut var_errorDetail = <Option<String>>::sse_decode(deserializer);
+        let mut var_status = <crate::api::minos::RequestTraceStatus>::sse_decode(deserializer);
+        let mut var_statusCode = <Option<u16>>::sse_decode(deserializer);
+        let mut var_startedAtMs = <i64>::sse_decode(deserializer);
+        let mut var_completedAtMs = <Option<i64>>::sse_decode(deserializer);
+        let mut var_durationMs = <Option<u32>>::sse_decode(deserializer);
+        return crate::api::minos::RequestTraceRecord {
+            id: var_id,
+            transport: var_transport,
+            method: var_method,
+            target: var_target,
+            thread_id: var_threadId,
+            request_summary: var_requestSummary,
+            response_summary: var_responseSummary,
+            error_detail: var_errorDetail,
+            status: var_status,
+            status_code: var_statusCode,
+            started_at_ms: var_startedAtMs,
+            completed_at_ms: var_completedAtMs,
+            duration_ms: var_durationMs,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::RequestTraceStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::minos::RequestTraceStatus::Pending,
+            1 => crate::api::minos::RequestTraceStatus::Success,
+            2 => crate::api::minos::RequestTraceStatus::Failure,
+            _ => unreachable!("Invalid variant for RequestTraceStatus: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::RequestTraceTransport {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::minos::RequestTraceTransport::Http,
+            1 => crate::api::minos::RequestTraceTransport::Rpc,
+            _ => unreachable!("Invalid variant for RequestTraceTransport: {}", inner),
         };
     }
 }
@@ -2384,6 +2585,13 @@ impl SseDecode for crate::api::minos::ThreadSummary {
             ended_at_ms: var_endedAtMs,
             end_reason: var_endReason,
         };
+    }
+}
+
+impl SseDecode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u16::<NativeEndian>().unwrap()
     }
 }
 
@@ -2641,10 +2849,16 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        22 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
-        25 => {
+        23 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
+        27 => {
             wire__crate__api__minos__subscribe_log_records_impl(port, ptr, rust_vec_len, data_len)
         }
+        28 => wire__crate__api__minos__subscribe_request_traces_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
         _ => unreachable!(),
     }
 }
@@ -2674,8 +2888,10 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3163,11 +3379,8 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::PairingStat
 impl flutter_rust_bridge::IntoDart for crate::api::minos::PersistedPairingState {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
-            self.backend_url.into_into_dart().into_dart(),
             self.device_id.into_into_dart().into_dart(),
             self.device_secret.into_into_dart().into_dart(),
-            self.cf_access_client_id.into_into_dart().into_dart(),
-            self.cf_access_client_secret.into_into_dart().into_dart(),
             self.access_token.into_into_dart().into_dart(),
             self.access_expires_at_ms.into_into_dart().into_dart(),
             self.refresh_token.into_into_dart().into_dart(),
@@ -3230,6 +3443,81 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ReadThreadR
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ReadThreadResponse> {
         self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::minos::RequestTraceRecord {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.transport.into_into_dart().into_dart(),
+            self.method.into_into_dart().into_dart(),
+            self.target.into_into_dart().into_dart(),
+            self.thread_id.into_into_dart().into_dart(),
+            self.request_summary.into_into_dart().into_dart(),
+            self.response_summary.into_into_dart().into_dart(),
+            self.error_detail.into_into_dart().into_dart(),
+            self.status.into_into_dart().into_dart(),
+            self.status_code.into_into_dart().into_dart(),
+            self.started_at_ms.into_into_dart().into_dart(),
+            self.completed_at_ms.into_into_dart().into_dart(),
+            self.duration_ms.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::minos::RequestTraceRecord
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::RequestTraceRecord>
+    for crate::api::minos::RequestTraceRecord
+{
+    fn into_into_dart(self) -> crate::api::minos::RequestTraceRecord {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::minos::RequestTraceStatus {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Pending => 0.into_dart(),
+            Self::Success => 1.into_dart(),
+            Self::Failure => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::minos::RequestTraceStatus
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::RequestTraceStatus>
+    for crate::api::minos::RequestTraceStatus
+{
+    fn into_into_dart(self) -> crate::api::minos::RequestTraceStatus {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::minos::RequestTraceTransport {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Http => 0.into_dart(),
+            Self::Rpc => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::minos::RequestTraceTransport
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::RequestTraceTransport>
+    for crate::api::minos::RequestTraceTransport
+{
+    fn into_into_dart(self) -> crate::api::minos::RequestTraceTransport {
+        self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -3509,6 +3797,18 @@ impl SseEncode
 }
 
 impl SseEncode
+    for StreamSink<
+        crate::api::minos::RequestTraceRecord,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
     for StreamSink<crate::api::minos::UiEventFrame, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3705,6 +4005,16 @@ impl SseEncode for Vec<u8> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <u8>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::minos::RequestTraceRecord> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::minos::RequestTraceRecord>::sse_encode(item, serializer);
         }
     }
 }
@@ -4004,6 +4314,26 @@ impl SseEncode for Option<crate::api::minos::ThreadEndReason> {
     }
 }
 
+impl SseEncode for Option<u16> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <u16>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <u32>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<u64> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4034,11 +4364,8 @@ impl SseEncode for crate::api::minos::PairingState {
 impl SseEncode for crate::api::minos::PersistedPairingState {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <Option<String>>::sse_encode(self.backend_url, serializer);
         <Option<String>>::sse_encode(self.device_id, serializer);
         <Option<String>>::sse_encode(self.device_secret, serializer);
-        <Option<String>>::sse_encode(self.cf_access_client_id, serializer);
-        <Option<String>>::sse_encode(self.cf_access_client_secret, serializer);
         <Option<String>>::sse_encode(self.access_token, serializer);
         <Option<i64>>::sse_encode(self.access_expires_at_ms, serializer);
         <Option<String>>::sse_encode(self.refresh_token, serializer);
@@ -4063,6 +4390,58 @@ impl SseEncode for crate::api::minos::ReadThreadResponse {
         <Option<u64>>::sse_encode(self.next_seq, serializer);
         <Option<crate::api::minos::ThreadEndReason>>::sse_encode(
             self.thread_end_reason,
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::minos::RequestTraceRecord {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u64>::sse_encode(self.id, serializer);
+        <crate::api::minos::RequestTraceTransport>::sse_encode(self.transport, serializer);
+        <String>::sse_encode(self.method, serializer);
+        <String>::sse_encode(self.target, serializer);
+        <Option<String>>::sse_encode(self.thread_id, serializer);
+        <Option<String>>::sse_encode(self.request_summary, serializer);
+        <Option<String>>::sse_encode(self.response_summary, serializer);
+        <Option<String>>::sse_encode(self.error_detail, serializer);
+        <crate::api::minos::RequestTraceStatus>::sse_encode(self.status, serializer);
+        <Option<u16>>::sse_encode(self.status_code, serializer);
+        <i64>::sse_encode(self.started_at_ms, serializer);
+        <Option<i64>>::sse_encode(self.completed_at_ms, serializer);
+        <Option<u32>>::sse_encode(self.duration_ms, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::RequestTraceStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::minos::RequestTraceStatus::Pending => 0,
+                crate::api::minos::RequestTraceStatus::Success => 1,
+                crate::api::minos::RequestTraceStatus::Failure => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::minos::RequestTraceTransport {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::minos::RequestTraceTransport::Http => 0,
+                crate::api::minos::RequestTraceTransport::Rpc => 1,
+                _ => {
+                    unimplemented!("");
+                }
+            },
             serializer,
         );
     }
@@ -4114,6 +4493,13 @@ impl SseEncode for crate::api::minos::ThreadSummary {
         <u32>::sse_encode(self.message_count, serializer);
         <Option<i64>>::sse_encode(self.ended_at_ms, serializer);
         <Option<crate::api::minos::ThreadEndReason>>::sse_encode(self.end_reason, serializer);
+    }
+}
+
+impl SseEncode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u16::<NativeEndian>(self).unwrap();
     }
 }
 

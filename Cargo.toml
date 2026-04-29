@@ -5,15 +5,18 @@ resolver = "2"
 # root, not under `crates/`. The FFI shim crates (`minos-ffi-*`) are matched by
 # the glob; their build-smoke tests run with `cargo test --workspace`.
 members = ["crates/*", "xtask"]
+exclude = ["third_party/openwire", "third_party/fire"]
 # default-members empty → `cargo test` (no flags) tests every glob match.
 default-members = []
 
 [workspace.package]
 edition = "2021"
+version = "0.1.0"
 license = "MIT"
 authors = ["Peterich <wangqingyn2@gmail.com>"]
 homepage = "https://github.com/peterich-rs/minos"
 repository = "https://github.com/peterich-rs/minos"
+rust-version = "1.80"
 
 [workspace.dependencies]
 # async runtime
@@ -38,11 +41,13 @@ url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 
 # http / rpc
+http = "1"
 axum = { version = "0.7", features = ["ws", "macros"] }
 jsonrpsee = { version = "0.24", features = ["server", "client", "ws-client", "macros"] }
 jsonwebtoken = "9"
 tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rustls = { version = "0.23.35", features = ["aws-lc-rs"] }
 futures-util = "0.3"
 async-trait = "0.1"
 

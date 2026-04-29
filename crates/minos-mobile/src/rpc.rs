@@ -16,6 +16,13 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::request_trace::{self, RequestTransport};
+
+pub struct RpcTraceContext {
+    pub thread_id: Option<String>,
+    pub request_summary: Option<String>,
+}
+
 /// Inner-payload-level reply matched against a pending entry by JSON-RPC id.
 ///
 /// `Ok` carries the raw `result` value verbatim; `Err` carries a JSON-RPC
@@ -51,10 +58,20 @@ pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
     method: &str,
     params: P,
     timeout: Duration,
+    trace: Option<RpcTraceContext>,
 ) -> Result<R, MinosError> {
     if pending.len() >= PENDING_CAP {
         return Err(MinosError::NotConnected);
     }
+    let trace_id = trace.as_ref().map(|ctx| {
+        request_trace::start(
+            RequestTransport::Rpc,
+            method,
+            format!("rpc:{method}"),
+            ctx.thread_id.clone(),
+            ctx.request_summary.clone(),
+        )
+    });
     let id = next_id.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
     pending.insert(id, tx);
@@ -75,6 +92,9 @@ pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
 
     if outbox.send(env).await.is_err() {
         pending.remove(&id);
+        if let Some(trace_id) = trace_id {
+            request_trace::finish_failure(trace_id, None, "outbox send failed");
+        }
         return Err(MinosError::NotConnected);
     }
 
@@ -85,7 +105,7 @@ pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
             // gracefully so callers wired to `Result<(), _>` don't blow
             // up. Try the strict decode first; fall back to "treat as
             // unit if the type tag matches".
-            serde_json::from_value::<R>(v.clone()).or_else(|e| {
+            let result = serde_json::from_value::<R>(v.clone()).or_else(|e| {
                 if std::any::TypeId::of::<R>() == std::any::TypeId::of::<()>() {
                     // Safe: we just confirmed R == () so the empty value
                     // is the correct decode.
@@ -101,9 +121,30 @@ pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
                         message: format!("decode {method} reply: {e}; payload: {v}"),
                     })
                 }
-            })
+            });
+            match result {
+                Ok(value) => {
+                    if let Some(trace_id) = trace_id {
+                        let response_summary = summarize_value(&v);
+                        request_trace::finish_success(trace_id, None, Some(response_summary), None);
+                    }
+                    Ok(value)
+                }
+                Err(error) => {
+                    if let Some(trace_id) = trace_id {
+                        request_trace::finish_failure(trace_id, None, error.to_string());
+                    }
+                    Err(error)
+                }
+            }
         }
-        Ok(Ok(RpcReply::Err { code, message })) => Err(map_rpc_err(method, code, message)),
+        Ok(Ok(RpcReply::Err { code, message })) => {
+            let error = map_rpc_err(method, code, message);
+            if let Some(trace_id) = trace_id {
+                request_trace::finish_failure(trace_id, None, error.to_string());
+            }
+            Err(error)
+        }
         Ok(Err(_)) => {
             // The oneshot sender was dropped without a value. This means
             // the recv loop closed pending without sending — which is the
@@ -111,10 +152,16 @@ pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
             // the drain-helper-in-progress. But we can also land here if
             // the pending entry was removed externally. Either way the
             // request is no longer in flight.
+            if let Some(trace_id) = trace_id {
+                request_trace::finish_failure(trace_id, None, "pending reply dropped");
+            }
             Err(MinosError::RequestDropped)
         }
         Err(_) => {
             pending.remove(&id);
+            if let Some(trace_id) = trace_id {
+                request_trace::finish_failure(trace_id, None, "request timed out");
+            }
             Err(MinosError::Timeout)
         }
     }
@@ -159,6 +206,25 @@ fn map_rpc_err(method: &str, code: i32, message: String) -> MinosError {
     }
 }
 
+fn summarize_value(value: &Value) -> String {
+    match value {
+        Value::Null => "null".into(),
+        Value::Bool(v) => v.to_string(),
+        Value::Number(v) => v.to_string(),
+        Value::String(v) => v.clone(),
+        Value::Array(items) => format!("items={}", items.len()),
+        Value::Object(map) => {
+            if let Some(session_id) = map.get("session_id").and_then(Value::as_str) {
+                format!("session_id={session_id}")
+            } else if let Some(cwd) = map.get("cwd").and_then(Value::as_str) {
+                format!("cwd={cwd}")
+            } else {
+                format!("keys={}", map.len())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +242,7 @@ mod tests {
             "minos_health",
             serde_json::Value::Null,
             Duration::from_millis(50),
+            None,
         )
         .await;
         assert!(matches!(res, Err(MinosError::Timeout)));
@@ -198,6 +265,7 @@ mod tests {
                     "minos_test_method",
                     serde_json::json!({"foo": "bar"}),
                     Duration::from_millis(200),
+                    None,
                 )
                 .await;
             }
@@ -228,6 +296,7 @@ mod tests {
             "minos_health",
             serde_json::Value::Null,
             Duration::from_secs(5),
+            None,
         )
         .await;
         assert!(matches!(res, Err(MinosError::NotConnected)));
@@ -276,6 +345,7 @@ mod tests {
                 "minos_stop_agent",
                 serde_json::Value::Null,
                 Duration::from_secs(1),
+                None,
             )
             .await;
             res
@@ -338,6 +408,7 @@ mod tests {
             "minos_health",
             serde_json::Value::Null,
             Duration::from_secs(5),
+            None,
         )
         .await;
         assert!(matches!(res, Err(MinosError::NotConnected)));
@@ -373,6 +444,7 @@ mod tests {
                 "minos_health",
                 serde_json::Value::Null,
                 Duration::from_secs(5),
+                None,
             )
             .await;
             res

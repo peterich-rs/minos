@@ -24,7 +24,7 @@ async fn ingestor_sends_one_envelope_ingest_frame() {
 
     let server = tokio::spawn(accept_one_frame(listener));
 
-    let (ingestor, _handle) = Ingestor::connect(&format!("ws://{addr}"), "device-id", None)
+    let (ingestor, _handle) = Ingestor::connect(&format!("ws://{addr}"), "device-id", None, None)
         .await
         .unwrap();
 
@@ -67,7 +67,7 @@ async fn ingestor_seq_counter_increments_per_thread() {
         out
     });
 
-    let (ingestor, _handle) = Ingestor::connect(&format!("ws://{addr}"), "device-id", None)
+    let (ingestor, _handle) = Ingestor::connect(&format!("ws://{addr}"), "device-id", None, None)
         .await
         .unwrap();
 

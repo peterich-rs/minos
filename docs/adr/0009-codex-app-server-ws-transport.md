@@ -2,9 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Accepted |
+| Status | Superseded by 0017 |
 | Date | 2026-04-23 |
 | Deciders | fannnzhang |
+
+This ADR captured the initial bridge choice during app-server bring-up. The
+current default production route now lives in
+`0017-codex-exec-jsonl-default-route.md`.
+
 
 ## Context
 

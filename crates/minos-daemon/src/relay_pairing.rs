@@ -8,18 +8,16 @@ use serde::{Deserialize, Serialize};
 
 /// QR payload emitted by the Mac when pairing. This mirrors
 /// `minos_protocol::PairingQrPayload` so the Mac renders exactly the schema
-/// the iOS client scans: backend URL, host display name, one-shot token,
-/// expiry, and optional CF Access service-token headers.
+/// the iOS client scans: host display name, one-shot token, and expiry.
+/// The backend URL and any CF Access service-token headers live in the
+/// mobile client's compile-time build config — not in the QR payload.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RelayQrPayload {
     pub v: u8,
-    pub backend_url: String,
     pub host_display_name: String,
     pub pairing_token: PairingToken,
     pub expires_at_ms: i64,
-    pub cf_access_client_id: Option<String>,
-    pub cf_access_client_secret: Option<String>,
 }
 
 /// Mac-side peer record (formerly `minos_pairing::TrustedDevice` without
@@ -40,12 +38,9 @@ mod tests {
     fn relay_qr_payload_round_trip() {
         let qr = RelayQrPayload {
             v: 2,
-            backend_url: "wss://minos.fan-nn.top/devices".into(),
             host_display_name: "fannnzhang's MacBook".into(),
             pairing_token: PairingToken("example-32b".into()),
             expires_at_ms: 1_700_000_000_000,
-            cf_access_client_id: Some("client-id".into()),
-            cf_access_client_secret: Some("client-secret".into()),
         };
         let j = serde_json::to_string(&qr).unwrap();
         let back: RelayQrPayload = serde_json::from_str(&j).unwrap();

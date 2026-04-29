@@ -88,6 +88,53 @@ pub async fn get_pair(pool: &SqlitePool, id: DeviceId) -> Result<Option<DeviceId
     get_pair_with_executor(pool, id).await
 }
 
+/// Look up the peer device paired with `id` together with the pairing's
+/// `created_at` timestamp (epoch ms).
+///
+/// Returns `Ok(None)` when the device has no pairing row, mirroring
+/// [`get_pair`]. Used by `/v1/me/peer` to populate `paired_at_ms`
+/// without forcing the caller to re-query the row.
+pub async fn get_pair_with_created_at(
+    pool: &SqlitePool,
+    id: DeviceId,
+) -> Result<Option<(DeviceId, i64)>, BackendError> {
+    let id_str = id.to_string();
+
+    let row = sqlx::query!(
+        r#"
+        SELECT device_a, device_b, created_at
+        FROM pairings
+        WHERE device_a = ? OR device_b = ?
+        LIMIT 1
+        "#,
+        id_str,
+        id_str,
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "get_pair_with_created_at".to_string(),
+        message: e.to_string(),
+    })?;
+
+    let Some(r) = row else {
+        return Ok(None);
+    };
+
+    let peer_str = if r.device_a == id_str {
+        r.device_b
+    } else {
+        r.device_a
+    };
+    let peer = Uuid::parse_str(&peer_str)
+        .map(DeviceId)
+        .map_err(|e| BackendError::StoreDecode {
+            column: "pairings.device_a/b".to_string(),
+            message: e.to_string(),
+        })?;
+    Ok(Some((peer, r.created_at)))
+}
+
 pub(crate) async fn get_pair_with_executor<'e, E>(
     executor: E,
     id: DeviceId,
@@ -276,5 +323,25 @@ mod tests {
         // Never inserted — must not error.
         delete_pair(&pool, a, b).await.unwrap();
         delete_pair(&pool, b, a).await.unwrap(); // reversed order too
+    }
+
+    #[tokio::test]
+    async fn get_pair_with_created_at_round_trips_peer_and_timestamp() {
+        let pool = memory_pool().await;
+        let (a, b) = two_devices(&pool).await;
+        let now = T0 + 1_234;
+        insert_pairing(&pool, a, b, now).await.unwrap();
+
+        let from_a = get_pair_with_created_at(&pool, a).await.unwrap();
+        assert_eq!(from_a, Some((b, now)));
+        let from_b = get_pair_with_created_at(&pool, b).await.unwrap();
+        assert_eq!(from_b, Some((a, now)));
+    }
+
+    #[tokio::test]
+    async fn get_pair_with_created_at_unpaired_returns_none() {
+        let pool = memory_pool().await;
+        let (a, _b) = two_devices(&pool).await;
+        assert_eq!(get_pair_with_created_at(&pool, a).await.unwrap(), None);
     }
 }

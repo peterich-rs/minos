@@ -16,6 +16,10 @@ use std::sync::OnceLock;
 
 use flutter_rust_bridge::frb;
 use minos_mobile::log_capture::{LogLevel as CoreLogLevel, LogRecord as CoreLogRecord};
+use minos_mobile::request_trace::{
+    RequestTraceRecord as CoreRequestTraceRecord, RequestTraceStatus as CoreRequestTraceStatus,
+    RequestTransport as CoreRequestTransport,
+};
 use minos_mobile::UiEventFrame as MobileUiEventFrame;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::watch;
@@ -91,12 +95,13 @@ pub struct UiEventFrame {
 /// account identity) so the Dart-side secure store can rehydrate the full
 /// session on cold launch. All five auth fields are persisted as a tuple —
 /// either every one is present or all are `None`.
+///
+/// Backend URL and CF Access service-token headers were dropped from the
+/// snapshot when pairing transitioned to compile-time `build_config` — the
+/// transport-edge values never round-trip through durable storage now.
 pub struct PersistedPairingState {
-    pub backend_url: Option<String>,
     pub device_id: Option<String>,
     pub device_secret: Option<String>,
-    pub cf_access_client_id: Option<String>,
-    pub cf_access_client_secret: Option<String>,
     pub access_token: Option<String>,
     pub access_expires_at_ms: Option<i64>,
     pub refresh_token: Option<String>,
@@ -107,11 +112,8 @@ pub struct PersistedPairingState {
 impl From<minos_mobile::PersistedPairingState> for PersistedPairingState {
     fn from(state: minos_mobile::PersistedPairingState) -> Self {
         Self {
-            backend_url: state.backend_url,
             device_id: state.device_id,
             device_secret: state.device_secret,
-            cf_access_client_id: state.cf_access_client_id,
-            cf_access_client_secret: state.cf_access_client_secret,
             access_token: state.access_token,
             access_expires_at_ms: state.access_expires_at_ms,
             refresh_token: state.refresh_token,
@@ -124,11 +126,8 @@ impl From<minos_mobile::PersistedPairingState> for PersistedPairingState {
 impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
     fn from(state: PersistedPairingState) -> Self {
         Self {
-            backend_url: state.backend_url,
             device_id: state.device_id,
             device_secret: state.device_secret,
-            cf_access_client_id: state.cf_access_client_id,
-            cf_access_client_secret: state.cf_access_client_secret,
             access_token: state.access_token,
             access_expires_at_ms: state.access_expires_at_ms,
             refresh_token: state.refresh_token,
@@ -317,9 +316,9 @@ impl MobileClient {
 
     // ─────────────────────────── agent dispatch ────────────────────────────
 
-    /// Start a new agent session and deliver the prompt as the first user
-    /// message. Returns the daemon-issued `session_id` (a.k.a.
-    /// `thread_id`) and the resolved workspace path.
+    /// Start a new agent session and return the daemon-issued `session_id`
+    /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
+    /// responsible for sending the first user message separately.
     pub async fn start_agent(
         &self,
         agent: AgentName,
@@ -472,6 +471,105 @@ pub fn subscribe_log_records(sink: StreamSink<LogRecord>) {
                     // Best-effort tail; the Dart side can re-snapshot
                     // recent_log_records() if it cares about the gap.
                 }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+// ───────────────────────── request trace surface ─────────────────────────
+
+pub enum RequestTraceTransport {
+    Http,
+    Rpc,
+}
+
+impl From<CoreRequestTransport> for RequestTraceTransport {
+    fn from(value: CoreRequestTransport) -> Self {
+        match value {
+            CoreRequestTransport::Http => Self::Http,
+            CoreRequestTransport::Rpc => Self::Rpc,
+        }
+    }
+}
+
+pub enum RequestTraceStatus {
+    Pending,
+    Success,
+    Failure,
+}
+
+impl From<CoreRequestTraceStatus> for RequestTraceStatus {
+    fn from(value: CoreRequestTraceStatus) -> Self {
+        match value {
+            CoreRequestTraceStatus::Pending => Self::Pending,
+            CoreRequestTraceStatus::Success => Self::Success,
+            CoreRequestTraceStatus::Failure => Self::Failure,
+        }
+    }
+}
+
+pub struct RequestTraceRecord {
+    pub id: u64,
+    pub transport: RequestTraceTransport,
+    pub method: String,
+    pub target: String,
+    pub thread_id: Option<String>,
+    pub request_summary: Option<String>,
+    pub response_summary: Option<String>,
+    pub error_detail: Option<String>,
+    pub status: RequestTraceStatus,
+    pub status_code: Option<u16>,
+    pub started_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+    pub duration_ms: Option<u32>,
+}
+
+impl From<CoreRequestTraceRecord> for RequestTraceRecord {
+    fn from(record: CoreRequestTraceRecord) -> Self {
+        Self {
+            id: record.id,
+            transport: record.transport.into(),
+            method: record.method,
+            target: record.target,
+            thread_id: record.thread_id,
+            request_summary: record.request_summary,
+            response_summary: record.response_summary,
+            error_detail: record.error_detail,
+            status: record.status.into(),
+            status_code: record.status_code,
+            started_at_ms: record.started_at_ms,
+            completed_at_ms: record.completed_at_ms,
+            duration_ms: record.duration_ms,
+        }
+    }
+}
+
+#[frb(sync)]
+#[must_use]
+pub fn recent_request_traces() -> Vec<RequestTraceRecord> {
+    minos_mobile::request_trace::recent()
+        .into_iter()
+        .map(RequestTraceRecord::from)
+        .collect()
+}
+
+#[frb(sync)]
+pub fn clear_request_traces() {
+    minos_mobile::request_trace::clear();
+}
+
+pub fn subscribe_request_traces(sink: StreamSink<RequestTraceRecord>) {
+    let mut rx = minos_mobile::request_trace::subscribe();
+    frb_runtime().spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(record) => {
+                    if sink.add(RequestTraceRecord::from(record)).is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }

@@ -213,7 +213,7 @@ mod tests {
         fs::write(
             &shell,
             format!(
-                "#!/bin/sh\nprintf started > {}\nsleep 1\nprintf completed > {}\n",
+                "#!/bin/sh\nprintf started > {}\nsleep 2\nprintf completed > {}\n",
                 shell_quote(&started),
                 shell_quote(&completed)
             ),
@@ -227,10 +227,16 @@ mod tests {
         fs::set_permissions(&shell, perms).expect("make slow shell executable");
 
         let shell_path = shell.to_str().expect("temp shell path should be utf-8");
-        let _ = capture_shell_env(shell_path, Duration::from_millis(50)).await;
+        let _ = capture_shell_env(shell_path, Duration::from_secs(1)).await;
 
-        assert!(started.exists(), "test shell should have started");
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("test shell should have started");
+        tokio::time::sleep(Duration::from_millis(2_200)).await;
         assert!(
             !completed.exists(),
             "timed-out shell should be killed before completing"

@@ -214,7 +214,7 @@ async fn register_account(backend: &str, email: &str, password: &str) -> Result<
     let http = MobileHttpClient::new(backend, device_id, None).context("build MobileHttpClient")?;
     eprintln!("→ POST /v1/auth/register email={email}");
     let resp = http
-        .register(email, password)
+        .register(email, password, None)
         .await
         .context("POST /v1/auth/register")?;
     eprintln!(
@@ -236,7 +236,7 @@ async fn login_or_register(backend: &str, email: &str, password: &str) -> Result
     let device_id = DeviceId::new();
     let http = MobileHttpClient::new(backend, device_id, None).context("build MobileHttpClient")?;
     eprintln!("→ POST /v1/auth/login email={email}");
-    match http.login(email, password).await {
+    match http.login(email, password, None).await {
         Ok(resp) => {
             eprintln!(
                 "← login OK account_id={} email={}",
@@ -358,16 +358,13 @@ async fn run_smoke_session(
     // first-launch and subsequent runs.
     let auth = login_or_register(backend, email, password).await?;
 
-    // Seed the MobileClient via the persisted-state ctor so backend_url
-    // + auth tuple are populated before we call `pair_with_qr_json` (the
-    // pair path looks them up from the store).
+    // Seed the MobileClient via the persisted-state ctor so the auth
+    // tuple is in place before we call `pair_with_qr_json_at` (the pair
+    // path looks the access token up from `auth_session`).
     let now_ms = chrono::Utc::now().timestamp_millis();
     let persisted = PersistedPairingState {
-        backend_url: Some(backend.to_string()),
         device_id: None,
         device_secret: None,
-        cf_access_client_id: None,
-        cf_access_client_secret: None,
         access_token: Some(auth.access_token),
         access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
         refresh_token: Some(auth.refresh_token),
@@ -382,19 +379,16 @@ async fn run_smoke_session(
     // so we don't have to ask the user to paste full JSON.
     let qr_json = serde_json::json!({
         "v": 2,
-        "backend_url": backend,
         "host_display_name": "FakeMac",
         "pairing_token": token,
         "expires_at_ms": i64::MAX,
-        "cf_access_client_id": null,
-        "cf_access_client_secret": null,
     })
     .to_string();
-    eprintln!("→ pair_with_qr_json");
+    eprintln!("→ pair_with_qr_json_at backend={backend}");
     client
-        .pair_with_qr_json(qr_json)
+        .pair_with_qr_json_at(qr_json, backend)
         .await
-        .context("pair_with_qr_json")?;
+        .context("pair_with_qr_json_at")?;
     eprintln!("← paired; current_state={:?}", client.current_state());
 
     // Wait for the WS to land in `Connected` so the outbox is registered
@@ -407,6 +401,15 @@ async fn run_smoke_session(
         .await
         .context("start_agent")?;
     eprintln!("← session_id={} cwd={}", resp.session_id, resp.cwd);
+    eprintln!(
+        "→ send_user_message session_id={} text={prompt:?}",
+        resp.session_id
+    );
+    client
+        .send_user_message(resp.session_id.clone(), prompt.to_string())
+        .await
+        .context("send_user_message")?;
+    eprintln!("← send_user_message ok");
 
     eprintln!("tailing ui_events_stream — Ctrl-C to exit");
     loop {

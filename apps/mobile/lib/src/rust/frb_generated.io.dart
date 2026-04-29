@@ -57,6 +57,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RustStreamSink<LogRecord> dco_decode_StreamSink_log_record_Sse(dynamic raw);
 
   @protected
+  RustStreamSink<RequestTraceRecord>
+  dco_decode_StreamSink_request_trace_record_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<UiEventFrame> dco_decode_StreamSink_ui_event_frame_Sse(
     dynamic raw,
   );
@@ -103,6 +107,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadEndReason dco_decode_box_autoadd_thread_end_reason(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_16(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
 
   @protected
@@ -125,6 +135,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<RequestTraceRecord> dco_decode_list_request_trace_record(dynamic raw);
 
   @protected
   List<ThreadSummary> dco_decode_list_thread_summary(dynamic raw);
@@ -163,6 +176,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadEndReason? dco_decode_opt_box_autoadd_thread_end_reason(dynamic raw);
 
   @protected
+  int? dco_decode_opt_box_autoadd_u_16(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
 
   @protected
@@ -178,6 +197,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReadThreadResponse dco_decode_read_thread_response(dynamic raw);
 
   @protected
+  RequestTraceRecord dco_decode_request_trace_record(dynamic raw);
+
+  @protected
+  RequestTraceStatus dco_decode_request_trace_status(dynamic raw);
+
+  @protected
+  RequestTraceTransport dco_decode_request_trace_transport(dynamic raw);
+
+  @protected
   StartAgentResponse dco_decode_start_agent_response(dynamic raw);
 
   @protected
@@ -185,6 +213,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ThreadSummary dco_decode_thread_summary(dynamic raw);
+
+  @protected
+  int dco_decode_u_16(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -244,6 +275,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<RequestTraceRecord>
+  sse_decode_StreamSink_request_trace_record_Sse(SseDeserializer deserializer);
+
+  @protected
   RustStreamSink<UiEventFrame> sse_decode_StreamSink_ui_event_frame_Sse(
     SseDeserializer deserializer,
   );
@@ -296,6 +331,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int sse_decode_box_autoadd_u_16(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
@@ -318,6 +359,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<RequestTraceRecord> sse_decode_list_request_trace_record(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<ThreadSummary> sse_decode_list_thread_summary(
@@ -368,6 +414,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int? sse_decode_opt_box_autoadd_u_16(SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
@@ -387,6 +439,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RequestTraceRecord sse_decode_request_trace_record(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RequestTraceStatus sse_decode_request_trace_status(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RequestTraceTransport sse_decode_request_trace_transport(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   StartAgentResponse sse_decode_start_agent_response(
     SseDeserializer deserializer,
   );
@@ -396,6 +463,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ThreadSummary sse_decode_thread_summary(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -460,6 +530,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_log_record_Sse(
     RustStreamSink<LogRecord> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_request_trace_record_Sse(
+    RustStreamSink<RequestTraceRecord> self,
     SseSerializer serializer,
   );
 
@@ -536,6 +612,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
@@ -565,6 +647,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_request_trace_record(
+    List<RequestTraceRecord> self,
     SseSerializer serializer,
   );
 
@@ -626,6 +714,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_u_16(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
 
   @protected
@@ -650,6 +744,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_request_trace_record(
+    RequestTraceRecord self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_request_trace_status(
+    RequestTraceStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_request_trace_transport(
+    RequestTraceTransport self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_start_agent_response(
     StartAgentResponse self,
     SseSerializer serializer,
@@ -663,6 +775,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_thread_summary(ThreadSummary self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);

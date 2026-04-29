@@ -57,9 +57,10 @@ abstract class MinosCoreProtocol {
 
   // ---- Agent dispatch (Phase 8) ----
 
-  /// Start a new agent session and deliver `prompt` as the first user
-  /// message. Returns the daemon-issued `session_id` (a.k.a. `thread_id`)
-  /// and the resolved workspace path.
+  /// Start a new agent session. `prompt` is retained so the UI can keep the
+  /// typed text visible during `SessionStarting`, but the first user message
+  /// must be sent separately via [sendUserMessage]. Returns the daemon-issued
+  /// `session_id` (a.k.a. `thread_id`) and the resolved workspace path.
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,

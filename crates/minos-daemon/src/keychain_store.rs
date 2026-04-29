@@ -6,7 +6,10 @@
 pub mod imp {
     use minos_domain::{DeviceSecret, MinosError};
     use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
-    use security_framework::passwords::{delete_generic_password, set_generic_password};
+    use security_framework::passwords::{
+        delete_generic_password, delete_generic_password_options, generic_password,
+        set_generic_password_options, PasswordOptions,
+    };
 
     const SERVICE: &str = "ai.minos.macos";
     const ACCOUNT_DEVICE_SECRET: &str = "device-secret";
@@ -16,6 +19,10 @@ pub mod imp {
     /// and a clean `Ok(())` on delete so callers can treat "nothing to
     /// do" identically regardless of prior state.
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    /// errSecMissingEntitlement — returned when the process cannot access the
+    /// protected data keychain. In that case we fall back to the legacy login
+    /// keychain instead of failing boot.
+    const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
 
     pub struct KeychainTrustedDeviceStore;
 
@@ -25,10 +32,39 @@ pub mod imp {
         /// interactive authentication. Startup must never trigger a Keychain
         /// password / Touch ID prompt.
         pub fn read(&self) -> Result<Option<DeviceSecret>, MinosError> {
-            match read_no_ui() {
+            match read_protected() {
                 Ok(Some(bytes)) => decode_secret(bytes),
-                Ok(None) => Ok(None),
-                Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+                Ok(None) => match read_legacy_no_ui() {
+                    Ok(Some(bytes)) => {
+                        let secret = decode_secret(bytes.clone())?;
+                        if let Some(secret) = secret.as_ref() {
+                            if write_protected(secret)?.is_some() {
+                                let _ = delete_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET);
+                            }
+                        }
+                        Ok(secret)
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+                    Err(e) => Err(MinosError::StoreIo {
+                        path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
+                        message: format!("keychain read: {e}"),
+                    }),
+                },
+                Err(e)
+                    if e.code() == ERR_SEC_ITEM_NOT_FOUND
+                        || e.code() == ERR_SEC_MISSING_ENTITLEMENT =>
+                {
+                    match read_legacy_no_ui() {
+                        Ok(Some(bytes)) => decode_secret(bytes),
+                        Ok(None) => Ok(None),
+                        Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+                        Err(e) => Err(MinosError::StoreIo {
+                            path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
+                            message: format!("keychain read: {e}"),
+                        }),
+                    }
+                }
                 Err(e) => Err(MinosError::StoreIo {
                     path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
                     message: format!("keychain read: {e}"),
@@ -37,11 +73,15 @@ pub mod imp {
         }
 
         pub fn write(&self, secret: &DeviceSecret) -> Result<(), MinosError> {
-            set_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET, secret.0.as_bytes()).map_err(|e| {
-                MinosError::StoreIo {
-                    path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
-                    message: format!("keychain write: {e}"),
-                }
+            if write_protected(secret)?.is_some() {
+                let _ = delete_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET);
+                return Ok(());
+            }
+
+            Err(MinosError::StoreIo {
+                path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
+                message: "keychain write: protected keychain requires a signed app entitlement"
+                    .into(),
             })
         }
 
@@ -49,18 +89,67 @@ pub mod imp {
         /// since the caller's intent ("make sure this isn't present")
         /// is satisfied either way.
         pub fn delete(&self) -> Result<(), MinosError> {
-            match delete_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET) {
-                Ok(()) => Ok(()),
-                Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
-                Err(e) => Err(MinosError::StoreIo {
+            let protected = delete_generic_password_options(password_options());
+            let legacy = delete_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET);
+
+            match (protected, legacy) {
+                (Ok(()) | Err(_), Ok(())) | (Ok(()), Err(_)) => Ok(()),
+                (Err(protected), Err(legacy))
+                    if protected.code() == ERR_SEC_MISSING_ENTITLEMENT
+                        && legacy.code() == ERR_SEC_ITEM_NOT_FOUND =>
+                {
+                    Ok(())
+                }
+                (Err(protected), Err(legacy))
+                    if protected.code() == ERR_SEC_ITEM_NOT_FOUND
+                        && legacy.code() == ERR_SEC_ITEM_NOT_FOUND =>
+                {
+                    Ok(())
+                }
+                (Err(e), _)
+                    if e.code() != ERR_SEC_ITEM_NOT_FOUND
+                        && e.code() != ERR_SEC_MISSING_ENTITLEMENT =>
+                {
+                    Err(MinosError::StoreIo {
+                        path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
+                        message: format!("keychain delete: {e}"),
+                    })
+                }
+                (_, Err(e)) if e.code() != ERR_SEC_ITEM_NOT_FOUND => Err(MinosError::StoreIo {
                     path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
                     message: format!("keychain delete: {e}"),
                 }),
+                _ => Ok(()),
             }
         }
     }
 
-    fn read_no_ui() -> security_framework::base::Result<Option<Vec<u8>>> {
+    fn password_options() -> PasswordOptions {
+        let mut options = PasswordOptions::new_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET);
+        options.use_protected_keychain();
+        options
+    }
+
+    fn read_protected() -> security_framework::base::Result<Option<Vec<u8>>> {
+        match generic_password(password_options()) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn write_protected(secret: &DeviceSecret) -> Result<Option<()>, MinosError> {
+        match set_generic_password_options(secret.0.as_bytes(), password_options()) {
+            Ok(()) => Ok(Some(())),
+            Err(e) if e.code() == ERR_SEC_MISSING_ENTITLEMENT => Ok(None),
+            Err(e) => Err(MinosError::StoreIo {
+                path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
+                message: format!("keychain write: {e}"),
+            }),
+        }
+    }
+
+    fn read_legacy_no_ui() -> security_framework::base::Result<Option<Vec<u8>>> {
         let mut search = ItemSearchOptions::new();
         search
             .class(ItemClass::generic_password())
@@ -102,7 +191,15 @@ pub mod imp {
             let _ = store.delete();
 
             let secret = DeviceSecret("test-secret-xyz".into());
-            store.write(&secret).unwrap();
+            if let Err(error) = store.write(&secret) {
+                let MinosError::StoreIo { message, .. } = error else {
+                    panic!("unexpected keychain error: {error:?}");
+                };
+                if message.contains("requires a signed app entitlement") {
+                    return;
+                }
+                panic!("unexpected keychain write failure: {message}");
+            }
             let got = store.read().unwrap().expect("just wrote");
             assert_eq!(got, secret);
 

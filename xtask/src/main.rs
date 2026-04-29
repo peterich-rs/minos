@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use fs2::FileExt;
 use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, RawIngest};
 use minos_domain::AgentName;
 use tempfile::TempDir;
@@ -125,6 +126,8 @@ fn check_all(with_codex: bool) -> Result<()> {
                 "platform=macOS",
                 "-configuration",
                 "Debug",
+                "CODE_SIGNING_ALLOWED=NO",
+                "CODE_SIGNING_REQUIRED=NO",
                 "build",
             ],
             &macos_root,
@@ -142,6 +145,8 @@ fn check_all(with_codex: bool) -> Result<()> {
                 "platform=macOS",
                 "-configuration",
                 "Debug",
+                "CODE_SIGNING_ALLOWED=NO",
+                "CODE_SIGNING_REQUIRED=NO",
                 "test",
             ],
             &macos_root,
@@ -563,6 +568,7 @@ fn build_macos(configuration: Option<&str>) -> Result<()> {
 
     let root = workspace_root()?;
     let build_config = MacosBuildConfiguration::from_xcode(configuration);
+    let _build_lock = acquire_build_macos_lock(&root, &build_config.xcode_name)?;
     if which("lipo").is_none() {
         bail!("lipo not installed; `build-macos` requires Xcode command-line tools");
     }
@@ -632,6 +638,24 @@ fn build_macos(configuration: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn acquire_build_macos_lock(root: &Path, configuration: &str) -> Result<std::fs::File> {
+    let lock_dir = root.join("target/locks");
+    fs::create_dir_all(&lock_dir).with_context(|| format!("mkdir {}", lock_dir.display()))?;
+
+    let lock_name = configuration
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>();
+    let lock_path = lock_dir.join(format!("build-macos-{lock_name}.lock"));
+    let lock = std::fs::File::create(&lock_path)
+        .with_context(|| format!("create {}", lock_path.display()))?;
+
+    eprintln!("==> acquiring build-macos lock {}", lock_path.display());
+    lock.lock_exclusive()
+        .with_context(|| format!("lock {}", lock_path.display()))?;
+    Ok(lock)
+}
+
 fn gen_uniffi() -> Result<()> {
     let root = workspace_root()?;
     let out_dir = root.join("apps/macos/Minos/Generated");
@@ -641,46 +665,52 @@ fn gen_uniffi() -> Result<()> {
         bail!("uniffi-bindgen-swift not installed; run `cargo xtask bootstrap`");
     }
 
-    eprintln!("==> cargo build (host arch) -p minos-ffi-uniffi --release");
+    let host_target = host_macos_rust_target();
+    eprintln!("==> cargo build (host arch) -p minos-ffi-uniffi --target {host_target}");
     run(
         "cargo",
-        &["build", "-p", "minos-ffi-uniffi", "--release"],
+        &["build", "-p", "minos-ffi-uniffi", "--target", host_target],
         &root,
     )?;
 
-    let dylib = root
-        .join("target/release")
-        .join(format!("libminos_ffi_uniffi.{}", host_dylib_suffix()));
-    if !dylib.exists() {
-        bail!("expected built library at {}", dylib.display());
+    let staticlib = root
+        .join("target")
+        .join(host_target)
+        .join(CargoProfile::Debug.artifact_dir())
+        .join("libminos_ffi_uniffi.a");
+    if !staticlib.exists() {
+        bail!("expected built library at {}", staticlib.display());
     }
 
     eprintln!(
         "==> uniffi-bindgen-swift --swift-sources {}",
-        dylib.display()
+        staticlib.display()
     );
     run(
         "uniffi-bindgen-swift",
         &[
             "--swift-sources",
-            dylib.to_str().unwrap(),
+            staticlib.to_str().unwrap(),
             out_dir.to_str().unwrap(),
         ],
         &root,
     )?;
 
-    eprintln!("==> uniffi-bindgen-swift --headers {}", dylib.display());
+    eprintln!("==> uniffi-bindgen-swift --headers {}", staticlib.display());
     run(
         "uniffi-bindgen-swift",
         &[
             "--headers",
-            dylib.to_str().unwrap(),
+            staticlib.to_str().unwrap(),
             out_dir.to_str().unwrap(),
         ],
         &root,
     )?;
 
-    eprintln!("==> uniffi-bindgen-swift --modulemap {}", dylib.display());
+    eprintln!(
+        "==> uniffi-bindgen-swift --modulemap {}",
+        staticlib.display()
+    );
     run(
         "uniffi-bindgen-swift",
         &[
@@ -690,7 +720,7 @@ fn gen_uniffi() -> Result<()> {
             "MinosCore",
             "--modulemap-filename",
             "MinosCoreFFI.modulemap",
-            dylib.to_str().unwrap(),
+            staticlib.to_str().unwrap(),
             out_dir.to_str().unwrap(),
         ],
         &root,
@@ -1014,6 +1044,8 @@ fn gen_frb() -> Result<()> {
 }
 
 fn build_ios() -> Result<()> {
+    const IOS_DEPLOYMENT_TARGET: &str = "16.0";
+
     if !cfg!(target_os = "macos") {
         bail!("`build-ios` requires a macOS host");
     }
@@ -1048,7 +1080,7 @@ fn build_ios() -> Result<()> {
 
     for target in ["aarch64-apple-ios", "aarch64-apple-ios-sim"] {
         eprintln!("==> cargo build -p minos-ffi-frb --release --target {target}");
-        run(
+        run_env(
             "cargo",
             &[
                 "build",
@@ -1058,6 +1090,7 @@ fn build_ios() -> Result<()> {
                 "--target",
                 target,
             ],
+            &[("IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)],
             &root,
         )?;
 
@@ -1087,13 +1120,13 @@ fn ensure_macos_scaffold_dirs(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn host_dylib_suffix() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "dylib"
-    } else if cfg!(target_os = "windows") {
-        "dll"
+fn host_macos_rust_target() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "aarch64-apple-darwin"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64-apple-darwin"
     } else {
-        "so"
+        panic!("unsupported macOS host arch for UniFFI codegen")
     }
 }
 

@@ -2,8 +2,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
-use minos_daemon::{paths, DaemonHandle, LocalState, RelayConfig, BACKEND_URL};
-use minos_domain::MinosError;
+use minos_daemon::{paths, DaemonHandle, RelayConfig};
+use minos_domain::{DeviceId, MinosError};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -68,22 +68,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[allow(clippy::unused_async)]
 async fn doctor(paths: &ResolvedPaths) -> Result<(), Box<dyn std::error::Error>> {
+    let relay_config = relay_config_from_env()?;
     println!(
         "minos home: {}",
         display_optional(paths.minos_home.as_deref())
     );
     println!("data dir:   {}", display_path(&paths.data_dir));
-    println!(
-        "local state:{}",
-        display_path(&paths.data_dir.join("local-state.json"))
-    );
     println!("log dir:    {}", display_path(&paths.log_dir));
-    println!("relay:      {BACKEND_URL}");
+    println!("relay:      {}", relay_config.resolved_backend_url());
 
     Ok(())
 }
 
 async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std::error::Error>> {
+    let config = relay_config_from_env()?;
     let mac_name = args.mac_name.unwrap_or_else(default_mac_name);
     println!(
         "minos home: {}",
@@ -91,30 +89,9 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
     );
     println!("data dir:   {}", display_path(&paths.data_dir));
     println!("log dir:    {}", display_path(&paths.log_dir));
-    println!("relay:      {BACKEND_URL}");
+    println!("relay:      {}", config.resolved_backend_url());
 
-    // CLI reads CF creds from host env. The macOS app follows the same
-    // rule; no host-side CF credentials are stored in Keychain. Empty env
-    // vars collapse to "no CF" for local/dev backends.
-    let config = cf_config_from_env()?;
-
-    let local_state = LocalState::load_or_init(&LocalState::default_path())?;
-
-    // Keychain read is macOS-only; on other platforms the CLI drives the
-    // daemon without a persisted device_secret (first-run path).
-    #[cfg(target_os = "macos")]
-    let secret = minos_daemon::KeychainTrustedDeviceStore.read()?;
-    #[cfg(not(target_os = "macos"))]
-    let secret: Option<minos_domain::DeviceSecret> = None;
-
-    let handle = DaemonHandle::start(
-        config,
-        local_state.self_device_id,
-        local_state.peer.clone(),
-        secret,
-        mac_name,
-    )
-    .await?;
+    let handle = DaemonHandle::start(config, DeviceId::new(), None, None, mac_name).await?;
 
     if args.print_qr {
         let qr = handle.pairing_qr().await?;
@@ -209,23 +186,26 @@ fn display_optional(path: Option<&Path>) -> String {
     path.map_or_else(|| "<platform-defaults>".into(), display_path)
 }
 
-fn cf_config_from_env() -> Result<RelayConfig, MinosError> {
-    cf_config_from_values(
+fn relay_config_from_env() -> Result<RelayConfig, MinosError> {
+    relay_config_from_values(
+        env::var("MINOS_BACKEND_URL").ok(),
         env::var("CF_ACCESS_CLIENT_ID").ok(),
         env::var("CF_ACCESS_CLIENT_SECRET").ok(),
     )
 }
 
-fn cf_config_from_values(
+fn relay_config_from_values(
+    backend_url: Option<String>,
     client_id: Option<String>,
     client_secret: Option<String>,
 ) -> Result<RelayConfig, MinosError> {
+    let backend_url = blank_to_none(backend_url).unwrap_or_default();
     let client_id = blank_to_none(client_id);
     let client_secret = blank_to_none(client_secret);
 
     match (client_id, client_secret) {
-        (Some(id), Some(secret)) => Ok(RelayConfig::new(id, secret)),
-        (None, None) => Ok(RelayConfig::new(String::new(), String::new())),
+        (Some(id), Some(secret)) => Ok(RelayConfig::new(backend_url, id, secret)),
+        (None, None) => Ok(RelayConfig::new(backend_url, String::new(), String::new())),
         (Some(_), None) => Err(MinosError::CfAccessMisconfigured {
             reason: "CF_ACCESS_CLIENT_ID is set but CF_ACCESS_CLIENT_SECRET is missing".into(),
         }),
@@ -280,22 +260,29 @@ mod tests {
 
     #[test]
     fn cf_config_from_values_accepts_empty_pair() {
-        let config = cf_config_from_values(None, Some("  ".into())).expect("empty pair");
+        let config = relay_config_from_values(None, None, Some("  ".into())).expect("empty pair");
+        assert!(config.backend_url.is_empty());
         assert!(config.cf_client_id.is_empty());
         assert!(config.cf_client_secret.is_empty());
     }
 
     #[test]
     fn cf_config_from_values_accepts_complete_pair() {
-        let config =
-            cf_config_from_values(Some(" id ".into()), Some(" secret ".into())).expect("pair");
+        let config = relay_config_from_values(
+            Some(" wss://relay.example/devices ".into()),
+            Some(" id ".into()),
+            Some(" secret ".into()),
+        )
+        .expect("pair");
+        assert_eq!(config.backend_url, "wss://relay.example/devices");
         assert_eq!(config.cf_client_id, "id");
         assert_eq!(config.cf_client_secret, "secret");
     }
 
     #[test]
     fn cf_config_from_values_rejects_partial_pair() {
-        let err = cf_config_from_values(Some("id".into()), None).expect_err("partial pair");
+        let err =
+            relay_config_from_values(None, Some("id".into()), None).expect_err("partial pair");
         assert!(matches!(err, MinosError::CfAccessMisconfigured { .. }));
     }
 }

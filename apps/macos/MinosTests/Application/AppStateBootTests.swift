@@ -122,52 +122,26 @@ final class AppStateBootTests: XCTestCase {
         }
     }
 
-    func testLocalStateLoaderAcceptsRustFractionalRfc3339PairedAt() throws {
-        let json = """
-        {
-          "self_device_id": "00000000-0000-0000-0000-000000000001",
-          "peer": {
-            "device_id": "00000000-0000-0000-0000-000000000002",
-            "name": "iPhone",
-            "paired_at": "2026-04-26T02:34:56.123456789Z"
-          }
-        }
-        """
-
-        let loaded = try LocalStateLoader.decodePersistedState(
-            Data(json.utf8),
-            from: "/tmp/local-state.json"
+    func testDaemonBootstrapRelayConfigReadsFromInfoPlist() throws {
+        let config = try DaemonBootstrap.relayConfig(
+            infoDictionary: [
+                "MINOS_BACKEND_URL": " wss://relay.example/devices ",
+                "CF_ACCESS_CLIENT_ID": " info-id ",
+                "CF_ACCESS_CLIENT_SECRET": " info-secret "
+            ]
         )
 
-        XCTAssertEqual(loaded.selfDeviceId, "00000000-0000-0000-0000-000000000001")
-        XCTAssertEqual(loaded.toRecord()?.deviceId, "00000000-0000-0000-0000-000000000002")
-        XCTAssertEqual(loaded.toRecord()?.name, "iPhone")
+        XCTAssertEqual(config.backendUrl, "wss://relay.example/devices")
+        XCTAssertEqual(config.cfClientId, "info-id")
+        XCTAssertEqual(config.cfClientSecret, "info-secret")
     }
 
-    func testLocalStateLoaderReportsBadDateAsStoreCorrupt() throws {
-        let path = "/tmp/local-state.json"
+    func testDaemonBootstrapRelayConfigDefaultsBlankWhenInfoPlistEmpty() throws {
+        let config = try DaemonBootstrap.relayConfig(infoDictionary: [:])
 
-        let json = """
-        {
-          "self_device_id": "00000000-0000-0000-0000-000000000001",
-          "peer": {
-            "device_id": "00000000-0000-0000-0000-000000000002",
-            "name": "iPhone",
-            "paired_at": "not-a-date"
-          }
-        }
-        """
-
-        XCTAssertThrowsError(
-            try LocalStateLoader.decodePersistedState(Data(json.utf8), from: path)
-        ) { error in
-            guard case let .StoreCorrupt(errorPath, message) = error as? MinosError else {
-                XCTFail("expected StoreCorrupt, got \(error)")
-                return
-            }
-            XCTAssertEqual(errorPath, path)
-            XCTAssertTrue(message.contains("paired_at"))
-        }
+        XCTAssertEqual(config.backendUrl, "")
+        XCTAssertEqual(config.cfClientId, "")
+        XCTAssertEqual(config.cfClientSecret, "")
     }
 
     @MainActor

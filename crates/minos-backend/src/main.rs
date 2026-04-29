@@ -92,19 +92,13 @@ async fn main() -> Result<()> {
         .jwt_secret
         .clone()
         .expect("MINOS_JWT_SECRET must be set after Config::validate");
-    let mut state = BackendState::new(
+    let state = BackendState::new(
         registry.clone(),
         pairing.clone(),
         pool.clone(),
         cfg.token_ttl(),
         jwt_secret,
     );
-    // Override the default public-cfg with env-sourced values from cfg.
-    state.public_cfg = Arc::new(crate::http::BackendPublicConfig {
-        public_url: cfg.public_url.clone(),
-        cf_access_client_id: cfg.cf_access_client_id.clone(),
-        cf_access_client_secret: cfg.cf_access_client_secret.clone(),
-    });
 
     let gc_task = spawn_token_gc(pool.clone());
 

@@ -491,10 +491,9 @@ Out of MVP CI: Xcode device/simulator builds; Flutter iOS/Android builds; UniFFI
 | Rust daemon (Mac process) | `tracing` + `mars_xlog::XlogLayer` | `~/Library/Logs/Minos/` | `daemon` |
 | Rust core (iOS process) | `tracing` + `mars_xlog::XlogLayer` | iOS app `Documents/Minos/Logs/` | `mobile-rust` |
 | Swift app | `OSLog` subsystem `ai.minos.macos` | Console.app + Unified log | — |
-| Flutter app | `package:xlog` (peterich-rs/xlog Dart package) | Same iOS Documents directory | `mobile-flutter` |
 | Decoder | `third_party/mars/.../decode_mars_nocrypt_log_file.py` (referenced from README) | — | — |
 
-Single-writer constraint: same `(name_prefix, log_dir)` pair allows only one writer. Mac and iOS each have multiple distinct prefixes to permit Rust and language-host loggers to coexist in the same directory.
+Single-writer constraint: same `(name_prefix, log_dir)` pair allows only one writer. iOS emits exclusively through the Rust core writer (`mobile-rust`); the Flutter side does not open its own writer (Dart code does not emit logs directly — all observability flows through Rust `tracing`). Mac runs the daemon under `daemon` prefix in `~/Library/Logs/Minos/`; the Swift app writes to `OSLog` separately.
 
 Standard log fields (every cross-boundary log carries at least one): `device_id`, `peer_device_id`, `rpc_method`, `pairing_state`.
 

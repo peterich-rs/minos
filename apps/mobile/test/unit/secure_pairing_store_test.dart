@@ -2,7 +2,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:minos/infrastructure/cf_access_config.dart';
 import 'package:minos/infrastructure/secure_pairing_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
@@ -44,55 +43,27 @@ void main() {
     });
   });
 
-  test(
-    'saveState/loadState injects build-time cf access credentials',
-    () async {
-      final store = SecurePairingStore(
-        storage: storage,
-        cfAccessConfig: CfAccessConfig(
-          clientId: 'build-cf-id',
-          clientSecret: 'build-cf-secret',
-        ),
-      );
-      const state = PersistedPairingState(
-        backendUrl: 'ws://127.0.0.1/devices',
-        deviceId: 'dev-123',
-        deviceSecret: 'sec-456',
-        cfAccessClientId: 'runtime-cf-id',
-        cfAccessClientSecret: 'runtime-cf-secret',
-      );
+  test('saveState/loadState round-trips device credentials', () async {
+    final store = SecurePairingStore(storage: storage);
+    const state = PersistedPairingState(
+      deviceId: 'dev-123',
+      deviceSecret: 'sec-456',
+    );
 
-      await store.saveState(state);
+    await store.saveState(state);
 
-      expect(values, <String, String>{
-        'minos.backend_url': 'ws://127.0.0.1/devices',
-        'minos.device_id': 'dev-123',
-        'minos.device_secret': 'sec-456',
-      });
-      expect(
-        await store.loadState(),
-        const PersistedPairingState(
-          backendUrl: 'ws://127.0.0.1/devices',
-          deviceId: 'dev-123',
-          deviceSecret: 'sec-456',
-          cfAccessClientId: 'build-cf-id',
-          cfAccessClientSecret: 'build-cf-secret',
-        ),
-      );
-    },
-  );
+    expect(values, <String, String>{
+      'minos.device_id': 'dev-123',
+      'minos.device_secret': 'sec-456',
+    });
+    expect(await store.loadState(), state);
+  });
 
   test('clearAll removes every persisted credential key', () async {
     final store = SecurePairingStore(storage: storage);
     await store.saveState(
-      const PersistedPairingState(
-        backendUrl: 'ws://127.0.0.1/devices',
-        deviceId: 'dev-123',
-        deviceSecret: 'sec-456',
-      ),
+      const PersistedPairingState(deviceId: 'dev-123', deviceSecret: 'sec-456'),
     );
-    values['minos.cf_access_client_id'] = 'legacy-cf-id';
-    values['minos.cf_access_client_secret'] = 'legacy-cf-secret';
 
     await store.clearAll();
 
@@ -100,81 +71,9 @@ void main() {
     expect(await store.loadState(), isNull);
   });
 
-  test(
-    'saveState/loadState preserves qr-carried cf access credentials',
-    () async {
-      final store = SecurePairingStore(storage: storage);
-      const state = PersistedPairingState(
-        backendUrl: 'wss://example.com/devices',
-        deviceId: 'dev-123',
-        deviceSecret: 'sec-456',
-        cfAccessClientId: 'qr-cf-id',
-        cfAccessClientSecret: 'qr-cf-secret',
-      );
-
-      await store.saveState(state);
-
-      expect(values, <String, String>{
-        'minos.backend_url': 'wss://example.com/devices',
-        'minos.device_id': 'dev-123',
-        'minos.device_secret': 'sec-456',
-        'minos.cf_access_client_id': 'qr-cf-id',
-        'minos.cf_access_client_secret': 'qr-cf-secret',
-      });
-      expect(await store.loadState(), state);
-    },
-  );
-
   test('loadState wipes incomplete core resume snapshots', () async {
     final store = SecurePairingStore(storage: storage);
-    values.addAll(<String, String>{
-      'minos.backend_url': 'ws://127.0.0.1/devices',
-      'minos.device_id': 'dev-123',
-      'minos.cf_access_client_id': 'cf-id',
-      'minos.cf_access_client_secret': 'cf-secret',
-    });
-
-    expect(await store.loadState(), isNull);
-    expect(values, isEmpty);
-  });
-
-  test('loadState restores stored Cloudflare Access credentials', () async {
-    final store = SecurePairingStore(storage: storage);
-    values.addAll(<String, String>{
-      'minos.backend_url': 'ws://127.0.0.1/devices',
-      'minos.device_id': 'dev-123',
-      'minos.device_secret': 'sec-456',
-      'minos.cf_access_client_id': 'stored-cf-id',
-      'minos.cf_access_client_secret': 'stored-cf-secret',
-    });
-
-    expect(
-      await store.loadState(),
-      const PersistedPairingState(
-        backendUrl: 'ws://127.0.0.1/devices',
-        deviceId: 'dev-123',
-        deviceSecret: 'sec-456',
-        cfAccessClientId: 'stored-cf-id',
-        cfAccessClientSecret: 'stored-cf-secret',
-      ),
-    );
-    expect(values, <String, String>{
-      'minos.backend_url': 'ws://127.0.0.1/devices',
-      'minos.device_id': 'dev-123',
-      'minos.device_secret': 'sec-456',
-      'minos.cf_access_client_id': 'stored-cf-id',
-      'minos.cf_access_client_secret': 'stored-cf-secret',
-    });
-  });
-
-  test('loadState wipes incomplete Cloudflare Access credentials', () async {
-    final store = SecurePairingStore(storage: storage);
-    values.addAll(<String, String>{
-      'minos.backend_url': 'ws://127.0.0.1/devices',
-      'minos.device_id': 'dev-123',
-      'minos.device_secret': 'sec-456',
-      'minos.cf_access_client_id': 'stored-cf-id',
-    });
+    values.addAll(<String, String>{'minos.device_id': 'dev-123'});
 
     expect(await store.loadState(), isNull);
     expect(values, isEmpty);
@@ -185,7 +84,6 @@ void main() {
   test('saveState/loadState round-trips full auth tuple', () async {
     final store = SecurePairingStore(storage: storage);
     final state = PersistedPairingState(
-      backendUrl: 'wss://example.com/devices',
       deviceId: 'dev-1',
       deviceSecret: 'sec-1',
       accessToken: 'access-token-xyz',
@@ -209,7 +107,6 @@ void main() {
   test('saveState skips auth keys when no auth tuple is present', () async {
     final store = SecurePairingStore(storage: storage);
     const state = PersistedPairingState(
-      backendUrl: 'wss://example.com/devices',
       deviceId: 'dev-1',
       deviceSecret: 'sec-1',
     );
@@ -224,7 +121,6 @@ void main() {
   test('clearAuth wipes only the auth tuple, leaving pairing intact', () async {
     final store = SecurePairingStore(storage: storage);
     final state = PersistedPairingState(
-      backendUrl: 'wss://example.com/devices',
       deviceId: 'dev-1',
       deviceSecret: 'sec-1',
       accessToken: 'access',
@@ -237,7 +133,6 @@ void main() {
 
     await store.clearAuth();
 
-    expect(values['minos.backend_url'], 'wss://example.com/devices');
     expect(values['minos.device_id'], 'dev-1');
     expect(values['minos.device_secret'], 'sec-1');
     expect(values.containsKey('minos.access_token'), isFalse);
@@ -250,7 +145,6 @@ void main() {
   test('loadState wipes a half-set auth tuple', () async {
     final store = SecurePairingStore(storage: storage);
     values.addAll(<String, String>{
-      'minos.backend_url': 'wss://example.com/devices',
       'minos.device_id': 'dev-1',
       'minos.device_secret': 'sec-1',
       // Missing access_expires_at_ms / refresh_token / account_id /

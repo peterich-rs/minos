@@ -63,7 +63,7 @@ final class ActiveSessionControllerProvider
 }
 
 String _$activeSessionControllerHash() =>
-    r'05f201b7a679a2fc1becae56bc7e0775c840bd81';
+    r'5192cd45d71bff14f1b666ac8e4480bcc0e5898b';
 
 /// Drives the [ActiveSession] state machine off `core.uiEvents` and
 /// the explicit `start/send/stop` actions.

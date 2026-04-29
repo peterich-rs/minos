@@ -49,7 +49,10 @@ class _InputBarState extends State<InputBar> {
   bool get _canSend {
     final s = widget.session;
     final composable =
-        s is SessionIdle || s is SessionAwaitingInput || s is SessionStopped;
+        s is SessionIdle ||
+        s is SessionAwaitingInput ||
+        s is SessionStopped ||
+        (s is SessionError && s.threadId == null);
     if (!composable) return false;
     final trimmed = _ctl.text.trim();
     if (trimmed.isEmpty) return false;
@@ -89,7 +92,7 @@ class _InputBarState extends State<InputBar> {
                   child: ShadInput(
                     controller: _ctl,
                     focusNode: _focus,
-                    placeholder: const Text('Message…'),
+                    placeholder: const Text('输入消息…'),
                     minLines: 1,
                     maxLines: 4,
                     enabled: !_isStreaming,
@@ -100,13 +103,13 @@ class _InputBarState extends State<InputBar> {
                 if (_isStreaming)
                   ShadButton.destructive(
                     onPressed: widget.onStop,
-                    child: const Text('Stop'),
+                    child: const Text('停止'),
                   )
                 else
                   ShadButton(
                     enabled: _canSend,
                     onPressed: _canSend ? _submit : null,
-                    child: const Text('Send'),
+                    child: const Text('发送'),
                   ),
               ],
             ),
@@ -116,7 +119,7 @@ class _InputBarState extends State<InputBar> {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    '${_ctl.text.length} / $_maxChars characters',
+                    '${_ctl.text.length} / $_maxChars 字符',
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: theme.colorScheme.error,
                     ),

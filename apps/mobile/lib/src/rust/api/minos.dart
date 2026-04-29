@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `spawn_state_forwarder`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -34,6 +34,15 @@ List<LogRecord> recentLogRecords() =>
 /// blocked). The spawned task exits when the Dart side drops the stream.
 Stream<LogRecord> subscribeLogRecords() =>
     RustLib.instance.api.crateApiMinosSubscribeLogRecords();
+
+List<RequestTraceRecord> recentRequestTraces() =>
+    RustLib.instance.api.crateApiMinosRecentRequestTraces();
+
+void clearRequestTraces() =>
+    RustLib.instance.api.crateApiMinosClearRequestTraces();
+
+Stream<RequestTraceRecord> subscribeRequestTraces() =>
+    RustLib.instance.api.crateApiMinosSubscribeRequestTraces();
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>>
 abstract class MobileClient implements RustOpaqueInterface {
@@ -113,9 +122,9 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String text,
   });
 
-  /// Start a new agent session and deliver the prompt as the first user
-  /// message. Returns the daemon-issued `session_id` (a.k.a.
-  /// `thread_id`) and the resolved workspace path.
+  /// Start a new agent session and return the daemon-issued `session_id`
+  /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
+  /// responsible for sending the first user message separately.
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,
@@ -415,12 +424,13 @@ enum PairingState { unpaired, awaitingPeer, paired }
 /// account identity) so the Dart-side secure store can rehydrate the full
 /// session on cold launch. All five auth fields are persisted as a tuple —
 /// either every one is present or all are `None`.
+///
+/// Backend URL and CF Access service-token headers were dropped from the
+/// snapshot when pairing transitioned to compile-time `build_config` — the
+/// transport-edge values never round-trip through durable storage now.
 class PersistedPairingState {
-  final String? backendUrl;
   final String? deviceId;
   final String? deviceSecret;
-  final String? cfAccessClientId;
-  final String? cfAccessClientSecret;
   final String? accessToken;
   final PlatformInt64? accessExpiresAtMs;
   final String? refreshToken;
@@ -428,11 +438,8 @@ class PersistedPairingState {
   final String? accountEmail;
 
   const PersistedPairingState({
-    this.backendUrl,
     this.deviceId,
     this.deviceSecret,
-    this.cfAccessClientId,
-    this.cfAccessClientSecret,
     this.accessToken,
     this.accessExpiresAtMs,
     this.refreshToken,
@@ -442,11 +449,8 @@ class PersistedPairingState {
 
   @override
   int get hashCode =>
-      backendUrl.hashCode ^
       deviceId.hashCode ^
       deviceSecret.hashCode ^
-      cfAccessClientId.hashCode ^
-      cfAccessClientSecret.hashCode ^
       accessToken.hashCode ^
       accessExpiresAtMs.hashCode ^
       refreshToken.hashCode ^
@@ -458,11 +462,8 @@ class PersistedPairingState {
       identical(this, other) ||
       other is PersistedPairingState &&
           runtimeType == other.runtimeType &&
-          backendUrl == other.backendUrl &&
           deviceId == other.deviceId &&
           deviceSecret == other.deviceSecret &&
-          cfAccessClientId == other.cfAccessClientId &&
-          cfAccessClientSecret == other.cfAccessClientSecret &&
           accessToken == other.accessToken &&
           accessExpiresAtMs == other.accessExpiresAtMs &&
           refreshToken == other.refreshToken &&
@@ -518,6 +519,77 @@ class ReadThreadResponse {
           nextSeq == other.nextSeq &&
           threadEndReason == other.threadEndReason;
 }
+
+class RequestTraceRecord {
+  final BigInt id;
+  final RequestTraceTransport transport;
+  final String method;
+  final String target;
+  final String? threadId;
+  final String? requestSummary;
+  final String? responseSummary;
+  final String? errorDetail;
+  final RequestTraceStatus status;
+  final int? statusCode;
+  final PlatformInt64 startedAtMs;
+  final PlatformInt64? completedAtMs;
+  final int? durationMs;
+
+  const RequestTraceRecord({
+    required this.id,
+    required this.transport,
+    required this.method,
+    required this.target,
+    this.threadId,
+    this.requestSummary,
+    this.responseSummary,
+    this.errorDetail,
+    required this.status,
+    this.statusCode,
+    required this.startedAtMs,
+    this.completedAtMs,
+    this.durationMs,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      transport.hashCode ^
+      method.hashCode ^
+      target.hashCode ^
+      threadId.hashCode ^
+      requestSummary.hashCode ^
+      responseSummary.hashCode ^
+      errorDetail.hashCode ^
+      status.hashCode ^
+      statusCode.hashCode ^
+      startedAtMs.hashCode ^
+      completedAtMs.hashCode ^
+      durationMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RequestTraceRecord &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          transport == other.transport &&
+          method == other.method &&
+          target == other.target &&
+          threadId == other.threadId &&
+          requestSummary == other.requestSummary &&
+          responseSummary == other.responseSummary &&
+          errorDetail == other.errorDetail &&
+          status == other.status &&
+          statusCode == other.statusCode &&
+          startedAtMs == other.startedAtMs &&
+          completedAtMs == other.completedAtMs &&
+          durationMs == other.durationMs;
+}
+
+enum RequestTraceStatus { pending, success, failure }
+
+enum RequestTraceTransport { http, rpc }
 
 class StartAgentResponse {
   final String sessionId;

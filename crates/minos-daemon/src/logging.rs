@@ -48,6 +48,15 @@ pub fn init() -> Result<(), MinosError> {
         message: e.to_string(),
     })?;
 
+    // mars-xlog also forwards each record to the platform console when the
+    // instance has `console_log_open == true`. Apple targets default the
+    // sink to `os_log` (subsystem ""/category=name_prefix), which surfaces
+    // in Console.app and Xcode's debug area alongside the Swift
+    // `os.Logger` lines. Gate on `debug_assertions` so dev builds get the
+    // visibility while release builds stay quiet (xlog file is the
+    // shipping channel).
+    logger.set_console_log_open(cfg!(debug_assertions));
+
     let (layer, handle) =
         XlogLayer::with_config(logger, XlogLayerConfig::new(LogLevel::Info).enabled(true));
 

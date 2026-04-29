@@ -1,9 +1,6 @@
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:minos/infrastructure/cf_access_config.dart';
 import 'package:minos/infrastructure/minos_core.dart';
 import 'package:minos/infrastructure/secure_pairing_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -36,7 +33,6 @@ void main() {
     () async {
       const qrJson = '{"v":2}';
       const persisted = PersistedPairingState(
-        backendUrl: 'ws://127.0.0.1/devices',
         deviceId: 'dev-123',
         deviceSecret: 'sec-456',
       );
@@ -73,7 +69,6 @@ void main() {
   test('pairWithQrJson does not clear secure storage on success', () async {
     const qrJson = '{"v":2}';
     const persisted = PersistedPairingState(
-      backendUrl: 'ws://127.0.0.1/devices',
       deviceId: 'dev-123',
       deviceSecret: 'sec-456',
     );
@@ -91,79 +86,6 @@ void main() {
     verify(() => secureStore.saveState(persisted)).called(1);
     verifyNever(() => client.forgetPeer());
     verifyNever(() => secureStore.clearAll());
-  });
-
-  test('pairWithQrJson injects build-time cf access credentials', () async {
-    const qrJson =
-        '{"v":2,"cf_access_client_id":"qr-id","cf_access_client_secret":"qr-secret"}';
-    const persisted = PersistedPairingState(
-      backendUrl: 'wss://example.com/devices',
-      deviceId: 'dev-123',
-      deviceSecret: 'sec-456',
-    );
-
-    when(
-      () => client.pairWithQrJson(qrJson: any(named: 'qrJson')),
-    ).thenAnswer((_) async {});
-    when(
-      () => client.persistedPairingState(),
-    ).thenAnswer((_) async => persisted);
-    when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
-
-    final core = MinosCore.forTesting(
-      client: client,
-      secureStore: secureStore,
-      cfAccessConfig: CfAccessConfig(
-        clientId: 'build-id',
-        clientSecret: 'build-secret',
-      ),
-    );
-
-    await core.pairWithQrJson(qrJson);
-
-    final captured =
-        verify(
-              () => client.pairWithQrJson(qrJson: captureAny(named: 'qrJson')),
-            ).captured.single
-            as String;
-    final injected = jsonDecode(captured) as Map<String, Object?>;
-    expect(injected['cf_access_client_id'], 'build-id');
-    expect(injected['cf_access_client_secret'], 'build-secret');
-    verify(() => secureStore.saveState(persisted)).called(1);
-  });
-
-  test('pairWithQrJson preserves qr-carried cf access credentials', () async {
-    const qrJson =
-        '{"v":2,"cf_access_client_id":"qr-id","cf_access_client_secret":"qr-secret"}';
-    const persisted = PersistedPairingState(
-      backendUrl: 'wss://example.com/devices',
-      deviceId: 'dev-123',
-      deviceSecret: 'sec-456',
-      cfAccessClientId: 'qr-id',
-      cfAccessClientSecret: 'qr-secret',
-    );
-
-    when(
-      () => client.pairWithQrJson(qrJson: any(named: 'qrJson')),
-    ).thenAnswer((_) async {});
-    when(
-      () => client.persistedPairingState(),
-    ).thenAnswer((_) async => persisted);
-    when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
-
-    final core = MinosCore.forTesting(client: client, secureStore: secureStore);
-
-    await core.pairWithQrJson(qrJson);
-
-    final captured =
-        verify(
-              () => client.pairWithQrJson(qrJson: captureAny(named: 'qrJson')),
-            ).captured.single
-            as String;
-    final preserved = jsonDecode(captured) as Map<String, Object?>;
-    expect(preserved['cf_access_client_id'], 'qr-id');
-    expect(preserved['cf_access_client_secret'], 'qr-secret');
-    verify(() => secureStore.saveState(persisted)).called(1);
   });
 
   group('resolveClient', () {
@@ -189,7 +111,6 @@ void main() {
 
     test('returns the rehydrated client when resume succeeds', () async {
       const persisted = PersistedPairingState(
-        backendUrl: 'ws://127.0.0.1/devices',
         deviceId: 'dev-123',
         deviceSecret: 'sec-456',
         accessToken: 'access',
@@ -222,7 +143,6 @@ void main() {
         // Phase 8.9: paired-but-logged-out cold launch must not poke the
         // WS — let the AuthController drive resume after the user logs in.
         const persisted = PersistedPairingState(
-          backendUrl: 'ws://127.0.0.1/devices',
           deviceId: 'dev-paired',
           deviceSecret: 'sec-paired',
         );
@@ -248,7 +168,6 @@ void main() {
       'wipes secure storage and returns a fresh client when resume is revoked',
       () async {
         const persisted = PersistedPairingState(
-          backendUrl: 'ws://127.0.0.1/devices',
           deviceId: 'dev-stale',
           deviceSecret: 'sec-revoked',
           accessToken: 'access',
@@ -289,7 +208,6 @@ void main() {
       'keeps persisted pairing when resume fails due to transient connection loss',
       () async {
         const persisted = PersistedPairingState(
-          backendUrl: 'ws://127.0.0.1/devices',
           deviceId: 'dev-123',
           deviceSecret: 'sec-456',
           accessToken: 'access',
@@ -330,7 +248,6 @@ void main() {
     );
 
     PersistedPairingState pairedFor(String? accountId) => PersistedPairingState(
-      backendUrl: 'ws://127.0.0.1/devices',
       deviceId: 'dev-old',
       deviceSecret: 'sec-old',
       accessToken: accountId == null ? null : 'access',
@@ -344,7 +261,6 @@ void main() {
       'login on the same account preserves pairing and writes the fresh auth tuple',
       () async {
         const fresh = PersistedPairingState(
-          backendUrl: 'ws://127.0.0.1/devices',
           deviceId: 'dev-old',
           deviceSecret: 'sec-old',
           accessToken: 'access-new',
@@ -384,7 +300,6 @@ void main() {
       'login as a different account drops the stale pairing then persists',
       () async {
         const fresh = PersistedPairingState(
-          backendUrl: null,
           deviceId: null,
           deviceSecret: null,
           accessToken: 'access-new',
@@ -422,7 +337,6 @@ void main() {
       'register on a fresh device (no prior accountId) skips the migration branch',
       () async {
         const fresh = PersistedPairingState(
-          backendUrl: null,
           deviceId: null,
           deviceSecret: null,
           accessToken: 'access-new',
@@ -460,7 +374,6 @@ void main() {
         // the device is bound to no account in particular, so any new
         // account's login should reuse the device.
         const fresh = PersistedPairingState(
-          backendUrl: 'ws://127.0.0.1/devices',
           deviceId: 'dev-old',
           deviceSecret: 'sec-old',
           accessToken: 'access-new',
@@ -497,7 +410,6 @@ void main() {
     test('returns true when secure storage has a resumable snapshot', () async {
       when(() => secureStore.loadState()).thenAnswer(
         (_) async => const PersistedPairingState(
-          backendUrl: 'ws://127.0.0.1/devices',
           deviceId: 'dev-123',
           deviceSecret: 'sec-456',
         ),

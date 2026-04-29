@@ -68,16 +68,6 @@ dependencies:
   # service-token headers, and the long-lived `DeviceSecret`. See plan 05 §D5.
   flutter_secure_storage: ^9.2.0
 
-  # Dart-side mars-xlog writer (lives alongside Rust's mars-xlog output in
-  # the same Documents/Minos/Logs/ directory, distinguished by namePrefix
-  # per spec §9.4). Not on pub.dev; sourced from the peterich-rs/xlog-rs
-  # monorepo subdirectory.
-  xlog:
-    git:
-      url: https://github.com/peterich-rs/xlog-rs
-      path: packages/xlog
-      ref: 3f7f578501d142ad86a785a9f71a4e3f5077a6c1
-
 dev_dependencies:
   flutter_test:
     sdk: flutter

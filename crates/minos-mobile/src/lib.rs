@@ -7,11 +7,13 @@
 #![allow(clippy::duration_suboptimal_units)]
 
 pub mod auth;
+pub mod build_config;
 pub mod client;
 pub mod http;
 pub mod log_capture;
 pub mod logging;
 mod reconnect;
+pub mod request_trace;
 pub mod rpc;
 pub mod store;
 

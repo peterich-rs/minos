@@ -19,6 +19,10 @@ pub struct CodexTranslatorState {
     thread_id: String,
     /// Currently-open assistant message (only one at a time for codex).
     open_assistant_message_id: Option<String>,
+    /// Currently-open user message. The exec/jsonl route synthesizes
+    /// `item/userMessage/delta` so confirmed user messages can replace the
+    /// optimistic bubble in the mobile UI.
+    open_user_message_id: Option<String>,
     /// CLI tool-call-id → buffered state (args JSON fragments, stable UUID
     /// the translator assigned when `toolCall/started` was seen, plus the
     /// message id the tool call belongs to).
@@ -38,6 +42,7 @@ impl CodexTranslatorState {
         Self {
             thread_id,
             open_assistant_message_id: None,
+            open_user_message_id: None,
             tool_calls: HashMap::new(),
         }
     }
@@ -104,11 +109,27 @@ pub fn translate(
             let message_id = Uuid::new_v4().to_string();
             if matches!(role, MessageRole::Assistant) {
                 state.open_assistant_message_id = Some(message_id.clone());
+            } else if matches!(role, MessageRole::User) {
+                state.open_user_message_id = Some(message_id.clone());
             }
             Ok(vec![UiEventMessage::MessageStarted {
                 message_id,
                 role,
                 started_at_ms,
+            }])
+        }
+        "item/userMessage/delta" => {
+            let text = params
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let Some(msg_id) = state.open_user_message_id.clone() else {
+                return Ok(vec![]);
+            };
+            Ok(vec![UiEventMessage::TextDelta {
+                message_id: msg_id,
+                text,
             }])
         }
         "item/agentMessage/delta" => {
@@ -248,6 +269,26 @@ pub fn translate(
                 finished_at_ms,
             }])
         }
+        "error" => {
+            let code = params
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("codex_error")
+                .to_string();
+            let message = params
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("codex reported an error")
+                .to_string();
+            Ok(vec![UiEventMessage::Error {
+                code,
+                message,
+                message_id: state
+                    .open_assistant_message_id
+                    .clone()
+                    .or_else(|| state.open_user_message_id.clone()),
+            }])
+        }
         other => Ok(vec![UiEventMessage::Raw {
             kind: other.to_string(),
             payload_json: serde_json::to_string(&params).unwrap_or_default(),
@@ -344,6 +385,53 @@ mod state_tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn user_message_delta_sequence() {
+        let mut s = CodexTranslatorState::new("thr".into());
+
+        let o1 = translate(
+            &mut s,
+            &val(
+                r#"{"method":"item/started","params":{"itemId":"u1","role":"user","startedAtMs":1}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            o1.as_slice(),
+            [UiEventMessage::MessageStarted {
+                role: MessageRole::User,
+                ..
+            }]
+        ));
+
+        let o2 = translate(
+            &mut s,
+            &val(r#"{"method":"item/userMessage/delta","params":{"itemId":"u1","delta":"hello"}}"#),
+        )
+        .unwrap();
+        assert!(
+            matches!(o2.as_slice(), [UiEventMessage::TextDelta { text, .. }] if text == "hello")
+        );
+    }
+
+    #[test]
+    fn raw_error_maps_to_ui_error() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{"method":"error","params":{"code":"exec_exit_nonzero","message":"boom"}}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            vec![UiEventMessage::Error {
+                code: "exec_exit_nonzero".into(),
+                message: "boom".into(),
+                message_id: None,
+            }]
+        );
     }
 
     #[test]

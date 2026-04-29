@@ -1,14 +1,18 @@
 //! Mobile-side `MobilePairingStore`.
 //!
-//! The phone persists multiple pieces of state: the backend WS URL scanned from
-//! the QR, an optional Cloudflare Access service-token pair (header id + header
-//! secret), the client's own `DeviceId`, the long-lived `DeviceSecret` minted
-//! by the backend on successful `pair`, and — after Phase 4 — the slack.ai-style
-//! account auth tokens (access_token + access_expires_at_ms + refresh_token)
-//! together with the bound account identity (account_id + email). In a real
-//! iOS build the durable implementation lives in Dart (`flutter_secure_storage`,
-//! plan D5). For Rust unit/integration tests this module offers an in-memory
-//! implementation.
+//! The phone persists multiple pieces of state: the client's own `DeviceId`,
+//! the long-lived `DeviceSecret` minted by the backend on successful `pair`,
+//! and — after Phase 4 — the slack.ai-style account auth tokens
+//! (access_token + access_expires_at_ms + refresh_token) together with the
+//! bound account identity (account_id + email). Backend URL and any CF
+//! Access service-token headers are NOT persisted: they live in the mobile
+//! client's compile-time `build_config` (read by `option_env!` from the
+//! shell that drove the cargo build), so transport-edge configuration never
+//! leaks into business logic or durable storage.
+//!
+//! In a real iOS build the durable implementation lives in Dart
+//! (`flutter_secure_storage`, plan D5). For Rust unit/integration tests
+//! this module offers an in-memory implementation.
 //!
 //! The trait is mobile-local rather than reused from `minos-pairing` because
 //! the backend-assembled QR (spec §8.1) changed the data shape: there is no
@@ -22,11 +26,8 @@ use tokio::sync::RwLock;
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PersistedPairingState {
-    pub backend_url: Option<String>,
     pub device_id: Option<String>,
     pub device_secret: Option<String>,
-    pub cf_access_client_id: Option<String>,
-    pub cf_access_client_secret: Option<String>,
 
     // Phase 4 (auth): account-bound bearer/refresh tokens. All five fields
     // are persisted together — the store's `save_auth` writes the whole
@@ -57,12 +58,6 @@ pub struct PersistedAuth {
 /// blocking disk syncs inside `save_*`.
 #[async_trait]
 pub trait MobilePairingStore: Send + Sync {
-    async fn load_backend_url(&self) -> Result<Option<String>, MinosError>;
-    async fn save_backend_url(&self, url: &str) -> Result<(), MinosError>;
-
-    async fn load_cf_access(&self) -> Result<Option<(String, String)>, MinosError>;
-    async fn save_cf_access(&self, id: &str, secret: &str) -> Result<(), MinosError>;
-
     async fn load_device(&self) -> Result<Option<(DeviceId, DeviceSecret)>, MinosError>;
     async fn save_device(&self, id: &DeviceId, secret: &DeviceSecret) -> Result<(), MinosError>;
 
@@ -98,8 +93,6 @@ pub struct InMemoryPairingStore {
 
 #[derive(Default, Clone)]
 struct InMemoryState {
-    backend_url: Option<String>,
-    cf_access: Option<(String, String)>,
     device: Option<(DeviceId, DeviceSecret)>,
     auth: Option<PersistedAuth>,
 }
@@ -112,40 +105,17 @@ impl InMemoryPairingStore {
 
     #[must_use]
     pub fn from_parts(
-        backend_url: Option<String>,
-        cf_access: Option<(String, String)>,
         device: Option<(DeviceId, DeviceSecret)>,
         auth: Option<PersistedAuth>,
     ) -> Self {
         Self {
-            inner: RwLock::new(InMemoryState {
-                backend_url,
-                cf_access,
-                device,
-                auth,
-            }),
+            inner: RwLock::new(InMemoryState { device, auth }),
         }
     }
 }
 
 #[async_trait]
 impl MobilePairingStore for InMemoryPairingStore {
-    async fn load_backend_url(&self) -> Result<Option<String>, MinosError> {
-        Ok(self.inner.read().await.backend_url.clone())
-    }
-    async fn save_backend_url(&self, url: &str) -> Result<(), MinosError> {
-        self.inner.write().await.backend_url = Some(url.to_string());
-        Ok(())
-    }
-
-    async fn load_cf_access(&self) -> Result<Option<(String, String)>, MinosError> {
-        Ok(self.inner.read().await.cf_access.clone())
-    }
-    async fn save_cf_access(&self, id: &str, secret: &str) -> Result<(), MinosError> {
-        self.inner.write().await.cf_access = Some((id.to_string(), secret.to_string()));
-        Ok(())
-    }
-
     async fn load_device(&self) -> Result<Option<(DeviceId, DeviceSecret)>, MinosError> {
         Ok(self.inner.read().await.device.clone())
     }
@@ -195,19 +165,6 @@ mod tests {
     #[tokio::test]
     async fn round_trips_every_field_independently() {
         let store = InMemoryPairingStore::new();
-        assert!(store.load_backend_url().await.unwrap().is_none());
-        store.save_backend_url("wss://x.y/devices").await.unwrap();
-        assert_eq!(
-            store.load_backend_url().await.unwrap().as_deref(),
-            Some("wss://x.y/devices")
-        );
-
-        store.save_cf_access("id", "sec").await.unwrap();
-        assert_eq!(
-            store.load_cf_access().await.unwrap(),
-            Some(("id".into(), "sec".into()))
-        );
-
         let id = DeviceId::new();
         let sec = DeviceSecret::generate();
         store.save_device(&id, &sec).await.unwrap();
@@ -219,8 +176,6 @@ mod tests {
     #[tokio::test]
     async fn clear_all_wipes_every_field() {
         let store = InMemoryPairingStore::new();
-        store.save_backend_url("x").await.unwrap();
-        store.save_cf_access("id", "sec").await.unwrap();
         store
             .save_device(&DeviceId::new(), &DeviceSecret::generate())
             .await
@@ -237,8 +192,6 @@ mod tests {
             .unwrap();
 
         store.clear_all().await.unwrap();
-        assert!(store.load_backend_url().await.unwrap().is_none());
-        assert!(store.load_cf_access().await.unwrap().is_none());
         assert!(store.load_device().await.unwrap().is_none());
         assert!(store.load_auth().await.unwrap().is_none());
     }
@@ -272,7 +225,9 @@ mod tests {
     #[tokio::test]
     async fn clear_auth_wipes_only_auth_fields() {
         let store = InMemoryPairingStore::new();
-        store.save_backend_url("wss://x.y/devices").await.unwrap();
+        let id = DeviceId::new();
+        let sec = DeviceSecret::generate();
+        store.save_device(&id, &sec).await.unwrap();
         store
             .save_auth(
                 "access".into(),
@@ -287,10 +242,8 @@ mod tests {
         store.clear_auth().await.unwrap();
         assert!(store.load_auth().await.unwrap().is_none());
         // Pairing fields preserved.
-        assert_eq!(
-            store.load_backend_url().await.unwrap().as_deref(),
-            Some("wss://x.y/devices")
-        );
+        let (loaded_id, _) = store.load_device().await.unwrap().unwrap();
+        assert_eq!(loaded_id, id);
     }
 
     #[tokio::test]
@@ -298,8 +251,6 @@ mod tests {
         let id = DeviceId::new();
         let sec = DeviceSecret::generate();
         let store = InMemoryPairingStore::from_parts(
-            Some("wss://x.y/devices".into()),
-            Some(("cf-id".into(), "cf-secret".into())),
             Some((id, sec.clone())),
             Some(PersistedAuth {
                 access_token: "access".into(),
@@ -308,14 +259,6 @@ mod tests {
                 account_id: "acct-1".into(),
                 account_email: "a@b.com".into(),
             }),
-        );
-        assert_eq!(
-            store.load_backend_url().await.unwrap().as_deref(),
-            Some("wss://x.y/devices")
-        );
-        assert_eq!(
-            store.load_cf_access().await.unwrap(),
-            Some(("cf-id".into(), "cf-secret".into()))
         );
         let (loaded_id, _) = store.load_device().await.unwrap().unwrap();
         assert_eq!(loaded_id, id);
