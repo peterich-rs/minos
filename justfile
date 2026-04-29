@@ -55,3 +55,87 @@ smoke-fake-peer kind='register':
 clean:
     cargo clean
     cd apps/mobile && flutter clean
+
+# Build the minos-daemon binary with env vars baked into the Rust compile.
+# profile = release | debug
+build-daemon profile='release':
+    @just check-env >/dev/null
+    @if [ -z "${MINOS_BACKEND_URL:-}" ]; then \
+        echo "error: MINOS_BACKEND_URL must be set in .env.local for build-daemon"; \
+        exit 1; \
+    fi
+    MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
+    cargo build -p minos-daemon --bin minos-daemon --profile {{profile}}
+
+# Build the mobile Rust FFI staticlib for a given target.
+# target  = aarch64-apple-ios | aarch64-apple-ios-sim | x86_64-apple-ios | <android targets>
+# profile = release | debug
+build-mobile-rust target='aarch64-apple-ios' profile='release':
+    @just check-env >/dev/null
+    @if [ -z "${MINOS_BACKEND_URL:-}" ]; then \
+        echo "error: MINOS_BACKEND_URL required for build-mobile-rust"; \
+        exit 1; \
+    fi
+    MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
+    cargo build -p minos-ffi-frb --target {{target}} --profile {{profile}}
+
+# Build a Release iOS app via xcodebuild. Sets MINOS_BUILD_VIA_JUST=1
+# so the project's Pre-Build Run Script Phase doesn't fail (added in
+# Phase 5). Env vars MINOS_BACKEND_URL / CF_ACCESS_CLIENT_* are exported
+# into the xcodebuild environment so cargokit's build_pod.sh inherits
+# them and cargo build picks them up via option_env!.
+#
+# configuration = Release | Debug
+build-mobile-ios configuration='Release':
+    @just check-env >/dev/null
+    @if [ -z "${MINOS_BACKEND_URL:-}" ]; then \
+        echo "error: MINOS_BACKEND_URL required for build-mobile-ios"; \
+        exit 1; \
+    fi
+    cd apps/mobile && flutter build ios --config-only --release
+    cd apps/mobile/ios && \
+    MINOS_BUILD_VIA_JUST=1 \
+    MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
+    xcodebuild \
+        -workspace Runner.xcworkspace \
+        -scheme Runner \
+        -configuration {{configuration}} \
+        -sdk iphoneos \
+        -destination 'generic/platform=iOS' \
+        build
+
+# Hot-reload dev workflow. Runs `flutter run` in debug mode with --dart-define
+# for Cloudflare Access, and exports MINOS_BACKEND_URL into the parent shell
+# so cargokit's Rust compile (triggered by flutter's first build) picks it up.
+dev-mobile-ios:
+    @just check-env >/dev/null
+    @if [ -z "${MINOS_BACKEND_URL:-}" ]; then \
+        echo "error: MINOS_BACKEND_URL required for dev-mobile-ios"; \
+        exit 1; \
+    fi
+    cd apps/mobile && \
+    MINOS_BUILD_VIA_JUST=1 \
+    MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
+    flutter run \
+        --dart-define=CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+        --dart-define=CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
+
+# Stub: Android APK build. No Pre-Build hook on Android yet; this recipe
+# exists for parity. If Android stops being out-of-scope, harden it.
+build-mobile-android:
+    @just check-env >/dev/null
+    cd apps/mobile && \
+    MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
+    flutter build apk \
+        --dart-define=CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+        --dart-define=CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
