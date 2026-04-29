@@ -48,26 +48,6 @@ pub(crate) fn emit_thread_started(
     });
 }
 
-pub(crate) fn emit_thread_archived(
-    ingest_tx: &broadcast::Sender<RawIngest>,
-    agent: AgentName,
-    thread_id: &str,
-    archived_at_ms: i64,
-) {
-    let _ = ingest_tx.send(RawIngest {
-        agent,
-        thread_id: thread_id.to_string(),
-        payload: json!({
-            "method": "thread/archived",
-            "params": {
-                "threadId": thread_id,
-                "archivedAtMs": archived_at_ms,
-            },
-        }),
-        ts_ms: archived_at_ms,
-    });
-}
-
 pub(crate) struct ExecTurnRequest<'a> {
     pub(crate) bin: &'a Path,
     pub(crate) workspace_root: &'a Path,
@@ -499,6 +479,7 @@ impl ExecJsonlNormalizer {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // Single-site dispatch over Codex event_msg variants.
     fn normalize_event_msg(&mut self, payload: &Value) -> Vec<Value> {
         let event_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
         match event_type {
@@ -650,6 +631,7 @@ impl ExecJsonlNormalizer {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // Single-site dispatch over Codex response_item variants.
     fn normalize_response_item(&mut self, payload: &Value) -> Vec<Value> {
         let item_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
         match item_type {
@@ -802,7 +784,7 @@ fn extract_message_text(payload: &Value) -> String {
             parts
                 .iter()
                 .filter_map(|part| match part.get("type").and_then(Value::as_str) {
-                    Some("output_text") | Some("text") => part.get("text").and_then(Value::as_str),
+                    Some("output_text" | "text") => part.get("text").and_then(Value::as_str),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

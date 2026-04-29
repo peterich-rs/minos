@@ -2,8 +2,9 @@
 //!
 //! Verbatim native events keyed on `(thread_id, seq)`. The backend persists
 //! them on ingest and the translator re-reads them for history (`ReadThread`,
-//! task C2). Dedup on insert is authoritative: a retransmit with the same
-//! `(thread_id, seq)` is a no-op.
+//! task C2). Exact retransmits are deduped, while `(thread_id, seq)`
+//! collisions with different payloads are appended at a fresh backend seq so
+//! daemon restart/resume cannot silently drop new output.
 
 use minos_domain::AgentName;
 use serde_json::Value;
@@ -69,6 +70,96 @@ pub async fn insert_if_absent(
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "raw_events.insert_if_absent".into(),
+        message: e.to_string(),
+    })?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Insert one raw event and return the persisted sequence number.
+///
+/// Host-side sequence counters are process-local. After a daemon restart or
+/// a stopped session resume, the host can legitimately restart a thread's
+/// outgoing seq at 1 while the backend already has older rows for that
+/// thread. Treating every `(thread_id, seq)` collision as a retransmit would
+/// silently drop fresh Codex output. To keep reconnect/resume safe:
+///
+/// - same `(thread_id, seq, payload)` is a retransmit and returns `Ok(None)`;
+/// - same `(thread_id, seq)` with a different payload is appended at the next
+///   available seq and returns that assigned value.
+pub async fn insert_assigning_seq(
+    pool: &SqlitePool,
+    thread_id: &str,
+    requested_seq: u64,
+    agent: AgentName,
+    payload: &Value,
+    ts_ms: i64,
+) -> Result<Option<u64>, BackendError> {
+    let payload_s = serde_json::to_string(payload).map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.insert_assigning_seq.serialise".into(),
+        message: e.to_string(),
+    })?;
+
+    if insert_payload_at_seq(pool, thread_id, requested_seq, agent, &payload_s, ts_ms).await? {
+        return Ok(Some(requested_seq));
+    }
+
+    let requested_seq_i64 = i64::try_from(requested_seq).unwrap_or(i64::MAX);
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT payload_json FROM raw_events WHERE thread_id = ?1 AND seq = ?2")
+            .bind(thread_id)
+            .bind(requested_seq_i64)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| BackendError::StoreQuery {
+                operation: "raw_events.insert_assigning_seq.lookup_collision".into(),
+                message: e.to_string(),
+            })?;
+
+    if existing.as_deref() == Some(payload_s.as_str()) {
+        return Ok(None);
+    }
+
+    for _ in 0..8 {
+        let next = last_seq(pool, thread_id).await?.saturating_add(1);
+        if insert_payload_at_seq(pool, thread_id, next, agent, &payload_s, ts_ms).await? {
+            tracing::warn!(
+                target: "minos_backend::raw_events",
+                thread_id,
+                requested_seq,
+                assigned_seq = next,
+                "raw event seq collision with different payload; appended at next seq",
+            );
+            return Ok(Some(next));
+        }
+    }
+
+    Err(BackendError::StoreQuery {
+        operation: "raw_events.insert_assigning_seq".into(),
+        message: "could not allocate non-conflicting seq after retries".into(),
+    })
+}
+
+async fn insert_payload_at_seq(
+    pool: &SqlitePool,
+    thread_id: &str,
+    seq: u64,
+    agent: AgentName,
+    payload_s: &str,
+    ts_ms: i64,
+) -> Result<bool, BackendError> {
+    let result = sqlx::query(
+        r"INSERT OR IGNORE INTO raw_events (thread_id, seq, agent, payload_json, ts_ms)
+           VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(thread_id)
+    .bind(i64::try_from(seq).unwrap_or(i64::MAX))
+    .bind(agent_str(agent))
+    .bind(payload_s)
+    .bind(ts_ms)
+    .execute(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.insert_payload_at_seq".into(),
         message: e.to_string(),
     })?;
     Ok(result.rows_affected() == 1)
@@ -171,6 +262,49 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn insert_assigning_seq_dedupes_same_payload_but_appends_different_collision() {
+        let pool = memory_pool().await;
+        seed_host_and_thread(&pool).await;
+
+        let first = serde_json::json!({"method":"a"});
+        let duplicate = first.clone();
+        let fresh_after_counter_reset = serde_json::json!({"method":"b"});
+
+        assert_eq!(
+            insert_assigning_seq(&pool, "thr1", 1, AgentName::Codex, &first, 100)
+                .await
+                .unwrap(),
+            Some(1),
+        );
+        assert_eq!(
+            insert_assigning_seq(&pool, "thr1", 1, AgentName::Codex, &duplicate, 100)
+                .await
+                .unwrap(),
+            None,
+        );
+        assert_eq!(
+            insert_assigning_seq(
+                &pool,
+                "thr1",
+                1,
+                AgentName::Codex,
+                &fresh_after_counter_reset,
+                200,
+            )
+            .await
+            .unwrap(),
+            Some(2),
+        );
+
+        let rows = read_range(&pool, "thr1", 1, 10).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].seq, 1);
+        assert_eq!(rows[0].payload, first);
+        assert_eq!(rows[1].seq, 2);
+        assert_eq!(rows[1].payload, fresh_after_counter_reset);
     }
 
     #[tokio::test]

@@ -158,6 +158,7 @@ struct Inner {
     _state_rx_guard: watch::Receiver<AgentState>,
     ingest_tx: broadcast::Sender<RawIngest>,
     active: Mutex<Option<Active>>,
+    resumable_exec: Mutex<HashMap<String, ResumableExec>>,
 }
 
 enum Active {
@@ -194,6 +195,13 @@ struct ExecActive {
     turn_task: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+struct ResumableExec {
+    agent: AgentName,
+    started_at: SystemTime,
+    codex_session_id: Arc<Mutex<Option<String>>>,
+}
+
 impl AgentRuntime {
     /// Build a runtime in the `Idle` state. Returns an `Arc` so downstream
     /// observers can share the handle cheaply.
@@ -209,6 +217,7 @@ impl AgentRuntime {
                 _state_rx_guard: state_rx_guard,
                 ingest_tx,
                 active: Mutex::new(None),
+                resumable_exec: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -296,17 +305,26 @@ impl AgentRuntime {
 
         let thread_id = exec_jsonl::synthetic_thread_id();
         let started_at = SystemTime::now();
+        let codex_session_id = Arc::new(Mutex::new(None));
         let active = Active::Exec(ExecActive {
             thread_id: thread_id.clone(),
             started_at,
             agent,
-            codex_session_id: Arc::new(Mutex::new(None)),
+            codex_session_id: Arc::clone(&codex_session_id),
             turn_task: None,
         });
         {
             let mut slot = self.inner.active.lock().await;
             *slot = Some(active);
         }
+        self.inner.resumable_exec.lock().await.insert(
+            thread_id.clone(),
+            ResumableExec {
+                agent,
+                started_at,
+                codex_session_id,
+            },
+        );
 
         let _ = self.inner.state_tx.send(AgentState::Running {
             agent,
@@ -464,6 +482,7 @@ impl AgentRuntime {
 
     /// Fire a `turn/start` on the running session. Does NOT await
     /// `turn/completed` — that arrives as a broadcast event.
+    #[allow(clippy::too_many_lines)] // State-machine dispatch + resume path.
     pub async fn send_user_message(&self, session_id: &str, text: &str) -> Result<(), MinosError> {
         // Snapshot the state + active; minimise lock-held time.
         let state = self.inner.state_tx.borrow().clone();
@@ -473,7 +492,20 @@ impl AgentRuntime {
                     return Err(MinosError::AgentSessionIdMismatch);
                 }
             }
-            _ => return Err(MinosError::AgentNotRunning),
+            AgentState::Idle | AgentState::Crashed { .. } => {
+                if !self
+                    .inner
+                    .resumable_exec
+                    .lock()
+                    .await
+                    .contains_key(session_id)
+                {
+                    return Err(MinosError::AgentNotRunning);
+                }
+            }
+            AgentState::Starting { .. } | AgentState::Stopping => {
+                return Err(MinosError::AgentNotRunning);
+            }
         }
 
         loop {
@@ -565,7 +597,31 @@ impl AgentRuntime {
                     active.turn_task = Some(task);
                     return Ok(());
                 }
-                None => return Err(MinosError::AgentNotRunning),
+                None => {
+                    let resumable = self
+                        .inner
+                        .resumable_exec
+                        .lock()
+                        .await
+                        .get(session_id)
+                        .cloned();
+                    let Some(resumable) = resumable else {
+                        return Err(MinosError::AgentNotRunning);
+                    };
+                    let started_at = resumable.started_at;
+                    *guard = Some(Active::Exec(ExecActive {
+                        thread_id: session_id.to_string(),
+                        started_at,
+                        agent: resumable.agent,
+                        codex_session_id: Arc::clone(&resumable.codex_session_id),
+                        turn_task: None,
+                    }));
+                    let _ = self.inner.state_tx.send(AgentState::Running {
+                        agent: resumable.agent,
+                        thread_id: session_id.to_string(),
+                        started_at,
+                    });
+                }
             }
         }
     }
@@ -598,16 +654,18 @@ impl AgentRuntime {
 
         match active {
             Active::Exec(mut active) => {
+                self.inner.resumable_exec.lock().await.insert(
+                    active.thread_id.clone(),
+                    ResumableExec {
+                        agent: active.agent,
+                        started_at: active.started_at,
+                        codex_session_id: Arc::clone(&active.codex_session_id),
+                    },
+                );
                 if let Some(task) = active.turn_task.take() {
                     task.abort();
                     let _ = task.await;
                 }
-                exec_jsonl::emit_thread_archived(
-                    &self.inner.ingest_tx,
-                    active.agent,
-                    &active.thread_id,
-                    current_unix_ms(),
-                );
                 let _ = self.inner.state_tx.send(AgentState::Idle);
                 Ok(())
             }

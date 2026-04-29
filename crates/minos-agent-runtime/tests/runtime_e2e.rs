@@ -42,12 +42,14 @@ where
 {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
-        let ingest = tokio::time::timeout(Duration::from_millis(500), ingest_rx.recv())
-            .await
-            .expect("timed out waiting for ingest event")
-            .expect("broadcast receive error");
-        if predicate(&ingest) {
-            return ingest;
+        match tokio::time::timeout(Duration::from_millis(100), ingest_rx.recv()).await {
+            Ok(Ok(ingest)) => {
+                if predicate(&ingest) {
+                    return ingest;
+                }
+            }
+            Ok(Err(broadcast::error::RecvError::Lagged(_))) | Err(_) => {}
+            Ok(Err(e)) => panic!("broadcast receive error: {e}"),
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -165,6 +167,7 @@ async fn happy_path_start_send_stream_stop() {
 
 #[cfg(unix)]
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // End-to-end exec resume scenario; splitting obscures the script.
 async fn default_exec_route_streams_and_resumes_sessions() {
     let tmp = TempDir::new().expect("tempdir");
     let workspace_root = tmp.path().join("workspace");
@@ -263,18 +266,29 @@ fi\n",
 
     rt.stop().await.unwrap();
 
-    let archived = recv_matching(&mut ingest_rx, |ingest| {
-        ingest.payload["method"] == "thread/archived"
+    // A stopped exec-backed session remains resumable. The next send should
+    // reuse Codex's session id instead of requiring a fresh start_agent.
+    rt.send_user_message(&outcome.session_id, "third prompt after stop")
+        .await
+        .unwrap();
+
+    let assistant_delta_three = recv_matching(&mut ingest_rx, |ingest| {
+        ingest.payload["method"] == "item/agentMessage/delta"
+            && ingest.payload["params"]["delta"] == "Hello two"
     })
     .await;
-    assert_eq!(archived.thread_id, outcome.session_id);
+    assert_eq!(assistant_delta_three.thread_id, outcome.session_id);
 
     let logged_args = std::fs::read_to_string(&log_path).unwrap();
-    assert_eq!(logged_args.matches("---\n").count(), 2, "{logged_args}");
+    assert_eq!(logged_args.matches("---\n").count(), 3, "{logged_args}");
     assert!(logged_args.contains("\nresume\n"), "{logged_args}");
     assert!(logged_args.contains("\nses-test\n"), "{logged_args}");
     assert!(logged_args.contains("\nfirst prompt\n"), "{logged_args}");
     assert!(logged_args.contains("\nsecond prompt\n"), "{logged_args}");
+    assert!(
+        logged_args.contains("\nthird prompt after stop\n"),
+        "{logged_args}"
+    );
 }
 
 #[cfg(unix)]
