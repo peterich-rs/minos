@@ -193,6 +193,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 97C147051CF9000F007C117D /* Build configuration list for PBXNativeTarget "Runner" */;
 			buildPhases = (
+				2A107F9FD684D2B93ACCDE91 /* MINOS via-just guard */,
 				C71F255A5B6E63EA6E211CE9 /* [CP] Check Pods Manifest.lock */,
 				9740EEB61CF901F6004384FC /* Run Script */,
 				97C146EA1CF9000F007C117D /* Sources */,
@@ -273,6 +274,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		2A107F9FD684D2B93ACCDE91 /* MINOS via-just guard */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "MINOS via-just guard";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${MINOS_BUILD_VIA_JUST:-}\" != \"1\" ]; then\n  echo \"error: this build must be invoked via 'just build-mobile-ios' or 'just dev-mobile-ios'.\"\n  echo \"error: direct Xcode IDE Build/Run does not propagate env vars to cargokit's Rust compile,\"\n  echo \"error: which silently bakes localhost into the binary. See docs/superpowers/specs/unified-config-pipeline-design.md\"\n  exit 1\nfi\necho \"MINOS_BUILD_VIA_JUST=1 -> proceeding with build.\"\n";
+		};
 		3B06AD1E1E4923F5004D2608 /* Thin Binary */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
