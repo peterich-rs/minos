@@ -58,3 +58,7 @@ apps/mobile/android/local.properties
 apps/mobile/android/captures/
 apps/mobile/android/key.properties
 apps/mobile/android/**/gradle-wrapper.jar
+
+# Per-developer environment configuration. .env.example is the schema.
+.env.local
+.env.local.*
