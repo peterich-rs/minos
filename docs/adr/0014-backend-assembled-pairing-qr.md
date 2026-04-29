@@ -2,13 +2,16 @@
 
 | Field | Value |
 |---|---|
-| Status | Accepted |
+| Status | Partially superseded by 0016 (CF Access) and 0018 (URL distribution) |
 | Date | 2026-04-24 |
 | Deciders | fannnzhang |
 
 > Update 2026-04-25: ADR 0016 supersedes this ADR's Cloudflare Access
 > credential-distribution decision. Backend-assembled QR payloads remain, but
 > current clients get CF Access headers from build-time / host env config.
+>
+> Update 2026-04-29: ADR 0018 specifies the entry point and storage for the
+> client-side build-time configuration (single .env.local + justfile).
 
 ## Context
 

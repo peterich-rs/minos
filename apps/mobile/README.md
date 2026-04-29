@@ -2,18 +2,34 @@
 
 Flutter shell for the Minos mobile client.
 
-## Cloudflare Access
+## Build & run
 
-The app reads Cloudflare Access service-token headers from Flutter
-compile-time environment values. CI should pass GitHub Secrets with
-`--dart-define`; local runs can forward shell env vars:
+All commands go through `just` from the workspace root. See the workspace
+README for one-time setup (`cp .env.example .env.local`).
 
 ```sh
-flutter run \
-  --dart-define=CF_ACCESS_CLIENT_ID="$CF_ACCESS_CLIENT_ID" \
-  --dart-define=CF_ACCESS_CLIENT_SECRET="$CF_ACCESS_CLIENT_SECRET"
+# Production iOS build (Release configuration).
+just build-mobile-ios Release
+
+# Hot-reload dev workflow on a simulator or attached device.
+just dev-mobile-ios
+
+# Android stub (placeholder; not currently part of the supported surface).
+just build-mobile-android
 ```
 
-These values are injected into the in-memory Rust client at startup/pairing
-time. They are not persisted to iOS Keychain; Keychain stores only the Minos
-business-layer pairing state (`backend_url`, `device_id`, `device_secret`).
+Direct invocation of `flutter run` or Xcode IDE Build/Run is **not
+supported** — see the Pre-Build error message and
+`docs/superpowers/specs/unified-config-pipeline-design.md` §4.6 for why.
+
+## Configuration
+
+`MINOS_BACKEND_URL` and `CF_ACCESS_CLIENT_*` are baked at build time
+from `.env.local` (workspace root). The Rust FFI reads them via
+`option_env!`; the Dart layer reads CF Access via `String.fromEnvironment`
+which `flutter run` populates with `--dart-define` (the just recipe wires
+both paths from the same `.env.local`).
+
+iOS Keychain (`flutter_secure_storage`) holds only Minos business state:
+`device_id`, `device_secret`, `account_id`, refresh tokens — never the
+backend URL or CF Access tokens.

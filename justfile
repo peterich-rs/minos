@@ -139,3 +139,7 @@ build-mobile-android:
     flutter build apk \
         --dart-define=CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
         --dart-define=CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
+
+# Print the CF Access rotation runbook. Pure documentation; no state mutation.
+rotate-cf-access:
+    @cat docs/ops/secrets-rotation.md

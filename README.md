@@ -100,21 +100,23 @@ open apps/mobile/ios/Runner.xcworkspace
 ```
 
 For a real-device install that still launches from the Home Screen after you
-force-quit it, install a Profile or Release Flutter build instead of a Debug
-`flutter run` build:
+force-quit it, build via `just` instead of debug `flutter run`:
 
 ```bash
-cd apps/mobile
-fvm flutter devices
-fvm flutter run --profile -d <device-id>
-# or: fvm flutter run --release -d <device-id>
+just dev-mobile-ios            # debug + flutter run hot-reload
+just build-mobile-ios Release  # production-flavoured build
 ```
 
-If you install from Xcode, open `apps/mobile/ios/Runner.xcworkspace`, choose
-your signing team, then set the Runner scheme's Run configuration to `Profile`
-or `Release` before Product > Run.
+Direct invocation of `flutter run`, `flutter build`, or Xcode IDE Build/Run
+is **not supported** — these paths bypass the env-injection that bakes
+`MINOS_BACKEND_URL` and CF Access credentials into the Rust FFI compile,
+silently producing a binary that dials localhost. The Runner target's
+Pre-Build script will fail any build invoked outside `just`. See
+`docs/superpowers/specs/unified-config-pipeline-design.md` and ADR 0018.
 
-During development without a real device: iOS Tier A still uses the pre-relay Tailscale pair flow, so spin up the legacy minos-daemon stack on that side. The Mac-side relay flow has its own dev bin instead — see `cargo run -p minos-mobile --bin fake-peer --features cli`, which drives the relay end-to-end without an iPhone.
+During development without a real device: the Mac-side relay flow has a dev
+bin — see `just smoke-fake-peer register` (or `pair` / `smoke-session`),
+which drives the relay end-to-end without an iPhone.
 
 ## Mobile login + agent session
 
@@ -124,28 +126,54 @@ Plan 08 (`docs/superpowers/plans/08-mobile-auth-and-agent-session.md` + 08a/08b)
 2. **Pair** — once authenticated, the iPhone scans the Mac's QR (v2 payload), POSTs `/v1/pairing/consume` with the bearer, and persists the freshly minted `DeviceSecret`. Same-device subsequent runs re-use the secret; switching accounts on a previously-paired device drops the pairing automatically (`MinosCore._onAuthLanded`).
 3. **`start_agent`** — the iPhone opens an authenticated `/devices` WebSocket, then forwards `minos_start_agent` (and follow-up `minos_send_user_message`) to the Mac via `Envelope::Forward`. The daemon replies with a `session_id`; live `EventKind::UiEventMessage` frames stream back over the same socket.
 
-### Backend env
+### Local setup
 
-`minos-backend` requires `MINOS_JWT_SECRET` (32+ bytes) at startup — without it the auth surface refuses to mint or verify tokens. The CLI exits early with a clear error if the var is missing.
+```sh
+# 1. Install the task runner (one-time):
+brew install just  # or: cargo install just
 
-```bash
-export MINOS_JWT_SECRET=$(openssl rand -base64 48)
-cargo run -p minos-backend -- --listen 127.0.0.1:8787 --db /tmp/relay.db
+# 2. Configure environment (one-time):
+cp .env.example .env.local
+# Edit .env.local: at minimum set MINOS_BACKEND_URL and MINOS_JWT_SECRET.
+# Generate a JWT secret: openssl rand -hex 32
+
+# 3. Run the backend:
+just backend
+
+# 4. Smoke a fake peer (in another terminal):
+just smoke-fake-peer register
+
+# 5. Build the mobile app:
+just build-mobile-ios Release
 ```
+
+All build and run commands go through `just`. Direct `cargo build` /
+`flutter build` invocations bypass the env-var injection that bakes
+`MINOS_BACKEND_URL` and CF Access credentials into the Rust FFI compile;
+release builds will panic at `build.rs` time and Xcode IDE Build will
+fail at the Pre-Build hook with a pointer at this section.
+
+`minos-backend` requires `MINOS_JWT_SECRET` (32+ bytes) at startup;
+`just backend` enforces it before invoking cargo. See
+`docs/superpowers/specs/unified-config-pipeline-design.md` for the
+config pipeline design and `docs/adr/0018-just-config-pipeline.md` for
+the policy decision.
 
 ### Dev smoke without an iPhone
 
-`fake-peer` ships three subcommands (`cargo run -p minos-mobile --bin fake-peer --features cli -- <cmd>`):
+`just smoke-fake-peer <kind>` wraps `cargo run -p minos-mobile --bin
+fake-peer --features cli -- <kind> --backend "$MINOS_BACKEND_URL"`:
 
 - `pair` — login-or-register + pair-only; tails inbound frames until the socket closes.
 - `register` — strict register + pair; surfaces `EmailTaken` instead of falling through to login.
 - `smoke-session` — full register-or-login → pair → `start_agent` loop; tails `UiEventFrame`s on stderr until interrupted.
 
-Example:
+For per-subcommand flags (e.g. `--email`, `--password`, `--token`,
+`--prompt`), invoke the bin directly:
 
 ```bash
 cargo run -p minos-mobile --bin fake-peer --features cli -- smoke-session \
-    --backend ws://127.0.0.1:8787/devices \
+    --backend "$MINOS_BACKEND_URL" \
     --email fan+smoke@example.com \
     --password Sup3rSecret! \
     --token <token-from-mac-qr> \
