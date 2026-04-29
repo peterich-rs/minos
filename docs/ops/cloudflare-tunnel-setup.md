@@ -177,31 +177,21 @@ sudo systemctl status cloudflared
 sudo journalctl -u cloudflared -f
 ```
 
-### 7a. Set backend public URL on the LaunchDaemon / systemd unit
+### 7a. Backend service env (no public-URL or CF-Access vars)
 
-The backend advertises the public WebSocket URL in pairing QR payloads. Configure the backend service with:
+The backend itself does not need `MINOS_BACKEND_URL`,
+`CF_ACCESS_CLIENT_ID`, or `CF_ACCESS_CLIENT_SECRET`. Mobile and daemon
+clients dial the URL baked at build time (set via `.env.local`,
+documented in
+`docs/superpowers/specs/unified-config-pipeline-design.md`). Cloudflare
+Access service tokens are configured on clients only — the backend is
+unaware of CF Access (it sees post-edge HTTP loopback on
+`127.0.0.1:8787`).
 
-```
-MINOS_BACKEND_PUBLIC_URL=wss://minos.fan-nn.top/devices
-```
-
-`MINOS_BACKEND_CF_ACCESS_CLIENT_ID` / `MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET` are optional compatibility knobs only. Current mobile and agent-host clients get the Cloudflare Access service token from build-time / host environment configuration.
-
-On macOS, drop these into the LaunchDaemon plist's `EnvironmentVariables` dictionary and reload:
-
-```bash
-sudo launchctl bootout system/ai.minos.backend
-sudo launchctl bootstrap system /Library/LaunchDaemons/ai.minos.backend.plist
-```
-
-On Linux (systemd), put them in a drop-in:
-
-```
-sudo systemctl edit ai.minos.backend.service
-# [Service]
-# Environment="MINOS_BACKEND_PUBLIC_URL=wss://minos.fan-nn.top/devices"
-sudo systemctl restart ai.minos.backend.service
-```
+The backend does still need `MINOS_JWT_SECRET` (account-auth bearer
+token signing). Set it in the LaunchDaemon plist or systemd drop-in
+the same way you'd set any other env var; the backend panics at boot
+if absent or shorter than 32 bytes.
 
 ---
 

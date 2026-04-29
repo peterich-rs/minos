@@ -748,9 +748,9 @@ mod tests {
     #[test]
     fn cf_access_misconfigured_display_contains_reason() {
         let e = MinosError::CfAccessMisconfigured {
-            reason: "missing MINOS_BACKEND_CF_ACCESS_CLIENT_ID".into(),
+            reason: "missing CF_ACCESS_CLIENT_ID".into(),
         };
-        assert!(format!("{e}").contains("missing MINOS_BACKEND_CF_ACCESS_CLIENT_ID"));
+        assert!(format!("{e}").contains("missing CF_ACCESS_CLIENT_ID"));
     }
 
     #[test]
