@@ -9,7 +9,8 @@ import 'package:minos/domain/active_session.dart';
 ///   - Idle / AwaitingInput / Stopped → Send button (gated on
 ///     `_canSend`: text non-empty + ≤ [_maxChars]).
 ///   - Starting / Streaming → destructive Stop button.
-///   - Error → both inputs disabled (caller can offer a retry above).
+///   - Error → Send retries; if the error has a thread id the parent resumes
+///     that thread instead of starting a new agent.
 ///
 /// The widget owns its own `TextEditingController`; the parent receives
 /// the message via `onSend(text)` and is responsible for clearing /
@@ -52,7 +53,7 @@ class _InputBarState extends State<InputBar> {
         s is SessionIdle ||
         s is SessionAwaitingInput ||
         s is SessionStopped ||
-        (s is SessionError && s.threadId == null);
+        s is SessionError;
     if (!composable) return false;
     final trimmed = _ctl.text.trim();
     if (trimmed.isEmpty) return false;

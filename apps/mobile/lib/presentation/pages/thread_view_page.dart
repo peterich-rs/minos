@@ -31,10 +31,17 @@ import 'package:minos/src/rust/api/minos.dart';
 /// the controller transitions to `SessionStreaming` we follow that
 /// thread id for events.
 class ThreadViewPage extends ConsumerStatefulWidget {
-  const ThreadViewPage({super.key, this.threadId});
+  const ThreadViewPage({super.key, this.threadId, this.agent});
 
   /// Pre-existing thread to load. Null = new chat.
   final String? threadId;
+
+  /// Agent the thread was started with. Set when navigating from the thread
+  /// list (we already have it on the [ThreadSummary]); the title falls back
+  /// to it whenever the global active session is bound to a *different*
+  /// thread, so we never label a historical thread with the live session's
+  /// agent.
+  final AgentName? agent;
 
   @override
   ConsumerState<ThreadViewPage> createState() => _ThreadViewPageState();
@@ -100,13 +107,35 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   }
 
   String? _resolvedThreadId(ActiveSession session) {
+    // When the user navigated into a specific thread, that always wins —
+    // otherwise tapping an older thread would show the most-recently-started
+    // session's events because the active-session controller is global.
+    // The session-derived branch is only meant for the "new chat" path,
+    // where widget.threadId is null and we need start_agent to mint one.
+    if (widget.threadId != null) return widget.threadId;
+    return _sessionThreadId(session);
+  }
+
+  static String? _sessionThreadId(ActiveSession session) {
     return switch (session) {
       SessionStreaming(threadId: final t) => t,
       SessionAwaitingInput(threadId: final t) => t,
       SessionStopped(threadId: final t) => t,
       SessionError(threadId: final t?) => t,
-      _ => widget.threadId,
+      _ => null,
     };
+  }
+
+  /// Returns the global session if it is currently bound to the thread the
+  /// page is rendering, otherwise [SessionIdle]. The whole page (title,
+  /// subtitle, input bar, send/start decision) reads off this view-scoped
+  /// value so historical threads never inherit the live session's "回复中"
+  /// badge or "停止" button while the agent is busy on a different thread.
+  ActiveSession _viewSession(ActiveSession session) {
+    if (widget.threadId == null) return session;
+    return _sessionThreadId(session) == widget.threadId
+        ? session
+        : const SessionIdle();
   }
 
   String _enqueueOptimisticMessage(String text) {
@@ -187,21 +216,25 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     _maybeAutoScroll(eventCount + _optimisticMessages.length);
   }
 
-  Future<void> _dispatchMessage(String text, ActiveSession session) async {
+  Future<void> _dispatchMessage(String text, ActiveSession viewSession) async {
     final optimisticId = _enqueueOptimisticMessage(text);
     final controller = ref.read(activeSessionControllerProvider.notifier);
-    final shouldStart =
-        session is SessionIdle ||
-        session is SessionStopped ||
-        session is SessionError;
+    final targetThreadId = widget.threadId ?? _sessionThreadId(viewSession);
     MinosError? error;
-    if (shouldStart) {
+    if (targetThreadId == null) {
       error = await controller.startAndSend(
         agent: ref.read(preferredAgentProvider),
         prompt: text,
       );
     } else {
-      error = await controller.send(text);
+      error = await controller.sendToThread(
+        threadId: targetThreadId,
+        agent:
+            widget.agent ??
+            _sessionAgent(viewSession) ??
+            ref.read(preferredAgentProvider),
+        text: text,
+      );
     }
 
     if (!mounted) return;
@@ -210,13 +243,14 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     }
   }
 
-  void _onSend(String text, ActiveSession session) {
-    unawaited(_dispatchMessage(text, session));
+  void _onSend(String text, ActiveSession viewSession) {
+    unawaited(_dispatchMessage(text, viewSession));
   }
 
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(activeSessionControllerProvider);
+    final viewSession = _viewSession(session);
     final threadId = _resolvedThreadId(session);
 
     final body = threadId == null && _optimisticMessages.isEmpty
@@ -250,8 +284,9 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     final scaffoldBg = isDark
         ? const Color(0xFF000000)
         : const Color(0xFFF2F2F7);
-    final agent = _sessionAgent(session);
-    final subtitle = _sessionSubtitle(session);
+    final liveAgent = _sessionAgent(viewSession);
+    final titleAgent = liveAgent ?? widget.agent;
+    final subtitle = _sessionSubtitle(viewSession);
 
     return Scaffold(
       backgroundColor: scaffoldBg,
@@ -274,7 +309,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
             Text(
               threadId == null
                   ? '新对话'
-                  : (agent == null ? '会话' : _agentLabel(agent)),
+                  : (titleAgent == null ? '会话' : _agentLabel(titleAgent)),
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
@@ -295,8 +330,8 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
           children: <Widget>[
             Expanded(child: body),
             InputBar(
-              session: session,
-              onSend: (t) => _onSend(t, session),
+              session: viewSession,
+              onSend: (t) => _onSend(t, viewSession),
               onStop: () =>
                   ref.read(activeSessionControllerProvider.notifier).stop(),
             ),

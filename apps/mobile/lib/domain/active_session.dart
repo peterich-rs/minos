@@ -25,8 +25,9 @@ sealed class ActiveSession {
 }
 
 /// No agent session is in flight on this device. The chat input gates on
-/// this state to mean "Send" should call `start_agent` instead of
-/// `send_user_message`.
+/// this state to mean "Send" should call `start_agent` only when the page
+/// has no existing thread id. Existing thread pages still call
+/// `send_user_message(session_id)` so the daemon can resume.
 class SessionIdle extends ActiveSession {
   const SessionIdle();
 
@@ -88,8 +89,9 @@ class SessionAwaitingInput extends ActiveSession {
   int get hashCode => Object.hash(threadId, agent);
 }
 
-/// The thread has been closed (user hit Stop, daemon completed, or host
-/// crashed). The next "Send" tap will start a brand-new session.
+/// The thread has been stopped locally. The next "Send" tap on that same
+/// thread resumes via `send_user_message(session_id)` instead of starting a
+/// brand-new session.
 class SessionStopped extends ActiveSession {
   final String threadId;
   const SessionStopped(this.threadId);

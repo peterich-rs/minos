@@ -15,6 +15,7 @@ class _FakeCore implements MinosCoreProtocol {
   StartAgentResponse? startResponse;
   MinosError? startError;
   MinosError? sendError;
+  int startCount = 0;
   int sendCount = 0;
   int stopCount = 0;
   String? lastSendThreadId;
@@ -31,6 +32,7 @@ class _FakeCore implements MinosCoreProtocol {
     required String prompt,
   }) async {
     if (startError != null) throw startError!;
+    startCount += 1;
     return startResponse ??
         const StartAgentResponse(sessionId: 'thr-1', cwd: '/tmp');
   }
@@ -93,6 +95,12 @@ class _FakeCore implements MinosCoreProtocol {
 
   @override
   Future<bool> hasPersistedPairing() async => false;
+
+  @override
+  Future<String?> peerDisplayName() async => null;
+
+  @override
+  Future<void> setPeerDisplayName(String? name) async {}
 
   @override
   Future<ListThreadsResponse> listThreads(ListThreadsParams params) async =>
@@ -404,6 +412,35 @@ void main() {
     expect(core.sendCount, 0);
     expect(c.read(activeSessionControllerProvider), const SessionIdle());
   });
+
+  test(
+    'sendToThread() in Idle resumes known thread without startAgent',
+    () async {
+      final core = _FakeCore();
+      final c = _container(core);
+
+      final error = await c
+          .read(activeSessionControllerProvider.notifier)
+          .sendToThread(
+            threadId: 'thr-existing',
+            agent: AgentName.codex,
+            text: 'resume',
+          );
+
+      expect(error, isNull);
+      expect(core.startCount, 0);
+      expect(core.sendCount, 1);
+      expect(core.lastSendThreadId, 'thr-existing');
+      expect(core.lastSendText, 'resume');
+      expect(
+        c.read(activeSessionControllerProvider),
+        const SessionStreaming(
+          threadId: 'thr-existing',
+          agent: AgentName.codex,
+        ),
+      );
+    },
+  );
 
   test('stop() in Streaming calls core and transitions to Stopped', () async {
     final core = _FakeCore()

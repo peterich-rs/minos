@@ -16,6 +16,15 @@ abstract class MinosCoreProtocol {
   /// already-paired device, even if the current WebSocket is offline.
   Future<bool> hasPersistedPairing();
 
+  /// Display name of the currently paired peer, sourced from the QR's
+  /// `host_display_name` at pair time. Returns `null` when no pairing
+  /// is persisted or the name was never recorded.
+  Future<String?> peerDisplayName();
+
+  /// Persist the paired peer's display name. Pass `null` or empty to
+  /// clear the stored value.
+  Future<void> setPeerDisplayName(String? name);
+
   /// Paged thread summaries for the paired agent-host.
   Future<ListThreadsResponse> listThreads(ListThreadsParams params);
 

@@ -115,7 +115,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
   Future<void> _confirmCandidate(_PairingCandidate candidate) async {
     await ref
         .read(pairingControllerProvider.notifier)
-        .submit(candidate.rawJson);
+        .submit(candidate.rawJson, displayName: candidate.hostDisplayName);
     final state = ref.read(pairingControllerProvider);
     if (!mounted || state is! AsyncData<bool> || state.value != true) return;
     ref.invalidate(runtimeAgentDescriptorsProvider);

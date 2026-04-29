@@ -27,6 +27,14 @@ final hasPersistedPairingProvider = FutureProvider<bool>((ref) {
   return ref.watch(minosCoreProvider).hasPersistedPairing();
 });
 
+/// Display name of the currently paired peer, sourced from the QR's
+/// `host_display_name` at pair time. `null` when no pairing exists or
+/// the name was never recorded (e.g. pairings made before this field
+/// was added).
+final peerDisplayNameProvider = FutureProvider<String?>((ref) {
+  return ref.watch(minosCoreProvider).peerDisplayName();
+});
+
 final runtimeAgentDescriptorsProvider = FutureProvider<List<AgentDescriptor>>((
   ref,
 ) {
@@ -69,12 +77,24 @@ class PairingController extends _$PairingController {
   FutureOr<bool> build() => false;
 
   /// Submit a raw QR JSON payload to the Rust core, updating [state] with
-  /// loading / data / error as the call resolves.
-  Future<void> submit(String qrJson) async {
+  /// loading / data / error as the call resolves. `displayName` is the
+  /// `host_display_name` already extracted from the QR by the scanner UI;
+  /// it is mirrored into the Dart secure store on success so the partners
+  /// list can show the peer name instead of a generic "Agent Runtime".
+  Future<void> submit(String qrJson, {String? displayName}) async {
     state = const AsyncValue.loading();
     try {
-      await ref.read(minosCoreProvider).pairWithQrJson(qrJson);
+      final core = ref.read(minosCoreProvider);
+      await core.pairWithQrJson(qrJson);
+      try {
+        await core.setPeerDisplayName(displayName);
+      } catch (_) {
+        // Best-effort: a keychain write failure here should not undo the
+        // successful pair — the partner row will fall back to a generic
+        // label until the name can be resolved another way.
+      }
       ref.invalidate(hasPersistedPairingProvider);
+      ref.invalidate(peerDisplayNameProvider);
       state = const AsyncValue.data(true);
     } on MinosError catch (e, st) {
       state = AsyncValue.error(e, st);

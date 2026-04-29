@@ -133,6 +133,13 @@ class MinosCore implements MinosCoreProtocol {
   }
 
   @override
+  Future<String?> peerDisplayName() => _secure.loadPeerDisplayName();
+
+  @override
+  Future<void> setPeerDisplayName(String? name) =>
+      _secure.savePeerDisplayName(name);
+
+  @override
   Future<ListThreadsResponse> listThreads(ListThreadsParams params) =>
       _client.listThreads(req: params);
 

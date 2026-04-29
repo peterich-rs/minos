@@ -32,6 +32,10 @@ class SecurePairingStore {
   static const _keyAccountId = 'minos.account_id';
   static const _keyAccountEmail = 'minos.account_email';
 
+  // Display name from the scanned QR's `host_display_name`. UI-only —
+  // does not gate resume, so it lives outside the snapshot validation.
+  static const _keyPeerDisplayName = 'minos.peer_display_name';
+
   Future<PersistedPairingState?> loadState() async {
     final deviceId = await _storage.read(key: _keyDeviceId);
     final deviceSecret = await _storage.read(key: _keyDeviceSecret);
@@ -94,10 +98,23 @@ class SecurePairingStore {
     }
   }
 
+  Future<String?> loadPeerDisplayName() {
+    return _storage.read(key: _keyPeerDisplayName);
+  }
+
+  Future<void> savePeerDisplayName(String? name) {
+    final trimmed = name?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return _storage.delete(key: _keyPeerDisplayName);
+    }
+    return _storage.write(key: _keyPeerDisplayName, value: trimmed);
+  }
+
   /// Wipe every key this store owns. Called from `forgetPeer`.
   Future<void> clearAll() async {
     await _storage.delete(key: _keyDeviceId);
     await _storage.delete(key: _keyDeviceSecret);
+    await _storage.delete(key: _keyPeerDisplayName);
     await _deleteAuthKeys();
   }
 

@@ -65,6 +65,12 @@ class _FakeCore implements MinosCoreProtocol {
   Future<bool> hasPersistedPairing() async => false;
 
   @override
+  Future<String?> peerDisplayName() async => null;
+
+  @override
+  Future<void> setPeerDisplayName(String? name) async {}
+
+  @override
   Future<ListThreadsResponse> listThreads(ListThreadsParams params) async =>
       const ListThreadsResponse(threads: []);
 

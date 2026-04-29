@@ -128,6 +128,29 @@ class ActiveSessionController extends _$ActiveSessionController {
     }
   }
 
+  /// Send into a known thread id, regardless of the current global state.
+  ///
+  /// Existing thread pages use this path for follow-ups after Stop/Error or
+  /// after app navigation. The daemon/runtime treats the `sessionId` as the
+  /// resume target, so the mobile UI does not start a new agent for an
+  /// already-minted session.
+  Future<MinosError?> sendToThread({
+    required String threadId,
+    required AgentName agent,
+    required String text,
+  }) async {
+    state = SessionStreaming(threadId: threadId, agent: agent);
+    try {
+      await ref
+          .read(minosCoreProvider)
+          .sendUserMessage(sessionId: threadId, text: text);
+      return null;
+    } on MinosError catch (e) {
+      state = SessionAwaitingInput(threadId: threadId, agent: agent);
+      return e;
+    }
+  }
+
   /// Best-effort stop. Errors from the daemon are swallowed; the local
   /// machine still transitions to [SessionStopped] so the UI doesn't
   /// hang in a half-streaming state.

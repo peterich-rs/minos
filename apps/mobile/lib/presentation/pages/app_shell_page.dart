@@ -133,7 +133,10 @@ class _ThreadList extends StatelessWidget {
         summary: threads[index],
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (_) => ThreadViewPage(threadId: threads[index].threadId),
+            builder: (_) => ThreadViewPage(
+              threadId: threads[index].threadId,
+              agent: threads[index].agent,
+            ),
           ),
         ),
       ),
@@ -386,15 +389,16 @@ class _PartnerEmptyCard extends StatelessWidget {
   }
 }
 
-class _RuntimePartnerRow extends StatelessWidget {
+class _RuntimePartnerRow extends ConsumerWidget {
   const _RuntimePartnerRow({required this.connection, required this.onTap});
 
   final ConnectionState? connection;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final name = _resolvePeerDisplayName(ref);
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -408,7 +412,7 @@ class _RuntimePartnerRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    'Agent Runtime',
+                    name,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
@@ -430,14 +434,15 @@ class _RuntimePartnerRow extends StatelessWidget {
   }
 }
 
-class _RuntimeProfileHeader extends StatelessWidget {
+class _RuntimeProfileHeader extends ConsumerWidget {
   const _RuntimeProfileHeader({required this.connection});
 
   final ConnectionState? connection;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final name = _resolvePeerDisplayName(ref);
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -453,7 +458,7 @@ class _RuntimeProfileHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  'Agent Runtime',
+                  name,
                   style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
@@ -467,6 +472,16 @@ class _RuntimeProfileHeader extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Reads the persisted peer display name and falls back to a generic
+/// label when it's still loading, missing, or comes back empty.
+String _resolvePeerDisplayName(WidgetRef ref) {
+  const fallback = 'Agent Runtime';
+  final value = ref.watch(peerDisplayNameProvider).asData?.value;
+  if (value == null) return fallback;
+  final trimmed = value.trim();
+  return trimmed.isEmpty ? fallback : trimmed;
 }
 
 class _RuntimeAvatar extends StatelessWidget {
