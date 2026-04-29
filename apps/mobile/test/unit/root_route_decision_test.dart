@@ -101,19 +101,16 @@ void main() {
       );
     });
 
-    test(
-      'Authenticated + paired + null connection -> threadListOffline',
-      () {
-        expect(
-          decideRootRoute(
-            authState: AuthAuthenticated(account),
-            connectionState: null,
-            hasPersistedPairing: true,
-          ),
-          RootRoute.threadListOffline,
-        );
-      },
-    );
+    test('Authenticated + paired + null connection -> threadListOffline', () {
+      expect(
+        decideRootRoute(
+          authState: AuthAuthenticated(account),
+          connectionState: null,
+          hasPersistedPairing: true,
+        ),
+        RootRoute.threadListOffline,
+      );
+    });
 
     test(
       'Authenticated + paired + Pairing connection -> threadListOffline',
