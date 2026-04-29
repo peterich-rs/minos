@@ -51,6 +51,9 @@ class _FakeCore implements MinosCoreProtocol {
     stopCount += 1;
   }
 
+  @override
+  Future<List<AgentDescriptor>> listClis() async => const [];
+
   // --- MinosCoreProtocol stubs we don't exercise ---
 
   @override
@@ -154,6 +157,57 @@ void main() {
     expect(st.error, isA<MinosError_AgentStartFailed>());
     expect(error, isA<MinosError_AgentStartFailed>());
   });
+
+  test('startAndSend() sends initial prompt before Streaming', () async {
+    final core = _FakeCore()
+      ..startResponse = const StartAgentResponse(
+        sessionId: 'thr-initial',
+        cwd: '/w',
+      );
+    final c = _container(core);
+    final notifier = c.read(activeSessionControllerProvider.notifier);
+
+    final done = notifier.startAndSend(agent: AgentName.codex, prompt: 'hello');
+    expect(c.read(activeSessionControllerProvider), isA<SessionStarting>());
+    final error = await done;
+
+    expect(error, isNull);
+    expect(core.sendCount, 1);
+    expect(core.lastSendThreadId, 'thr-initial');
+    expect(core.lastSendText, 'hello');
+    expect(
+      c.read(activeSessionControllerProvider),
+      const SessionStreaming(threadId: 'thr-initial', agent: AgentName.codex),
+    );
+  });
+
+  test(
+    'startAndSend() send failure keeps the minted threadId on error',
+    () async {
+      final core = _FakeCore()
+        ..startResponse = const StartAgentResponse(
+          sessionId: 'thr-initial-fail',
+          cwd: '/w',
+        )
+        ..sendError = const MinosError.timeout();
+      final c = _container(core);
+      final notifier = c.read(activeSessionControllerProvider.notifier);
+
+      final error = await notifier.startAndSend(
+        agent: AgentName.codex,
+        prompt: 'hello',
+      );
+
+      expect(error, isA<MinosError_Timeout>());
+      expect(
+        c.read(activeSessionControllerProvider),
+        const SessionError(
+          threadId: 'thr-initial-fail',
+          error: MinosError.timeout(),
+        ),
+      );
+    },
+  );
 
   test(
     'reset() clears a stale thread-bound error back to SessionIdle',

@@ -54,6 +54,9 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// WS. Idempotent.
   Future<void> forgetPeer();
 
+  /// Detect the CLI agents available on the paired runtime.
+  Future<List<AgentDescriptor>> listClis();
+
   /// Request a page of thread summaries.
   Future<ListThreadsResponse> listThreads({required ListThreadsParams req});
 
@@ -150,7 +153,44 @@ abstract class MobileClient implements RustOpaqueInterface {
   Stream<UiEventFrame> subscribeUiEvents();
 }
 
+class AgentDescriptor {
+  final AgentName name;
+  final String? path;
+  final String? version;
+  final AgentStatus status;
+
+  const AgentDescriptor({
+    required this.name,
+    this.path,
+    this.version,
+    required this.status,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^ path.hashCode ^ version.hashCode ^ status.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AgentDescriptor &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          path == other.path &&
+          version == other.version &&
+          status == other.status;
+}
+
 enum AgentName { codex, claude, gemini }
+
+@freezed
+sealed class AgentStatus with _$AgentStatus {
+  const AgentStatus._();
+
+  const factory AgentStatus.ok() = AgentStatus_Ok;
+  const factory AgentStatus.missing() = AgentStatus_Missing;
+  const factory AgentStatus.error({required String reason}) = AgentStatus_Error;
+}
 
 @freezed
 sealed class AuthStateFrame with _$AuthStateFrame {

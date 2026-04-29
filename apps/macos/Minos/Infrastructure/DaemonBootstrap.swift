@@ -173,11 +173,12 @@ enum DaemonBootstrap {
     }
 
     static func relayConfig(
-        infoDictionary: [String: Any]? = Bundle.main.infoDictionary
+        infoDictionary: [String: Any]? = Bundle.main.infoDictionary,
+        env: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> RelayConfig {
         let infoDictionary = infoDictionary ?? [:]
-        let creds = try infoCreds(from: infoDictionary)
-        let backendUrl = infoString(infoDictionary[backendURLKey]) ?? ""
+        let creds = try infoCreds(from: infoDictionary) ?? envCreds(from: env)
+        let backendUrl = infoString(infoDictionary[backendURLKey]) ?? blankToNil(env[backendURLKey]) ?? ""
 
         return RelayConfig(
             backendUrl: backendUrl,

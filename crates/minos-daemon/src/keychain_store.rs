@@ -8,7 +8,7 @@ pub mod imp {
     use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
     use security_framework::passwords::{
         delete_generic_password, delete_generic_password_options, generic_password,
-        set_generic_password_options, PasswordOptions,
+        set_generic_password, set_generic_password_options, PasswordOptions,
     };
 
     const SERVICE: &str = "ai.minos.macos";
@@ -78,11 +78,7 @@ pub mod imp {
                 return Ok(());
             }
 
-            Err(MinosError::StoreIo {
-                path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
-                message: "keychain write: protected keychain requires a signed app entitlement"
-                    .into(),
-            })
+            write_legacy(secret)
         }
 
         /// Delete the entry. Succeeds (`Ok`) if the entry doesn't exist,
@@ -147,6 +143,15 @@ pub mod imp {
                 message: format!("keychain write: {e}"),
             }),
         }
+    }
+
+    fn write_legacy(secret: &DeviceSecret) -> Result<(), MinosError> {
+        set_generic_password(SERVICE, ACCOUNT_DEVICE_SECRET, secret.0.as_bytes()).map_err(|e| {
+            MinosError::StoreIo {
+                path: format!("Keychain {SERVICE}/{ACCOUNT_DEVICE_SECRET}"),
+                message: format!("keychain write: {e}"),
+            }
+        })
     }
 
     fn read_legacy_no_ui() -> security_framework::base::Result<Option<Vec<u8>>> {

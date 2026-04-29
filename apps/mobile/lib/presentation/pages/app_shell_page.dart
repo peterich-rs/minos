@@ -10,13 +10,14 @@ import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/domain/auth_state.dart';
 import 'package:minos/presentation/pages/log_viewer_page.dart';
+import 'package:minos/presentation/pages/pairing_page.dart';
 import 'package:minos/presentation/pages/thread_view_page.dart';
 import 'package:minos/presentation/widgets/thread_list_tile.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 const String _appVersion = '1.0.0';
 
-/// iOS-flat shell: three tabs (Messages / Agent / Profile) with a sticky
+/// iOS-flat shell: three tabs (Messages / Partners / Profile) with a sticky
 /// large title per tab, a thin top divider, and a Material 3
 /// [NavigationBar] themed to match.
 class AppShellPage extends ConsumerStatefulWidget {
@@ -140,48 +141,66 @@ class _ThreadList extends StatelessWidget {
   }
 }
 
-// ─────────────────────────── Agent tab ───────────────────────────
+// ─────────────────────────── Partners tab ───────────────────────────
 
 class _AgentsTab extends ConsumerWidget {
   const _AgentsTab();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final preferredAgent = ref.watch(preferredAgentProvider);
-    final session = ref.watch(activeSessionControllerProvider);
-    final currentSessionAgent = _sessionAgent(session);
+    final hasPairing = ref.watch(hasPersistedPairingProvider);
+    final connection = ref.watch(connectionStateProvider).asData?.value;
 
     return SafeArea(
       bottom: false,
       child: Column(
         children: <Widget>[
-          const _LargeTitleBar(title: 'Agent', subtitle: '为新会话选择默认 Agent'),
+          const _LargeTitleBar(title: '伙伴', subtitle: '真人伙伴与已添加的 runtime 设备'),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
               children: <Widget>[
-                _GroupedCard(
-                  children: <Widget>[
-                    for (
-                      var i = 0;
-                      i < AgentName.values.length;
-                      i++
-                    ) ...<Widget>[
-                      if (i > 0) const _RowDivider(indent: 56),
-                      _AgentRow(
-                        agent: AgentName.values[i],
-                        selected: preferredAgent == AgentName.values[i],
-                        active: currentSessionAgent == AgentName.values[i],
-                        onTap: () => ref
-                            .read(preferredAgentProvider.notifier)
-                            .setAgent(AgentName.values[i]),
-                      ),
-                    ],
-                  ],
+                const _SectionLabel('真人伙伴'),
+                const _PartnerEmptyCard(
+                  icon: CupertinoIcons.person_2,
+                  title: '还没有真人伙伴',
+                  subtitle: '后端尚未开放真人伙伴列表；当前可以先添加 runtime 设备。',
+                ),
+                const SizedBox(height: 18),
+                const _SectionLabel('设备'),
+                hasPairing.when(
+                  loading: () => const _PartnerLoadingCard(),
+                  error: (error, _) => _PartnerEmptyCard(
+                    icon: CupertinoIcons.exclamationmark_triangle,
+                    title: '设备状态读取失败',
+                    subtitle: error.toString(),
+                  ),
+                  data: (paired) {
+                    if (!paired) {
+                      return const _PartnerEmptyCard(
+                        icon: CupertinoIcons.desktopcomputer,
+                        title: '还没有设备伙伴',
+                        subtitle: '到「我的」页面点击「添加伙伴」，扫描 runtime 二维码。',
+                      );
+                    }
+                    return _GroupedCard(
+                      children: <Widget>[
+                        _RuntimePartnerRow(
+                          connection: connection,
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const _RuntimeProfilePage(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 12),
-                _GroupedFooter(
-                  text: '切换默认 Agent 只影响新建会话；已有 thread 会保持当前运行上下文。',
+                const _GroupedFooter(
+                  text:
+                      '设备伙伴承载 Agent runtime；点击设备主页可以查看它支持的 Agent CLI、发起会话或删除伙伴。',
                 ),
               ],
             ),
@@ -192,17 +211,185 @@ class _AgentsTab extends ConsumerWidget {
   }
 }
 
-class _AgentRow extends StatelessWidget {
-  const _AgentRow({
-    required this.agent,
-    required this.selected,
-    required this.active,
-    required this.onTap,
+class _RuntimeProfilePage extends ConsumerWidget {
+  const _RuntimeProfilePage();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final connection = ref.watch(connectionStateProvider).asData?.value;
+    final agents = ref.watch(runtimeAgentDescriptorsProvider);
+    final preferredAgent = ref.watch(preferredAgentProvider);
+    final session = ref.watch(activeSessionControllerProvider);
+    final currentSessionAgent = _sessionAgent(session);
+
+    return Scaffold(
+      backgroundColor: _scaffoldBg(context),
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: <Widget>[
+            _LargeTitleBar(
+              title: '设备主页',
+              subtitle: 'Agent runtime',
+              trailing: _CircleIconButton(
+                icon: CupertinoIcons.xmark,
+                onTap: () => Navigator.of(context).pop(),
+                tooltip: '关闭',
+              ),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () async {
+                  ref.invalidate(runtimeAgentDescriptorsProvider);
+                  await ref.read(runtimeAgentDescriptorsProvider.future);
+                },
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+                  children: <Widget>[
+                    _RuntimeProfileHeader(connection: connection),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () => _openNewChat(context, ref),
+                            icon: const Icon(CupertinoIcons.bubble_left),
+                            label: const Text('发起会话'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => _confirmForgetPeer(context, ref),
+                            icon: const Icon(CupertinoIcons.delete),
+                            label: const Text('删除伙伴'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    const _SectionLabel('支持的 Agent'),
+                    agents.when(
+                      loading: () => const _PartnerLoadingCard(),
+                      error: (error, _) => _PartnerEmptyCard(
+                        icon: CupertinoIcons.exclamationmark_triangle,
+                        title: 'Agent 检测失败',
+                        subtitle: error.toString(),
+                      ),
+                      data: (items) {
+                        if (items.isEmpty) {
+                          return const _PartnerEmptyCard(
+                            icon: CupertinoIcons.command,
+                            title: '没有检测到 Agent CLI',
+                            subtitle: 'runtime detect 未返回可展示的 CLI。',
+                          );
+                        }
+                        return _GroupedCard(
+                          children: <Widget>[
+                            for (var i = 0; i < items.length; i++) ...<Widget>[
+                              if (i > 0) const _RowDivider(indent: 56),
+                              _RuntimeAgentRow(
+                                descriptor: items[i],
+                                selected: preferredAgent == items[i].name,
+                                active: currentSessionAgent == items[i].name,
+                                onTap: _agentAvailable(items[i])
+                                    ? () => ref
+                                          .read(preferredAgentProvider.notifier)
+                                          .setAgent(items[i].name)
+                                    : null,
+                              ),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    const _GroupedFooter(
+                      text: '选择默认 Agent 只影响新建会话；已有 thread 会保持当前运行上下文。',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openNewChat(BuildContext context, WidgetRef ref) {
+    ref.read(activeSessionControllerProvider.notifier).reset();
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const ThreadViewPage()));
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _PartnerLoadingCard extends StatelessWidget {
+  const _PartnerLoadingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _GroupedCard(
+      children: <Widget>[
+        Padding(
+          padding: EdgeInsets.all(18),
+          child: Center(child: CupertinoActivityIndicator()),
+        ),
+      ],
+    );
+  }
+}
+
+class _PartnerEmptyCard extends StatelessWidget {
+  const _PartnerEmptyCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
   });
 
-  final AgentName agent;
-  final bool selected;
-  final bool active;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return _GroupedCard(
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
+          child: _EmptyState(icon: icon, title: title, subtitle: subtitle),
+        ),
+      ],
+    );
+  }
+}
+
+class _RuntimePartnerRow extends StatelessWidget {
+  const _RuntimePartnerRow({required this.connection, required this.onTap});
+
+  final ConnectionState? connection;
   final VoidCallback onTap;
 
   @override
@@ -211,10 +398,129 @@ class _AgentRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: <Widget>[
+            const _RuntimeAvatar(size: 42),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'Agent Runtime',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  _ConnectionLine(state: connection),
+                ],
+              ),
+            ),
+            Icon(
+              CupertinoIcons.chevron_right,
+              size: 16,
+              color: theme.colorScheme.outline,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RuntimeProfileHeader extends StatelessWidget {
+  const _RuntimeProfileHeader({required this.connection});
+
+  final ConnectionState? connection;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: <Widget>[
+          const _RuntimeAvatar(size: 62),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'Agent Runtime',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                _ConnectionLine(state: connection),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RuntimeAvatar extends StatelessWidget {
+  const _RuntimeAvatar({required this.size});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(size * 0.28),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[Color(0xFF64D2FF), Color(0xFF0A84FF)],
+        ),
+      ),
+      alignment: Alignment.center,
+      child: Icon(
+        CupertinoIcons.desktopcomputer,
+        color: Colors.white,
+        size: size * 0.48,
+      ),
+    );
+  }
+}
+
+class _RuntimeAgentRow extends StatelessWidget {
+  const _RuntimeAgentRow({
+    required this.descriptor,
+    required this.selected,
+    required this.active,
+    required this.onTap,
+  });
+
+  final AgentDescriptor descriptor;
+  final bool selected;
+  final bool active;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final available = _agentAvailable(descriptor);
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: <Widget>[
-            _AgentAvatar(agent: agent, size: 36),
+            _AgentAvatar(agent: descriptor.name, size: 36),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -223,7 +529,7 @@ class _AgentRow extends StatelessWidget {
                   Row(
                     children: <Widget>[
                       Text(
-                        _agentLabel(agent),
+                        _agentLabel(descriptor.name),
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
@@ -236,9 +542,11 @@ class _AgentRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    _agentDescription(agent),
+                    _agentDescriptorLine(descriptor),
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: available
+                          ? theme.colorScheme.onSurfaceVariant
+                          : theme.colorScheme.error,
                       height: 1.35,
                     ),
                   ),
@@ -317,9 +625,13 @@ class _ProfileTab extends ConsumerWidget {
                     const _RowDivider(indent: 56),
                     _SettingsRow(
                       icon: CupertinoIcons.qrcode_viewfinder,
-                      title: '重新配对',
-                      subtitle: '清除当前设备绑定并返回扫码页',
-                      onTap: () => _confirmForgetPeer(context, ref),
+                      title: '添加伙伴',
+                      subtitle: '扫描二维码添加 runtime 设备',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const PairingPage(),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -349,30 +661,6 @@ class _ProfileTab extends ConsumerWidget {
         ],
       ),
     );
-  }
-
-  Future<void> _confirmForgetPeer(BuildContext context, WidgetRef ref) async {
-    final confirmed = await showCupertinoDialog<bool>(
-      context: context,
-      builder: (ctx) => CupertinoAlertDialog(
-        title: const Text('重新配对'),
-        content: const Text('这会清除当前设备绑定并返回扫码页。是否继续？'),
-        actions: <Widget>[
-          CupertinoDialogAction(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('取消'),
-          ),
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('继续'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    await ref.read(minosCoreProvider).forgetPeer();
-    ref.invalidate(hasPersistedPairingProvider);
   }
 
   Future<void> _confirmLogout(BuildContext context, WidgetRef ref) async {
@@ -473,13 +761,13 @@ class _ConnectionLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final (label, color) = switch (state) {
-      ConnectionState_Connected() => ('Mac 已连接', const Color(0xFF34C759)),
+      ConnectionState_Connected() => ('在线', const Color(0xFF34C759)),
       ConnectionState_Reconnecting(:final attempt) => (
         '重连中 #$attempt',
         const Color(0xFFFF9500),
       ),
       ConnectionState_Pairing() => ('配对中', const Color(0xFFFF9500)),
-      _ => ('Mac 离线', const Color(0xFFFF3B30)),
+      _ => ('离线', const Color(0xFFFF3B30)),
     };
     return Row(
       children: <Widget>[
@@ -642,10 +930,10 @@ class _OfflineBanner extends StatelessWidget {
 
   String _label() {
     return switch (state) {
-      ConnectionState_Reconnecting(:final attempt) => 'Mac 正在重连 #$attempt',
+      ConnectionState_Reconnecting(:final attempt) => '正在重连 #$attempt',
       ConnectionState_Pairing() => '配对中',
-      ConnectionState_Disconnected() => 'Mac 已离线',
-      _ => 'Mac 已离线',
+      ConnectionState_Disconnected() => '已离线',
+      _ => '已离线',
     };
   }
 
@@ -775,6 +1063,34 @@ class _RowDivider extends StatelessWidget {
   }
 }
 
+Future<void> _confirmForgetPeer(BuildContext context, WidgetRef ref) async {
+  final confirmed = await showCupertinoDialog<bool>(
+    context: context,
+    builder: (ctx) => CupertinoAlertDialog(
+      title: const Text('删除设备伙伴'),
+      content: const Text('这会清除当前设备绑定。再次使用需要重新添加伙伴。'),
+      actions: <Widget>[
+        CupertinoDialogAction(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('取消'),
+        ),
+        CupertinoDialogAction(
+          isDestructiveAction: true,
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('删除'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return;
+  await ref.read(minosCoreProvider).forgetPeer();
+  ref.invalidate(hasPersistedPairingProvider);
+  ref.invalidate(runtimeAgentDescriptorsProvider);
+  if (context.mounted) {
+    Navigator.of(context).pop();
+  }
+}
+
 class _AgentAvatar extends StatelessWidget {
   const _AgentAvatar({required this.agent, this.size = 32});
 
@@ -852,9 +1168,9 @@ class _BottomNav extends StatelessWidget {
                 onTap: () => onChanged(0),
               ),
               _NavItem(
-                icon: CupertinoIcons.cube,
-                activeIcon: CupertinoIcons.cube_fill,
-                label: 'Agent',
+                icon: CupertinoIcons.person_2,
+                activeIcon: CupertinoIcons.person_2_fill,
+                label: '伙伴',
                 selected: index == 1,
                 onTap: () => onChanged(1),
               ),
@@ -932,11 +1248,25 @@ String _agentLabel(AgentName agent) {
   };
 }
 
-String _agentDescription(AgentName agent) {
-  return switch (agent) {
-    AgentName.codex => '代码生成与仓库内编辑，作为主开发代理。',
-    AgentName.claude => '长上下文解释与复杂输入整理，偏分析型。',
-    AgentName.gemini => '快速探索与多轮补充，可作为新建 thread 入口。',
+bool _agentAvailable(AgentDescriptor descriptor) {
+  return switch (descriptor.status) {
+    AgentStatus_Ok() => true,
+    _ => false,
+  };
+}
+
+String _agentDescriptorLine(AgentDescriptor descriptor) {
+  final version = descriptor.version;
+  final path = descriptor.path;
+  final suffix = <String>[
+    if (version != null && version.isNotEmpty) version,
+    if (path != null && path.isNotEmpty) path,
+  ].join(' · ');
+  final detail = suffix.isEmpty ? '' : ' · $suffix';
+  return switch (descriptor.status) {
+    AgentStatus_Ok() => '可用$detail',
+    AgentStatus_Missing() => '未安装',
+    AgentStatus_Error(:final reason) => '检测异常: $reason',
   };
 }
 

@@ -58,8 +58,21 @@ targets:
         script: |
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-          cd "$SRCROOT/../.."
-          cargo xtask build-macos --configuration "$CONFIGURATION"
+          ROOT="$(cd "$SRCROOT/../.." && pwd -P)"
+          just --justfile "$ROOT/justfile" --working-directory "$ROOT" check-env
+          just --justfile "$ROOT/justfile" --working-directory "$ROOT" \
+            --command cargo xtask gen-uniffi
+          just --justfile "$ROOT/justfile" --working-directory "$ROOT" \
+            --command cargo xtask build-macos --configuration "$CONFIGURATION"
+    postBuildScripts:
+      - name: Inject just env into Info.plist
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          ROOT="$(cd "$SRCROOT/../.." && pwd -P)"
+          just --justfile "$ROOT/justfile" --working-directory "$ROOT" \
+            _patch-macos-info-plist "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
   MinosTests:
     type: bundle.unit-test
     platform: macOS

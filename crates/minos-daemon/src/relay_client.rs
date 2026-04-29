@@ -40,14 +40,14 @@
 //!
 //! # Pairing state on `EventKind::Paired`
 //!
-//! Pairing is now process-local on the host. When the relay finalises a
-//! pair and forwards us `your_device_secret`, the dispatch task updates its
-//! in-memory peer mirror and publishes `PeerState::Paired`, but it no longer
-//! writes `device-secret` to the macOS Keychain or saves `local-state.json`.
+//! Pairing facts are backend-owned, but the host's `device-secret` must be
+//! retained locally. When the relay finalises a pair and forwards
+//! `your_device_secret`, the dispatch task updates the live reconnect slot,
+//! writes the secret to Keychain, and publishes `PeerState::Paired`.
 
 use std::sync::{Arc, Mutex as StdMutex};
 
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, PeerState, RelayLinkState};
 use minos_protocol::envelope::{Envelope, EventKind};
@@ -79,10 +79,10 @@ struct Inner {
     /// The Mac's display name — sent to the backend in `RequestPairingQr`
     /// so the assembled QR carries it through to the iPhone.
     mac_name: String,
-    /// Spawn-time snapshot of the device secret. Used by [`Self::forget_peer`]
-    /// to authenticate the HTTP `DELETE /v1/pairing` call. `None` until the
-    /// daemon respawns the client with a fresh secret post-pairing.
-    secret: Option<DeviceSecret>,
+    /// Live device secret. Pairing can mint it while this relay client is
+    /// already running, so reconnects and `forget_peer` read it through a
+    /// shared slot instead of a spawn-time snapshot.
+    secret: Arc<StdMutex<Option<DeviceSecret>>>,
     /// HTTP client for the backend's `/v1/*` control plane.
     http: Arc<RelayHttpClient>,
     /// Cloneable producer side of the dispatcher's outbound queue.
@@ -136,7 +136,7 @@ impl RelayClient {
         let (out_tx, out_rx) = mpsc::channel::<Envelope>(OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-        let inner_secret = secret.clone();
+        let secret_store = Arc::new(StdMutex::new(secret));
         let http = match RelayHttpClient::new(
             &backend_url,
             self_device_id,
@@ -167,13 +167,14 @@ impl RelayClient {
         let dispatch_ctx = DispatchCtx {
             config,
             self_device_id,
-            secret,
+            secret: secret_store.clone(),
             mac_name: mac_name.clone(),
             backend_url: backend_url.clone(),
             link_tx,
             peer_tx,
             out_tx: out_tx.clone(),
             out_rx,
+            http: http.clone(),
             rpc_server,
             peer_store: persistence.peer_store,
             last_error: persistence.last_error,
@@ -185,7 +186,7 @@ impl RelayClient {
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             task: Mutex::new(Some(task)),
             mac_name,
-            secret: inner_secret,
+            secret: secret_store,
             http,
             out_tx,
         });
@@ -222,7 +223,9 @@ impl RelayClient {
         let secret = self
             .inner
             .secret
-            .clone()
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
             .ok_or_else(|| MinosError::DeviceNotTrusted {
                 device_id: "(none)".into(),
             })?;
@@ -280,7 +283,7 @@ pub struct PersistenceCtx {
 struct DispatchCtx {
     config: RelayConfig,
     self_device_id: DeviceId,
-    secret: Option<DeviceSecret>,
+    secret: Arc<StdMutex<Option<DeviceSecret>>>,
     mac_name: String,
     backend_url: String,
     link_tx: watch::Sender<RelayLinkState>,
@@ -290,6 +293,8 @@ struct DispatchCtx {
     /// without going through the public [`RelayClient`] handle.
     out_tx: mpsc::Sender<Envelope>,
     out_rx: mpsc::Receiver<Envelope>,
+    /// HTTP handle for `/v1/me/peer` refreshes after authenticated connects.
+    http: Arc<RelayHttpClient>,
     /// Local jsonrpsee surface invoked when the relay delivers an
     /// `Envelope::Forwarded`. `None` in tests that don't exercise the
     /// peer-RPC path; production wires the daemon's `RpcServerImpl` here.
@@ -366,10 +371,11 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
 /// failure, `AuthFailed` on a pre-upgrade HTTP 401, and `Shutdown` when the
 /// outer `shutdown_rx` fires mid-cycle.
 async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>) -> CycleOutcome {
+    let secret = secret_snapshot(&ctx.secret);
     let headers = build_headers(
         &ctx.config,
         ctx.self_device_id,
-        ctx.secret.as_ref(),
+        secret.as_ref(),
         &ctx.mac_name,
     );
     let request = match build_request(&ctx.backend_url, &headers) {
@@ -428,8 +434,49 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
 
     let _ = ctx.link_tx.send(RelayLinkState::Connected);
     tracing::info!(target: "minos_daemon::relay_client", "relay link up");
+    refresh_peer_from_backend(ctx, secret.as_ref()).await;
 
     dispatch_loop(ws, ctx, shutdown_rx).await
+}
+
+async fn refresh_peer_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSecret>) {
+    let Some(secret) = secret else {
+        return;
+    };
+    match ctx.http.get_me_peer(secret).await {
+        Ok(Some(peer)) => {
+            let paired_at = Utc
+                .timestamp_millis_opt(peer.paired_at_ms)
+                .single()
+                .unwrap_or_else(Utc::now);
+            let record = PeerRecord {
+                device_id: peer.peer_device_id,
+                name: peer.peer_name.clone(),
+                paired_at,
+            };
+            if let Ok(mut guard) = ctx.peer_store.lock() {
+                *guard = Some(record);
+            }
+            let _ = ctx.peer_tx.send(PeerState::Paired {
+                peer_id: peer.peer_device_id,
+                peer_name: peer.peer_name,
+                online: false,
+            });
+        }
+        Ok(None) => {
+            if let Ok(mut guard) = ctx.peer_store.lock() {
+                *guard = None;
+            }
+            let _ = ctx.peer_tx.send(PeerState::Unpaired);
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                error = %e,
+                "failed to refresh paired peer after relay connect",
+            );
+        }
+    }
 }
 
 /// Inbound + outbound dispatch pump over an upgraded WebSocket. Returns
@@ -636,16 +683,27 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
     }
 }
 
-/// Host pairing is process-local, so paired transitions no longer write to
-/// the macOS Keychain or `local-state.json`.
+/// Persist the freshly minted host secret and update the live reconnect slot.
+/// The peer record itself remains backend-owned; the in-memory mirror is
+/// updated by the caller after this succeeds best-effort.
 fn persist_pairing(record: &PeerRecord, secret: &DeviceSecret, ctx: &DispatchCtx) {
-    let _ = (record, secret, ctx);
+    if let Ok(mut guard) = ctx.secret.lock() {
+        *guard = Some(secret.clone());
+    }
+    persist_device_secret(secret, &ctx.last_error);
+    tracing::info!(
+        target: "minos_daemon::relay_client",
+        peer = %record.device_id,
+        "persisted paired device secret for future reconnects",
+    );
 }
 
-/// Mirror of [`persist_pairing`] for `Unpaired`. Host pairing state is
-/// process-local, so the relay echo only clears the in-memory mirror.
+/// Mirror of [`persist_pairing`] for `Unpaired`.
 fn clear_pairing(ctx: &DispatchCtx) {
-    let _ = ctx;
+    if let Ok(mut guard) = ctx.secret.lock() {
+        *guard = None;
+    }
+    clear_device_secret(&ctx.last_error);
 }
 
 /// Map a WS close frame onto the outer `CycleOutcome`, populating
@@ -715,6 +773,42 @@ fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
         *guard = Some(err);
     }
 }
+
+fn secret_snapshot(slot: &Arc<StdMutex<Option<DeviceSecret>>>) -> Option<DeviceSecret> {
+    slot.lock().ok().and_then(|guard| guard.clone())
+}
+
+#[cfg(target_os = "macos")]
+fn persist_device_secret(secret: &DeviceSecret, last_error: &Arc<StdMutex<Option<MinosError>>>) {
+    let store = crate::keychain_store::KeychainTrustedDeviceStore;
+    if let Err(e) = store.write(secret) {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %e,
+            "failed to persist device secret to Keychain",
+        );
+        store_last_error(last_error, e);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn persist_device_secret(_secret: &DeviceSecret, _last_error: &Arc<StdMutex<Option<MinosError>>>) {}
+
+#[cfg(target_os = "macos")]
+fn clear_device_secret(last_error: &Arc<StdMutex<Option<MinosError>>>) {
+    let store = crate::keychain_store::KeychainTrustedDeviceStore;
+    if let Err(e) = store.delete() {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %e,
+            "failed to delete device secret from Keychain",
+        );
+        store_last_error(last_error, e);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clear_device_secret(_last_error: &Arc<StdMutex<Option<MinosError>>>) {}
 
 /// Build the outbound auth-header bundle. Role is always `AgentHost` here —
 /// this module is the Mac-side client by construction.

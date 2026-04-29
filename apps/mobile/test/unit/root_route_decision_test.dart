@@ -51,17 +51,17 @@ void main() {
     });
   });
 
-  group('decideRootRoute pairing gate (when authenticated)', () {
+  group('decideRootRoute shell gate (when authenticated)', () {
     final account = const AuthSummary(accountId: 'a', email: 'a@b.test');
 
-    test('Authenticated + no pairing routes to pairing', () {
+    test('Authenticated + no pairing still enters shell', () {
       expect(
         decideRootRoute(
           authState: AuthAuthenticated(account),
           connectionState: const ConnectionState.connected(),
           hasPersistedPairing: false,
         ),
-        RootRoute.pairing,
+        RootRoute.threadList,
       );
     });
 
@@ -90,19 +90,19 @@ void main() {
       },
     );
 
-    test('Authenticated + paired + disconnected -> threadListMacOffline', () {
+    test('Authenticated + paired + disconnected -> threadListOffline', () {
       expect(
         decideRootRoute(
           authState: AuthAuthenticated(account),
           connectionState: const ConnectionState.disconnected(),
           hasPersistedPairing: true,
         ),
-        RootRoute.threadListMacOffline,
+        RootRoute.threadListOffline,
       );
     });
 
     test(
-      'Authenticated + paired + null connection -> threadListMacOffline',
+      'Authenticated + paired + null connection -> threadListOffline',
       () {
         expect(
           decideRootRoute(
@@ -110,24 +110,24 @@ void main() {
             connectionState: null,
             hasPersistedPairing: true,
           ),
-          RootRoute.threadListMacOffline,
+          RootRoute.threadListOffline,
         );
       },
     );
 
     test(
-      'Authenticated + paired + Pairing connection -> threadListMacOffline',
+      'Authenticated + paired + Pairing connection -> threadListOffline',
       () {
         // The Pairing connection state means the WS is in the QR-handshake
-        // phase, which from the chat surface's perspective is "Mac peer
-        // not yet talking" — show the offline UI.
+        // phase, which from the chat surface's perspective is "not fully
+        // connected yet" — show the offline UI.
         expect(
           decideRootRoute(
             authState: AuthAuthenticated(account),
             connectionState: const ConnectionState.pairing(),
             hasPersistedPairing: true,
           ),
-          RootRoute.threadListMacOffline,
+          RootRoute.threadListOffline,
         );
       },
     );

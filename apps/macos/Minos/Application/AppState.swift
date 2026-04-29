@@ -107,6 +107,14 @@ final class AppState: @unchecked Sendable {
         return false
     }
 
+    /// Show a manual reconnect affordance when the relay task has stopped
+    /// retrying and the daemon is still otherwise booted.
+    var canReconnectBackend: Bool {
+        guard phase == .running, daemon != nil else { return false }
+        if case .disconnected = relayLink { return true }
+        return false
+    }
+
     // ── Phase transitions ──
 
     @MainActor

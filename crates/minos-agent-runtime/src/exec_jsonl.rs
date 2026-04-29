@@ -106,6 +106,7 @@ pub(crate) async fn spawn_exec_turn(
         resumed = existing_session_id.is_some(),
         "spawned codex exec JSONL turn",
     );
+    emit_user_prompt(&ingest_tx, agent, &thread_id, &prompt);
 
     Ok(tokio::spawn(run_exec_turn(ExecTurnTask {
         child,
@@ -113,7 +114,6 @@ pub(crate) async fn spawn_exec_turn(
         stderr,
         agent,
         thread_id,
-        prompt,
         codex_session_id,
         ingest_tx,
     })))
@@ -167,7 +167,6 @@ struct ExecTurnTask {
     stderr: ChildStderr,
     agent: AgentName,
     thread_id: String,
-    prompt: String,
     codex_session_id: Arc<Mutex<Option<String>>>,
     ingest_tx: broadcast::Sender<RawIngest>,
 }
@@ -179,7 +178,6 @@ async fn run_exec_turn(task: ExecTurnTask) {
         stderr,
         agent,
         thread_id,
-        prompt,
         codex_session_id,
         ingest_tx,
     } = task;
@@ -205,8 +203,6 @@ async fn run_exec_turn(task: ExecTurnTask) {
             }
         }
     });
-
-    emit_user_prompt(&ingest_tx, agent, &thread_id, &prompt);
 
     let mut normalizer = ExecJsonlNormalizer::default();
     let mut stdout_lines = BufReader::new(stdout).lines();
@@ -339,17 +335,10 @@ async fn handle_stdout_line(
         return;
     };
 
-    if let Some(session_id) = entry
-        .get("type")
-        .and_then(Value::as_str)
-        .filter(|kind| *kind == "session_meta")
-        .and_then(|_| entry.get("payload"))
-        .and_then(|payload| payload.get("id"))
-        .and_then(Value::as_str)
-    {
+    if let Some(session_id) = session_id_from_entry(&entry) {
         let mut guard = codex_session_id.lock().await;
         if guard.is_none() {
-            *guard = Some(session_id.to_string());
+            *guard = Some(session_id);
         }
     }
 
@@ -361,6 +350,24 @@ async fn handle_stdout_line(
             payload,
             ts_ms: current_unix_ms(),
         });
+    }
+}
+
+fn session_id_from_entry(entry: &Value) -> Option<String> {
+    match entry.get("type").and_then(Value::as_str) {
+        Some("session_meta") => entry
+            .get("payload")
+            .and_then(|payload| payload.get("id"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        Some("session_configured") => entry
+            .get("session_id")
+            .or_else(|| entry.get("sessionId"))
+            .or_else(|| entry.get("thread_id"))
+            .or_else(|| entry.get("threadId"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        _ => None,
     }
 }
 
@@ -464,15 +471,30 @@ fn build_exec_args(existing_session_id: Option<&str>, cwd: &str, prompt: &str) -
 struct ExecJsonlNormalizer {
     assistant_item_id: Option<String>,
     active_turn_id: Option<String>,
+    assistant_text_seen: bool,
 }
 
 impl ExecJsonlNormalizer {
     fn normalize(&mut self, entry: &Value) -> Vec<Value> {
         let kind = entry.get("type").and_then(Value::as_str).unwrap_or("");
-        let payload = entry.get("payload").cloned().unwrap_or(Value::Null);
         match kind {
-            "event_msg" => self.normalize_event_msg(&payload),
-            "response_item" => self.normalize_response_item(&payload),
+            "event_msg" => self.normalize_event_msg(entry.get("payload").unwrap_or(&Value::Null)),
+            "response_item" | "raw_response_item" => {
+                self.normalize_response_item(response_item_payload(entry))
+            }
+            "task_started"
+            | "turn_started"
+            | "task_complete"
+            | "turn_complete"
+            | "agent_message"
+            | "agent_message_delta"
+            | "agent_message_content_delta"
+            | "agent_reasoning"
+            | "agent_reasoning_delta"
+            | "agent_reasoning_raw_content"
+            | "agent_reasoning_raw_content_delta"
+            | "reasoning_content_delta"
+            | "reasoning_raw_content_delta" => self.normalize_event_msg(entry),
             _ => Vec::new(),
         }
     }
@@ -480,7 +502,7 @@ impl ExecJsonlNormalizer {
     fn normalize_event_msg(&mut self, payload: &Value) -> Vec<Value> {
         let event_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
         match event_type {
-            "task_started" => {
+            "task_started" | "turn_started" => {
                 self.active_turn_id = read_string(
                     payload
                         .get("turn_id")
@@ -488,9 +510,10 @@ impl ExecJsonlNormalizer {
                         .and_then(Value::as_str),
                 );
                 self.assistant_item_id = None;
+                self.assistant_text_seen = false;
                 self.ensure_assistant_started()
             }
-            "task_complete" => {
+            "task_complete" | "turn_complete" => {
                 let turn_id = read_string(
                     payload
                         .get("turn_id")
@@ -501,6 +524,7 @@ impl ExecJsonlNormalizer {
                 .unwrap_or_default();
                 self.assistant_item_id = None;
                 self.active_turn_id = None;
+                self.assistant_text_seen = false;
                 vec![json!({
                     "method": "turn/completed",
                     "params": {
@@ -529,6 +553,29 @@ impl ExecJsonlNormalizer {
                         "delta": text,
                     },
                 }));
+                self.assistant_text_seen = true;
+                out
+            }
+            "agent_message_delta" | "agent_message_content_delta" => {
+                let Some(text) = read_preserved_string(
+                    payload
+                        .get("delta")
+                        .or_else(|| payload.get("text"))
+                        .or_else(|| payload.get("message"))
+                        .or_else(|| payload.get("content"))
+                        .and_then(Value::as_str),
+                ) else {
+                    return Vec::new();
+                };
+                let mut out = self.ensure_assistant_started();
+                out.push(json!({
+                    "method": "item/agentMessage/delta",
+                    "params": {
+                        "itemId": self.assistant_item_id.clone().unwrap_or_default(),
+                        "delta": text,
+                    },
+                }));
+                self.assistant_text_seen = true;
                 out
             }
             "agent_reasoning" => {
@@ -553,6 +600,52 @@ impl ExecJsonlNormalizer {
                 }));
                 out
             }
+            "agent_reasoning_delta"
+            | "agent_reasoning_raw_content_delta"
+            | "reasoning_content_delta"
+            | "reasoning_raw_content_delta" => {
+                let Some(text) = read_preserved_string(
+                    payload
+                        .get("delta")
+                        .or_else(|| payload.get("text"))
+                        .or_else(|| payload.get("message"))
+                        .or_else(|| payload.get("content"))
+                        .and_then(Value::as_str),
+                ) else {
+                    return Vec::new();
+                };
+                let mut out = self.ensure_assistant_started();
+                out.push(json!({
+                    "method": "item/reasoning/delta",
+                    "params": {
+                        "itemId": self.assistant_item_id.clone().unwrap_or_default(),
+                        "delta": text,
+                    },
+                }));
+                out
+            }
+            "agent_reasoning_raw_content" => {
+                let text = read_string(
+                    payload
+                        .get("content")
+                        .or_else(|| payload.get("text"))
+                        .or_else(|| payload.get("message"))
+                        .and_then(Value::as_str),
+                )
+                .unwrap_or_default();
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                let mut out = self.ensure_assistant_started();
+                out.push(json!({
+                    "method": "item/reasoning/delta",
+                    "params": {
+                        "itemId": self.assistant_item_id.clone().unwrap_or_default(),
+                        "delta": text,
+                    },
+                }));
+                out
+            }
             _ => Vec::new(),
         }
     }
@@ -560,6 +653,29 @@ impl ExecJsonlNormalizer {
     fn normalize_response_item(&mut self, payload: &Value) -> Vec<Value> {
         let item_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
         match item_type {
+            "message" => {
+                let role = payload
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("assistant");
+                if role != "assistant" || self.assistant_text_seen {
+                    return Vec::new();
+                }
+                let text = extract_message_text(payload);
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                let mut out = self.ensure_assistant_started();
+                out.push(json!({
+                    "method": "item/agentMessage/delta",
+                    "params": {
+                        "itemId": self.assistant_item_id.clone().unwrap_or_default(),
+                        "delta": text,
+                    },
+                }));
+                self.assistant_text_seen = true;
+                out
+            }
             "reasoning" => {
                 let text = extract_reasoning_text(payload);
                 if text.is_empty() {
@@ -656,6 +772,45 @@ impl ExecJsonlNormalizer {
     }
 }
 
+fn response_item_payload(entry: &Value) -> &Value {
+    entry
+        .get("payload")
+        .and_then(|payload| {
+            payload
+                .get("item")
+                .or_else(|| payload.get("response_item"))
+                .or(Some(payload))
+        })
+        .or_else(|| entry.get("item"))
+        .unwrap_or(entry)
+}
+
+fn extract_message_text(payload: &Value) -> String {
+    if let Some(text) = payload.get("text").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    if let Some(text) = payload.get("message").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    if let Some(text) = payload.get("content").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    payload
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| match part.get("type").and_then(Value::as_str) {
+                    Some("output_text") | Some("text") => part.get("text").and_then(Value::as_str),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
 fn extract_reasoning_text(payload: &Value) -> String {
     let summary = payload
         .get("summary")
@@ -695,6 +850,16 @@ fn read_string(value: Option<&str>) -> Option<String> {
             None
         } else {
             Some(trimmed.to_string())
+        }
+    })
+}
+
+fn read_preserved_string(value: Option<&str>) -> Option<String> {
+    value.and_then(|text| {
+        if text.is_empty() {
+            None
+        } else {
+            Some(text.to_string())
         }
     })
 }
@@ -829,5 +994,105 @@ mod tests {
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0]["method"], "turn/completed");
         assert_eq!(completed[0]["params"]["turnId"], "turn-1");
+    }
+
+    #[test]
+    fn normalizer_maps_current_cli_delta_events() {
+        let mut normalizer = ExecJsonlNormalizer::default();
+
+        let started = normalizer.normalize(&json!({
+            "type": "turn_started",
+            "turn_id": "turn-new",
+        }));
+        assert_eq!(started[0]["method"], "item/started");
+
+        let first = normalizer.normalize(&json!({
+            "type": "agent_message_delta",
+            "delta": "Hello ",
+        }));
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0]["method"], "item/agentMessage/delta");
+        assert_eq!(first[0]["params"]["delta"], "Hello ");
+
+        let second = normalizer.normalize(&json!({
+            "type": "agent_message_content_delta",
+            "delta": "world",
+            "content_index": 0,
+        }));
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0]["params"]["delta"], "world");
+
+        let completed = normalizer.normalize(&json!({
+            "type": "turn_complete",
+            "turn_id": "turn-new",
+        }));
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0]["method"], "turn/completed");
+        assert_eq!(completed[0]["params"]["turnId"], "turn-new");
+    }
+
+    #[test]
+    fn normalizer_uses_raw_response_message_when_no_deltas_arrived() {
+        let mut normalizer = ExecJsonlNormalizer::default();
+        let _ = normalizer.normalize(&json!({
+            "type": "task_started",
+            "turn_id": "turn-raw",
+        }));
+
+        let out = normalizer.normalize(&json!({
+            "type": "raw_response_item",
+            "payload": {
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "raw "},
+                        {"type": "output_text", "text": "text"}
+                    ]
+                }
+            }
+        }));
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["method"], "item/agentMessage/delta");
+        assert_eq!(out[0]["params"]["delta"], "raw text");
+    }
+
+    #[test]
+    fn normalizer_does_not_duplicate_raw_response_message_after_deltas() {
+        let mut normalizer = ExecJsonlNormalizer::default();
+        let _ = normalizer.normalize(&json!({
+            "type": "task_started",
+            "turn_id": "turn-dup",
+        }));
+        let _ = normalizer.normalize(&json!({
+            "type": "agent_message_delta",
+            "delta": "streamed",
+        }));
+
+        let out = normalizer.normalize(&json!({
+            "type": "raw_response_item",
+            "payload": {
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "streamed"}]
+                }
+            }
+        }));
+
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn session_configured_supplies_resume_id() {
+        let entry = json!({
+            "type": "session_configured",
+            "session_id": "00000000-0000-0000-0000-000000000123",
+        });
+        assert_eq!(
+            session_id_from_entry(&entry),
+            Some("00000000-0000-0000-0000-000000000123".to_string())
+        );
     }
 }

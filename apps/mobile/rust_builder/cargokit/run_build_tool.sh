@@ -2,7 +2,22 @@
 
 set -e
 
-BASEDIR=$(dirname "$0")
+BASEDIR=$(cd "$(dirname "$0")" ; pwd -P)
+
+if [[ "${MINOS_JUST_ENV_ACTIVE:-}" != "1" ]]; then
+  REPO_ROOT=$(cd "$BASEDIR/../../../.." ; pwd -P)
+  if [[ -f "$REPO_ROOT/justfile" ]]; then
+    if ! command -v just >/dev/null 2>&1; then
+      echo "error: just is required so Cargokit can load Minos build env from .env.local." >&2
+      echo "error: install it with 'brew install just' or 'cargo install just'." >&2
+      exit 1
+    fi
+    just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" check-env
+    export MINOS_JUST_ENV_ACTIVE=1
+    exec just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" \
+      --command "$BASEDIR/$(basename "$0")" "$@"
+  fi
+fi
 
 mkdir -p "$CARGOKIT_TOOL_TEMP_DIR"
 

@@ -63,6 +63,30 @@ extension AppState {
     }
 
     @MainActor
+    func reconnectBackend() async {
+        guard canReconnectBackend else { return }
+
+        let currentDaemon = daemon
+        let currentRelayLinkSubscription = relayLinkSubscription
+        let currentPeerSubscription = peerSubscription
+        let currentAgentSubscription = agentSubscription
+
+        currentRelayLinkSubscription?.cancel()
+        currentPeerSubscription?.cancel()
+        currentAgentSubscription?.cancel()
+
+        do {
+            try await currentDaemon?.stop()
+        } catch let error as MinosError {
+            actionsLogger.error("Reconnect stop failed: \(error.technicalDetails, privacy: .public)")
+        } catch {
+            actionsLogger.error("Unexpected reconnect stop error: \(String(describing: error), privacy: .public)")
+        }
+
+        await DaemonBootstrap.bootstrap(self)
+    }
+
+    @MainActor
     func shutdown() async {
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()

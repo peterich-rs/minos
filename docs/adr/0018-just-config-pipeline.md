@@ -20,13 +20,15 @@ service-token secrets ended up in plaintext in the xcscheme.
 ## Decision
 
 A single workspace-root `.env.local` is the source of truth, loaded by
-a `justfile` that is the **only** sanctioned entry point for build and
-run commands. Recipes export the loaded vars to subprocess environments
-(cargo, flutter, xcodebuild). The Runner Xcode target gets a Pre-Build
-Run Script Phase that fails the build if `MINOS_BUILD_VIA_JUST=1` is
-absent — guaranteeing IDE Build/Run can't bypass the env-injection.
+a `justfile`. Public recipes remain the documented entry points for
+build and run commands, and native build scripts call back into `just`
+where users naturally click Run: the macOS XcodeGen project invokes
+`just --command cargo xtask gen-uniffi`, `just --command cargo xtask
+build-macos`, and patches the built app `Info.plist`; mobile Cargokit
+re-enters `just` before invoking cargo.
 Mobile FFI and daemon `build.rs` panic on `release` builds with
-`MINOS_BACKEND_URL` unset.
+`MINOS_BACKEND_URL` unset, so IDE Build/Run cannot silently bake the
+localhost fallback.
 
 Secrets live in `.env.local` (gitignored) for developers and in GitHub
 Secrets for CI. The xcscheme's `<EnvironmentVariables>` block is empty;
@@ -45,7 +47,8 @@ Positive:
 
 - One file to edit per environment switch.
 - The localhost-baking bug cannot recur: build fails fast in release,
-  warns loudly in debug, and the IDE-direct path is blocked entirely.
+  warns loudly in debug, and IDE-direct paths still load `.env.local`
+  before Rust resolves `option_env!`.
 - CF Access secrets do not enter the source tree.
 - A new contributor's onboarding becomes `cp .env.example .env.local
   && just backend` — no shell rcfile editing, no Xcode poking.
@@ -54,11 +57,9 @@ Negative:
 
 - Adds `just` as a hard dependency (mitigated by ubiquitous availability:
   `brew install just`, `cargo install just`).
-- Disallows the Xcode IDE Build/Run muscle memory; requires either a
-  custom Xcode scheme runner or terminal-driven workflow.
 - Pbxproj contains a hand-written PBXShellScriptBuildPhase block; if
   Flutter's build tooling regenerates pbxproj it could clobber the
-  guard. Flutter currently does not regenerate Runner.pbxproj on
+  env check. Flutter currently does not regenerate Runner.pbxproj on
   ordinary builds (only `flutter create` would), so this is low-risk
   but worth flagging.
 
@@ -74,10 +75,10 @@ Negative:
   the URL is needed for the very first request (login), so a runtime
   override would have to live before authentication, adding an
   onboarding step.
-- **Pre-Build hook as a build-script-only check (no Xcode integration).**
-  Rejected: the build script doesn't run for IDE Build until cargokit
-  runs, by which time the bake has already happened. The Xcode-level
-  hook fires before any Rust source compiles.
+- **Pre-Build hook that blocks IDE-direct builds.** Rejected after
+  implementation feedback: it prevents the common Run button workflow.
+  The final design keeps an Xcode env check for good errors, but the
+  actual Rust compile self-bootstraps through `just`.
 
 Refines (does not replace) ADR 0013, 0014, 0016 — those decisions about
 what gets baked into the binary remain in force; this ADR specifies

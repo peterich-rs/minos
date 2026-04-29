@@ -18,9 +18,11 @@ just dev-mobile-ios
 just build-mobile-android
 ```
 
-Direct invocation of `flutter run` or Xcode IDE Build/Run is **not
-supported** — see the Pre-Build error message and
-`docs/superpowers/specs/unified-config-pipeline-design.md` §4.6 for why.
+Direct `flutter run` and Xcode IDE Build/Run are still wired through the same
+env path: Cargokit's Rust build script re-enters `just` before invoking cargo,
+so `.env.local` is loaded before `option_env!` is evaluated. Prefer the public
+recipes above for normal work because they include the project-level checks and
+documented flags.
 
 ## Configuration
 

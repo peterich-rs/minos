@@ -8,7 +8,6 @@ import 'package:minos/application/root_route_decision.dart';
 import 'package:minos/domain/auth_state.dart';
 import 'package:minos/presentation/pages/app_shell_page.dart';
 import 'package:minos/presentation/pages/login_page.dart';
-import 'package:minos/presentation/pages/pairing_page.dart';
 
 /// Root of the Minos app. Provides the Shad theme, routes between the
 /// splash / login / pairing / threadList surfaces based on the joint
@@ -98,9 +97,8 @@ class _Router extends ConsumerWidget {
           _ => null,
         },
       ),
-      RootRoute.pairing => const PairingPage(),
       RootRoute.threadList => const AppShellPage(),
-      RootRoute.threadListMacOffline => const AppShellPage(),
+      RootRoute.threadListOffline => const AppShellPage(),
     };
   }
 }

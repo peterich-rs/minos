@@ -79,6 +79,32 @@ class ActiveSessionController extends _$ActiveSessionController {
     }
   }
 
+  /// Start a fresh session and deliver its first user message before exposing
+  /// the thread id to the chat view. That keeps the initial history read from
+  /// racing ahead of the confirmed user-message event.
+  Future<MinosError?> startAndSend({
+    required AgentName agent,
+    required String prompt,
+  }) async {
+    state = SessionStarting(agent: agent, prompt: prompt);
+    String? startedThreadId;
+    try {
+      final resp = await ref
+          .read(minosCoreProvider)
+          .startAgent(agent: agent, prompt: prompt);
+      startedThreadId = resp.sessionId;
+      ref.invalidate(threadListProvider);
+      await ref
+          .read(minosCoreProvider)
+          .sendUserMessage(sessionId: resp.sessionId, text: prompt);
+      state = SessionStreaming(threadId: resp.sessionId, agent: agent);
+      return null;
+    } on MinosError catch (e) {
+      state = SessionError(threadId: startedThreadId, error: e);
+      return e;
+    }
+  }
+
   /// Send a follow-up user message into the active session. No-op when
   /// the machine isn't in [SessionStreaming] or [SessionAwaitingInput].
   Future<MinosError?> send(String text) async {

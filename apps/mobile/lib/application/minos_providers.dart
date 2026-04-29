@@ -27,6 +27,12 @@ final hasPersistedPairingProvider = FutureProvider<bool>((ref) {
   return ref.watch(minosCoreProvider).hasPersistedPairing();
 });
 
+final runtimeAgentDescriptorsProvider = FutureProvider<List<AgentDescriptor>>((
+  ref,
+) {
+  return ref.watch(minosCoreProvider).listClis();
+});
+
 /// Camera permission status + action helpers. The notifier is the single
 /// source of truth for the permission state driving the pairing UI.
 @riverpod

@@ -98,6 +98,12 @@ struct MenuBarView: View {
                 }
             }
 
+            if appState.canReconnectBackend {
+                actionButton("重新连接后端") {
+                    Task { await appState.reconnectBackend() }
+                }
+            }
+
             if appState.canForgetPeer {
                 actionButton("忘记已配对设备", role: .destructive) {
                     Task { await appState.forgetPeer() }

@@ -65,10 +65,10 @@ class SecurePairingStore {
       accountEmail: accountEmail,
     );
 
-    if (!_isResumable(state) || !_hasCompleteAuth(state)) {
-      // Either core resume is impossible or the auth tuple is half-set.
-      // Wipe everything so the next launch gets a clean slate; partial
-      // state is never useful.
+    if (!_isValidSnapshot(state) || !_hasCompleteAuth(state)) {
+      // Either the identity/auth tuple is incomplete or the auth tuple is
+      // half-set. Wipe everything so the next launch gets a clean slate;
+      // partial state is never useful.
       await clearAll();
       return null;
     }
@@ -114,8 +114,16 @@ class SecurePairingStore {
     return _storage.write(key: key, value: value);
   }
 
-  bool _isResumable(PersistedPairingState state) {
-    return state.deviceId != null && state.deviceSecret != null;
+  bool _isValidSnapshot(PersistedPairingState state) {
+    if (state.deviceId == null) return false;
+    final hasDeviceSecret = state.deviceSecret != null;
+    final hasAnyAuth =
+        state.accessToken != null ||
+        state.accessExpiresAtMs != null ||
+        state.refreshToken != null ||
+        state.accountId != null ||
+        state.accountEmail != null;
+    return hasDeviceSecret || hasAnyAuth;
   }
 
   /// All five auth fields must be present together — either every one is

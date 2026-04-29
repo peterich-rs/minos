@@ -12,6 +12,302 @@ part of 'minos.dart';
 // dart format off
 T _$identity<T>(T value) => value;
 /// @nodoc
+mixin _$AgentStatus {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AgentStatus);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AgentStatus()';
+}
+
+
+}
+
+/// @nodoc
+class $AgentStatusCopyWith<$Res>  {
+$AgentStatusCopyWith(AgentStatus _, $Res Function(AgentStatus) __);
+}
+
+
+/// Adds pattern-matching-related methods to [AgentStatus].
+extension AgentStatusPatterns on AgentStatus {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( AgentStatus_Ok value)?  ok,TResult Function( AgentStatus_Missing value)?  missing,TResult Function( AgentStatus_Error value)?  error,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case AgentStatus_Ok() when ok != null:
+return ok(_that);case AgentStatus_Missing() when missing != null:
+return missing(_that);case AgentStatus_Error() when error != null:
+return error(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( AgentStatus_Ok value)  ok,required TResult Function( AgentStatus_Missing value)  missing,required TResult Function( AgentStatus_Error value)  error,}){
+final _that = this;
+switch (_that) {
+case AgentStatus_Ok():
+return ok(_that);case AgentStatus_Missing():
+return missing(_that);case AgentStatus_Error():
+return error(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( AgentStatus_Ok value)?  ok,TResult? Function( AgentStatus_Missing value)?  missing,TResult? Function( AgentStatus_Error value)?  error,}){
+final _that = this;
+switch (_that) {
+case AgentStatus_Ok() when ok != null:
+return ok(_that);case AgentStatus_Missing() when missing != null:
+return missing(_that);case AgentStatus_Error() when error != null:
+return error(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  ok,TResult Function()?  missing,TResult Function( String reason)?  error,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case AgentStatus_Ok() when ok != null:
+return ok();case AgentStatus_Missing() when missing != null:
+return missing();case AgentStatus_Error() when error != null:
+return error(_that.reason);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  ok,required TResult Function()  missing,required TResult Function( String reason)  error,}) {final _that = this;
+switch (_that) {
+case AgentStatus_Ok():
+return ok();case AgentStatus_Missing():
+return missing();case AgentStatus_Error():
+return error(_that.reason);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  ok,TResult? Function()?  missing,TResult? Function( String reason)?  error,}) {final _that = this;
+switch (_that) {
+case AgentStatus_Ok() when ok != null:
+return ok();case AgentStatus_Missing() when missing != null:
+return missing();case AgentStatus_Error() when error != null:
+return error(_that.reason);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class AgentStatus_Ok extends AgentStatus {
+  const AgentStatus_Ok(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AgentStatus_Ok);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AgentStatus.ok()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class AgentStatus_Missing extends AgentStatus {
+  const AgentStatus_Missing(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AgentStatus_Missing);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AgentStatus.missing()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class AgentStatus_Error extends AgentStatus {
+  const AgentStatus_Error({required this.reason}): super._();
+  
+
+ final  String reason;
+
+/// Create a copy of AgentStatus
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$AgentStatus_ErrorCopyWith<AgentStatus_Error> get copyWith => _$AgentStatus_ErrorCopyWithImpl<AgentStatus_Error>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AgentStatus_Error&&(identical(other.reason, reason) || other.reason == reason));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,reason);
+
+@override
+String toString() {
+  return 'AgentStatus.error(reason: $reason)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $AgentStatus_ErrorCopyWith<$Res> implements $AgentStatusCopyWith<$Res> {
+  factory $AgentStatus_ErrorCopyWith(AgentStatus_Error value, $Res Function(AgentStatus_Error) _then) = _$AgentStatus_ErrorCopyWithImpl;
+@useResult
+$Res call({
+ String reason
+});
+
+
+
+
+}
+/// @nodoc
+class _$AgentStatus_ErrorCopyWithImpl<$Res>
+    implements $AgentStatus_ErrorCopyWith<$Res> {
+  _$AgentStatus_ErrorCopyWithImpl(this._self, this._then);
+
+  final AgentStatus_Error _self;
+  final $Res Function(AgentStatus_Error) _then;
+
+/// Create a copy of AgentStatus
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
+  return _then(AgentStatus_Error(
+reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
 mixin _$AuthStateFrame {
 
 

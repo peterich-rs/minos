@@ -11,37 +11,33 @@ enum RootRoute {
   /// No auth (or refresh failed). Route to the email/password screen.
   login,
 
-  /// Authenticated but no paired Mac. Route to the QR scanner.
-  pairing,
-
   /// Authenticated + paired + WS up (or transient reconnect). Route to
   /// the chat list.
   threadList,
 
-  /// Authenticated + paired but the Mac peer is offline / WS torn down.
-  /// Same surface as [threadList] visually but expected to render a
-  /// "Mac is offline" banner and disable the input bar.
-  threadListMacOffline,
+  /// Authenticated + paired but the connection to server is offline / WS
+  /// torn down. Same surface as [threadList] visually but expected to render
+  /// an offline banner and disable the input bar.
+  threadListOffline,
 }
 
-/// Pure decision matrix gating on auth state first, then pairing
-/// presence, then connection state. Inputs come from the providers in
-/// `application/`.
+/// Pure decision matrix gating on auth state first, then connection state.
+/// Pairing is now a user-initiated "Add partner" flow from Profile rather
+/// than a top-level auth gate.
 RootRoute decideRootRoute({
   required AuthState authState,
   required core.ConnectionState? connectionState,
-  required bool hasPersistedPairing,
+  bool hasPersistedPairing = false,
 }) {
   return switch (authState) {
     AuthBootstrapping() => RootRoute.splash,
     AuthRefreshing() => RootRoute.splash,
     AuthUnauthenticated() => RootRoute.login,
     AuthRefreshFailed() => RootRoute.login,
-    AuthAuthenticated() when !hasPersistedPairing => RootRoute.pairing,
     AuthAuthenticated() => switch (connectionState) {
       core.ConnectionState_Connected() => RootRoute.threadList,
       core.ConnectionState_Reconnecting() => RootRoute.threadList,
-      _ => RootRoute.threadListMacOffline,
+      _ => RootRoute.threadListOffline,
     },
   };
 }

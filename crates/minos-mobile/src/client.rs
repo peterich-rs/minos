@@ -28,8 +28,9 @@ use futures_util::{SinkExt, StreamExt};
 use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceSecret, MinosError};
 use minos_protocol::{
     AuthSummary, Envelope, EventKind, GetThreadLastSeqParams, GetThreadLastSeqResponse,
-    ListThreadsParams, ListThreadsResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
-    RefreshResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    ListClisResponse, ListThreadsParams, ListThreadsResponse, PairingQrPayload, ReadThreadParams,
+    ReadThreadResponse, RefreshResponse, SendUserMessageRequest, StartAgentRequest,
+    StartAgentResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, RwLock};
@@ -244,7 +245,10 @@ impl MobileClient {
         let auth = self.store.load_auth().await?;
 
         Ok(PersistedPairingState {
-            device_id: device.as_ref().map(|(id, _)| id.to_string()),
+            // Keep the device id even before pairing mints a DeviceSecret.
+            // Bearer tokens are bound to this id, so a register/login ->
+            // cold-launch -> pair flow must not silently rotate it.
+            device_id: Some(self.device_id.to_string()),
             device_secret: device
                 .as_ref()
                 .map(|(_, secret)| secret.as_str().to_string()),
@@ -534,6 +538,30 @@ impl MobileClient {
     }
 
     // ─────────────────────────── agent dispatch ────────────────────────────
+
+    /// Detect the CLI agents available on the paired runtime.
+    pub async fn list_clis(&self) -> Result<ListClisResponse, MinosError> {
+        let outbox = self
+            .outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or(MinosError::NotConnected)?;
+        let resp: ListClisResponse = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            "minos_list_clis",
+            serde_json::Value::Null,
+            Duration::from_secs(10),
+            Some(RpcTraceContext {
+                thread_id: None,
+                request_summary: Some("detect runtime CLI agents".into()),
+            }),
+        )
+        .await?;
+        Ok(resp)
+    }
 
     /// Start a fresh agent session. The caller supplies `prompt` so higher
     /// layers can keep a single start() call shape during the transition to
@@ -1653,6 +1681,24 @@ mod tests {
         let persisted = PersistedPairingState {
             device_id: Some(DeviceId::new().to_string()),
             device_secret: Some(DeviceSecret::generate().as_str().to_string()),
+            access_token: Some("access".into()),
+            access_expires_at_ms: Some(123_456),
+            refresh_token: Some("refresh".into()),
+            account_id: Some("acct-1".into()),
+            account_email: Some("a@b.com".into()),
+        };
+
+        let client = MobileClient::new_with_persisted_state("test".into(), persisted.clone());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let exported = rt.block_on(client.persisted_pairing_state()).unwrap();
+        assert_eq!(exported, persisted);
+    }
+
+    #[test]
+    fn persisted_pairing_state_exports_device_id_before_pairing() {
+        let persisted = PersistedPairingState {
+            device_id: Some(DeviceId::new().to_string()),
+            device_secret: None,
             access_token: Some("access".into()),
             access_expires_at_ms: Some(123_456),
             refresh_token: Some("refresh".into()),

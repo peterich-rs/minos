@@ -1,26 +1,24 @@
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import 'package:minos/application/minos_providers.dart';
-
 /// Thin wrapper around [MobileScanner] that forwards the first non-empty QR
-/// payload to [pairingControllerProvider].
+/// payload to the caller.
 ///
-/// Submits at most once per camera-detected payload while the controller
-/// is busy or has already accepted the same raw value, otherwise the
-/// scanner would re-fire `submit` every frame and flood both the FRB
-/// boundary and the log panel with duplicate pair attempts.
-class QrScannerView extends ConsumerStatefulWidget {
-  const QrScannerView({super.key});
+/// The scanner stops while [onDetect] is handling a payload. Returning
+/// `true` keeps it stopped so the caller can move to a confirmation step;
+/// returning `false` restarts the camera and allows another scan.
+class QrScannerView extends StatefulWidget {
+  const QrScannerView({required this.onDetect, super.key});
+
+  final FutureOr<bool> Function(String rawValue) onDetect;
 
   @override
-  ConsumerState<QrScannerView> createState() => _QrScannerViewState();
+  State<QrScannerView> createState() => _QrScannerViewState();
 }
 
-class _QrScannerViewState extends ConsumerState<QrScannerView>
+class _QrScannerViewState extends State<QrScannerView>
     with WidgetsBindingObserver {
   final MobileScannerController _controller = MobileScannerController(
     autoStart: false,
@@ -103,31 +101,31 @@ class _QrScannerViewState extends ConsumerState<QrScannerView>
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<AsyncValue<bool>>(pairingControllerProvider, (_, next) {
-      if (next is AsyncError) {
-        unawaited(_startScanner());
-      }
-    });
-
     return MobileScanner(
+      fit: BoxFit.cover,
       controller: _controller,
       onDetect: (BarcodeCapture capture) {
         final raw = capture.barcodes.isNotEmpty
             ? capture.barcodes.first.rawValue
             : null;
         if (raw == null || raw.isEmpty) return;
-
-        final pairing = ref.read(pairingControllerProvider);
-        // Already in flight — let it finish before considering a re-scan.
-        if (pairing is AsyncLoading) return;
-        // Same QR already accepted: ignore until the user clears it via
-        // forgetPeer (which resets _lastSubmitted on next mount).
-        if (raw == _lastSubmitted && pairing is AsyncData) return;
-
+        if (raw == _lastSubmitted) return;
         _lastSubmitted = raw;
-        unawaited(_stopScanner());
-        ref.read(pairingControllerProvider.notifier).submit(raw);
+        unawaited(_handleDetected(raw));
       },
     );
+  }
+
+  Future<void> _handleDetected(String raw) async {
+    await _stopScanner();
+    bool accepted = false;
+    try {
+      accepted = await widget.onDetect(raw);
+    } catch (_) {
+      accepted = false;
+    }
+    if (!mounted || accepted) return;
+    _lastSubmitted = null;
+    await _startScanner();
   }
 }

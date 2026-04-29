@@ -99,6 +99,9 @@ class _FakeCore implements MinosCoreProtocol {
   Future<void> stopAgent() async {}
 
   @override
+  Future<List<AgentDescriptor>> listClis() async => const [];
+
+  @override
   void notifyForegrounded() {}
 
   @override

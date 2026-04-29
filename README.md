@@ -26,10 +26,13 @@ See `docs/superpowers/specs/minos-architecture-and-mvp-design.md` for the overal
 # On macOS this also installs xcodegen and swiftlint from apps/macos/Brewfile.
 cargo xtask bootstrap
 
+# Configure runtime/build env loaded by just.
+cp .env.example .env.local
+
 # Run all checks.
 # On macOS this includes UniFFI/XcodeGen generation, xcodebuild, MinosTests,
 # and swiftlint in addition to the Rust workspace checks.
-cargo xtask check-all
+just check
 ```
 
 ## macOS app
@@ -37,10 +40,8 @@ cargo xtask check-all
 The macOS app lives in `apps/macos/` and uses XcodeGen plus UniFFI-generated Swift bindings.
 
 ```bash
-# Build the universal Rust static library used by Xcode.
-# No configuration defaults to Release for compatibility.
-cargo xtask build-macos
-cargo xtask build-macos --configuration Debug
+# Build the app through Xcode with .env.local loaded by just.
+just build-macos Debug
 
 # Regenerate Swift bindings and the Xcode project.
 cargo xtask gen-uniffi
@@ -50,10 +51,10 @@ cargo xtask gen-xcode
 open apps/macos/Minos.xcodeproj
 ```
 
-The generated Xcode project runs `cargo xtask build-macos --configuration "$CONFIGURATION"`
-before compiling the app target. Debug Xcode builds link the Rust dev-profile
-archive from `target/xcframework/Debug/`; non-Debug configurations link a Rust
-release-profile archive from `target/xcframework/<Configuration>/`.
+The generated Xcode project calls back into `just` before compiling the app
+target, so Xcode IDE Build/Run loads `.env.local` before Rust evaluates
+`option_env!`. A post-build phase patches the built app's `Info.plist` with the
+same runtime relay values for Finder/Xcode launches.
 
 ## Rust daemon CLI
 
@@ -100,18 +101,18 @@ open apps/mobile/ios/Runner.xcworkspace
 ```
 
 For a real-device install that still launches from the Home Screen after you
-force-quit it, build via `just` instead of debug `flutter run`:
+force-quit it, the public recipes are:
 
 ```bash
 just dev-mobile-ios            # debug + flutter run hot-reload
 just build-mobile-ios Release  # production-flavoured build
 ```
 
-Direct invocation of `flutter run`, `flutter build`, or Xcode IDE Build/Run
-is **not supported** — these paths bypass the env-injection that bakes
-`MINOS_BACKEND_URL` and CF Access credentials into the Rust FFI compile,
-silently producing a binary that dials localhost. The Runner target's
-Pre-Build script will fail any build invoked outside `just`. See
+Direct `flutter run`, `flutter build`, and Xcode IDE Build/Run now
+self-bootstrap the Rust FFI compile through `just` via Cargokit, so
+`.env.local` is still loaded before `option_env!` is evaluated. Prefer the
+public `just` recipes for normal work because they also run the project-level
+validation and documented build flags. See
 `docs/superpowers/specs/unified-config-pipeline-design.md` and ADR 0018.
 
 During development without a real device: the Mac-side relay flow has a dev
@@ -147,11 +148,10 @@ just smoke-fake-peer register
 just build-mobile-ios Release
 ```
 
-All build and run commands go through `just`. Direct `cargo build` /
-`flutter build` invocations bypass the env-var injection that bakes
-`MINOS_BACKEND_URL` and CF Access credentials into the Rust FFI compile;
-release builds will panic at `build.rs` time and Xcode IDE Build will
-fail at the Pre-Build hook with a pointer at this section.
+All documented build and run commands go through `just`. The macOS Xcode
+project and mobile Cargokit scripts also call back into `just` internally, so
+IDE launches and direct Flutter builds still load `.env.local` for the Rust
+compile instead of silently baking localhost.
 
 `minos-backend` requires `MINOS_JWT_SECRET` (32+ bytes) at startup;
 `just backend` enforces it before invoking cargo. See

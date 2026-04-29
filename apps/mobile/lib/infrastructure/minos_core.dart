@@ -63,6 +63,10 @@ class MinosCore implements MinosCoreProtocol {
   /// back the rehydrated client *without* calling `resumePersistedSession`
   /// — the AuthController's stream listener will trigger the WS resume
   /// after the user logs in (`AuthAuthenticated`).
+  ///
+  /// Auth-only snapshots are valid too: login/register happens before QR
+  /// pairing, so cold launch must keep the bearer tuple and stable device id
+  /// while skipping WS resume until a `deviceSecret` exists.
   @visibleForTesting
   static Future<MobileClient> resolveClient({
     required SecurePairingStore secure,
@@ -73,13 +77,28 @@ class MinosCore implements MinosCoreProtocol {
     if (persisted == null) return buildFresh();
 
     final client = buildFromPersisted(persisted);
-    if (persisted.accessToken == null) {
-      // Paired but logged out. Don't attempt the WS — let the AuthController
-      // drive resume after the user authenticates.
+    if (_hasPersistedAuth(persisted)) {
+      try {
+        await client.refreshSession();
+        await _saveClientStateBestEffort(secure, client);
+      } catch (_) {
+        // The refresh token is the server-side proof that this cached login
+        // is still usable. If validation fails, drop only auth so the user is
+        // sent back to login while any pairing credential can be reused later.
+        await secure.clearAuth();
+        return client;
+      }
+    }
+
+    if (persisted.accessToken == null || persisted.deviceSecret == null) {
+      // Paired-but-logged-out or authenticated-before-pairing. Don't attempt
+      // the WS yet; either AuthController will retry after login, or the user
+      // can add a runtime from Profile.
       return client;
     }
     try {
       await client.resumePersistedSession();
+      await _saveClientStateBestEffort(secure, client);
       return client;
     } catch (error) {
       if (_shouldDiscardPersistedState(error)) {
@@ -109,7 +128,8 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   Future<bool> hasPersistedPairing() async {
-    return await _secure.loadState() != null;
+    final state = await _secure.loadState();
+    return state?.deviceId != null && state?.deviceSecret != null;
   }
 
   @override
@@ -152,7 +172,10 @@ class MinosCore implements MinosCoreProtocol {
   }
 
   @override
-  Future<void> refreshSession() => _client.refreshSession();
+  Future<void> refreshSession() async {
+    await _client.refreshSession();
+    await _saveClientStateBestEffort(_secure, _client);
+  }
 
   @override
   Future<void> logout() async {
@@ -167,7 +190,7 @@ class MinosCore implements MinosCoreProtocol {
   ///
   /// After a successful `register` / `login` we have to:
   ///
-  /// 1. Drop the existing pairing if the previously persisted snapshot
+  /// 1. Drop the existing pairing if the previously persisted paired snapshot
   ///    belonged to a *different* account. The Mac-side device row is
   ///    account-scoped, so reusing the prior `DeviceSecret` against a
   ///    new account would be rejected on the next WS upgrade — better to
@@ -182,8 +205,11 @@ class MinosCore implements MinosCoreProtocol {
   /// the live session, so a keychain write failure does not invalidate
   /// the in-memory login. The next pair-or-resume cycle will recover.
   Future<void> _onAuthLanded(String newAccountId) async {
-    final priorAccountId = (await _secure.loadState())?.accountId;
-    if (priorAccountId != null && priorAccountId != newAccountId) {
+    final prior = await _secure.loadState();
+    final priorAccountId = prior?.accountId;
+    if (priorAccountId != null &&
+        priorAccountId != newAccountId &&
+        prior?.deviceSecret != null) {
       // Stale pairing belongs to a different account — drop it so the
       // route gate flips to `pairing` for the new account.
       try {
@@ -210,6 +236,9 @@ class MinosCore implements MinosCoreProtocol {
   }) => _client.startAgent(agent: agent, prompt: prompt);
 
   @override
+  Future<List<AgentDescriptor>> listClis() => _client.listClis();
+
+  @override
   Future<void> sendUserMessage({
     required String sessionId,
     required String text,
@@ -230,7 +259,10 @@ class MinosCore implements MinosCoreProtocol {
   Stream<AuthStateFrame> get authStates => _client.subscribeAuthState();
 
   @override
-  Future<void> resumePersistedSession() => _client.resumePersistedSession();
+  Future<void> resumePersistedSession() async {
+    await _client.resumePersistedSession();
+    await _saveClientStateBestEffort(_secure, _client);
+  }
 
   Future<void> _rollbackFailedPersistedPairSave() async {
     try {
@@ -251,5 +283,26 @@ class MinosCore implements MinosCoreProtocol {
     return error is MinosError_DeviceNotTrusted ||
         error is MinosError_Unauthorized ||
         error is MinosError_StoreCorrupt;
+  }
+
+  static bool _hasPersistedAuth(PersistedPairingState state) {
+    return state.accessToken != null &&
+        state.accessExpiresAtMs != null &&
+        state.refreshToken != null &&
+        state.accountId != null &&
+        state.accountEmail != null;
+  }
+
+  static Future<void> _saveClientStateBestEffort(
+    SecurePairingStore secure,
+    MobileClient client,
+  ) async {
+    try {
+      await secure.saveState(await client.persistedPairingState());
+    } catch (_) {
+      // Persistence is a cold-launch optimisation. The live Rust session is
+      // authoritative for the current process; a later login/pair/refresh can
+      // repair the durable snapshot.
+    }
   }
 }

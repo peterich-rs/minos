@@ -196,11 +196,10 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
         session is SessionError;
     MinosError? error;
     if (shouldStart) {
-      error = await controller.start(
+      error = await controller.startAndSend(
         agent: ref.read(preferredAgentProvider),
         prompt: text,
       );
-      error ??= await controller.send(text);
     } else {
       error = await controller.send(text);
     }
@@ -400,7 +399,9 @@ class _ThreadEventStream extends ConsumerWidget {
           _LoadingThreadState(optimisticUserMessages: optimisticUserMessages),
       error: (e, _) => Center(child: Text('加载失败: $e')),
       data: (events) {
-        onMetricsChanged(events.length, _countUserMessages(events));
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          onMetricsChanged(events.length, _countUserMessages(events));
+        });
         if (events.isEmpty && optimisticUserMessages.isEmpty) {
           return const Center(child: Text('暂无消息'));
         }
@@ -479,10 +480,11 @@ class _LoadingThreadState extends StatelessWidget {
             },
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 24),
-          child: Center(child: CircularProgressIndicator()),
-        ),
+        if (optimisticUserMessages.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: CircularProgressIndicator()),
+          ),
       ],
     );
   }

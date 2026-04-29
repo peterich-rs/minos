@@ -121,6 +121,11 @@ void main() {
       );
       final rehydrated = _MockMobileClient();
       when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+      when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+      when(
+        () => rehydrated.persistedPairingState(),
+      ).thenAnswer((_) async => persisted);
+      when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
       when(() => rehydrated.resumePersistedSession()).thenAnswer((_) async {});
 
       final result = await MinosCore.resolveClient(
@@ -133,7 +138,9 @@ void main() {
       );
 
       expect(result, same(rehydrated));
+      verify(() => rehydrated.refreshSession()).called(1);
       verify(() => rehydrated.resumePersistedSession()).called(1);
+      verify(() => secureStore.saveState(persisted)).called(2);
       verifyNever(() => secureStore.clearAll());
     });
 
@@ -148,6 +155,11 @@ void main() {
         );
         final rehydrated = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+        when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+        when(
+          () => rehydrated.persistedPairingState(),
+        ).thenAnswer((_) async => persisted);
+        when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
 
         final result = await MinosCore.resolveClient(
           secure: secureStore,
@@ -165,6 +177,74 @@ void main() {
     );
 
     test(
+      'rehydrates auth-only snapshot without trying to resume websocket',
+      () async {
+        const persisted = PersistedPairingState(
+          deviceId: 'dev-auth-only',
+          accessToken: 'access',
+          accessExpiresAtMs: 1700000000000,
+          refreshToken: 'refresh',
+          accountId: 'acc',
+          accountEmail: 'u@example.com',
+        );
+        final rehydrated = _MockMobileClient();
+        when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+        when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+        when(
+          () => rehydrated.persistedPairingState(),
+        ).thenAnswer((_) async => persisted);
+        when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
+
+        final result = await MinosCore.resolveClient(
+          secure: secureStore,
+          buildFresh: () => fail('buildFresh must not run with auth snapshot'),
+          buildFromPersisted: (state) {
+            expect(state, persisted);
+            return rehydrated;
+          },
+        );
+
+        expect(result, same(rehydrated));
+        verify(() => rehydrated.refreshSession()).called(1);
+        verify(() => secureStore.saveState(persisted)).called(1);
+        verifyNever(() => rehydrated.resumePersistedSession());
+        verifyNever(() => secureStore.clearAll());
+      },
+    );
+
+    test('clears auth when persisted session validation fails', () async {
+      const persisted = PersistedPairingState(
+        deviceId: 'dev-auth-only',
+        accessToken: 'access',
+        accessExpiresAtMs: 1700000000000,
+        refreshToken: 'refresh',
+        accountId: 'acc',
+        accountEmail: 'u@example.com',
+      );
+      final rehydrated = _MockMobileClient();
+      when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+      when(() => secureStore.clearAuth()).thenAnswer((_) async {});
+      when(() => rehydrated.refreshSession()).thenThrow(
+        const MinosError.authRefreshFailed(message: 'invalid refresh'),
+      );
+
+      final result = await MinosCore.resolveClient(
+        secure: secureStore,
+        buildFresh: () => fail('auth failure should keep device identity'),
+        buildFromPersisted: (state) {
+          expect(state, persisted);
+          return rehydrated;
+        },
+      );
+
+      expect(result, same(rehydrated));
+      verify(() => rehydrated.refreshSession()).called(1);
+      verify(() => secureStore.clearAuth()).called(1);
+      verifyNever(() => rehydrated.resumePersistedSession());
+      verifyNever(() => secureStore.clearAll());
+    });
+
+    test(
       'wipes secure storage and returns a fresh client when resume is revoked',
       () async {
         const persisted = PersistedPairingState(
@@ -179,6 +259,11 @@ void main() {
         final rehydrated = _MockMobileClient();
         final freshClient = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+        when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+        when(
+          () => rehydrated.persistedPairingState(),
+        ).thenAnswer((_) async => persisted);
+        when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
         when(() => secureStore.clearAll()).thenAnswer((_) async {});
         when(() => rehydrated.resumePersistedSession()).thenAnswer(
           (_) async =>
@@ -199,7 +284,9 @@ void main() {
           same(freshClient),
           reason: 'returned client must come from buildFresh after recovery',
         );
+        verify(() => rehydrated.refreshSession()).called(1);
         verify(() => rehydrated.resumePersistedSession()).called(1);
+        verify(() => secureStore.saveState(persisted)).called(1);
         verify(() => secureStore.clearAll()).called(1);
       },
     );
@@ -218,6 +305,11 @@ void main() {
         );
         final rehydrated = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+        when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+        when(
+          () => rehydrated.persistedPairingState(),
+        ).thenAnswer((_) async => persisted);
+        when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
         when(() => rehydrated.resumePersistedSession()).thenAnswer(
           (_) async => throw const MinosError.connectFailed(
             url: 'ws://127.0.0.1/devices',
@@ -235,7 +327,9 @@ void main() {
         );
 
         expect(result, same(rehydrated));
+        verify(() => rehydrated.refreshSession()).called(1);
         verify(() => rehydrated.resumePersistedSession()).called(1);
+        verify(() => secureStore.saveState(persisted)).called(1);
         verifyNever(() => secureStore.clearAll());
       },
     );
@@ -334,6 +428,47 @@ void main() {
     );
 
     test(
+      'login as a different account with auth-only state does not forget peer',
+      () async {
+        const fresh = PersistedPairingState(
+          deviceId: 'dev-auth-only',
+          accessToken: 'access-new',
+          accessExpiresAtMs: 1700000099000,
+          refreshToken: 'refresh-new',
+          accountId: 'acc-new',
+          accountEmail: 'new@example.com',
+        );
+        when(() => secureStore.loadState()).thenAnswer(
+          (_) async => const PersistedPairingState(
+            deviceId: 'dev-auth-only',
+            accessToken: 'access-old',
+            accessExpiresAtMs: 1700000000000,
+            refreshToken: 'refresh-old',
+            accountId: 'acc-prior',
+            accountEmail: 'old@example.com',
+          ),
+        );
+        when(
+          () => client.login(email: 'new@example.com', password: 'pw'),
+        ).thenAnswer((_) async => newAccountSummary);
+        when(
+          () => client.persistedPairingState(),
+        ).thenAnswer((_) async => fresh);
+        when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
+
+        final core = MinosCore.forTesting(
+          client: client,
+          secureStore: secureStore,
+        );
+        await core.login(email: 'new@example.com', password: 'pw');
+
+        verifyNever(() => client.forgetPeer());
+        verifyNever(() => secureStore.clearAll());
+        verify(() => secureStore.saveState(fresh)).called(1);
+      },
+    );
+
+    test(
       'register on a fresh device (no prior accountId) skips the migration branch',
       () async {
         const fresh = PersistedPairingState(
@@ -425,6 +560,26 @@ void main() {
 
     test('returns false when secure storage is empty', () async {
       when(() => secureStore.loadState()).thenAnswer((_) async => null);
+
+      final core = MinosCore.forTesting(
+        client: client,
+        secureStore: secureStore,
+      );
+
+      expect(await core.hasPersistedPairing(), isFalse);
+    });
+
+    test('returns false for an authenticated pre-pair snapshot', () async {
+      when(() => secureStore.loadState()).thenAnswer(
+        (_) async => const PersistedPairingState(
+          deviceId: 'dev-auth-only',
+          accessToken: 'access',
+          accessExpiresAtMs: 1700000000000,
+          refreshToken: 'refresh',
+          accountId: 'acc',
+          accountEmail: 'u@example.com',
+        ),
+      );
 
       final core = MinosCore.forTesting(
         client: client,

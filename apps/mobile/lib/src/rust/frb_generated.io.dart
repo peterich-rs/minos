@@ -69,7 +69,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  AgentDescriptor dco_decode_agent_descriptor(dynamic raw);
+
+  @protected
   AgentName dco_decode_agent_name(dynamic raw);
+
+  @protected
+  AgentStatus dco_decode_agent_status(dynamic raw);
 
   @protected
   AuthStateFrame dco_decode_auth_state_frame(dynamic raw);
@@ -129,6 +135,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Lang dco_decode_lang(dynamic raw);
+
+  @protected
+  List<AgentDescriptor> dco_decode_list_agent_descriptor(dynamic raw);
 
   @protected
   List<LogRecord> dco_decode_list_log_record(dynamic raw);
@@ -287,7 +296,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  AgentDescriptor sse_decode_agent_descriptor(SseDeserializer deserializer);
+
+  @protected
   AgentName sse_decode_agent_name(SseDeserializer deserializer);
+
+  @protected
+  AgentStatus sse_decode_agent_status(SseDeserializer deserializer);
 
   @protected
   AuthStateFrame sse_decode_auth_state_frame(SseDeserializer deserializer);
@@ -353,6 +368,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Lang sse_decode_lang(SseDeserializer deserializer);
+
+  @protected
+  List<AgentDescriptor> sse_decode_list_agent_descriptor(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<LogRecord> sse_decode_list_log_record(SseDeserializer deserializer);
@@ -549,7 +569,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_agent_descriptor(
+    AgentDescriptor self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_agent_name(AgentName self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_agent_status(AgentStatus self, SseSerializer serializer);
 
   @protected
   void sse_encode_auth_state_frame(
@@ -637,6 +666,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_lang(Lang self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_agent_descriptor(
+    List<AgentDescriptor> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_log_record(

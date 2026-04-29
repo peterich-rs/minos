@@ -104,6 +104,24 @@ void main() {
     expect(await store.loadState(), state);
   });
 
+  test('loadState preserves authenticated pre-pair snapshots', () async {
+    final store = SecurePairingStore(storage: storage);
+    final state = PersistedPairingState(
+      deviceId: 'dev-1',
+      accessToken: 'access-token-xyz',
+      accessExpiresAtMs: 1700000000000,
+      refreshToken: 'refresh-token-abc',
+      accountId: 'acc-uuid',
+      accountEmail: 'user@example.com',
+    );
+
+    await store.saveState(state);
+
+    expect(values['minos.device_id'], 'dev-1');
+    expect(values.containsKey('minos.device_secret'), isFalse);
+    expect(await store.loadState(), state);
+  });
+
   test('saveState skips auth keys when no auth tuple is present', () async {
     final store = SecurePairingStore(storage: storage);
     const state = PersistedPairingState(

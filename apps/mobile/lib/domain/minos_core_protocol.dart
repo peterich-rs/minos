@@ -77,6 +77,9 @@ abstract class MinosCoreProtocol {
   /// no-active-session path.
   Future<void> stopAgent();
 
+  /// Detect CLI agents available on the paired runtime.
+  Future<List<AgentDescriptor>> listClis();
+
   // ---- Lifecycle (Phase 8) ----
 
   /// Mark the app as foregrounded. Resets the WS reconnect backoff so the

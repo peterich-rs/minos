@@ -136,8 +136,23 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertEqual(config.cfClientSecret, "info-secret")
     }
 
+    func testDaemonBootstrapRelayConfigFallsBackToEnvironment() throws {
+        let config = try DaemonBootstrap.relayConfig(
+            infoDictionary: [:],
+            env: [
+                "MINOS_BACKEND_URL": " wss://env.example/devices ",
+                "CF_ACCESS_CLIENT_ID": " env-id ",
+                "CF_ACCESS_CLIENT_SECRET": " env-secret "
+            ]
+        )
+
+        XCTAssertEqual(config.backendUrl, "wss://env.example/devices")
+        XCTAssertEqual(config.cfClientId, "env-id")
+        XCTAssertEqual(config.cfClientSecret, "env-secret")
+    }
+
     func testDaemonBootstrapRelayConfigDefaultsBlankWhenInfoPlistEmpty() throws {
-        let config = try DaemonBootstrap.relayConfig(infoDictionary: [:])
+        let config = try DaemonBootstrap.relayConfig(infoDictionary: [:], env: [:])
 
         XCTAssertEqual(config.backendUrl, "")
         XCTAssertEqual(config.cfClientId, "")

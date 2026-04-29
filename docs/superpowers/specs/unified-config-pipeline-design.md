@@ -41,11 +41,11 @@ This spec specifies a single source-of-truth `.env.local` file at the repository
 ### 2.1 MVP scope (this spec)
 
 1. **Single `.env.local` at the repository root.** Loaded by the justfile and exported into every subprocess invocation (cargo, flutter, xcodebuild, cargo run -p minos-backend). `.env.example` is committed as the canonical list of supported vars with documentation.
-2. **`justfile` as the sole sanctioned entry point.** Recipes: `just backend`, `just build-daemon`, `just build-mobile-rust`, `just build-mobile-ios`, `just build-mobile-android`, `just check`, `just smoke-fake-peer`, `just clean`, `just rotate-cf-access` (documentation-only printer). README and mobile README rewrite to instruct readers to use `just <recipe>` exclusively. Existing `cargo xtask` recipes that wrap cargo continue to work unchanged (they're invoked by just under the hood).
+2. **`justfile` as the public entry point plus build-script bootstrap.** Recipes: `just backend`, `just build-daemon`, `just build-macos`, `just build-mobile-rust`, `just build-mobile-ios`, `just build-mobile-android`, `just check`, `just smoke-fake-peer`, `just clean`, `just rotate-cf-access` (documentation-only printer). README and mobile README point readers at `just <recipe>`. Existing `cargo xtask` recipes that wrap cargo continue to work unchanged, and native build scripts call back into `just` for IDE Run paths.
 3. **Default-string consolidation.** Three Rust source files currently hardcode `ws://127.0.0.1:8787/devices` as a fallback (`crates/minos-mobile/src/build_config.rs:20`, `crates/minos-daemon/src/config.rs:7`, plus three clap defaults in `crates/minos-mobile/src/bin/fake-peer.rs`). New module `crates/minos-domain/src/defaults.rs` exposes `pub const DEV_BACKEND_URL: &str = "ws://127.0.0.1:8787/devices"`. All five sites import from that module. Tests that asserted the literal string assert via the constant.
 4. **Dead-var removal.** Drop `MINOS_BACKEND_PUBLIC_URL`, `MINOS_BACKEND_CF_ACCESS_CLIENT_ID`, `MINOS_BACKEND_CF_ACCESS_CLIENT_SECRET` from: the user's `Runner.xcscheme`, `crates/minos-domain/src/error.rs` test fixtures, `docs/ops/cloudflare-tunnel-setup.md` examples. Old plans (05) and ADRs (0014, 0016) keep the historical references but get a banner pointing at this spec for the current state.
 5. **Secret hygiene.** Rotate the Cloudflare Access service token whose secret leaked into the in-flight xcscheme change. Strip CF Access values out of `Runner.xcscheme` entirely; the scheme's `<EnvironmentVariables>` block keeps only non-secret runtime knobs (none, after this work). All secrets live in `.env.local` (gitignored) and the GitHub Actions secret store.
-6. **Xcode-via-just enforcement.** Document that Xcode IDE "Build" and "Run" alone will not produce a correctly-configured binary. Provide `just build-mobile-ios` (production) and `just dev-mobile-ios` (debug + flutter run, hot-reload). Add a Pre-Build Run Script Phase to the Runner target that fails the build with a clear message when invoked without `MINOS_BUILD_VIA_JUST=1` in the environment. Just sets that var; ad-hoc `xcodebuild` invocations don't.
+6. **IDE build auto-bootstrap.** Xcode IDE "Build" and "Run" must not bypass env injection. The macOS XcodeGen project invokes `just --command cargo xtask gen-uniffi`, `just --command cargo xtask build-macos`, and patches the built app `Info.plist`; mobile Cargokit re-enters `just` before invoking cargo. The Runner target keeps an early env check for clear missing-`just` / missing-env errors instead of requiring `MINOS_BUILD_VIA_JUST`.
 7. **Fail-fast on missing release config.** When building any release artifact (mobile FFI release, daemon release), missing `MINOS_BACKEND_URL` triggers a `compile_error!` at `option_env!` resolution time. Debug builds keep the localhost fallback but emit a `cargo:warning=...` from `build.rs` when no value was injected, surfacing the silent fallback in the build log. Backend's existing `Config::validate()` JWT-secret check is unchanged and remains the runtime equivalent.
 8. **Documentation.** Rewrite the "Local setup" section of `README.md` and `apps/mobile/README.md` to point at `cp .env.example .env.local && just <recipe>`. Add ADR 0018 documenting the just entry-point and secret-storage policy. Add `docs/ops/secrets-rotation.md` with the CF Access rotation runbook. Existing ADR 0013 and 0016 get a `Status: Superseded by 0018` banner where applicable.
 9. **CI compatibility.** Existing CI workflow uses `secrets.MINOS_BACKEND_URL` exported as an env var to `cargo build`. Justfile recipes work the same way: just exports vars to subprocesses, doesn't care whether they came from `.env.local` or the parent process. CI is updated to invoke `just <recipe>` instead of bare `cargo build` so the failure modes match local.
@@ -57,8 +57,7 @@ This spec specifies a single source-of-truth `.env.local` file at the repository
 - **Vault / 1Password / macOS Keychain integration for the developer `.env.local`.** `.env.local` lives on disk, gitignored, with the same protection level as a `~/.zshrc` containing `export OPENAI_API_KEY=...`. Encrypted-at-rest secret storage is out of scope until there's a production-deployment workflow that needs it.
 - **Cargo workspace metadata for the JustFile recipes** (e.g. `cargo-make`, `xtask` extension). `just` is a polyglot task runner and the build pipeline crosses cargo + flutter + xcodebuild; xtask is Rust-only. Keep `xtask` for cargo-flavored chores (`xtask check-all`, `xtask gen-frb`, `xtask backend-db-reset`); `just` is the cross-language driver that wraps xtask and the other tools.
 - **Removing `Config::validate()` from `minos-backend`.** Backend's runtime validation is correct as-is; this spec only tightens compile-time validation for the client crates.
-- **Android build pipeline beyond a stub recipe.** `just build-mobile-android` exists as a placeholder that runs `flutter build apk` with env passthrough; no Gradle hardening, no Pre-Build hook equivalent. Android is not part of the slack.ai-style MVP target surface yet (per `mobile-auth-and-agent-session-design.md`).
-- **`just build-macos`.** The macOS app uses XcodeGen + a separate UniFFI compile that this spec doesn't reorganise. Add a recipe in a follow-up plan if the same bug surfaces there.
+- **Android product hardening beyond Cargokit env bootstrap.** `just build-mobile-android` exists as a placeholder that runs `flutter build apk` with env passthrough; Cargokit loads `.env.local` before cargo, but no Gradle-specific policy/guard beyond that. Android is not part of the slack.ai-style MVP target surface yet (per `mobile-auth-and-agent-session-design.md`).
 
 ### 2.3 Testing philosophy
 
@@ -83,7 +82,7 @@ Inherits from the project root and earlier specs. Deltas:
 | Task runner | New top-level `justfile`. Requires `just` ≥ 1.30 (already on developer machines per `which just`). |
 | Env loader | `just`'s built-in `set dotenv-load := true` reads `.env.local` from the recipe's working directory. No external dotenv tool. |
 | Shared constants | New module `crates/minos-domain/src/defaults.rs` exporting `pub const DEV_BACKEND_URL: &str` and `pub const DEV_BACKEND_LISTEN: &str`. Re-exported from the crate root. |
-| Pre-build hook | Single shell snippet added as a Run Script Build Phase in `Runner.xcodeproj/project.pbxproj`. Roughly 5 lines; fails the Xcode build if `${MINOS_BUILD_VIA_JUST}` is not `1`. |
+| IDE bootstrap | macOS XcodeGen build phases and mobile Cargokit scripts invoke `just` so `.env.local` is loaded before cargo. The Runner target has an early env check for clear diagnostics. |
 | Build profile detection | Mobile FFI's `build.rs` learns to inspect `PROFILE` env var (cargo-injected: `debug` / `release`) and emit `compile_error!` via `cargo:rustc-cfg` machinery when `PROFILE=release` and `MINOS_BACKEND_URL` is unset. |
 
 No new crate dependencies. No new Flutter packages.
@@ -160,14 +159,17 @@ Recipes (one per line in this listing; full bodies in the plan):
 | `just backend` | `cargo run -p minos-backend -- --listen "$MINOS_BACKEND_LISTEN" --db ./minos-backend.db`. Fails fast if `MINOS_JWT_SECRET` is unset. |
 | `just check` | `cargo xtask check-all`. Inherits env passthrough so any compile-time fail-fast triggers correctly. |
 | `just build-daemon profile='release'` | `cargo build -p minos-daemon --bin minos-daemon --profile {{profile}}` with `MINOS_BACKEND_URL` and `CF_ACCESS_CLIENT_*` injected. |
+| `just build-macos configuration='Debug'` | Regenerates UniFFI/XcodeGen outputs and runs `xcodebuild`; the generated project also calls back into `just` from its build phases. |
 | `just build-mobile-rust target='aarch64-apple-ios' profile='release'` | `cargo build -p minos-ffi-frb --target {{target}} --profile {{profile}}` with the three client vars injected. |
-| `just build-mobile-ios configuration='Release'` | `(cd apps/mobile && flutter build ios --config-only)` then `xcodebuild -workspace ... build` with `MINOS_BUILD_VIA_JUST=1` and the client vars exported into the xcodebuild environment so cargokit's `build_pod.sh` `env` line surfaces them. Variant `just dev-mobile-ios` runs `flutter run --dart-define=...` for hot-reload work. |
-| `just build-mobile-android` | Stub: `flutter build apk` with `--dart-define` passthrough. No Gradle hooks. |
+| `just build-mobile-ios configuration='Release'` | `(cd apps/mobile && flutter build ios --config-only)` then `xcodebuild -workspace ... build` with the client vars exported; Cargokit also self-bootstraps through `just` for direct IDE/Flutter builds. Variant `just dev-mobile-ios` runs `flutter run --dart-define=...` for hot-reload work. |
+| `just build-mobile-android` | Stub: `flutter build apk` with env passthrough; Cargokit still loads `.env.local` before cargo. |
 | `just smoke-fake-peer kind='register'` | `cargo run -p minos-mobile --bin fake-peer -- {{kind}} --backend "$MINOS_BACKEND_URL"`. Single dispatch for the two existing fake-peer subcommands. |
 | `just clean` | `cargo clean && (cd apps/mobile && flutter clean)`. |
 | `just rotate-cf-access` | Pure documentation: prints the rotation runbook from `docs/ops/secrets-rotation.md` so a developer doesn't have to hunt for it. No state mutation. |
 
-The justfile is the **only** way contributors are told to run builds. The README's "Local setup" section explicitly says: "Do not run `cargo build` or `flutter build` directly; the env-passthrough that fixes the localhost-baking bug is provided by `just`." Existing `cargo xtask` calls inside the justfile are an implementation detail, not a public surface.
+The justfile is the documented public surface. Native build systems may invoke
+it internally so IDE Run paths behave the same way, but contributors should
+still prefer the public recipes for repeatable local and CI workflows.
 
 ### 4.3 Default-string consolidation
 
@@ -231,21 +233,32 @@ The plan's Phase 1 starts with `git status` to determine which path applies and 
 
 The `just rotate-cf-access` recipe `cat`s this file so it's discoverable.
 
-### 4.6 Xcode-via-just enforcement
+### 4.6 IDE build bootstrap
 
-`Runner.xcodeproj/project.pbxproj` gets one new `PBXShellScriptBuildPhase` placed before all other build phases on the `Runner` target. The script:
+The mobile Runner target keeps an early `PBXShellScriptBuildPhase` for
+diagnostics, but the load-bearing env injection lives at the actual Rust
+compile point: `apps/mobile/rust_builder/cargokit/run_build_tool.sh`
+re-execs itself through `just --command` before it invokes cargo. That means
+direct `flutter run`, `flutter build`, and Xcode IDE Build/Run all load the
+workspace `.env.local` before `option_env!` is evaluated.
+
+The Runner env-check script:
 
 ```sh
-if [ "${MINOS_BUILD_VIA_JUST:-}" != "1" ]; then
-  echo "error: this build must be invoked via 'just build-mobile-ios' or 'just dev-mobile-ios'."
-  echo "error: direct Xcode IDE Build/Run does not propagate env vars to cargokit's Rust compile,"
-  echo "error: which silently bakes localhost into the binary. See docs/superpowers/specs/unified-config-pipeline-design.md §1A."
+if ! command -v just >/dev/null 2>&1; then
+  echo "error: just is required so Minos can load .env.local during the Rust build."
   exit 1
 fi
-echo "MINOS_BUILD_VIA_JUST=1 → proceeding with build."
+ROOT="$(cd "$SRCROOT/../../.." && pwd -P)"
+just --justfile "$ROOT/justfile" --working-directory "$ROOT" check-env
 ```
 
-`just build-mobile-ios` and `just dev-mobile-ios` set `MINOS_BUILD_VIA_JUST=1` in their xcodebuild invocation environment. A developer who clicks Build in Xcode without going through just gets an explicit error, not a silent localhost bake. This is the load-bearing fix for the original bug.
+The macOS XcodeGen project follows the same principle. Its pre-build phase
+runs `just --command cargo xtask gen-uniffi` and then `just --command cargo
+xtask build-macos --configuration "$CONFIGURATION"` so generated bindings are
+fresh and `minos-daemon` sees the loaded env during compile. A post-build
+phase calls `_patch-macos-info-plist` to write the same relay values into the
+built app bundle's `Info.plist` for Finder/Xcode launches.
 
 `Runner.xcscheme` `<EnvironmentVariables>` block is emptied (kept as `<EnvironmentVariables/>` self-closing for diff clarity). The launch-time vars previously listed there were either dead (`MINOS_BACKEND_PUBLIC_URL`, `MINOS_BACKEND_CF_ACCESS_*`) or now redundant (`MINOS_BACKEND_URL`, `CF_ACCESS_CLIENT_*` get baked at build time, not consumed at launch).
 
@@ -325,7 +338,9 @@ Backend's existing `Config::validate()` (`crates/minos-backend/src/config.rs:100
 | `crates/minos-backend/src/config.rs` | Replace listen literal at `:35`; update test scaffolding to use the constant. |
 | `crates/minos-domain/src/error.rs:751,753` | Update test fixture strings to drop `MINOS_BACKEND_` prefix on CF var names. |
 | `apps/mobile/ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme` | Empty `<EnvironmentVariables>` block (or remove if Xcode tolerates absence). |
-| `apps/mobile/ios/Runner.xcodeproj/project.pbxproj` | New `PBXShellScriptBuildPhase` for the via-just guard. |
+| `apps/mobile/ios/Runner.xcodeproj/project.pbxproj` | `PBXShellScriptBuildPhase` for the early just/env check. |
+| `apps/mobile/rust_builder/cargokit/run_build_tool.sh` | Re-exec through `just --command` before invoking cargo. |
+| `apps/macos/project.yml` | Build phases call back into `just`; post-build phase patches runtime Info.plist config. |
 | `README.md` | Rewrite "Local setup" section (lines around 127–148 by current count). |
 | `apps/mobile/README.md` | Rewrite the Cloudflare Access section to point at just. |
 | `docs/ops/cloudflare-tunnel-setup.md:185,202` | Drop `MINOS_BACKEND_PUBLIC_URL` references. |
@@ -336,8 +351,6 @@ Backend's existing `Config::validate()` (`crates/minos-backend/src/config.rs:100
 
 ### 5.3 Files explicitly NOT touched
 
-- `apps/mobile/rust_builder/cargokit/**` — vendored plugin shim, do not modify.
-- `apps/macos/**` — out of scope for this plan; the macOS app's separate UniFFI compile may need a similar treatment in a follow-up.
 - `crates/minos-backend/migrations/**` — no schema impact.
 - `xtask/**` — kept as the cargo-flavored chore runner; just wraps it.
 
@@ -351,7 +364,7 @@ There is no observable user-facing change. The plan executes in this order to ke
 2. **Constant consolidation** (callers swap to the new constant). `cargo xtask check-all` passes; tests still pass with the same string asserted via the constant.
 3. **Justfile recipes for low-risk wrappers** (`just check`, `just backend`, `just smoke-fake-peer`). No source change; just shell glue.
 4. **Justfile recipes for build wrappers** (`just build-daemon`, `just build-mobile-rust`, `just build-mobile-ios`). End-to-end smoke confirms the localhost bug is fixed.
-5. **Xcode integration** (Pre-Build hook + xcscheme cleanup + secret strip). After this checkpoint, Xcode IDE Build fails with a clear message; only `just build-mobile-ios` works.
+5. **Xcode/Cargokit integration** (env check + self-bootstrap + xcscheme cleanup + secret strip). After this checkpoint, Xcode IDE Build/Run and direct Flutter builds load `.env.local` before Rust compiles.
 6. **Dead-var removal** (xcscheme strip is already done in step 5; this step does the docs/error-message cleanup).
 7. **Fail-fast** (`build.rs` updates).
 8. **Documentation** (READMEs, ADR 0018, rotation runbook, banners on superseded ADRs).
@@ -363,7 +376,7 @@ If any phase fails, the workspace is left in a state where the previous phase's 
 The user will need to:
 
 - After the plan lands, run `cp .env.example .env.local` and fill in values once.
-- Update muscle memory from `cargo build -p ... && flutter run ...` to `just build-mobile-ios` / `just dev-mobile-ios`.
+- Prefer `just build-mobile-ios` / `just dev-mobile-ios` for repeatable workflows; direct IDE/Flutter builds now self-bootstrap but remain secondary paths.
 
 CI maintainers will need to:
 
@@ -381,7 +394,7 @@ Each phase has a checkpoint command and expected output (full bodies in the plan
 3. `rg 'MINOS_BACKEND_PUBLIC_URL|MINOS_BACKEND_CF_ACCESS' crates/ apps/ .github/` returns zero matches.
 4. `rg 'CF_ACCESS_CLIENT_SECRET=[a-f0-9]{30,}' apps/` returns zero matches (no committed plaintext secret).
 5. `MINOS_BACKEND_URL=wss://minos.fan-nn.top/devices just build-mobile-ios` produces an IPA. Installing it on a device and capturing the first WS handshake shows it targets `minos.fan-nn.top`, not `127.0.0.1`.
-6. Clicking "Build" in Xcode (without going through just) fails with the explicit error from the via-just guard.
+6. Clicking "Build" in Xcode without first exporting any env still reaches the just/env check; with `.env.local` present it proceeds and Cargokit loads those values before cargo.
 7. `just check` is the same as `cargo xtask check-all`.
 8. README's "Local setup" section walks a fresh contributor through `cp .env.example .env.local` → `just backend` → `just smoke-fake-peer` and works without any side commands.
 

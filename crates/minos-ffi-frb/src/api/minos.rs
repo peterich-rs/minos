@@ -33,7 +33,10 @@ use crate::frb_generated::StreamSink;
 // Re-exported `pub use` so `crate::api::minos::TypeName` resolves for the
 // generated wire code in `frb_generated.rs`. Mirror declarations below still
 // provide the shape metadata the codegen needs.
-pub use minos_domain::{AgentName, ConnectionState, ErrorKind, Lang, MinosError, PairingState};
+pub use minos_domain::{
+    AgentDescriptor, AgentName, AgentStatus, ConnectionState, ErrorKind, Lang, MinosError,
+    PairingState,
+};
 pub use minos_protocol::{
     AuthSummary, ListThreadsParams, ListThreadsResponse, ReadThreadParams, ReadThreadResponse,
     StartAgentResponse, ThreadSummary,
@@ -315,6 +318,11 @@ impl MobileClient {
     }
 
     // ─────────────────────────── agent dispatch ────────────────────────────
+
+    /// Detect the CLI agents available on the paired runtime.
+    pub async fn list_clis(&self) -> Result<Vec<AgentDescriptor>, MinosError> {
+        self.0.list_clis().await
+    }
 
     /// Start a new agent session and return the daemon-issued `session_id`
     /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
@@ -614,6 +622,23 @@ pub enum _AgentName {
     Codex,
     Claude,
     Gemini,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(AgentStatus))]
+pub enum _AgentStatus {
+    Ok,
+    Missing,
+    Error { reason: String },
+}
+
+#[allow(dead_code)]
+#[frb(mirror(AgentDescriptor))]
+pub struct _AgentDescriptor {
+    pub name: AgentName,
+    pub path: Option<String>,
+    pub version: Option<String>,
+    pub status: AgentStatus,
 }
 
 #[allow(dead_code)]
