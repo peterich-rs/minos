@@ -12,6 +12,7 @@
 
 pub mod agent;
 pub mod connection;
+pub mod defaults;
 pub mod error;
 pub mod ids;
 pub mod pairing_state;
