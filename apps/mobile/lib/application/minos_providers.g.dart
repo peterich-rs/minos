@@ -196,7 +196,7 @@ final class PairingControllerProvider
   PairingController create() => PairingController();
 }
 
-String _$pairingControllerHash() => r'175a1146f869b538ab5fd62cf1358baa51936ae6';
+String _$pairingControllerHash() => r'97ea21fac9d46667ee1a9ca8bb13b100856358cc';
 
 /// Owns the pairing submission lifecycle. The outcome is a plain
 /// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not
