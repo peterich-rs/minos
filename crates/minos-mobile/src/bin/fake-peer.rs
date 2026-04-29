@@ -55,6 +55,7 @@
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
+use minos_domain::defaults::DEV_BACKEND_URL;
 use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceRole, MinosError, PairingToken};
 use minos_mobile::http::MobileHttpClient;
 use minos_mobile::{MobileClient, PersistedPairingState};
@@ -86,7 +87,7 @@ enum Cmd {
     /// stderr until the socket closes.
     Pair {
         /// Relay backend URL (the `/devices` WebSocket endpoint).
-        #[arg(long, default_value = "ws://127.0.0.1:8787/devices")]
+        #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
         backend: String,
         /// Pairing token captured from the Mac's QR payload.
         #[arg(long)]
@@ -106,7 +107,7 @@ enum Cmd {
     /// you only need to warm up an account before driving traffic by
     /// other means.
     Register {
-        #[arg(long, default_value = "ws://127.0.0.1:8787/devices")]
+        #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
         backend: String,
         #[arg(long)]
         email: String,
@@ -121,7 +122,7 @@ enum Cmd {
     /// needed, then call `start_agent` and stream `UiEventFrame`s to
     /// stderr until the user interrupts.
     SmokeSession {
-        #[arg(long, default_value = "ws://127.0.0.1:8787/devices")]
+        #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
         backend: String,
         #[arg(long)]
         email: String,

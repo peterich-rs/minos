@@ -17,7 +17,7 @@
 /// backend when no env override is present at build time.
 pub const BACKEND_URL: &str = match option_env!("MINOS_BACKEND_URL") {
     Some(v) => v,
-    None => "ws://127.0.0.1:8787/devices",
+    None => minos_domain::defaults::DEV_BACKEND_URL,
 };
 
 /// Optional Cloudflare Access service-token client id. `Some(..)` only when
@@ -46,10 +46,11 @@ mod tests {
 
     #[test]
     fn backend_url_has_a_sane_dev_fallback() {
-        // The test build doesn't set MINOS_BACKEND_URL, so we expect the
-        // local dev fallback. Asserting the literal here also pins the
-        // contract: any future tweak to the fallback breaks this test.
-        assert_eq!(BACKEND_URL, "ws://127.0.0.1:8787/devices");
+        // Note: this test runs in `cargo test -p minos-mobile` with no
+        // MINOS_BACKEND_URL set, so we expect the shared dev fallback.
+        // The constant lives in `minos-domain` so all client crates point
+        // at the same string — see unified-config-pipeline-design.md §4.3.
+        assert_eq!(BACKEND_URL, minos_domain::defaults::DEV_BACKEND_URL);
         assert!(BACKEND_URL.starts_with("ws://") || BACKEND_URL.starts_with("wss://"));
     }
 

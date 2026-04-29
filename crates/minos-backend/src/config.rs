@@ -32,7 +32,13 @@ const DEFAULT_TOKEN_TTL_SECS: u64 = 300;
 #[command(version, about)]
 pub struct Config {
     /// TCP socket to listen on.
-    #[arg(long, env = "MINOS_BACKEND_LISTEN", default_value = "127.0.0.1:8787")]
+    #[arg(
+        long,
+        env = "MINOS_BACKEND_LISTEN",
+        default_value_t = minos_domain::defaults::DEV_BACKEND_LISTEN
+            .parse::<SocketAddr>()
+            .expect("DEV_BACKEND_LISTEN is a compile-time-valid SocketAddr"),
+    )]
     pub listen: SocketAddr,
 
     /// SQLite database path. Created on first run via sqlx

@@ -4,7 +4,7 @@
 /// Fallback is the local dev backend (`cargo run -p minos-backend`).
 pub const BACKEND_URL: &str = match option_env!("MINOS_BACKEND_URL") {
     Some(v) => v,
-    None => "ws://127.0.0.1:8787/devices",
+    None => minos_domain::defaults::DEV_BACKEND_URL,
 };
 
 /// Runtime relay config. Callers can override the backend URL and optional
@@ -47,6 +47,9 @@ mod tests {
 
     #[test]
     fn backend_url_has_a_sane_fallback() {
+        // With no MINOS_BACKEND_URL at test-build time, BACKEND_URL must
+        // fall back to the shared dev constant from minos-domain.
+        assert_eq!(BACKEND_URL, minos_domain::defaults::DEV_BACKEND_URL);
         assert!(BACKEND_URL.starts_with("ws://") || BACKEND_URL.starts_with("wss://"));
     }
 
