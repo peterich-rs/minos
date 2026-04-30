@@ -172,6 +172,14 @@ Standard fields added this phase: `agent_name` (always `codex` for now), `thread
 
 ### 4.5 Non-use of `minos-transport`
 
+> **Note (2026-04-30):** The "raw framed JSON" wire format below is now
+> typed end-to-end by `crates/minos-codex-protocol` (typify codegen of
+> `schemas/`). `CodexClient::call_typed` / `notify_typed` carry method
+> strings and response types from the trait, and inbound dispatch goes
+> through generated `ServerRequest` / `ServerNotification` enums. See
+> `codex-typed-protocol-design.md` and ADR
+> `0019-codex-protocol-typed-codegen.md`.
+
 `minos-transport` wraps jsonrpsee's server + client for the mobile↔daemon protocol (where both ends run our trait-generated code). Codex's WS surface is driven by codex's own JSON-RPC schema — method names differ, param shapes differ, no shared trait. Reusing `WsClient` here would mean bypassing jsonrpsee's type-safe client and writing raw `RpcMessage` / `RpcResponse` payloads anyway. We therefore talk to codex with `tokio-tungstenite` directly (raw framed JSON), matching codex's own client examples.
 
 ---
@@ -811,6 +819,16 @@ codex child dies (OOM, segfault, unexpected exit)
 `dismissAgentCrash()` clears `agentError` but does NOT change `agentState`; the next successful `startAgent` transitions `Crashed → Starting → Running` naturally.
 
 ### 6.4 Approval ServerRequest (expected to be rare)
+
+> **Note (2026-04-30):** Approval method names and reply-payload shapes
+> are now defined by `codex-typed-protocol-design.md` and ADR
+> `0019-codex-protocol-typed-codegen.md`. The handler is exhaustive over
+> the typed `ServerRequest` enum; the per-variant reject shape (`Denied`
+> for v1 `ApplyPatchApproval` / `ExecCommandApproval`, `Decline` for v2
+> `CommandExecution` / `FileChange`, empty `GrantedPermissionProfile`
+> for `Permissions`) matches the schema. The illustrative `decision:
+> "rejected"` literal below is preserved for historical context only —
+> no schema accepts that string.
 
 ```
 codex emits a ServerRequest:
