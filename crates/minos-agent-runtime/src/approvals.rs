@@ -1,106 +1,186 @@
 //! Auto-reject builder for codex `ServerRequest` approval prompts.
 //!
 //! codex is started with `approval_policy=never`, so any approval server
-//! request that still lands on our WS is unexpected. Rather than crash, we
-//! reply `{"decision": "rejected"}` immediately and forward the request
-//! payload as a synthetic `server_request/<name>` `RawIngest` so the
-//! backend translator and the eventual chat-ui can surface "codex tried to
-//! run X, auto-rejected". See spec §6.4 and ADR 0010.
+//! request that still lands on our pump is unexpected. Rather than crash, we
+//! reply with the schema-correct typed reject (`decline` / `denied` /
+//! empty-grant per variant), and forward the original payload as a synthetic
+//! `server_request/<name>` `RawIngest` (unchanged from before — see
+//! `runtime.rs::event_pump_loop`).
 //!
-//! This module owns both the pure payload builder and the static list of
-//! method names that count as approval prompts ([`APPROVAL_METHODS`]) —
-//! Phase C's runtime pump dispatches off that list.
+//! This module is `pub(crate)` — it is exhaustively dispatched against the
+//! typed `ServerRequest` enum from `minos-codex-protocol`. New schema variants
+//! become a non-exhaustive-match compile error on regeneration.
 
-/// codex's known approval server-request methods. See spec §6.4.
-///
-/// Exported so `runtime.rs` can check incoming server-request methods
-/// against the approval set with a single source of truth.
-pub const APPROVAL_METHODS: &[&str] = &[
-    "ApplyPatchApproval",
-    "ExecCommandApproval",
-    "FileChangeRequestApproval",
-    "PermissionsRequestApproval",
-    "CommandExecutionRequestApproval",
-];
+use minos_codex_protocol::{
+    ApplyPatchApprovalResponse, CommandExecutionApprovalDecision,
+    CommandExecutionRequestApprovalResponse, ExecCommandApprovalResponse,
+    FileChangeApprovalDecision, FileChangeRequestApprovalResponse, GrantedPermissionProfile,
+    PermissionGrantScope, PermissionsRequestApprovalResponse, ReviewDecision, ServerRequest,
+};
 
-/// Build the JSON-RPC auto-reject response payload for an approval server request.
+/// Build the typed reply payload to auto-reject an approval `ServerRequest`.
 ///
-/// The caller supplies the original request `id` (any JSON value — codex uses
-/// both numeric and string ids) and `method`. `method` is retained on the
-/// signature so future variants of this helper can emit per-method rejection
-/// reasons without a breaking API change. Phase B emits the same body
-/// regardless of `method`. The shape is pinned:
+/// Returns `Some(value)` for the five approval-shaped variants; the caller
+/// passes that value to `CodexClient::reply`. Returns `None` for non-approval
+/// variants (`item/tool/requestUserInput`, `mcpServer/elicitation/request`,
+/// `account/chatgptAuthTokens/refresh`, `item/tool/call` / DynamicToolCall) —
+/// the runtime warns and does not reply, since those are not approval prompts.
 ///
-/// ```json
-/// {"jsonrpc":"2.0","id":<request_id>,"result":{"decision":"rejected"}}
-/// ```
-#[must_use]
-#[allow(unused_variables)]
-pub fn build_auto_reject(request_id: serde_json::Value, method: &str) -> serde_json::Value {
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "result": {
-            "decision": "rejected",
-        },
-    })
+/// Reject choice per variant:
+/// - `decline` for `CommandExecution` / `FileChange` (agent continues turn).
+/// - `denied` for legacy v1 `ApplyPatchApproval` / `ExecCommandApproval`.
+/// - empty `GrantedPermissionProfile` for `PermissionsRequestApproval` (which
+///   has no `decision` field at all in its response schema).
+pub(crate) fn auto_reject(req: &ServerRequest) -> Option<serde_json::Value> {
+    let value = match req {
+        ServerRequest::ApplyPatchApproval(_) => serde_json::to_value(ApplyPatchApprovalResponse {
+            decision: ReviewDecision::Denied,
+        }),
+        ServerRequest::ExecCommandApproval(_) => {
+            serde_json::to_value(ExecCommandApprovalResponse {
+                decision: ReviewDecision::Denied,
+            })
+        }
+        ServerRequest::CommandExecutionRequestApproval(_) => {
+            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::Decline,
+            })
+        }
+        ServerRequest::FileChangeRequestApproval(_) => {
+            serde_json::to_value(FileChangeRequestApprovalResponse {
+                decision: FileChangeApprovalDecision::Decline,
+            })
+        }
+        ServerRequest::PermissionsRequestApproval(_) => {
+            serde_json::to_value(PermissionsRequestApprovalResponse {
+                permissions: GrantedPermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: None,
+            })
+        }
+        ServerRequest::ToolRequestUserInput(_)
+        | ServerRequest::McpServerElicitationRequest(_)
+        | ServerRequest::ChatgptAuthTokensRefresh(_)
+        | ServerRequest::DynamicToolCall(_) => return None,
+    };
+    Some(value.expect("typed approval response serialisation is infallible"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use minos_codex_protocol::{
+        CommandExecutionRequestApprovalParams, FileChangeRequestApprovalParams, ServerRequest,
+    };
     use serde_json::json;
 
-    fn assert_shape(method: &str, id: serde_json::Value) {
-        let response = build_auto_reject(id.clone(), method);
-        assert_eq!(response["jsonrpc"], json!("2.0"), "method={method}");
-        assert_eq!(response["id"], id, "method={method}");
-        assert_eq!(
-            response["result"]["decision"],
-            json!("rejected"),
-            "method={method}"
-        );
-        // Response must parse/re-serialize cleanly as JSON-RPC 2.0.
-        let s = serde_json::to_string(&response).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(parsed, response, "method={method}");
-    }
-
-    #[test]
-    fn apply_patch_approval_rejects_with_string_id() {
-        assert_shape("ApplyPatchApproval", json!("req-1"));
-    }
-
-    #[test]
-    fn exec_command_approval_rejects_with_numeric_id() {
-        assert_shape("ExecCommandApproval", json!(42));
-    }
-
-    #[test]
-    fn file_change_request_approval_rejects() {
-        assert_shape("FileChangeRequestApproval", json!("fc-7"));
-    }
-
-    #[test]
-    fn permissions_request_approval_rejects() {
-        assert_shape("PermissionsRequestApproval", json!("perm-xyz"));
-    }
-
-    #[test]
-    fn command_execution_request_approval_rejects() {
-        assert_shape("CommandExecutionRequestApproval", json!(0));
-    }
-
-    #[test]
-    fn all_known_approval_methods_produce_identical_shape() {
-        // Exhaustive sweep: every known approval method yields the same
-        // response body modulo the id. This guarantees Phase C can pipe
-        // *any* received approval through the same code path without a
-        // per-method switch.
-        for method in APPROVAL_METHODS {
-            let body = build_auto_reject(json!("id-sweep"), method);
-            assert_eq!(body["jsonrpc"], json!("2.0"));
-            assert_eq!(body["result"]["decision"], json!("rejected"));
+    fn dummy_command_exec_params() -> CommandExecutionRequestApprovalParams {
+        CommandExecutionRequestApprovalParams {
+            approval_id: None,
+            command: None,
+            command_actions: None,
+            cwd: None,
+            item_id: "item-1".into(),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            reason: None,
+            thread_id: "thr-1".into(),
+            turn_id: "turn-1".into(),
         }
+    }
+
+    fn dummy_file_change_params() -> FileChangeRequestApprovalParams {
+        FileChangeRequestApprovalParams {
+            grant_root: None,
+            item_id: "item-1".into(),
+            reason: None,
+            thread_id: "thr-1".into(),
+            turn_id: "turn-1".into(),
+        }
+    }
+
+    #[test]
+    fn auto_reject_command_execution_returns_typed_decline() {
+        let req = ServerRequest::CommandExecutionRequestApproval(dummy_command_exec_params());
+        let reply = auto_reject(&req).expect("approval should auto-reject");
+        assert_eq!(reply["decision"], json!("decline"));
+    }
+
+    #[test]
+    fn auto_reject_file_change_returns_typed_decline() {
+        let req = ServerRequest::FileChangeRequestApproval(dummy_file_change_params());
+        let reply = auto_reject(&req).expect("approval should auto-reject");
+        assert_eq!(reply["decision"], json!("decline"));
+    }
+
+    #[test]
+    fn auto_reject_apply_patch_returns_typed_denied() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "applyPatchApproval",
+            "params": {
+                "callId": "call-1",
+                "conversationId": "conv-1",
+                "fileChanges": {}
+            }
+        }))
+        .expect("apply-patch params decode");
+        let reply = auto_reject(&req).expect("approval should auto-reject");
+        assert_eq!(reply["decision"], json!("denied"));
+    }
+
+    #[test]
+    fn auto_reject_exec_command_returns_typed_denied() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "execCommandApproval",
+            "params": {
+                "callId": "call-1",
+                "command": ["ls"],
+                "conversationId": "conv-1",
+                "cwd": "/tmp",
+                "parsedCmd": []
+            }
+        }))
+        .expect("exec-command params decode");
+        let reply = auto_reject(&req).expect("approval should auto-reject");
+        assert_eq!(reply["decision"], json!("denied"));
+    }
+
+    #[test]
+    fn auto_reject_permissions_returns_empty_grant() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "item/permissions/requestApproval",
+            "params": {
+                "cwd": "/tmp",
+                "itemId": "item-1",
+                "permissions": {},
+                "threadId": "thr-1",
+                "turnId": "turn-1"
+            }
+        }))
+        .expect("permissions params decode");
+        let reply = auto_reject(&req).expect("permissions should auto-reject");
+        assert!(
+            reply.get("permissions").is_some(),
+            "permissions field required"
+        );
+    }
+
+    #[test]
+    fn auto_reject_tool_request_user_input_returns_none() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "item/tool/requestUserInput",
+            "params": {
+                "itemId": "item-1",
+                "questions": [],
+                "threadId": "thr-1",
+                "turnId": "turn-1"
+            }
+        }))
+        .expect("tool/requestUserInput params decode");
+        assert!(
+            auto_reject(&req).is_none(),
+            "non-approval requests must not auto-reject",
+        );
     }
 }

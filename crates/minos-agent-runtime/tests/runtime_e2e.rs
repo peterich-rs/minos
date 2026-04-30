@@ -12,6 +12,11 @@ use std::time::Duration;
 
 use minos_agent_runtime::test_support::{FakeCodexServer, Step};
 use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState, RawIngest};
+use minos_codex_protocol::{
+    ApprovalsReviewer, AskForApproval, InitializeResponse, ReadOnlyAccess, SandboxPolicy,
+    SessionSource, Thread, ThreadArchiveResponse, ThreadStartResponse, ThreadStatus, Turn,
+    TurnInterruptResponse, TurnStartResponse, TurnStatus,
+};
 use minos_domain::{AgentName, MinosError};
 use serde_json::json;
 use tempfile::TempDir;
@@ -27,6 +32,82 @@ fn make_cfg(ws_url: Url) -> AgentRuntimeConfig {
     let mut cfg = AgentRuntimeConfig::new(workspace_root);
     cfg.test_ws_url = Some(ws_url);
     cfg
+}
+
+/// Build an `InitializeResponse` with stub fields suitable for tests.
+fn init_response_value() -> serde_json::Value {
+    serde_json::to_value(InitializeResponse {
+        codex_home: "/tmp/codex".to_string().into(),
+        platform_family: "unix".into(),
+        platform_os: "macos".into(),
+        user_agent: "codex/test".into(),
+    })
+    .expect("InitializeResponse serialises")
+}
+
+/// Build a `ThreadStartResponse` whose nested `Thread.id` matches `thread_id`.
+fn thread_start_response_value(thread_id: &str) -> serde_json::Value {
+    serde_json::to_value(ThreadStartResponse {
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        cwd: "/tmp/workspace".to_string().into(),
+        instruction_sources: Vec::new(),
+        model: "test-model".into(),
+        model_provider: "openai".into(),
+        permission_profile: None,
+        reasoning_effort: None,
+        sandbox: SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            network_access: false,
+        },
+        service_tier: None,
+        thread: Thread {
+            agent_nickname: None,
+            agent_role: None,
+            cli_version: "0".into(),
+            created_at: 0,
+            cwd: "/tmp/workspace".to_string().into(),
+            ephemeral: false,
+            forked_from_id: None,
+            git_info: None,
+            id: thread_id.into(),
+            model_provider: "openai".into(),
+            name: None,
+            path: None,
+            preview: String::new(),
+            source: SessionSource::AppServer,
+            status: ThreadStatus::Idle,
+            turns: Vec::new(),
+            updated_at: 0,
+        },
+    })
+    .expect("ThreadStartResponse serialises")
+}
+
+/// Build a `TurnStartResponse` with a placeholder Turn.
+fn turn_start_response_value() -> serde_json::Value {
+    serde_json::to_value(TurnStartResponse {
+        turn: Turn {
+            completed_at: None,
+            duration_ms: None,
+            error: None,
+            id: "turn-1".into(),
+            items: Vec::new(),
+            started_at: None,
+            status: TurnStatus::InProgress,
+        },
+    })
+    .expect("TurnStartResponse serialises")
+}
+
+fn turn_interrupt_response_value() -> serde_json::Value {
+    serde_json::to_value(TurnInterruptResponse(serde_json::Map::new()))
+        .expect("TurnInterruptResponse serialises")
+}
+
+fn thread_archive_response_value() -> serde_json::Value {
+    serde_json::to_value(ThreadArchiveResponse(serde_json::Map::new()))
+        .expect("ThreadArchiveResponse serialises")
 }
 
 fn ws_url_for(port: u16) -> Url {
@@ -65,21 +146,21 @@ async fn happy_path_start_send_stream_stop() {
         // initialize handshake
         Step::ExpectRequest {
             method: "initialize".into(),
-            reply: json!({"ok": true}),
+            reply: init_response_value(),
         },
         Step::ExpectNotification {
-            method: "notifications/initialized".into(),
-            params: json!({}),
+            method: "initialized".into(),
+            params: serde_json::Value::Null,
         },
-        // thread/start handshake — result must carry thread_id
+        // thread/start handshake — result must carry thread_id (now nested)
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: json!({"thread_id": "thr-abc"}),
+            reply: thread_start_response_value("thr-abc"),
         },
         // client sends turn/start
         Step::ExpectRequest {
             method: "turn/start".into(),
-            reply: json!({"accepted": true}),
+            reply: turn_start_response_value(),
         },
         // fake emits a streaming token delta
         Step::EmitNotification {
@@ -89,11 +170,11 @@ async fn happy_path_start_send_stream_stop() {
         // polite-goodbye pair (stop uses 500ms timeouts)
         Step::ExpectRequest {
             method: "turn/interrupt".into(),
-            reply: json!({}),
+            reply: turn_interrupt_response_value(),
         },
         Step::ExpectRequest {
             method: "thread/archive".into(),
-            reply: json!({}),
+            reply: thread_archive_response_value(),
         },
     ];
     let (fake, port) = FakeCodexServer::bind(script).await;
@@ -363,20 +444,28 @@ async fn approval_server_request_is_auto_rejected_and_broadcast() {
     let script = vec![
         Step::ExpectRequest {
             method: "initialize".into(),
-            reply: json!({"ok": true}),
+            reply: init_response_value(),
         },
         Step::ExpectNotification {
-            method: "notifications/initialized".into(),
-            params: json!({}),
+            method: "initialized".into(),
+            params: serde_json::Value::Null,
         },
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: json!({"thread_id": "thr-approval"}),
+            reply: thread_start_response_value("thr-approval"),
         },
-        // Server request — the client must auto-reject.
+        // Server request — the client must auto-reject. Use the v1
+        // `execCommandApproval` method (lowercase) which is still a valid
+        // arm of the typed `ServerRequest` enum.
         Step::EmitServerRequest {
-            method: "ExecCommandApproval".into(),
-            params: json!({"command": ["ls", "-la"]}),
+            method: "execCommandApproval".into(),
+            params: json!({
+                "callId": "call-1",
+                "command": ["ls", "-la"],
+                "conversationId": "conv-1",
+                "cwd": "/tmp",
+                "parsedCmd": []
+            }),
         },
         // The fake expects the reply. ExpectRequest asserts the method, but
         // replies don't have a `method`; we need a different check. Since
@@ -398,7 +487,7 @@ async fn approval_server_request_is_auto_rejected_and_broadcast() {
     while std::time::Instant::now() < deadline {
         match tokio::time::timeout(Duration::from_millis(200), ingest_rx.recv()).await {
             Ok(Ok(RawIngest { payload, .. })) => {
-                if payload["method"] == "server_request/ExecCommandApproval" {
+                if payload["method"] == "server_request/execCommandApproval" {
                     let params_s = serde_json::to_string(&payload["params"]).unwrap_or_default();
                     assert!(params_s.contains("\"ls\""), "{params_s}");
                     saw_server_req = true;
@@ -436,15 +525,15 @@ async fn unexpected_ws_drop_transitions_to_crashed() {
     let script = vec![
         Step::ExpectRequest {
             method: "initialize".into(),
-            reply: json!({"ok": true}),
+            reply: init_response_value(),
         },
         Step::ExpectNotification {
-            method: "notifications/initialized".into(),
-            params: json!({}),
+            method: "initialized".into(),
+            params: serde_json::Value::Null,
         },
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: json!({"thread_id": "thr-crash"}),
+            reply: thread_start_response_value("thr-crash"),
         },
         // Simulate codex dying.
         Step::DieUnexpectedly,
@@ -499,15 +588,15 @@ async fn stale_session_id_returns_mismatch_not_not_running() {
     let script = vec![
         Step::ExpectRequest {
             method: "initialize".into(),
-            reply: json!({"ok": true}),
+            reply: init_response_value(),
         },
         Step::ExpectNotification {
-            method: "notifications/initialized".into(),
-            params: json!({}),
+            method: "initialized".into(),
+            params: serde_json::Value::Null,
         },
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: json!({"thread_id": "thr-real"}),
+            reply: thread_start_response_value("thr-real"),
         },
         // Pseudo-parking step: the client will never send anything with this
         // method, so the fake blocks here and the WS stays open.
@@ -540,15 +629,15 @@ async fn multiple_subscribers_receive_same_event() {
     let script = vec![
         Step::ExpectRequest {
             method: "initialize".into(),
-            reply: json!({"ok": true}),
+            reply: init_response_value(),
         },
         Step::ExpectNotification {
-            method: "notifications/initialized".into(),
-            params: json!({}),
+            method: "initialized".into(),
+            params: serde_json::Value::Null,
         },
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: json!({"thread_id": "thr-fanout"}),
+            reply: thread_start_response_value("thr-fanout"),
         },
         Step::EmitNotification {
             method: "item/agentMessage/delta".into(),
@@ -593,15 +682,15 @@ async fn second_start_while_running_errors() {
     let script = vec![
         Step::ExpectRequest {
             method: "initialize".into(),
-            reply: json!({"ok": true}),
+            reply: init_response_value(),
         },
         Step::ExpectNotification {
-            method: "notifications/initialized".into(),
-            params: json!({}),
+            method: "initialized".into(),
+            params: serde_json::Value::Null,
         },
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: json!({"thread_id": "thr-one"}),
+            reply: thread_start_response_value("thr-one"),
         },
         Step::ExpectRequest {
             method: "__never__".into(),

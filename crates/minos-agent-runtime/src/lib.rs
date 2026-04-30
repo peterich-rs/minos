@@ -24,7 +24,7 @@
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
 
-pub mod approvals;
+pub(crate) mod approvals;
 pub(crate) mod codex_client;
 pub(crate) mod exec_jsonl;
 pub mod ingest;
@@ -35,7 +35,6 @@ pub mod state;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
-pub use approvals::build_auto_reject;
 pub use ingest::{Ingestor, IngestorHandle};
 pub use runtime::{AgentRuntime, AgentRuntimeConfig, RawIngest, StartAgentOutcome};
 pub use state::AgentState;

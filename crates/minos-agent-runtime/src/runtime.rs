@@ -38,6 +38,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::{Duration, SystemTime};
 
+use minos_codex_protocol::{
+    ClientInfo, InitializeCapabilities, InitializeParams, InitializeResponse,
+    InitializedNotification, ServerRequest, ThreadArchiveParams, ThreadStartParams,
+    ThreadStartResponse, TurnInterruptParams, TurnStartParams, UserInput,
+};
 use minos_domain::{AgentName, MinosError};
 use serde_json::Value;
 use tokio::sync::{broadcast, oneshot, watch, Mutex};
@@ -45,7 +50,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::approvals::{build_auto_reject, APPROVAL_METHODS};
+use crate::approvals::auto_reject;
 use crate::codex_client::{CodexClient, Inbound};
 use crate::exec_jsonl;
 use crate::process::{reason_from_exit, CodexProcess};
@@ -77,9 +82,6 @@ fn current_unix_ms() -> i64 {
 
 /// Default timeout for the one-shot `initialize` + `thread/start` handshake.
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// MCP protocol version sent to `codex app-server` during startup.
-const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 
 /// Fire-and-observe window for `turn/start`. The send itself awaits the
 /// response (so we can surface a protocol error synchronously), but we don't
@@ -352,6 +354,7 @@ impl AgentRuntime {
 
     /// Shared tail of the start sequence: connect WS, initialize + thread/start,
     /// wire up supervisor + pump, commit state to `Running`.
+    #[allow(clippy::too_many_lines)] // Linear handshake + supervisor wire-up.
     async fn start_on_url(
         &self,
         agent: AgentName,
@@ -368,50 +371,55 @@ impl AgentRuntime {
         };
         let client = Arc::new(client);
         let handshake_call_timeout = self.inner.cfg.handshake_call_timeout;
-        // Handshake: `initialize` → `notifications/initialized` → `thread/start`.
-        let init_res = tokio::time::timeout(
-            handshake_call_timeout,
-            client.call("initialize", initialize_params()),
-        )
-        .await;
-        if let Err(e) = map_timeout(init_res, "initialize", handshake_call_timeout) {
-            stop_process_if_present(&mut process).await;
-            return Err(e);
-        }
+        // Handshake: `initialize` → `initialized` → `thread/start`.
+        let init_params = InitializeParams {
+            client_info: ClientInfo {
+                name: env!("CARGO_PKG_NAME").into(),
+                title: Some("Minos".into()),
+                version: env!("CARGO_PKG_VERSION").into(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                opt_out_notification_methods: None,
+            }),
+        };
+        let init_res =
+            tokio::time::timeout(handshake_call_timeout, client.call_typed(init_params)).await;
+        let _initialize_response: InitializeResponse =
+            match map_timeout(init_res, "initialize", handshake_call_timeout) {
+                Ok(r) => r,
+                Err(e) => {
+                    stop_process_if_present(&mut process).await;
+                    return Err(e);
+                }
+            };
 
         let initialized_res = tokio::time::timeout(
             handshake_call_timeout,
-            client.notify("notifications/initialized", serde_json::json!({})),
+            client.notify_typed(InitializedNotification),
         )
         .await;
-        if let Err(e) = map_timeout_unit(
-            initialized_res,
-            "notifications/initialized",
-            handshake_call_timeout,
-        ) {
+        if let Err(e) = map_timeout(initialized_res, "initialized", handshake_call_timeout) {
             stop_process_if_present(&mut process).await;
             return Err(e);
         }
 
         let cwd = self.cwd_for_session();
-        let start_res = tokio::time::timeout(
-            handshake_call_timeout,
-            client.call("thread/start", serde_json::json!({ "cwd": cwd })),
-        )
-        .await;
-        let start_result = match map_timeout(start_res, "thread/start", handshake_call_timeout) {
-            Ok(v) => v,
-            Err(e) => {
-                stop_process_if_present(&mut process).await;
-                return Err(e);
-            }
+        let start_params = ThreadStartParams {
+            cwd: Some(cwd.clone()),
+            ..Default::default()
         };
-        let thread_id = thread_id_from_response(&start_result)
-            .ok_or_else(|| MinosError::CodexProtocolError {
-                method: "thread/start".into(),
-                message: "response missing thread_id/threadId".into(),
-            })?
-            .to_string();
+        let start_res =
+            tokio::time::timeout(handshake_call_timeout, client.call_typed(start_params)).await;
+        let start_result: ThreadStartResponse =
+            match map_timeout(start_res, "thread/start", handshake_call_timeout) {
+                Ok(r) => r,
+                Err(e) => {
+                    stop_process_if_present(&mut process).await;
+                    return Err(e);
+                }
+            };
+        let thread_id = start_result.thread.id;
 
         // Wire up supervisor + event pump.
         let expected_exit = Arc::new(AtomicBool::new(false));
@@ -519,15 +527,28 @@ impl AgentRuntime {
                     let client = Arc::clone(&active.client);
                     drop(guard);
 
-                    let params = serde_json::json!({
-                        "threadId": session_id,
-                        "input": [{ "type": "text", "text": text }],
-                    });
+                    let params = TurnStartParams {
+                        approval_policy: None,
+                        approvals_reviewer: None,
+                        cwd: None,
+                        effort: None,
+                        input: vec![UserInput::Text {
+                            text: text.to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        model: None,
+                        output_schema: None,
+                        permission_profile: None,
+                        personality: None,
+                        sandbox_policy: None,
+                        service_tier: None,
+                        summary: None,
+                        thread_id: session_id.to_string(),
+                    };
                     let res =
-                        tokio::time::timeout(TURN_START_TIMEOUT, client.call("turn/start", params))
-                            .await;
+                        tokio::time::timeout(TURN_START_TIMEOUT, client.call_typed(params)).await;
                     return match res {
-                        Ok(Ok(_)) => Ok(()),
+                        Ok(Ok(_response)) => Ok(()),
                         Ok(Err(e)) => Err(e),
                         Err(_elapsed) => Err(MinosError::CodexProtocolError {
                             method: "turn/start".into(),
@@ -676,14 +697,23 @@ impl AgentRuntime {
                 // Best-effort polite goodbyes (bounded).
                 let thread_id = active.thread_id.clone();
                 let polite_client = Arc::clone(&active.client);
+                // Best-effort polite-goodbye: AppServerActive does not currently
+                // track the active turn id, so we send an empty `turn_id`. codex
+                // will reject as bad params, the timeout swallows that — fine
+                // because the authoritative termination is the supervisor signal.
                 let _ = tokio::time::timeout(
                     STOP_POLITE_TIMEOUT,
-                    polite_client.call("turn/interrupt", thread_id_request_params(&thread_id)),
+                    polite_client.call_typed(TurnInterruptParams {
+                        thread_id: thread_id.clone(),
+                        turn_id: String::new(),
+                    }),
                 )
                 .await;
                 let _ = tokio::time::timeout(
                     STOP_POLITE_TIMEOUT,
-                    polite_client.call("thread/archive", thread_id_request_params(&thread_id)),
+                    polite_client.call_typed(ThreadArchiveParams {
+                        thread_id: thread_id.clone(),
+                    }),
                 )
                 .await;
 
@@ -749,11 +779,11 @@ async fn stop_process_if_present(process: &mut Option<CodexProcess>) {
     }
 }
 
-fn map_timeout(
-    res: Result<Result<Value, MinosError>, tokio::time::error::Elapsed>,
+fn map_timeout<T>(
+    res: Result<Result<T, MinosError>, tokio::time::error::Elapsed>,
     method: &str,
     timeout: Duration,
-) -> Result<Value, MinosError> {
+) -> Result<T, MinosError> {
     match res {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(e),
@@ -762,51 +792,6 @@ fn map_timeout(
             message: format!("timeout after {}s", timeout.as_secs()),
         }),
     }
-}
-
-fn map_timeout_unit(
-    res: Result<Result<(), MinosError>, tokio::time::error::Elapsed>,
-    method: &str,
-    timeout: Duration,
-) -> Result<(), MinosError> {
-    match res {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err(MinosError::CodexProtocolError {
-            method: method.into(),
-            message: format!("timeout after {}s", timeout.as_secs()),
-        }),
-    }
-}
-
-fn initialize_params() -> Value {
-    serde_json::json!({
-        "protocolVersion": MCP_PROTOCOL_VERSION,
-        "capabilities": {},
-        "clientInfo": {
-            "name": env!("CARGO_PKG_NAME"),
-            "version": env!("CARGO_PKG_VERSION"),
-        },
-    })
-}
-
-fn thread_id_from_response(value: &Value) -> Option<&str> {
-    value
-        .get("thread_id")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("threadId").and_then(Value::as_str))
-        .or_else(|| {
-            value
-                .get("thread")
-                .and_then(|thread| thread.get("id"))
-                .and_then(Value::as_str)
-        })
-}
-
-fn thread_id_request_params(thread_id: &str) -> Value {
-    serde_json::json!({
-        "threadId": thread_id,
-    })
 }
 
 /// Spawn the supervisor task. It owns `process` (which owns the child); it
@@ -938,40 +923,46 @@ async fn event_pump_loop(
                 }
             }
             Inbound::ServerRequest { id, method, params } => {
-                let known = APPROVAL_METHODS.contains(&method.as_str());
-                if known {
-                    let payload = build_auto_reject(id.clone(), &method);
-                    // Extract the inner "result" so we hand `reply()` the
-                    // result-only value — the client wraps it in the
-                    // {jsonrpc, id, result} envelope itself.
-                    let result = payload
-                        .get("result")
-                        .cloned()
-                        .unwrap_or(serde_json::json!({"decision": "rejected"}));
-                    if let Err(e) = client.reply(id.clone(), result).await {
+                let envelope = serde_json::json!({ "method": method, "params": params });
+                match serde_json::from_value::<ServerRequest>(envelope) {
+                    Ok(req) => {
+                        if let Some(reply) = auto_reject(&req) {
+                            if let Err(e) = client.reply(id.clone(), reply).await {
+                                warn!(
+                                    target: "minos_agent_runtime::runtime",
+                                    error = %e,
+                                    method = %method,
+                                    "auto-reject reply failed",
+                                );
+                            } else {
+                                info!(
+                                    target: "minos_agent_runtime::runtime",
+                                    method = %method,
+                                    "auto-rejected approval server request",
+                                );
+                            }
+                        } else {
+                            warn!(
+                                target: "minos_agent_runtime::runtime",
+                                method = %method,
+                                "non-approval server request; not replying",
+                            );
+                        }
+                    }
+                    Err(e) => {
                         warn!(
                             target: "minos_agent_runtime::runtime",
+                            method = %method,
                             error = %e,
-                            method = %method,
-                            "auto-reject reply failed",
-                        );
-                    } else {
-                        info!(
-                            target: "minos_agent_runtime::runtime",
-                            method = %method,
-                            "auto-rejected approval server request",
+                            "unknown server request method; not replying",
                         );
                     }
-                } else {
-                    warn!(
-                        target: "minos_agent_runtime::runtime",
-                        method = %method,
-                        "unexpected server request; forwarding as ingest and not replying",
-                    );
                 }
                 // Forward as a synthetic notification so ingest subscribers see
                 // the server request too. The backend's translator will fall
-                // through to the Raw variant for unknown method names.
+                // through to the Raw variant for unknown method names. RawIngest
+                // payload shape is unchanged from before for backend translator
+                // stability.
                 let synthetic_method = format!("server_request/{method}");
                 let payload = serde_json::json!({ "method": synthetic_method, "params": params });
                 let _ = ingest_tx.send(RawIngest {
@@ -1005,21 +996,6 @@ mod tests {
         let cfg = AgentRuntimeConfig::new(PathBuf::from("/tmp/ws"));
         assert_eq!(cfg.ws_port_range, 7879..=7883);
         assert_eq!(cfg.event_buffer, DEFAULT_EVENT_BUFFER);
-    }
-
-    #[test]
-    fn initialize_params_include_mcp_client_info() {
-        let params = initialize_params();
-        assert_eq!(params["protocolVersion"], MCP_PROTOCOL_VERSION);
-        assert_eq!(params["clientInfo"]["name"], env!("CARGO_PKG_NAME"));
-        assert_eq!(params["clientInfo"]["version"], env!("CARGO_PKG_VERSION"));
-        assert!(params["capabilities"].is_object());
-    }
-
-    #[test]
-    fn thread_id_from_response_accepts_nested_thread_object() {
-        let value = serde_json::json!({"thread": {"id": "thr-real"}});
-        assert_eq!(thread_id_from_response(&value), Some("thr-real"));
     }
 
     #[test]
