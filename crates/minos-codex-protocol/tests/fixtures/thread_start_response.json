@@ -1,0 +1,21 @@
+{
+  "thread": {
+    "id": "thr-abc123",
+    "cliVersion": "0.2.6",
+    "createdAt": 1714521600,
+    "updatedAt": 1714521600,
+    "cwd": "/tmp/workspace",
+    "ephemeral": false,
+    "modelProvider": "openai",
+    "preview": "",
+    "source": "appServer",
+    "status": { "type": "idle" },
+    "turns": []
+  },
+  "cwd": "/tmp/workspace",
+  "model": "gpt-5",
+  "modelProvider": "openai",
+  "sandbox": { "type": "readOnly" },
+  "approvalPolicy": "never",
+  "approvalsReviewer": "user"
+}

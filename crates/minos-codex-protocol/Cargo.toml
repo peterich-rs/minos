@@ -1,0 +1,24 @@
+[package]
+name = "minos-codex-protocol"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Typed Rust mirror of the codex app-server JSON-RPC protocol. Generated from the JSON Schemas in /schemas via `cargo xtask gen-codex-protocol`."
+
+[lib]
+# Skip doctests: typify-generated docstrings embed JSON-Schema snippets and
+# free-form prose with backticks/indentation that rustdoc otherwise tries
+# to compile as Rust code blocks. We don't want those running and there's
+# no per-module way to opt out of doctests.
+doctest = false
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

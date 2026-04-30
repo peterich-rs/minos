@@ -14,6 +14,8 @@ use tempfile::TempDir;
 use tokio::runtime::Builder;
 use tokio::sync::broadcast::error::RecvError;
 
+mod gen_codex;
+
 #[derive(Parser)]
 #[command(name = "xtask", about = "Minos build & codegen orchestration")]
 struct Cli {
@@ -51,6 +53,9 @@ enum Cmd {
     BackendDbReset,
     /// Run the backend binary with dev-friendly defaults.
     BackendRun,
+    /// Regenerate `crates/minos-codex-protocol/src/generated/{types,methods}.rs`
+    /// from the JSON schemas in `/schemas`. Run after editing `/schemas`.
+    GenCodexProtocol,
 }
 
 fn main() -> Result<()> {
@@ -66,6 +71,7 @@ fn main() -> Result<()> {
         Cmd::GenXcode => gen_xcode(),
         Cmd::BackendDbReset => backend_db_reset(),
         Cmd::BackendRun => backend_run(),
+        Cmd::GenCodexProtocol => gen_codex::run(&workspace_root()?),
     }
 }
 
