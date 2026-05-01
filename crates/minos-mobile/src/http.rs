@@ -144,10 +144,7 @@ impl MobileHttpClient {
     }
 
     /// List every Mac paired to the caller's account. Bearer-only.
-    pub async fn list_paired_macs(
-        &self,
-        access_token: &str,
-    ) -> Result<MeMacsResponse, MinosError> {
+    pub async fn list_paired_macs(&self, access_token: &str) -> Result<MeMacsResponse, MinosError> {
         let url = format!("{}/v1/me/macs", self.base);
         let trace_id = start_http_trace(Method::GET.as_str(), "/v1/me/macs", None, None);
         let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
@@ -297,11 +294,7 @@ impl MobileHttpClient {
     /// `POST /v1/auth/register` — create an account on the backend.
     /// Bearer-only post ADR-0020; the iOS rail no longer carries
     /// `X-Device-Secret`. Spec §5.2.
-    pub async fn register(
-        &self,
-        email: &str,
-        password: &str,
-    ) -> Result<AuthResponse, MinosError> {
+    pub async fn register(&self, email: &str, password: &str) -> Result<AuthResponse, MinosError> {
         let url = format!("{}/v1/auth/register", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
@@ -357,11 +350,7 @@ impl MobileHttpClient {
 
     /// `POST /v1/auth/logout` — revoke the named refresh token.
     /// Bearer-only post ADR-0020.
-    pub async fn logout(
-        &self,
-        access_token: &str,
-        refresh_token: &str,
-    ) -> Result<(), MinosError> {
+    pub async fn logout(&self, access_token: &str, refresh_token: &str) -> Result<(), MinosError> {
         let url = format!("{}/v1/auth/logout", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),

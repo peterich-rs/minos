@@ -168,46 +168,41 @@ void main() {
       },
     );
 
-    test(
-      'rehydrates auth-only snapshot and resumes the WS',
-      () async {
-        // Post ADR-0020: deviceId + full auth tuple is the canonical
-        // logged-in shape. resolveClient drives both refreshSession and
-        // resumePersistedSession.
-        const persisted = PersistedPairingState(
-          deviceId: 'dev-auth',
-          accessToken: 'access',
-          accessExpiresAtMs: 1700000000000,
-          refreshToken: 'refresh',
-          accountId: 'acc',
-          accountEmail: 'u@example.com',
-        );
-        final rehydrated = _MockMobileClient();
-        when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
-        when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
-        when(
-          () => rehydrated.persistedPairingState(),
-        ).thenAnswer((_) async => persisted);
-        when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
-        when(
-          () => rehydrated.resumePersistedSession(),
-        ).thenAnswer((_) async {});
+    test('rehydrates auth-only snapshot and resumes the WS', () async {
+      // Post ADR-0020: deviceId + full auth tuple is the canonical
+      // logged-in shape. resolveClient drives both refreshSession and
+      // resumePersistedSession.
+      const persisted = PersistedPairingState(
+        deviceId: 'dev-auth',
+        accessToken: 'access',
+        accessExpiresAtMs: 1700000000000,
+        refreshToken: 'refresh',
+        accountId: 'acc',
+        accountEmail: 'u@example.com',
+      );
+      final rehydrated = _MockMobileClient();
+      when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
+      when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+      when(
+        () => rehydrated.persistedPairingState(),
+      ).thenAnswer((_) async => persisted);
+      when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
+      when(() => rehydrated.resumePersistedSession()).thenAnswer((_) async {});
 
-        final result = await MinosCore.resolveClient(
-          secure: secureStore,
-          buildFresh: () => fail('buildFresh must not run with auth snapshot'),
-          buildFromPersisted: (state) {
-            expect(state, persisted);
-            return rehydrated;
-          },
-        );
+      final result = await MinosCore.resolveClient(
+        secure: secureStore,
+        buildFresh: () => fail('buildFresh must not run with auth snapshot'),
+        buildFromPersisted: (state) {
+          expect(state, persisted);
+          return rehydrated;
+        },
+      );
 
-        expect(result, same(rehydrated));
-        verify(() => rehydrated.refreshSession()).called(1);
-        verify(() => rehydrated.resumePersistedSession()).called(1);
-        verifyNever(() => secureStore.clearAll());
-      },
-    );
+      expect(result, same(rehydrated));
+      verify(() => rehydrated.refreshSession()).called(1);
+      verify(() => rehydrated.resumePersistedSession()).called(1);
+      verifyNever(() => secureStore.clearAll());
+    });
 
     test('clears auth when persisted session validation fails', () async {
       const persisted = PersistedPairingState(
@@ -530,23 +525,20 @@ void main() {
       expect(await core.hasPersistedPairing(), isFalse);
     });
 
-    test(
-      'returns false for a deviceId-only (logged-out) snapshot',
-      () async {
-        // Post ADR-0020: hasPersistedPairing now means "logged in" — a
-        // deviceId-only snapshot represents the post-logout state and
-        // should send the user back to login, not the chat surface.
-        when(() => secureStore.loadState()).thenAnswer(
-          (_) async => const PersistedPairingState(deviceId: 'dev-paired'),
-        );
+    test('returns false for a deviceId-only (logged-out) snapshot', () async {
+      // Post ADR-0020: hasPersistedPairing now means "logged in" — a
+      // deviceId-only snapshot represents the post-logout state and
+      // should send the user back to login, not the chat surface.
+      when(() => secureStore.loadState()).thenAnswer(
+        (_) async => const PersistedPairingState(deviceId: 'dev-paired'),
+      );
 
-        final core = MinosCore.forTesting(
-          client: client,
-          secureStore: secureStore,
-        );
+      final core = MinosCore.forTesting(
+        client: client,
+        secureStore: secureStore,
+      );
 
-        expect(await core.hasPersistedPairing(), isFalse);
-      },
-    );
+      expect(await core.hasPersistedPairing(), isFalse);
+    });
   });
 }

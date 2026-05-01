@@ -250,8 +250,7 @@ class _AgentsTab extends ConsumerWidget {
                   ),
                   const SizedBox(height: 12),
                   const _GroupedFooter(
-                    text:
-                        '设备伙伴承载 Agent runtime；点击设备切换路由目标，向左滑动可删除伙伴。',
+                    text: '设备伙伴承载 Agent runtime；点击设备切换路由目标，向左滑动可删除伙伴。',
                   ),
                 ],
               ),

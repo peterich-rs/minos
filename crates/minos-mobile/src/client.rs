@@ -323,7 +323,9 @@ impl MobileClient {
             .as_ref()
             .map(|s| s.access_token.clone());
 
-        let result = self.connect(backend_url, cf_access, access.as_deref()).await;
+        let result = self
+            .connect(backend_url, cf_access, access.as_deref())
+            .await;
 
         match result {
             Ok(()) => {

@@ -51,6 +51,7 @@ pub const PENDING_CAP: usize = 1024;
 ///    the pending entry and surface `MinosError::Timeout`. On disconnect,
 ///    the recv-loop drains pending with `RpcReply::Err { code: -32099 }`,
 ///    which `map_rpc_err` translates to `MinosError::RequestDropped`.
+#[allow(clippy::too_many_arguments)] // Single-site RPC fanout: each arg covers one orthogonal concern (channel handles, target/method/params, timeout/trace).
 pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
     pending: &DashMap<u64, oneshot::Sender<RpcReply>>,
     next_id: &AtomicU64,

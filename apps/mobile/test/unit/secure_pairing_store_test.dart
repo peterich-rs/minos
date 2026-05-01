@@ -138,27 +138,30 @@ void main() {
     expect(values.containsKey('minos.account_id'), isFalse);
   });
 
-  test('clearAuth wipes only the auth tuple, leaving device id intact', () async {
-    final store = SecurePairingStore(storage: storage);
-    final state = PersistedPairingState(
-      deviceId: 'dev-1',
-      accessToken: 'access',
-      accessExpiresAtMs: 1700000000000,
-      refreshToken: 'refresh',
-      accountId: 'acc',
-      accountEmail: 'u@example.com',
-    );
-    await store.saveState(state);
+  test(
+    'clearAuth wipes only the auth tuple, leaving device id intact',
+    () async {
+      final store = SecurePairingStore(storage: storage);
+      final state = PersistedPairingState(
+        deviceId: 'dev-1',
+        accessToken: 'access',
+        accessExpiresAtMs: 1700000000000,
+        refreshToken: 'refresh',
+        accountId: 'acc',
+        accountEmail: 'u@example.com',
+      );
+      await store.saveState(state);
 
-    await store.clearAuth();
+      await store.clearAuth();
 
-    expect(values['minos.device_id'], 'dev-1');
-    expect(values.containsKey('minos.access_token'), isFalse);
-    expect(values.containsKey('minos.access_expires_at_ms'), isFalse);
-    expect(values.containsKey('minos.refresh_token'), isFalse);
-    expect(values.containsKey('minos.account_id'), isFalse);
-    expect(values.containsKey('minos.account_email'), isFalse);
-  });
+      expect(values['minos.device_id'], 'dev-1');
+      expect(values.containsKey('minos.access_token'), isFalse);
+      expect(values.containsKey('minos.access_expires_at_ms'), isFalse);
+      expect(values.containsKey('minos.refresh_token'), isFalse);
+      expect(values.containsKey('minos.account_id'), isFalse);
+      expect(values.containsKey('minos.account_email'), isFalse);
+    },
+  );
 
   test('loadState wipes a half-set auth tuple', () async {
     final store = SecurePairingStore(storage: storage);

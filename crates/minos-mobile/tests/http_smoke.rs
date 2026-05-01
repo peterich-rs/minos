@@ -106,10 +106,7 @@ async fn auth_register_then_login_then_refresh_roundtrip() {
         .register("flow@example.com", "testpass1")
         .await
         .unwrap();
-    let logged_in = client
-        .login("flow@example.com", "testpass1")
-        .await
-        .unwrap();
+    let logged_in = client.login("flow@example.com", "testpass1").await.unwrap();
     assert_ne!(
         logged_in.refresh_token, registered.refresh_token,
         "login mints a fresh refresh token"

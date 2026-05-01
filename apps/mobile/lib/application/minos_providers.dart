@@ -69,9 +69,7 @@ class ActiveMac extends _$ActiveMac {
     } catch (e, st) {
       state = AsyncValue.error(e, st);
       try {
-        state = AsyncValue.data(
-          await ref.read(minosCoreProvider).activeMac(),
-        );
+        state = AsyncValue.data(await ref.read(minosCoreProvider).activeMac());
       } catch (_) {
         state = previous;
       }
