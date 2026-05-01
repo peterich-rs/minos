@@ -34,6 +34,7 @@ use anyhow::Result;
 use minos_agent_runtime::AgentKind;
 use minos_protocol::Envelope;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -64,6 +65,11 @@ pub struct Reconciliator {
     store: Arc<LocalStore>,
     writer: Arc<EventWriter>,
     relay_out: mpsc::Sender<Envelope>,
+    /// Optional override for the directory the codex CLI uses as its
+    /// "home". Production leaves this `None` so JSONL recovery resolves
+    /// against `$HOME`; tests pass a temp dir to avoid touching the
+    /// developer's real `~/.codex`.
+    codex_home_override: Option<PathBuf>,
 }
 
 impl Reconciliator {
@@ -76,6 +82,25 @@ impl Reconciliator {
             store,
             writer,
             relay_out,
+            codex_home_override: None,
+        }
+    }
+
+    /// Same as [`Self::new`] but routes JSONL recovery against
+    /// `codex_home_root` (the directory that contains `.codex/sessions/`)
+    /// instead of `$HOME`. Used by integration tests to stage a fake
+    /// codex home under a tempdir.
+    pub fn with_codex_home(
+        store: Arc<LocalStore>,
+        writer: Arc<EventWriter>,
+        relay_out: mpsc::Sender<Envelope>,
+        codex_home_root: PathBuf,
+    ) -> Self {
+        Self {
+            store,
+            writer,
+            relay_out,
+            codex_home_override: Some(codex_home_root),
         }
     }
 
@@ -167,8 +192,27 @@ impl Reconciliator {
                 to_seq,
                 "DB gap detected; attempting jsonl fallback"
             );
-            crate::jsonl_recover::recover(thread_id, &missing, codex_session_id, &self.writer)
-                .await?;
+            match self.codex_home_override.as_deref() {
+                Some(root) => {
+                    crate::jsonl_recover::recover_with_root(
+                        thread_id,
+                        &missing,
+                        codex_session_id,
+                        root,
+                        &self.writer,
+                    )
+                    .await?;
+                }
+                None => {
+                    crate::jsonl_recover::recover(
+                        thread_id,
+                        &missing,
+                        codex_session_id,
+                        &self.writer,
+                    )
+                    .await?;
+                }
+            }
         }
         Ok(())
     }
