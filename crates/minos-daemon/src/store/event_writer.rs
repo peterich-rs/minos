@@ -60,55 +60,117 @@ async fn writer_loop(
     relay_out: mpsc::Sender<minos_protocol::Envelope>,
     mut rx: mpsc::Receiver<WriteJob>,
 ) {
-    while let Some(job) = rx.recv().await {
-        let res = process_one(&store, &relay_out, job.ingest.clone(), job.source).await;
-        let _ = job.ack.send(res);
+    use tokio::time::{Duration, Instant};
+    const BATCH_MAX: usize = 100;
+    const BATCH_WINDOW: Duration = Duration::from_millis(5);
+
+    let mut buf: Vec<WriteJob> = Vec::with_capacity(BATCH_MAX);
+    while let Some(first) = rx.recv().await {
+        buf.push(first);
+        let deadline = Instant::now() + BATCH_WINDOW;
+        while buf.len() < BATCH_MAX {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Some(job)) => buf.push(job),
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        process_batch(&store, &relay_out, std::mem::take(&mut buf)).await;
     }
 }
 
-async fn process_one(
+async fn process_batch(
     store: &LocalStore,
     relay_out: &mpsc::Sender<minos_protocol::Envelope>,
-    ingest: RawIngest,
-    source: EventSource,
-) -> Result<u64> {
-    let mut tx = store.pool().begin().await?;
-    let prev: Option<i64> = sqlx::query_scalar("SELECT last_seq FROM threads WHERE thread_id = ?")
-        .bind(&ingest.thread_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let seq = (prev.unwrap_or(0) + 1) as u64;
-    let payload_bytes = serde_json::to_vec(&ingest.payload)?;
-    sqlx::query(
-        "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&ingest.thread_id)
-    .bind(seq as i64)
-    .bind(&payload_bytes)
-    .bind(ingest.ts_ms)
-    .bind(match source {
-        EventSource::Live => "live",
-        EventSource::JsonlRecovery => "jsonl_recovery",
-    })
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("UPDATE threads SET last_seq = ?, last_activity_at = ? WHERE thread_id = ?")
-        .bind(seq as i64)
-        .bind(ingest.ts_ms)
-        .bind(&ingest.thread_id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    let env = minos_protocol::Envelope::Ingest {
-        version: 1,
-        agent: ingest.agent,
-        thread_id: ingest.thread_id.clone(),
-        seq,
-        payload: ingest.payload.clone(),
-        ts_ms: ingest.ts_ms,
+    jobs: Vec<WriteJob>,
+) {
+    if jobs.is_empty() {
+        return;
+    }
+    let mut tx = match store.pool().begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            let err = std::sync::Arc::new(e);
+            for j in jobs {
+                let _ = j.ack.send(Err(anyhow::anyhow!("begin tx: {}", err)));
+            }
+            return;
+        }
     };
-    let _ = relay_out.send(env).await;
-    Ok(seq)
+    let mut results: Vec<Result<u64>> = Vec::with_capacity(jobs.len());
+    let mut envs: Vec<minos_protocol::Envelope> = Vec::with_capacity(jobs.len());
+    for job in &jobs {
+        let prev: Option<i64> =
+            match sqlx::query_scalar("SELECT last_seq FROM threads WHERE thread_id = ?")
+                .bind(&job.ingest.thread_id)
+                .fetch_optional(&mut *tx)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    results.push(Err(e.into()));
+                    continue;
+                }
+            };
+        let seq = (prev.unwrap_or(0) + 1) as u64;
+        let payload = match serde_json::to_vec(&job.ingest.payload) {
+            Ok(v) => v,
+            Err(e) => {
+                results.push(Err(e.into()));
+                continue;
+            }
+        };
+        if let Err(e) = sqlx::query(
+            "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&job.ingest.thread_id)
+        .bind(seq as i64)
+        .bind(&payload)
+        .bind(job.ingest.ts_ms)
+        .bind(match job.source {
+            EventSource::Live => "live",
+            EventSource::JsonlRecovery => "jsonl_recovery",
+        })
+        .execute(&mut *tx)
+        .await
+        {
+            results.push(Err(e.into()));
+            continue;
+        }
+        if let Err(e) =
+            sqlx::query("UPDATE threads SET last_seq = ?, last_activity_at = ? WHERE thread_id = ?")
+                .bind(seq as i64)
+                .bind(job.ingest.ts_ms)
+                .bind(&job.ingest.thread_id)
+                .execute(&mut *tx)
+                .await
+        {
+            results.push(Err(e.into()));
+            continue;
+        }
+        results.push(Ok(seq));
+        envs.push(minos_protocol::Envelope::Ingest {
+            version: 1,
+            agent: job.ingest.agent,
+            thread_id: job.ingest.thread_id.clone(),
+            seq,
+            payload: job.ingest.payload.clone(),
+            ts_ms: job.ingest.ts_ms,
+        });
+    }
+    if let Err(e) = tx.commit().await {
+        for (job, _) in jobs.into_iter().zip(results.into_iter()) {
+            let _ = job.ack.send(Err(anyhow::anyhow!("commit: {}", e)));
+        }
+        return;
+    }
+    for (job, r) in jobs.into_iter().zip(results.into_iter()) {
+        let _ = job.ack.send(r);
+    }
+    for env in envs {
+        let _ = relay_out.send(env).await;
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +191,55 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn batches_within_5ms_window() {
+        use std::time::Duration;
+        use tokio::time::Instant;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            LocalStore::open(&tmp.path().join("t.sqlite"))
+                .await
+                .unwrap(),
+        );
+        seed_thread(&store, "thr-B").await;
+        let (relay_tx, mut relay_rx) = mpsc::channel(256);
+        let writer = EventWriter::spawn(store.clone(), relay_tx);
+
+        let start = Instant::now();
+        let mut handles = Vec::new();
+        for i in 0..50 {
+            let w = writer.clone();
+            handles.push(tokio::spawn(async move {
+                w.write_live(RawIngest {
+                    agent: minos_agent_runtime::AgentKind::Codex,
+                    thread_id: "thr-B".into(),
+                    payload: serde_json::json!({"i": i}),
+                    ts_ms: i as i64,
+                })
+                .await
+                .unwrap()
+            }));
+        }
+        for h in handles {
+            let _ = h.await;
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "50 events should commit fast: {:?}",
+            elapsed
+        );
+
+        let mut got = 0;
+        while let Ok(_) = tokio::time::timeout(Duration::from_millis(200), relay_rx.recv()).await {
+            got += 1;
+            if got == 50 {
+                break;
+            }
+        }
+        assert_eq!(got, 50);
     }
 
     #[tokio::test]
