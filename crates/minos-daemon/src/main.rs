@@ -55,7 +55,6 @@ struct CliPaths {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let resolved_paths = resolve_paths(&cli.paths)?;
-    apply_paths(&resolved_paths);
 
     match cli.command {
         Command::Doctor => doctor(&resolved_paths).await,
@@ -108,7 +107,10 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
 
 fn resolve_paths(args: &CliPaths) -> Result<ResolvedPaths, Box<dyn std::error::Error>> {
     if args.platform_paths {
-        let data_dir = args.data_dir.clone().unwrap_or_else(platform_data_dir);
+        let data_dir = match args.data_dir.clone() {
+            Some(p) => p,
+            None => paths::state_dir()?,
+        };
         let log_dir = match args.log_dir.clone() {
             Some(p) => p,
             None => platform_log_dir()?,
@@ -139,24 +141,6 @@ fn resolve_paths(args: &CliPaths) -> Result<ResolvedPaths, Box<dyn std::error::E
         data_dir,
         log_dir,
     })
-}
-
-fn apply_paths(paths: &ResolvedPaths) {
-    env::set_var("MINOS_DATA_DIR", &paths.data_dir);
-    env::set_var("MINOS_LOG_DIR", &paths.log_dir);
-}
-
-fn platform_data_dir() -> PathBuf {
-    if let Ok(dir) = env::var("MINOS_DATA_DIR") {
-        return PathBuf::from(dir);
-    }
-
-    let home = env::var("HOME").unwrap_or_else(|_| ".".into());
-    if cfg!(target_os = "macos") {
-        PathBuf::from(home).join("Library/Application Support/minos")
-    } else {
-        PathBuf::from(home).join(".minos")
-    }
 }
 
 fn platform_log_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
