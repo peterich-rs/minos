@@ -325,8 +325,49 @@ impl AgentManager {
         }
     }
 
-    async fn implicit_resume(&self, _thread_id: &str, _text: String) -> anyhow::Result<()> {
-        anyhow::bail!("implicit_resume unimplemented (C13)")
+    async fn implicit_resume(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
+        let handle = self
+            .threads
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("thread not found"))?;
+        let from_state = handle.current_state();
+        handle.transition(ThreadState::Resuming)?;
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old: from_state,
+            new: ThreadState::Resuming,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        let workspace = handle.workspace.clone();
+        let codex_session_id = handle.codex_session_id.clone();
+
+        let inst = self.ensure_instance(&workspace).await?;
+        if let Some(sid) = codex_session_id {
+            inst.start_thread_resume(thread_id, &sid).await?;
+        } else {
+            let _ = handle.transition(ThreadState::Closed {
+                reason: crate::state_machine::CloseReason::TerminalError,
+            });
+            anyhow::bail!("resume failed: no codex_session_id");
+        }
+        handle.transition(ThreadState::Idle)?;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let new_state = ThreadState::Running {
+            turn_started_at_ms: now_ms,
+        };
+        handle.transition(new_state.clone())?;
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old: ThreadState::Idle,
+            new: new_state,
+            at_ms: now_ms,
+        });
+        inst.touch().await;
+        inst.send_user_message(thread_id, &text).await?;
+        Ok(())
     }
 
     pub async fn list_threads(&self) -> Vec<crate::store_facing::ThreadSnapshot> {
@@ -512,5 +553,14 @@ mod tests {
         let snap = mgr.list_threads().await;
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].workspace, ws);
+    }
+
+    #[tokio::test]
+    #[ignore = "implicit_resume requires FakeCodexBackend; full coverage lands in C22 multi-session smoke"]
+    async fn implicit_resume_from_suspended() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        let mgr = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+        let _ = mgr;
     }
 }
