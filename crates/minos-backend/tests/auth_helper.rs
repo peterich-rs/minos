@@ -53,7 +53,7 @@ async fn role_mismatch_against_existing_row_is_unauthorized() {
         .unwrap();
     let headers = header_map(&[
         ("x-device-id", &id.to_string()),
-        ("x-device-role", "ios-client"),
+        ("x-device-role", "mobile-client"),
     ]);
     let err = authenticate(&pool, &headers).await.unwrap_err();
     assert!(matches!(err, AuthError::Unauthorized(_)));

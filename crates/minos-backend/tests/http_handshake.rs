@@ -114,7 +114,7 @@ async fn devices_first_connect_emits_unpaired_event() {
     .expect("sign test bearer");
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", id.to_string())
-        .with_header("X-Device-Role", DeviceRole::IosClient.to_string())
+        .with_header("X-Device-Role", DeviceRole::MobileClient.to_string())
         .with_header("X-Device-Name", "my-phone".to_string())
         .with_header("Authorization", format!("Bearer {token}"));
 
@@ -144,7 +144,7 @@ async fn devices_first_connect_emits_unpaired_event() {
         .unwrap()
         .unwrap();
     assert_eq!(row.display_name, "my-phone");
-    assert_eq!(row.role, DeviceRole::IosClient);
+    assert_eq!(row.role, DeviceRole::MobileClient);
     assert!(
         row.secret_hash.is_none(),
         "first connect must have NULL hash"
@@ -234,7 +234,7 @@ async fn devices_role_spoof_rejects_with_401() {
     let url: Uri = format!("{}/devices", http_to_ws(&base)).parse().unwrap();
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", id.to_string())
-        .with_header("X-Device-Role", DeviceRole::IosClient.to_string())
+        .with_header("X-Device-Role", DeviceRole::MobileClient.to_string())
         .with_header("X-Device-Secret", secret.as_str().to_string());
     let err = tokio_tungstenite::connect_async(builder)
         .await
@@ -251,7 +251,7 @@ async fn devices_wrong_secret_rejects_with_401() {
     let id = DeviceId::new();
     let good = DeviceSecret::generate();
     let good_hash = hash_secret(&good).unwrap();
-    store::devices::insert_device(&pool, id, "x", DeviceRole::IosClient, 0)
+    store::devices::insert_device(&pool, id, "x", DeviceRole::MobileClient, 0)
         .await
         .unwrap();
     store::devices::upsert_secret_hash(&pool, id, &good_hash)
@@ -282,7 +282,7 @@ async fn devices_ios_upgrade_without_bearer_rejects_with_401() {
     // iOS role + valid X-Device-Id but no Authorization header.
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", id.to_string())
-        .with_header("X-Device-Role", DeviceRole::IosClient.to_string());
+        .with_header("X-Device-Role", DeviceRole::MobileClient.to_string());
     let err = tokio_tungstenite::connect_async(builder)
         .await
         .expect_err("ios upgrade without bearer must fail");
@@ -302,7 +302,7 @@ async fn devices_ios_upgrade_with_did_mismatch_rejects_with_401() {
     let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &token_did.to_string()).unwrap();
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", header_id.to_string())
-        .with_header("X-Device-Role", DeviceRole::IosClient.to_string())
+        .with_header("X-Device-Role", DeviceRole::MobileClient.to_string())
         .with_header("Authorization", format!("Bearer {token}"));
     let err = tokio_tungstenite::connect_async(builder)
         .await
@@ -319,7 +319,7 @@ async fn devices_missing_secret_on_authed_device_rejects_with_401() {
     let id = DeviceId::new();
     let good = DeviceSecret::generate();
     let good_hash = hash_secret(&good).unwrap();
-    store::devices::insert_device(&pool, id, "x", DeviceRole::IosClient, 0)
+    store::devices::insert_device(&pool, id, "x", DeviceRole::MobileClient, 0)
         .await
         .unwrap();
     store::devices::upsert_secret_hash(&pool, id, &good_hash)

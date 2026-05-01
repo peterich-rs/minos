@@ -33,7 +33,7 @@
 //!
 //! # Role default
 //!
-//! The plan pins `IosClient` as the MVP default when `X-Device-Role` is
+//! The plan pins `MobileClient` as the MVP default when `X-Device-Role` is
 //! absent on first registration. For existing rows, the backend trusts the
 //! stored role and rejects any mismatching header instead of reclassifying
 //! the device from client input.
@@ -112,7 +112,7 @@ pub async fn upgrade(
     // bearer JWT bound to the same `X-Device-Id` for the WS upgrade. The
     // Mac (`AgentHost`) rail keeps the device-secret-only path so existing
     // pairings continue to authenticate without an account-side token.
-    let account_id: Option<String> = if role == DeviceRole::IosClient {
+    let account_id: Option<String> = if role == DeviceRole::MobileClient {
         let bearer_outcome =
             bearer::require(&state, &headers).map_err(bearer::BearerError::into_response_tuple)?;
         Some(bearer_outcome.account_id)
@@ -279,11 +279,11 @@ mod tests {
     async fn revalidate_live_session_auth_allows_unpaired_existing_row() {
         let pool = memory_pool().await;
         let id = DeviceId::new();
-        insert_device(&pool, id, "ios", DeviceRole::IosClient, 0)
+        insert_device(&pool, id, "ios", DeviceRole::MobileClient, 0)
             .await
             .unwrap();
 
-        revalidate_live_session_auth(&pool, id, DeviceRole::IosClient, None, None)
+        revalidate_live_session_auth(&pool, id, DeviceRole::MobileClient, None, None)
             .await
             .expect("UnpairedExisting must admit the socket");
     }
@@ -365,7 +365,7 @@ mod tests {
     async fn activate_live_session_registers_only_when_called() {
         let registry = SessionRegistry::new();
         let device_id = DeviceId::new();
-        let (handle, mut outbox_rx) = SessionHandle::new(device_id, DeviceRole::IosClient);
+        let (handle, mut outbox_rx) = SessionHandle::new(device_id, DeviceRole::MobileClient);
 
         assert!(
             registry.is_empty(),
@@ -403,7 +403,7 @@ mod tests {
         let registry = SessionRegistry::new();
         let device_id = DeviceId::new();
 
-        let (first_handle, mut first_rx) = SessionHandle::new(device_id, DeviceRole::IosClient);
+        let (first_handle, mut first_rx) = SessionHandle::new(device_id, DeviceRole::MobileClient);
         activate_live_session(&registry, &first_handle);
 
         match first_rx.recv().await.expect("first session initial event") {
@@ -416,7 +416,7 @@ mod tests {
 
         let mut revoked = first_handle.subscribe_revocation();
         let (replacement_handle, mut replacement_rx) =
-            SessionHandle::new(device_id, DeviceRole::IosClient);
+            SessionHandle::new(device_id, DeviceRole::MobileClient);
 
         activate_live_session(&registry, &replacement_handle);
 

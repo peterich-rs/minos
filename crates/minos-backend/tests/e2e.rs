@@ -118,7 +118,7 @@ async fn connect_client(
     // pre-date the account model so they don't have a "real" account to
     // log in as — synthesise a token bound to the same `device_id` here so
     // the existing scenarios still exercise the post-upgrade behaviour.
-    let token = (role == DeviceRole::IosClient).then(|| {
+    let token = (role == DeviceRole::MobileClient).then(|| {
         jwt::sign(
             TEST_JWT_SECRET.as_bytes(),
             "e2e-acct",
@@ -234,13 +234,13 @@ async fn e2e_reconnect_with_wrong_secret_returns_401() -> anyhow::Result<()> {
     let id = DeviceId::new();
     let good = DeviceSecret::generate();
     let good_hash = hash_secret(&good)?;
-    store::devices::insert_device(&relay.pool, id, "seeded", DeviceRole::IosClient, 0).await?;
+    store::devices::insert_device(&relay.pool, id, "seeded", DeviceRole::MobileClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, id, &good_hash).await?;
 
     let err = connect_client(
         &relay,
         id,
-        DeviceRole::IosClient,
+        DeviceRole::MobileClient,
         Some("definitely-not-the-right-secret"),
         None,
     )
@@ -262,13 +262,13 @@ async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
     let id = DeviceId::new();
     let secret = DeviceSecret::generate();
     let secret_hash = hash_secret(&secret)?;
-    store::devices::insert_device(&relay.pool, id, "ios", DeviceRole::IosClient, 0).await?;
+    store::devices::insert_device(&relay.pool, id, "ios", DeviceRole::MobileClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, id, &secret_hash).await?;
 
     let mut first = connect_client(
         &relay,
         id,
-        DeviceRole::IosClient,
+        DeviceRole::MobileClient,
         Some(secret.as_str()),
         Some("ios"),
     )
@@ -278,7 +278,7 @@ async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
     let mut second = connect_client(
         &relay,
         id,
-        DeviceRole::IosClient,
+        DeviceRole::MobileClient,
         Some(secret.as_str()),
         Some("ios"),
     )
@@ -345,7 +345,7 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let ios_hash = hash_secret(&ios_secret)?;
 
     store::devices::insert_device(&relay.pool, mac_id, "mac", DeviceRole::AgentHost, 0).await?;
-    store::devices::insert_device(&relay.pool, ios_id, "ios", DeviceRole::IosClient, 0).await?;
+    store::devices::insert_device(&relay.pool, ios_id, "ios", DeviceRole::MobileClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, mac_id, &mac_hash).await?;
     store::devices::upsert_secret_hash(&relay.pool, ios_id, &ios_hash).await?;
     // ADR-0020: insert via account_mac_pairings instead of legacy device-keyed
@@ -376,7 +376,7 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let mut ios = connect_client(
         &relay,
         ios_id,
-        DeviceRole::IosClient,
+        DeviceRole::MobileClient,
         Some(ios_secret.as_str()),
         Some("ios"),
     )

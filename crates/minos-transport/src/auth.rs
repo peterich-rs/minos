@@ -144,7 +144,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn sample() -> (DeviceId, DeviceRole) {
-        (DeviceId::new(), DeviceRole::IosClient)
+        (DeviceId::new(), DeviceRole::MobileClient)
     }
 
     #[test]
@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(rendered[0].0, "X-Device-Id");
         assert_eq!(rendered[0].1, id.to_string());
         assert_eq!(rendered[1].0, "X-Device-Role");
-        assert_eq!(rendered[1].1, "ios-client");
+        assert_eq!(rendered[1].1, "mobile-client");
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
         // Covers all three variants — the header value is the Display impl.
         for (role, expected) in [
             (DeviceRole::AgentHost, "agent-host"),
-            (DeviceRole::IosClient, "ios-client"),
+            (DeviceRole::MobileClient, "mobile-client"),
             (DeviceRole::BrowserAdmin, "browser-admin"),
         ] {
             let headers = AuthHeaders::new(DeviceId::new(), role);

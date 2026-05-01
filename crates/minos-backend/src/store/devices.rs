@@ -363,7 +363,7 @@ mod tests {
             .await
             .unwrap();
         let id = DeviceId::new();
-        insert_device(&pool, id, "iphone", DeviceRole::IosClient, T0)
+        insert_device(&pool, id, "iphone", DeviceRole::MobileClient, T0)
             .await
             .unwrap();
         set_account_id(&pool, &id, &account.account_id)
@@ -384,7 +384,7 @@ mod tests {
     async fn upsert_secret_hash_sets_hash_visible_to_get() {
         let pool = memory_pool().await;
         let id = DeviceId::new();
-        insert_device(&pool, id, "ipad", DeviceRole::IosClient, T0)
+        insert_device(&pool, id, "ipad", DeviceRole::MobileClient, T0)
             .await
             .unwrap();
 
@@ -407,7 +407,7 @@ mod tests {
     async fn clear_secret_hash_removes_hash_visible_to_get() {
         let pool = memory_pool().await;
         let id = DeviceId::new();
-        insert_device(&pool, id, "ipad", DeviceRole::IosClient, T0)
+        insert_device(&pool, id, "ipad", DeviceRole::MobileClient, T0)
             .await
             .unwrap();
         upsert_secret_hash(&pool, id, "$argon2id$v=19$m=19456,t=2,p=1$salt$hash")
@@ -478,7 +478,7 @@ mod tests {
         // change can't silently start populating the column on iOS.
         let pool = memory_pool().await;
         let id = DeviceId::new();
-        insert_device(&pool, id, "iPhone", DeviceRole::IosClient, 0)
+        insert_device(&pool, id, "iPhone", DeviceRole::MobileClient, 0)
             .await
             .unwrap();
         let row = get_device(&pool, id).await.unwrap().unwrap();

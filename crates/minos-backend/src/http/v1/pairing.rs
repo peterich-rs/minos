@@ -92,7 +92,7 @@ async fn post_consume(
     headers: HeaderMap,
     Json(params): Json<PairConsumeRequest>,
 ) -> Result<Json<PairResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let outcome = auth::authenticate_role(&state.store, &headers, DeviceRole::IosClient)
+    let outcome = auth::authenticate_role(&state.store, &headers, DeviceRole::MobileClient)
         .await
         .map_err(|e| match e {
             auth::AuthError::Unauthorized(m) => {

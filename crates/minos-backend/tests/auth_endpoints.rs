@@ -34,7 +34,10 @@ async fn post_json(
 }
 
 fn ios_headers(device_id: &str) -> Vec<(&str, &str)> {
-    vec![("x-device-id", device_id), ("x-device-role", "ios-client")]
+    vec![
+        ("x-device-id", device_id),
+        ("x-device-role", "mobile-client"),
+    ]
 }
 
 #[tokio::test]
@@ -101,7 +104,7 @@ async fn auth_register_login_refresh_logout_happy_path() {
         "/v1/auth/logout",
         &[
             ("x-device-id", &device_id),
-            ("x-device-role", "ios-client"),
+            ("x-device-role", "mobile-client"),
             ("authorization", &auth_hdr),
         ],
         json!({"refresh_token": final_refresh}),
@@ -255,7 +258,7 @@ async fn auth_login_keeps_other_iphone_ws_sessions_for_same_account() {
     // Simulate device A's live WS by directly inserting a SessionHandle
     // bound to the account. (The HTTP-only test app doesn't go through
     // /devices, so we model the post-upgrade state manually.)
-    let (handle_a, mut rx_a) = SessionHandle::new(device_a_id, DeviceRole::IosClient);
+    let (handle_a, mut rx_a) = SessionHandle::new(device_a_id, DeviceRole::MobileClient);
     handle_a.set_account_id(account_id.clone());
     state.registry.insert(handle_a.clone());
     let a_revoked = handle_a.subscribe_revocation();
@@ -315,7 +318,7 @@ async fn auth_refresh_with_revoked_token_returns_401() {
         "/v1/auth/logout",
         &[
             ("x-device-id", &device_id),
-            ("x-device-role", "ios-client"),
+            ("x-device-role", "mobile-client"),
             ("authorization", &auth_hdr),
         ],
         json!({"refresh_token": refresh}),
@@ -413,7 +416,7 @@ async fn auth_logout_revokes_only_current_refresh_token() {
         "/v1/auth/logout",
         &[
             ("x-device-id", &device_id),
-            ("x-device-role", "ios-client"),
+            ("x-device-role", "mobile-client"),
             ("authorization", &auth_hdr),
         ],
         json!({"refresh_token": r2}),
@@ -478,7 +481,7 @@ async fn auth_rate_limit_login_returns_429_with_retry_after() {
             .uri("/v1/auth/login")
             .header("content-type", "application/json")
             .header("x-device-id", &device_id)
-            .header("x-device-role", "ios-client")
+            .header("x-device-role", "mobile-client")
             .header("x-forwarded-for", ip)
             .body(json_body(json!({
                 "email": "rl@example.com",

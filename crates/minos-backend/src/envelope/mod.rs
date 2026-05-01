@@ -597,7 +597,7 @@ mod tests {
         // Mac is paired in DB but no live session in the registry → offline.
         let (pool, account, mac, ios) = paired_fixture().await;
         let registry = SessionRegistry::new();
-        let (session, _rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (session, _rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
         session.set_account_id(account);
 
         let orig = serde_json::json!({
@@ -633,7 +633,7 @@ mod tests {
         let ios = insert_ios_device(&pool, &account).await;
         let mac_target = DeviceId::new(); // never paired
         let registry = SessionRegistry::new();
-        let (session, _rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (session, _rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
         session.set_account_id(account);
 
         // Payload with no `id` key → synthesised id must be null.
@@ -654,7 +654,7 @@ mod tests {
         let registry = SessionRegistry::new();
         let sender_id = DeviceId::new();
         let target = DeviceId::new();
-        let (session, _rx) = SessionHandle::new(sender_id, DeviceRole::IosClient);
+        let (session, _rx) = SessionHandle::new(sender_id, DeviceRole::MobileClient);
         // No set_account_id → handler bails with peer_offline.
 
         let orig = serde_json::json!({"method": "x", "id": 1});
@@ -676,7 +676,7 @@ mod tests {
         let (pool, account, mac, ios) = paired_fixture().await;
         let registry = SessionRegistry::new();
 
-        let (ha, _rxa) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (ha, _rxa) = SessionHandle::new(ios, DeviceRole::MobileClient);
         let (hb, mut rxb) = SessionHandle::new(mac, DeviceRole::AgentHost);
         ha.set_account_id(account.clone());
         hb.set_account_id(account);
@@ -725,8 +725,8 @@ mod tests {
 
         let registry = SessionRegistry::new();
         let (mac, _mac_rx) = SessionHandle::new(mac_id, DeviceRole::AgentHost);
-        let (a, _a_rx) = SessionHandle::new(ios_a, DeviceRole::IosClient);
-        let (b, mut b_rx) = SessionHandle::new(ios_b, DeviceRole::IosClient);
+        let (a, _a_rx) = SessionHandle::new(ios_a, DeviceRole::MobileClient);
+        let (b, mut b_rx) = SessionHandle::new(ios_b, DeviceRole::MobileClient);
         mac.set_account_id(account.clone());
         a.set_account_id(account.clone());
         b.set_account_id(account);
@@ -770,7 +770,7 @@ mod tests {
     async fn handle_forward_full_outbox_synthesizes_jsonrpc_backpressure_error() {
         let (pool, account, mac, ios) = paired_fixture().await;
         let registry = SessionRegistry::new();
-        let (ha, _rxa) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (ha, _rxa) = SessionHandle::new(ios, DeviceRole::MobileClient);
         let (hb, _rxb) = SessionHandle::new(mac, DeviceRole::AgentHost);
         ha.set_account_id(account.clone());
         hb.set_account_id(account);

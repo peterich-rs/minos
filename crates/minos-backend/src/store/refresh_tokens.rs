@@ -189,7 +189,7 @@ mod tests {
             .await
             .unwrap();
         let device_id = DeviceId::new();
-        insert_device(pool, device_id, "iphone", DeviceRole::IosClient, T0)
+        insert_device(pool, device_id, "iphone", DeviceRole::MobileClient, T0)
             .await
             .unwrap();
         (account.account_id, device_id.to_string())
@@ -271,7 +271,7 @@ mod tests {
         let pool = memory_pool().await;
         let (account_id, device_a) = setup_account_and_device(&pool).await;
         let device_b = DeviceId::new();
-        insert_device(&pool, device_b, "ipad", DeviceRole::IosClient, T0)
+        insert_device(&pool, device_b, "ipad", DeviceRole::MobileClient, T0)
             .await
             .unwrap();
         let device_b = device_b.to_string();

@@ -5,7 +5,7 @@
 //! - `agent`       AgentName / AgentStatus / AgentDescriptor
 //! - `connection`  ConnectionState
 //! - `pairing_state`  PairingState (used inside MinosError)
-//! - `role`        DeviceRole (AgentHost / IosClient / BrowserAdmin)
+//! - `role`        DeviceRole (AgentHost / MobileClient / BrowserAdmin)
 //! - `error`       Lang, ErrorKind, MinosError + user_message
 
 #![forbid(unsafe_code)]

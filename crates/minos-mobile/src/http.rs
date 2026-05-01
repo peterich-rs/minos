@@ -72,7 +72,7 @@ impl MobileHttpClient {
             client,
             base,
             device_id,
-            device_role: "ios-client",
+            device_role: "mobile-client",
             cf_access,
         })
     }

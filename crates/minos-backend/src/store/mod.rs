@@ -109,7 +109,7 @@ pub mod test_support {
     pub async fn insert_ios_device(pool: &SqlitePool, account_id: &str) -> DeviceId {
         let id = DeviceId::new();
         let id_str = id.to_string();
-        let role_str = DeviceRole::IosClient.to_string();
+        let role_str = DeviceRole::MobileClient.to_string();
         sqlx::query(
             "INSERT INTO devices (device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id)
              VALUES (?, ?, ?, NULL, ?, ?, ?)",

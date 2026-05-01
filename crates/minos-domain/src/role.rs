@@ -16,8 +16,8 @@ pub enum DeviceRole {
     /// Agent-host daemon (macOS today, platform-neutral name for future
     /// Linux/Windows ports). One per account at MVP.
     AgentHost,
-    /// iOS client app.
-    IosClient,
+    /// Mobile client app (iOS today, Android in the future).
+    MobileClient,
     /// Browser-based admin console.
     BrowserAdmin,
 }
@@ -26,7 +26,7 @@ impl fmt::Display for DeviceRole {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::AgentHost => "agent-host",
-            Self::IosClient => "ios-client",
+            Self::MobileClient => "mobile-client",
             Self::BrowserAdmin => "browser-admin",
         })
     }
@@ -38,7 +38,7 @@ impl FromStr for DeviceRole {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "agent-host" => Ok(Self::AgentHost),
-            "ios-client" => Ok(Self::IosClient),
+            "mobile-client" => Ok(Self::MobileClient),
             "browser-admin" => Ok(Self::BrowserAdmin),
             other => Err(format!("unknown device role: {other}")),
         }
@@ -52,7 +52,7 @@ mod tests {
     #[test]
     fn display_is_kebab_case() {
         assert_eq!(DeviceRole::AgentHost.to_string(), "agent-host");
-        assert_eq!(DeviceRole::IosClient.to_string(), "ios-client");
+        assert_eq!(DeviceRole::MobileClient.to_string(), "mobile-client");
         assert_eq!(DeviceRole::BrowserAdmin.to_string(), "browser-admin");
     }
 
@@ -60,7 +60,7 @@ mod tests {
     fn from_str_round_trips_display() {
         for role in [
             DeviceRole::AgentHost,
-            DeviceRole::IosClient,
+            DeviceRole::MobileClient,
             DeviceRole::BrowserAdmin,
         ] {
             let wire = role.to_string();
@@ -84,16 +84,16 @@ mod tests {
             "\"agent-host\""
         );
         assert_eq!(
-            serde_json::to_string(&DeviceRole::IosClient).unwrap(),
-            "\"ios-client\""
+            serde_json::to_string(&DeviceRole::MobileClient).unwrap(),
+            "\"mobile-client\""
         );
         assert_eq!(
             serde_json::to_string(&DeviceRole::BrowserAdmin).unwrap(),
             "\"browser-admin\""
         );
 
-        let back: DeviceRole = serde_json::from_str("\"ios-client\"").unwrap();
-        assert_eq!(back, DeviceRole::IosClient);
+        let back: DeviceRole = serde_json::from_str("\"mobile-client\"").unwrap();
+        assert_eq!(back, DeviceRole::MobileClient);
     }
 
     #[test]
@@ -101,7 +101,7 @@ mod tests {
         // Catch any drift between the serde rename and the manual Display.
         for role in [
             DeviceRole::AgentHost,
-            DeviceRole::IosClient,
+            DeviceRole::MobileClient,
             DeviceRole::BrowserAdmin,
         ] {
             let from_serde = serde_json::to_string(&role).unwrap();

@@ -271,7 +271,7 @@ async fn broadcast_to_peers_of(
 
         for device in devices
             .iter()
-            .filter(|d| d.role == minos_domain::DeviceRole::IosClient)
+            .filter(|d| d.role == minos_domain::DeviceRole::MobileClient)
         {
             let Some(handle) = registry.get(device.device_id) else {
                 tracing::debug!(

@@ -294,7 +294,7 @@ async fn run_pair_then_tail(
     );
     request.headers_mut().insert(
         HeaderName::from_static("x-device-role"),
-        DeviceRole::IosClient
+        DeviceRole::MobileClient
             .to_string()
             .parse()
             .context("encode device-role header")?,

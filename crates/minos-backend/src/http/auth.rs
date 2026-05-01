@@ -195,7 +195,7 @@ pub fn resolve_device_role(
             }
             Ok(row.role)
         }
-        None => Ok(requested_role.unwrap_or(DeviceRole::IosClient)),
+        None => Ok(requested_role.unwrap_or(DeviceRole::MobileClient)),
     }
 }
 
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn resolve_device_role_first_connect_defaults_to_ios_client() {
         let role = resolve_device_role(None, None).unwrap();
-        assert_eq!(role, DeviceRole::IosClient);
+        assert_eq!(role, DeviceRole::MobileClient);
     }
 
     #[test]
@@ -300,7 +300,7 @@ mod tests {
             account_id: None,
         };
 
-        let err = resolve_device_role(Some(&row), Some(DeviceRole::IosClient)).unwrap_err();
+        let err = resolve_device_role(Some(&row), Some(DeviceRole::MobileClient)).unwrap_err();
         assert!(matches!(err, AuthError::Unauthorized(ref m) if m.contains("mismatch")));
     }
 
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn classify_no_row_is_first_connect() {
-        let out = classify(None, None, DeviceRole::IosClient).unwrap();
+        let out = classify(None, None, DeviceRole::MobileClient).unwrap();
         assert!(matches!(out, Classification::FirstConnect));
     }
 
@@ -329,13 +329,13 @@ mod tests {
         let row = DeviceRow {
             device_id: DeviceId::new(),
             display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
+            role: DeviceRole::MobileClient,
             secret_hash: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
         };
-        let out = classify(Some(row), None, DeviceRole::IosClient).unwrap();
+        let out = classify(Some(row), None, DeviceRole::MobileClient).unwrap();
         assert!(matches!(out, Classification::UnpairedExisting));
     }
 
@@ -344,13 +344,13 @@ mod tests {
         let row = DeviceRow {
             device_id: DeviceId::new(),
             display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
+            role: DeviceRole::MobileClient,
             secret_hash: Some("$argon2id$v=19$m=19456,t=2,p=1$abc$def".to_string()),
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
         };
-        let err = classify(Some(row), None, DeviceRole::IosClient).unwrap_err();
+        let err = classify(Some(row), None, DeviceRole::MobileClient).unwrap_err();
         assert!(
             matches!(err, AuthError::Unauthorized(ref m) if m.contains("X-Device-Secret required"))
         );
@@ -364,13 +364,13 @@ mod tests {
         let row = DeviceRow {
             device_id: DeviceId::new(),
             display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
+            role: DeviceRole::MobileClient,
             secret_hash: Some(hash),
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
         };
-        let out = classify(Some(row), Some(plain.as_str()), DeviceRole::IosClient).unwrap();
+        let out = classify(Some(row), Some(plain.as_str()), DeviceRole::MobileClient).unwrap();
         assert!(matches!(out, Classification::Authenticated));
     }
 
@@ -381,13 +381,13 @@ mod tests {
         let row = DeviceRow {
             device_id: DeviceId::new(),
             display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
+            role: DeviceRole::MobileClient,
             secret_hash: Some(hash),
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
         };
-        let err = classify(Some(row), Some("wrong-secret"), DeviceRole::IosClient).unwrap_err();
+        let err = classify(Some(row), Some("wrong-secret"), DeviceRole::MobileClient).unwrap_err();
         assert!(matches!(err, AuthError::Unauthorized(ref m) if m.contains("does not match")));
     }
 
@@ -413,13 +413,13 @@ mod tests {
         let row = DeviceRow {
             device_id: DeviceId::new(),
             display_name: "x".to_string(),
-            role: DeviceRole::IosClient,
+            role: DeviceRole::MobileClient,
             secret_hash: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
         };
-        let res = classify(Some(row), None, DeviceRole::IosClient).unwrap();
+        let res = classify(Some(row), None, DeviceRole::MobileClient).unwrap();
         assert!(matches!(res, Classification::UnpairedExisting));
     }
 

@@ -107,7 +107,7 @@ async fn connect_client(
     // Phase 2 Task 2.2 / ADR-0020: iOS upgrades require a bearer JWT bound
     // to the same `X-Device-Id`. The bearer also seeds `session.account_id`
     // which the new account_mac_pairings fan-out path keys on.
-    if role == DeviceRole::IosClient {
+    if role == DeviceRole::MobileClient {
         let acct = account_id.expect("iOS connect requires a real account_id");
         let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), acct, &device_id.to_string())
             .expect("test bearer signs cleanly");
@@ -200,7 +200,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
     let mut phone = connect_client(
         &relay,
         phone_id,
-        DeviceRole::IosClient,
+        DeviceRole::MobileClient,
         None,
         Some("phone"),
         Some(&account_id),
@@ -338,7 +338,7 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
     let mut phone = connect_client(
         &relay,
         phone_id,
-        DeviceRole::IosClient,
+        DeviceRole::MobileClient,
         None,
         Some("phone"),
         Some(&account_id),

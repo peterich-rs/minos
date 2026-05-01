@@ -105,7 +105,7 @@ pub struct SessionHandle {
     /// Account that owns this session, set after a successful bearer-
     /// token check on iOS upgrades or copied across at pairing-consume on
     /// the Mac side. `None` while the session has not yet been linked to
-    /// an account (e.g. fresh `IosClient` first-connect or a pre-bearer
+    /// an account (e.g. fresh `MobileClient` first-connect or a pre-bearer
     /// `AgentHost`). Wrapped in [`Mutex`] (sync `std::sync`) so the
     /// upgrade handler can `set_account_id` synchronously without
     /// promising async borrow semantics — stays sync because no caller
@@ -315,7 +315,7 @@ impl SessionRegistry {
             .iter()
             .filter(|entry| {
                 let h = entry.value();
-                if h.role != DeviceRole::IosClient {
+                if h.role != DeviceRole::MobileClient {
                     return false;
                 }
                 if h.account_id().as_deref() != Some(account_id) {
@@ -499,11 +499,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_handle(id: DeviceId) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
-        // Tests default to `IosClient` so the Mac→iOS account-scope gate
+        // Tests default to `MobileClient` so the Mac→iOS account-scope gate
         // added in Phase 2 Task 2.4 does not fire. The dedicated
         // `routing_mac_to_ios_*` tests construct `AgentHost` senders
         // explicitly and seed `account_id` to exercise that gate.
-        SessionHandle::new(id, DeviceRole::IosClient)
+        SessionHandle::new(id, DeviceRole::MobileClient)
     }
 
     // Small outbox variant so we can fill it deterministically in tests.
@@ -666,7 +666,7 @@ mod tests {
         let mac = DeviceId::new();
         let ios = DeviceId::new();
         let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
-        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
 
         mac_handle.set_account_id("acct-shared".into());
         ios_handle.set_account_id("acct-shared".into());
@@ -694,7 +694,7 @@ mod tests {
         let mac = DeviceId::new();
         let ios = DeviceId::new();
         let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
-        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
 
         // Distinct accounts simulate a stale pairing or cross-account
         // device-secret reuse. Routing must not punch through.
@@ -724,7 +724,7 @@ mod tests {
         let mac = DeviceId::new();
         let ios = DeviceId::new();
         let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
-        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
         ios_handle.set_account_id("acct-1".into());
         reg.insert(mac_handle);
         reg.insert(ios_handle);
@@ -745,7 +745,7 @@ mod tests {
         let mac = DeviceId::new();
         let ios = DeviceId::new();
         let (mac_handle, mut mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
-        let (ios_handle, _ios_rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (ios_handle, _ios_rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
         mac_handle.set_account_id("acct-mac".into());
         ios_handle.set_account_id("acct-other".into());
         reg.insert(mac_handle);
@@ -884,8 +884,8 @@ mod tests {
         let reg = SessionRegistry::new();
         let a = DeviceId::new();
         let b = DeviceId::new();
-        let (ha, _ra) = SessionHandle::new(a, DeviceRole::IosClient);
-        let (hb, _rb) = SessionHandle::new(b, DeviceRole::IosClient);
+        let (ha, _ra) = SessionHandle::new(a, DeviceRole::MobileClient);
+        let (hb, _rb) = SessionHandle::new(b, DeviceRole::MobileClient);
         ha.set_account_id("acct-1".into());
         hb.set_account_id("acct-1".into());
         reg.insert(ha.clone());
@@ -915,8 +915,8 @@ mod tests {
         let ios_target = DeviceId::new();
         let ios_other_acct = DeviceId::new();
         let mac_same_acct = DeviceId::new();
-        let (h_target, _r1) = SessionHandle::new(ios_target, DeviceRole::IosClient);
-        let (h_other, _r2) = SessionHandle::new(ios_other_acct, DeviceRole::IosClient);
+        let (h_target, _r1) = SessionHandle::new(ios_target, DeviceRole::MobileClient);
+        let (h_other, _r2) = SessionHandle::new(ios_other_acct, DeviceRole::MobileClient);
         let (h_mac, _r3) = SessionHandle::new(mac_same_acct, DeviceRole::AgentHost);
         h_target.set_account_id("acct-1".into());
         h_other.set_account_id("acct-2".into());
@@ -942,7 +942,7 @@ mod tests {
     async fn close_account_sessions_with_no_matches_returns_zero() {
         let reg = SessionRegistry::new();
         let id = DeviceId::new();
-        let (h, _r) = SessionHandle::new(id, DeviceRole::IosClient);
+        let (h, _r) = SessionHandle::new(id, DeviceRole::MobileClient);
         h.set_account_id("acct-1".into());
         reg.insert(h);
 

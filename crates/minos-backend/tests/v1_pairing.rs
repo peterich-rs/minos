@@ -74,7 +74,7 @@ async fn post_pairing_tokens_rejects_ios_client() {
         .method(Method::POST)
         .uri("/v1/pairing/tokens")
         .header("x-device-id", device_id.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .header(header::CONTENT_TYPE, "application/json")
         .body(json_body(serde_json::json!({ "host_display_name": "x" })))
         .unwrap();
@@ -128,7 +128,7 @@ async fn post_pairing_consume_happy_path_pairs_account_and_mac() {
         .method(Method::POST)
         .uri("/v1/pairing/consume")
         .header("x-device-id", consumer_id.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .header("authorization", &auth_hdr)
         .header(header::CONTENT_TYPE, "application/json")
         .body(json_body(
@@ -207,7 +207,7 @@ async fn pairing_consume_ios_writes_account_id_to_pairing_record() {
         .method(Method::POST)
         .uri("/v1/pairing/consume")
         .header("x-device-id", consumer_id.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .header("authorization", &auth_hdr)
         .header(header::CONTENT_TYPE, "application/json")
         .body(json_body(
@@ -264,7 +264,7 @@ async fn post_pairing_consume_invalid_token_returns_409() {
         .method(Method::POST)
         .uri("/v1/pairing/consume")
         .header("x-device-id", consumer_id.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .header("authorization", &auth_hdr)
         .header(header::CONTENT_TYPE, "application/json")
         .body(json_body(

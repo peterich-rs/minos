@@ -21,7 +21,7 @@ async fn paired_pair_with_account(
     insert_device(&state.store, mac, "Mac", DeviceRole::AgentHost, 0)
         .await
         .unwrap();
-    insert_device(&state.store, ios, "iPhone", DeviceRole::IosClient, 0)
+    insert_device(&state.store, ios, "iPhone", DeviceRole::MobileClient, 0)
         .await
         .unwrap();
 
@@ -104,7 +104,7 @@ async fn get_threads_returns_owner_scoped_list() {
         .method(Method::GET)
         .uri("/v1/threads?limit=50")
         .header("x-device-id", ios_id.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .header("x-device-secret", secret.as_str())
         .header("authorization", &auth_hdr)
         .body(Body::empty())
@@ -152,7 +152,7 @@ async fn get_thread_events_paginates() {
         .method(Method::GET)
         .uri("/v1/threads/thr_a/events?limit=10")
         .header("x-device-id", ios_id.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .header("x-device-secret", secret.as_str())
         .header("authorization", &auth_hdr)
         .body(Body::empty())
@@ -194,7 +194,7 @@ async fn get_thread_last_seq_returns_max() {
         .method(Method::GET)
         .uri("/v1/threads/thr_a/last_seq")
         .header("x-device-id", ios_id.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .header("x-device-secret", secret.as_str())
         .header("authorization", &auth_hdr)
         .body(Body::empty())
@@ -251,7 +251,7 @@ async fn routing_threads_filtered_by_account() {
         .method(Method::GET)
         .uri("/v1/threads?limit=50")
         .header("x-device-id", ios_a.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .header("x-device-secret", secret_a.as_str())
         .header("authorization", &auth_hdr)
         .body(Body::empty())
@@ -277,7 +277,7 @@ async fn get_threads_without_bearer_returns_401() {
     // path).
     let state = backend_state().await;
     let id = DeviceId::new();
-    insert_device(&state.store, id, "iPhone", DeviceRole::IosClient, 0)
+    insert_device(&state.store, id, "iPhone", DeviceRole::MobileClient, 0)
         .await
         .unwrap();
 
@@ -286,7 +286,7 @@ async fn get_threads_without_bearer_returns_401() {
         .method(Method::GET)
         .uri("/v1/threads?limit=10")
         .header("x-device-id", id.to_string())
-        .header("x-device-role", "ios-client")
+        .header("x-device-role", "mobile-client")
         .body(Body::empty())
         .unwrap();
     let (status, body) = common::send(&mut app, req).await;

@@ -983,7 +983,9 @@ impl MobileClient {
         );
         headers.insert(
             "X-Device-Role",
-            "ios-client".parse().expect("static header value is valid"),
+            "mobile-client"
+                .parse()
+                .expect("static header value is valid"),
         );
         if let Some(tok) = access_token {
             headers.insert(
@@ -1552,7 +1554,9 @@ async fn connect_with_handles(
     );
     headers.insert(
         "X-Device-Role",
-        "ios-client".parse().expect("static header value is valid"),
+        "mobile-client"
+            .parse()
+            .expect("static header value is valid"),
     );
     if let Some(tok) = access_token {
         headers.insert(

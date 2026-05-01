@@ -187,7 +187,7 @@ impl PairingService {
                     &mut *tx,
                     consumer,
                     &consumer_name,
-                    DeviceRole::IosClient,
+                    DeviceRole::MobileClient,
                     now,
                 )
                 .await?;
