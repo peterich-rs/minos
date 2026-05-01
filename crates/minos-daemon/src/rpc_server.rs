@@ -238,20 +238,29 @@ mod tests {
         }
     }
 
-    fn fake_server() -> Arc<RpcServerImpl> {
+    async fn fake_server() -> Arc<RpcServerImpl> {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("test.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let (out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
         Arc::new(RpcServerImpl {
             started_at: Instant::now(),
             runner: Arc::new(NoopRunner),
             agent: Arc::new(AgentGlue::new(
-                std::env::temp_dir().join("minos-rpc-test"),
+                tmp.path().to_path_buf(),
                 Arc::new(std::collections::HashMap::new()),
+                store,
+                out_tx,
             )),
         })
     }
 
     #[tokio::test]
     async fn invoke_forwarded_health_returns_jsonrpc_result() {
-        let server = fake_server();
+        let server = fake_server().await;
         let req = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -268,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn invoke_forwarded_pair_returns_unauthorized_error() {
-        let server = fake_server();
+        let server = fake_server().await;
         let req = json!({
             "jsonrpc": "2.0",
             "id": 7,
@@ -292,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn invoke_forwarded_unknown_method_returns_minus_32601() {
-        let server = fake_server();
+        let server = fake_server().await;
         let req = json!({
             "jsonrpc": "2.0",
             "id": 99,
@@ -306,7 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn invoke_forwarded_missing_method_returns_parse_error() {
-        let server = fake_server();
+        let server = fake_server().await;
         let req = json!({ "jsonrpc": "2.0", "id": 5 });
         let resp = invoke_forwarded(req, &server).await;
         assert_eq!(resp["id"], 5);

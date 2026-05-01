@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
-pub(crate) mod agent_ingest;
 pub mod config;
 pub mod handle;
 #[cfg(target_os = "macos")]

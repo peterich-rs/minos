@@ -13,6 +13,9 @@ use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
+use minos_protocol::Envelope;
+use tokio::sync::mpsc;
+
 use crate::agent::AgentGlue;
 use crate::config::RelayConfig;
 use crate::paths;
@@ -40,9 +43,6 @@ struct DaemonInner {
     /// occurrence.
     last_error: Arc<StdMutex<Option<MinosError>>>,
     agent: Arc<AgentGlue>,
-    /// Background task that forwards `RawIngest` from the agent runtime to
-    /// the backend ingest WS. Aborted on `stop()` so the WS tears down.
-    agent_ingest_task: tokio::task::JoinHandle<()>,
     /// Captured under `DaemonHandle::start` (which always runs inside a
     /// Tokio runtime — either the CLI's `#[tokio::main]` or UniFFI's
     /// tokio runtime) so sync FFI methods can spawn onto it from Swift
@@ -77,9 +77,27 @@ impl DaemonHandle {
         // process env internally, so this never blocks bootstrap.
         let subprocess_env = Arc::new(minos_cli_detect::capture_user_shell_env().await);
 
+        // Open the daemon's local SQLite store. The schema is migrated on
+        // first open via sqlx::migrate! against `crates/minos-daemon/migrations`.
+        let db_path = paths::minos_home()?.join("daemon.sqlite");
+        let store = Arc::new(crate::store::LocalStore::open(&db_path).await.map_err(
+            |e| MinosError::StoreIo {
+                path: db_path.display().to_string(),
+                message: format!("LocalStore::open failed: {e}"),
+            },
+        )?);
+
+        // Build the agent glue ahead of the relay. The agent's `EventWriter`
+        // consumes a relay-out mpsc; we cannot use `relay.outbound_sender()`
+        // yet because the relay needs an `RpcServerImpl` that references the
+        // agent. Solve the cycle with a local forwarder channel that's wired
+        // to the relay's outbound queue once both halves exist.
+        let (agent_out_tx, mut agent_out_rx) = mpsc::channel::<Envelope>(256);
         let agent = Arc::new(AgentGlue::new(
             paths::minos_home()?.join("workspaces"),
             subprocess_env.clone(),
+            store.clone(),
+            agent_out_tx,
         ));
 
         // The relay-client dispatches forwarded peer JSON-RPC into this
@@ -116,14 +134,21 @@ impl DaemonHandle {
             },
         );
 
-        // Forward agent ingest events into the relay's existing outbound
-        // queue. The single `/devices` WS the dispatcher owns carries
-        // both peer-to-peer `Forward` traffic and host `Ingest` frames —
-        // the backend's session registry is keyed by `DeviceId` alone, so
-        // a second WS handshake from the same id would supersede the
-        // first in a tight loop.
-        let agent_ingest_task =
-            crate::agent_ingest::spawn(relay.outbound_sender(), agent.ingest_stream());
+        // Forward agent ingest envelopes (already persisted by the
+        // EventWriter inside AgentGlue) into the relay's outbound queue.
+        // The single `/devices` WS the dispatcher owns carries both
+        // peer-to-peer `Forward` traffic and host `Ingest` frames — the
+        // backend's session registry is keyed by `DeviceId` alone, so a
+        // second WS handshake from the same id would supersede the first
+        // in a tight loop.
+        let relay_out = relay.outbound_sender();
+        tokio::spawn(async move {
+            while let Some(env) = agent_out_rx.recv().await {
+                if relay_out.send(env).await.is_err() {
+                    break;
+                }
+            }
+        });
 
         Ok(Arc::new(Self {
             inner: Arc::new(DaemonInner {
@@ -134,7 +159,6 @@ impl DaemonHandle {
                 mac_name,
                 last_error,
                 agent,
-                agent_ingest_task,
                 rt_handle: Handle::current(),
             }),
         }))
@@ -190,7 +214,6 @@ impl DaemonHandle {
             Err(err) => return Err(err),
         }
         self.inner.relay.stop().await;
-        self.inner.agent_ingest_task.abort();
         Ok(())
     }
 
