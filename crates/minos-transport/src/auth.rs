@@ -68,10 +68,22 @@ impl AuthHeaders {
         }
     }
 
-    /// Attach the long-lived bearer secret minted at pair time.
+    /// Attach the long-lived bearer secret minted at pair time. Mac-side
+    /// callers continue to use this — the host rail still flashes
+    /// `X-Device-Secret` post-ADR-0020.
     #[must_use]
     pub fn with_secret(mut self, secret: DeviceSecret) -> Self {
         self.device_secret = Some(secret);
+        self
+    }
+
+    /// Like [`Self::with_secret`] but accepts an optional secret. iOS
+    /// callers post-ADR-0020 pass `None` here so no `X-Device-Secret`
+    /// header is stamped onto the upgrade request. Calling with `None`
+    /// is functionally equivalent to omitting the call.
+    #[must_use]
+    pub fn with_secret_opt(mut self, secret: Option<DeviceSecret>) -> Self {
+        self.device_secret = secret;
         self
     }
 
@@ -219,6 +231,27 @@ mod tests {
             !entry.1.contains("redacted"),
             "must not leak Display redaction into header: {}",
             entry.1
+        );
+    }
+
+    #[test]
+    fn with_secret_opt_some_is_equivalent_to_with_secret() {
+        let (id, role) = sample();
+        let s = DeviceSecret("xyz".into());
+        let a = AuthHeaders::new(id, role).with_secret(s.clone());
+        let b = AuthHeaders::new(id, role).with_secret_opt(Some(s));
+        let av: Vec<_> = a.iter().collect();
+        let bv: Vec<_> = b.iter().collect();
+        assert_eq!(av, bv);
+    }
+
+    #[test]
+    fn with_secret_opt_none_omits_x_device_secret() {
+        let (id, role) = sample();
+        let headers = AuthHeaders::new(id, role).with_secret_opt(None);
+        assert!(
+            headers.iter().all(|(k, _)| k != "X-Device-Secret"),
+            "with_secret_opt(None) must not stamp X-Device-Secret"
         );
     }
 
