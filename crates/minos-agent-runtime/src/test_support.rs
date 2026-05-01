@@ -141,9 +141,8 @@ impl FakeCodexServer {
         let server_request_ids = Arc::new(Mutex::new(Vec::<String>::new()));
         let accept_task = tokio::spawn(async move {
             loop {
-                let (stream, _peer) = match listener.accept().await {
-                    Ok(pair) => pair,
-                    Err(_) => return,
+                let Ok((stream, _peer)) = listener.accept().await else {
+                    return;
                 };
                 tokio::spawn(async move {
                     let Ok(ws) = accept_async(stream).await else {
@@ -351,7 +350,7 @@ async fn auto_respond(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStre
                     "status": "inProgress"
                 }
             }),
-            "turn/interrupt" => serde_json::json!({}),
+            // "turn/interrupt" and any unknown method get an empty `{}` ack.
             _ => serde_json::json!({}),
         };
         let response = serde_json::json!({

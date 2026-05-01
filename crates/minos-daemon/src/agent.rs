@@ -13,8 +13,8 @@ use minos_protocol::{
 };
 use tokio::sync::{broadcast, mpsc, watch};
 
-use crate::store::LocalStore;
 use crate::store::event_writer::EventWriter;
+use crate::store::LocalStore;
 use crate::subscription::{AgentStateObserver, Subscription};
 
 /// `AgentGlue` is the daemon-side wrapper that:
@@ -134,10 +134,7 @@ impl AgentGlue {
             .map_err(map_anyhow)
     }
 
-    pub async fn interrupt_thread(
-        &self,
-        req: InterruptThreadRequest,
-    ) -> Result<(), MinosError> {
+    pub async fn interrupt_thread(&self, req: InterruptThreadRequest) -> Result<(), MinosError> {
         self.manager
             .interrupt_thread(&req.thread_id)
             .await
@@ -158,7 +155,7 @@ impl AgentGlue {
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
         let _ = req; // Filter / agent / pagination plumbing lands with the
-        // SQLite-backed history list (C21+).
+                     // SQLite-backed history list (C21+).
         let snap = self.manager.list_threads().await;
         let threads: Vec<ThreadSummary> = snap
             .into_iter()
@@ -179,15 +176,12 @@ impl AgentGlue {
         })
     }
 
-    pub async fn get_thread(
-        &self,
-        req: GetThreadParams,
-    ) -> Result<GetThreadResponse, MinosError> {
+    pub async fn get_thread(&self, req: GetThreadParams) -> Result<GetThreadResponse, MinosError> {
         let snap = self.manager.list_threads().await;
         let s = snap
             .into_iter()
             .find(|s| s.thread_id == req.thread_id)
-            .ok_or_else(|| MinosError::AgentSessionIdMismatch)?;
+            .ok_or(MinosError::AgentSessionIdMismatch)?;
         let thread = ThreadSummary {
             thread_id: s.thread_id.clone(),
             agent: minos_domain::AgentName::Codex,

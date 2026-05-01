@@ -3,9 +3,9 @@
 //! callers and tests; `minos-mobile` now uses the envelope/local-RPC path.
 
 use crate::{
-    CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse,
-    InterruptThreadRequest, ListClisResponse, ListThreadsParams, ListThreadsResponse, PairRequest,
-    PairResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse, InterruptThreadRequest,
+    ListClisResponse, ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
 use jsonrpsee::proc_macros::rpc;
 
@@ -48,10 +48,8 @@ pub trait MinosRpc {
     /// app-server may have already finished the turn — that is fine, the
     /// thread transitions to `Suspended { UserInterrupt }` either way.
     #[method(name = "interrupt_thread")]
-    async fn interrupt_thread(
-        &self,
-        req: InterruptThreadRequest,
-    ) -> jsonrpsee::core::RpcResult<()>;
+    async fn interrupt_thread(&self, req: InterruptThreadRequest)
+        -> jsonrpsee::core::RpcResult<()>;
 
     /// Permanently close the named thread. Idempotent — re-closing a closed
     /// thread is a no-op.

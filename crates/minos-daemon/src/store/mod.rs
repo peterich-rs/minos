@@ -1,9 +1,20 @@
+// SQLite always stores integers as i64; the SQL row encodings use i64 even
+// where the Rust-side semantics use u64 (sequence numbers, ms timestamps that
+// are always positive). Permitting these casts here keeps the SQL-bind
+// surface readable without scattering `as_signed` / `try_from` everywhere.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless
+)]
+
 pub mod event_writer;
 pub mod migrations_loader;
 
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -165,9 +176,12 @@ mod tests {
             .execute(store.pool())
             .await
             .unwrap();
-        for (i, status) in ["running", "idle", "closed", "suspended"].iter().enumerate() {
+        for (i, status) in ["running", "idle", "closed", "suspended"]
+            .iter()
+            .enumerate()
+        {
             sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, '/w', 'codex', ?, 0, ?, ?)")
-                .bind(format!("t{}", i))
+                .bind(format!("t{i}"))
                 .bind(*status)
                 .bind(i as i64)
                 .bind(i as i64)
@@ -185,13 +199,15 @@ mod tests {
         let store = LocalStore::open(&tmp.path().join("t.sqlite"))
             .await
             .unwrap();
-        sqlx::query("INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)")
-            .execute(store.pool())
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
         for i in 0..3 {
             sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, '/w', 'codex', 'idle', 0, ?, ?)")
-                .bind(format!("thr-{}", i))
+                .bind(format!("thr-{i}"))
                 .bind(i as i64)
                 .bind(i as i64)
                 .execute(store.pool())

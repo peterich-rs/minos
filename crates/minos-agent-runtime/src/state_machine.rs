@@ -37,10 +37,8 @@ pub struct IllegalTransition {
     pub to: ThreadState,
 }
 
-pub fn validate_transition(
-    from: &ThreadState,
-    to: &ThreadState,
-) -> Result<(), IllegalTransition> {
+#[allow(clippy::unnested_or_patterns, clippy::enum_glob_use)]
+pub fn validate_transition(from: &ThreadState, to: &ThreadState) -> Result<(), IllegalTransition> {
     use ThreadState::*;
     let ok = matches!(
         (from, to),

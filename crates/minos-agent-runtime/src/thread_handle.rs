@@ -1,8 +1,8 @@
-use crate::AgentKind;
 use crate::state_machine::ThreadState;
+use crate::AgentKind;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use tokio::sync::watch;
 
 #[derive(Clone)]
@@ -83,9 +83,6 @@ mod tests {
             turn_started_at_ms: 1,
         })
         .unwrap();
-        assert!(matches!(
-            h.current_state(),
-            ThreadState::Running { .. }
-        ));
+        assert!(matches!(h.current_state(), ThreadState::Running { .. }));
     }
 }

@@ -18,10 +18,9 @@ use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::envelope::Envelope;
 use minos_protocol::{
-    CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse,
-    InterruptThreadRequest, ListClisResponse, ListThreadsParams, ListThreadsResponse,
-    MinosRpcServer, PairRequest, PairResponse, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse,
+    CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse, InterruptThreadRequest,
+    ListClisResponse, ListThreadsParams, ListThreadsResponse, MinosRpcServer, PairRequest,
+    PairResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
 use serde_json::{json, Map, Value};
 

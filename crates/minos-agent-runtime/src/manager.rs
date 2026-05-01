@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, broadcast, watch};
+use tokio::sync::{broadcast, watch, Mutex};
 use tracing::{info, warn};
 use url::Url;
 
@@ -29,7 +29,7 @@ impl Default for InstanceCaps {
     fn default() -> Self {
         Self {
             max_instances: 8,
-            idle_timeout: std::time::Duration::from_secs(30 * 60),
+            idle_timeout: std::time::Duration::from_mins(30),
         }
     }
 }
@@ -65,7 +65,7 @@ impl AgentManager {
         let threads = self.threads.clone();
         let manager_tx = self.manager_tx.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut tick = tokio::time::interval(std::time::Duration::from_mins(1));
             loop {
                 tick.tick().await;
                 let mut to_reap: Vec<PathBuf> = Vec::new();
@@ -77,9 +77,9 @@ impl AgentManager {
                         let tids = inst.thread_ids().await;
                         let tg = threads.lock().await;
                         let any_running = tids.iter().any(|t| {
-                            tg.get(t)
-                                .map(|h| matches!(h.current_state(), ThreadState::Running { .. }))
-                                .unwrap_or(false)
+                            tg.get(t).is_some_and(|h| {
+                                matches!(h.current_state(), ThreadState::Running { .. })
+                            })
                         });
                         drop(tg);
                         if idle && !any_running {
@@ -100,9 +100,8 @@ impl AgentManager {
         manager_tx: &broadcast::Sender<ManagerEvent>,
         ws: &Path,
     ) {
-        let inst = match instances.lock().await.remove(ws) {
-            Some(i) => i,
-            None => return,
+        let Some(inst) = instances.lock().await.remove(ws) else {
+            return;
         };
         let tids = inst.thread_ids().await;
         let workspace = inst.workspace.clone();
@@ -168,10 +167,7 @@ impl AgentManager {
             ThreadState::Starting,
             0,
         );
-        self.threads
-            .lock()
-            .await
-            .insert(thread_id.clone(), handle);
+        self.threads.lock().await.insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
             workspace: canon.clone(),
@@ -215,6 +211,7 @@ impl AgentManager {
         Ok(inst)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn spawn_instance(&self, workspace: &Path) -> anyhow::Result<Arc<AppServerInstance>> {
         let workspace_buf = workspace.to_path_buf();
         let workspace_display = workspace_buf.display().to_string();
@@ -233,7 +230,7 @@ impl AgentManager {
             // start_thread / send_user_message / interrupt_turn with canned
             // responses, so the handshake adds no test value.
             let (crash_tx, _crash_rx) = tokio::sync::mpsc::channel::<()>(1);
-            let inst = build_fake_instance(workspace_buf.clone(), client, crash_tx).await;
+            let inst = build_fake_instance(workspace_buf.clone(), client, crash_tx);
             return Ok(inst);
         }
 
@@ -373,8 +370,7 @@ impl AgentManager {
             let tids = inst.thread_ids().await;
             let any_running = tids.iter().any(|t| {
                 tg.get(t)
-                    .map(|h| matches!(h.current_state(), ThreadState::Running { .. }))
-                    .unwrap_or(false)
+                    .is_some_and(|h| matches!(h.current_state(), ThreadState::Running { .. }))
             });
             if !any_running {
                 candidates.push((ws.clone(), *inst.last_activity_at.lock().await));
@@ -428,7 +424,7 @@ impl AgentManager {
             .lock()
             .await
             .get(thread_id)
-            .map(|h| h.current_state())
+            .map(ThreadHandle::current_state)
     }
 
     /// Test-only helper: run one pass of the reaper synchronously. Production
@@ -445,8 +441,7 @@ impl AgentManager {
                 let tg = self.threads.lock().await;
                 let any_running = tids.iter().any(|t| {
                     tg.get(t)
-                        .map(|h| matches!(h.current_state(), ThreadState::Running { .. }))
-                        .unwrap_or(false)
+                        .is_some_and(|h| matches!(h.current_state(), ThreadState::Running { .. }))
                 });
                 drop(tg);
                 if idle && !any_running {
@@ -463,11 +458,7 @@ impl AgentManager {
         Self::reap_static(&self.instances, &self.threads, &self.manager_tx, ws).await;
     }
 
-    pub async fn send_user_message(
-        &self,
-        thread_id: &str,
-        text: String,
-    ) -> anyhow::Result<()> {
+    pub async fn send_user_message(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
         let handle = self
             .threads
             .lock()
@@ -501,7 +492,7 @@ impl AgentManager {
                 Ok(())
             }
             ThreadState::Suspended { .. } => self.implicit_resume(thread_id, text).await,
-            other => anyhow::bail!("send_user_message rejected: state={:?}", other),
+            other => anyhow::bail!("send_user_message rejected: state={other:?}"),
         }
     }
 
@@ -562,7 +553,8 @@ impl AgentManager {
             handle.current_state(),
             ThreadState::Running { .. } | ThreadState::Idle
         ) {
-            anyhow::bail!("interrupt rejected: state={:?}", handle.current_state());
+            let s = handle.current_state();
+            anyhow::bail!("interrupt rejected: state={s:?}");
         }
         let workspace = handle.workspace.clone();
         if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
@@ -630,7 +622,7 @@ impl AgentManager {
             }
         }
         tokio::time::sleep(grace).await;
-        for (_, inst) in std::mem::take(&mut *g).into_iter() {
+        for (_, inst) in std::mem::take(&mut *g) {
             let child_opt = inst.child.lock().await.take();
             drop(inst);
             if let Some(mut child) = child_opt {
@@ -658,7 +650,7 @@ pub struct StartAgentOutcome {
 }
 
 #[cfg(feature = "test-support")]
-async fn build_fake_instance(
+fn build_fake_instance(
     workspace: PathBuf,
     client: Arc<CodexClient>,
     crash_signal: tokio::sync::mpsc::Sender<()>,
@@ -712,8 +704,10 @@ async fn event_pump_loop(
     while let Some(inbound) = client.next_inbound().await {
         match inbound {
             Inbound::Notification { method, params } => {
-                let thread_id =
-                    params.get("threadId").and_then(Value::as_str).map(str::to_string);
+                let thread_id = params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 let Some(thread_id) = thread_id else {
                     continue;
                 };
@@ -723,8 +717,7 @@ async fn event_pump_loop(
                     .lock()
                     .await
                     .get(&thread_id)
-                    .map(|h| h.agent)
-                    .unwrap_or(AgentName::Codex);
+                    .map_or(AgentName::Codex, |h| h.agent);
                 let payload = serde_json::json!({ "method": method, "params": params });
                 let ingest = RawIngest {
                     agent,
@@ -767,15 +760,16 @@ async fn event_pump_loop(
                         );
                     }
                 }
-                let thread_id =
-                    params.get("threadId").and_then(Value::as_str).map(str::to_string);
+                let thread_id = params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 if let Some(thread_id) = thread_id {
                     let agent = threads
                         .lock()
                         .await
                         .get(&thread_id)
-                        .map(|h| h.agent)
-                        .unwrap_or(AgentName::Codex);
+                        .map_or(AgentName::Codex, |h| h.agent);
                     let synthetic_method = format!("server_request/{method}");
                     let payload =
                         serde_json::json!({ "method": synthetic_method, "params": params });

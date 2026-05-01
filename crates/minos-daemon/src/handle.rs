@@ -80,12 +80,14 @@ impl DaemonHandle {
         // Open the daemon's local SQLite store. The schema is migrated on
         // first open via sqlx::migrate! against `crates/minos-daemon/migrations`.
         let db_path = paths::minos_home()?.join("daemon.sqlite");
-        let store = Arc::new(crate::store::LocalStore::open(&db_path).await.map_err(
-            |e| MinosError::StoreIo {
-                path: db_path.display().to_string(),
-                message: format!("LocalStore::open failed: {e}"),
-            },
-        )?);
+        let store = Arc::new(
+            crate::store::LocalStore::open(&db_path)
+                .await
+                .map_err(|e| MinosError::StoreIo {
+                    path: db_path.display().to_string(),
+                    message: format!("LocalStore::open failed: {e}"),
+                })?,
+        );
 
         // C21: any thread that was running / idle when the previous daemon
         // exited gets flipped to `suspended { daemon_restart }` so the mobile

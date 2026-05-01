@@ -179,7 +179,6 @@ pub(crate) fn spawn_peer_observer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minos_domain::AgentName;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
 

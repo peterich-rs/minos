@@ -1,5 +1,5 @@
-use crate::AgentKind;
 use crate::state_machine::{CloseReason, ThreadState};
+use crate::AgentKind;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]

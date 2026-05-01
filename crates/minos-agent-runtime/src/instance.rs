@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{mpsc, Mutex};
 
 /// Default RPC timeouts when issuing per-turn calls. Mirrors the figures used
 /// by the legacy `runtime.rs` paths so behaviour stays uniform across the
@@ -138,11 +138,8 @@ impl AppServerInstance {
             thread_id: thread_id.to_string(),
             turn_id: String::new(),
         };
-        let _ = tokio::time::timeout(
-            Duration::from_millis(500),
-            self.client.call_typed(params),
-        )
-        .await;
+        let _ =
+            tokio::time::timeout(Duration::from_millis(500), self.client.call_typed(params)).await;
         Ok(())
     }
 }

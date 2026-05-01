@@ -1,3 +1,12 @@
+// `seq` and `ts_ms` are stored as i64 in SQLite; the Rust-side semantics use
+// u64 (sequence numbers are always positive and ts_ms is positive epoch).
+// Permit the bind-site casts to keep the SQL surface readable.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+
 use crate::store::LocalStore;
 use anyhow::Result;
 use minos_agent_runtime::RawIngest;
@@ -37,7 +46,8 @@ impl EventWriter {
     }
 
     pub async fn write_recovery(&self, ingest: RawIngest) -> Result<u64> {
-        self.write_internal(ingest, EventSource::JsonlRecovery).await
+        self.write_internal(ingest, EventSource::JsonlRecovery)
+            .await
     }
 
     async fn write_internal(&self, ingest: RawIngest, source: EventSource) -> Result<u64> {
@@ -72,8 +82,7 @@ async fn writer_loop(
             let remaining = deadline.saturating_duration_since(Instant::now());
             match tokio::time::timeout(remaining, rx.recv()).await {
                 Ok(Some(job)) => buf.push(job),
-                Ok(None) => break,
-                Err(_) => break,
+                Ok(None) | Err(_) => break,
             }
         }
         process_batch(&store, &relay_out, std::mem::take(&mut buf)).await;
@@ -93,7 +102,7 @@ async fn process_batch(
         Err(e) => {
             let err = std::sync::Arc::new(e);
             for j in jobs {
-                let _ = j.ack.send(Err(anyhow::anyhow!("begin tx: {}", err)));
+                let _ = j.ack.send(Err(anyhow::anyhow!("begin tx: {err}")));
             }
             return;
         }
@@ -160,12 +169,12 @@ async fn process_batch(
         });
     }
     if let Err(e) = tx.commit().await {
-        for (job, _) in jobs.into_iter().zip(results.into_iter()) {
-            let _ = job.ack.send(Err(anyhow::anyhow!("commit: {}", e)));
+        for (job, _) in jobs.into_iter().zip(results) {
+            let _ = job.ack.send(Err(anyhow::anyhow!("commit: {e}")));
         }
         return;
     }
-    for (job, r) in jobs.into_iter().zip(results.into_iter()) {
+    for (job, r) in jobs.into_iter().zip(results) {
         let _ = job.ack.send(r);
     }
     for env in envs {
@@ -228,12 +237,14 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(
             elapsed < Duration::from_millis(500),
-            "50 events should commit fast: {:?}",
-            elapsed
+            "50 events should commit fast: {elapsed:?}"
         );
 
         let mut got = 0;
-        while let Ok(_) = tokio::time::timeout(Duration::from_millis(200), relay_rx.recv()).await {
+        while tokio::time::timeout(Duration::from_millis(200), relay_rx.recv())
+            .await
+            .is_ok()
+        {
             got += 1;
             if got == 50 {
                 break;
