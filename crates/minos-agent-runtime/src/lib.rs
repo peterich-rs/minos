@@ -28,18 +28,22 @@ pub(crate) mod approvals;
 pub(crate) mod codex_client;
 pub(crate) mod exec_jsonl;
 pub mod ingest;
+pub mod manager_event;
 pub(crate) mod process;
 pub mod runtime;
 pub mod state;
 pub mod state_machine;
+pub mod thread_handle;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
 pub use ingest::{Ingestor, IngestorHandle};
+pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;
 pub use runtime::{
     AgentLaunchMode, AgentRuntime, AgentRuntimeConfig, RawIngest, StartAgentOutcome,
 };
 pub use state::AgentState;
 pub use state_machine::{CloseReason, PauseReason, ThreadState};
+pub use thread_handle::ThreadHandle;
