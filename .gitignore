@@ -63,6 +63,9 @@ apps/mobile/android/**/gradle-wrapper.jar
 .env.local
 .env.local.*
 
+# Claude Code local agent state (scheduled-task locks, transcripts, etc.).
+.claude/
+
 # Workspace-root FVM (mirrors apps/mobile/.fvm/ rule above).
 .fvm/
 .fvmrc
