@@ -82,6 +82,19 @@ impl LocalStore {
         .fetch_all(&self.pool)
         .await?)
     }
+
+    /// Flip every thread whose status is neither `closed` nor `suspended`
+    /// to `suspended { daemon_restart }`. Returns the number of rows
+    /// affected so callers can log the recovery footprint.
+    pub async fn mark_orphans_suspended(&self) -> anyhow::Result<u64> {
+        let r = sqlx::query(
+            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart' \
+             WHERE status NOT IN ('closed', 'suspended')",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +153,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row.0, 0);
+    }
+
+    #[tokio::test]
+    async fn mark_orphans_suspended_flips_running_idle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w',0,0)")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        for (i, status) in ["running", "idle", "closed", "suspended"].iter().enumerate() {
+            sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, '/w', 'codex', ?, 0, ?, ?)")
+                .bind(format!("t{}", i))
+                .bind(*status)
+                .bind(i as i64)
+                .bind(i as i64)
+                .execute(store.pool())
+                .await
+                .unwrap();
+        }
+        let n = store.mark_orphans_suspended().await.unwrap();
+        assert_eq!(n, 2);
     }
 
     #[tokio::test]

@@ -87,6 +87,23 @@ impl DaemonHandle {
             },
         )?);
 
+        // C21: any thread that was running / idle when the previous daemon
+        // exited gets flipped to `suspended { daemon_restart }` so the mobile
+        // UI can re-render the right state on reconnect.
+        match store.mark_orphans_suspended().await {
+            Ok(n) if n > 0 => tracing::info!(
+                target: "minos_daemon::handle",
+                rows = n,
+                "startup recovery flipped {n} orphan threads to suspended",
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                target: "minos_daemon::handle",
+                error = %e,
+                "mark_orphans_suspended failed; non-fatal, continuing startup",
+            ),
+        }
+
         // Build the agent glue ahead of the relay. The agent's `EventWriter`
         // consumes a relay-out mpsc; we cannot use `relay.outbound_sender()`
         // yet because the relay needs an `RpcServerImpl` that references the
