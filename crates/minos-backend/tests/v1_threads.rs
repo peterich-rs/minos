@@ -3,7 +3,7 @@ use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
-use minos_backend::store::{devices::insert_device, pairings::insert_pairing};
+use minos_backend::store::{account_mac_pairings, devices::insert_device};
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::ListThreadsResponse;
 
@@ -25,16 +25,19 @@ async fn paired_pair_with_account(
         .await
         .unwrap();
 
+    // After ADR-0020 the iOS rail is bearer-only and `secret_hash` stays
+    // NULL; we no longer mint an iOS device secret. The Mac side is still
+    // secret-bound, so we generate a Mac secret to keep the legacy
+    // assertions and signature-compat callers happy.
     let secret = minos_domain::DeviceSecret::generate();
     let hash = minos_backend::pairing::secret::hash_secret(&secret).unwrap();
-    minos_backend::store::devices::upsert_secret_hash(&state.store, ios, &hash)
+    minos_backend::store::devices::upsert_secret_hash(&state.store, mac, &hash)
         .await
         .unwrap();
-    insert_pairing(&state.store, mac, ios, 0).await.unwrap();
 
-    // Phase 2 Task 2.6: link both device rows to a real account_id so the
-    // /v1/threads handler's account-scoped query returns the seeded
-    // threads.
+    // Phase 2 Task 2.6 / ADR-0020: link both device rows to a real
+    // account_id, then record the pair via the account_mac_pairings table
+    // (the legacy device-keyed `pairings` module has been retired).
     let account = minos_backend::store::accounts::create(&state.store, email, "phc")
         .await
         .unwrap();
@@ -42,6 +45,9 @@ async fn paired_pair_with_account(
         .await
         .unwrap();
     minos_backend::store::devices::set_account_id(&state.store, &ios, &account.account_id)
+        .await
+        .unwrap();
+    account_mac_pairings::insert_pair(&state.store, mac, &account.account_id, ios, 0)
         .await
         .unwrap();
 
@@ -264,15 +270,14 @@ async fn routing_threads_filtered_by_account() {
 }
 
 #[tokio::test]
-async fn get_threads_unpaired_returns_401() {
+async fn get_threads_without_bearer_returns_401() {
+    // After ADR-0020 the iOS rail is bearer-only. A request without an
+    // Authorization header is rejected with 401 regardless of any
+    // x-device-secret presented (which is no longer consulted on the iOS
+    // path).
     let state = backend_state().await;
     let id = DeviceId::new();
     insert_device(&state.store, id, "iPhone", DeviceRole::IosClient, 0)
-        .await
-        .unwrap();
-    let secret = minos_domain::DeviceSecret::generate();
-    let hash = minos_backend::pairing::secret::hash_secret(&secret).unwrap();
-    minos_backend::store::devices::upsert_secret_hash(&state.store, id, &hash)
         .await
         .unwrap();
 
@@ -282,7 +287,6 @@ async fn get_threads_unpaired_returns_401() {
         .uri("/v1/threads?limit=10")
         .header("x-device-id", id.to_string())
         .header("x-device-role", "ios-client")
-        .header("x-device-secret", secret.as_str())
         .body(Body::empty())
         .unwrap();
     let (status, body) = common::send(&mut app, req).await;

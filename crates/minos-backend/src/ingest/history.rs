@@ -8,9 +8,9 @@ use crate::http::BackendState;
 /// caller (`http/v1/threads.rs`).
 #[derive(Debug)]
 pub enum HistoryError {
-    /// `thread_id` does not exist OR is owned by a device other than
-    /// `owner_id`. Both collapse to NotFound so we don't leak ownership
-    /// information across pairings.
+    /// `thread_id` does not exist OR is owned by a device whose
+    /// `account_id` differs from the caller's. Both collapse to NotFound
+    /// so we don't leak ownership information across accounts.
     NotFound,
     /// Underlying store / serialisation failure. Message is operator-facing.
     Internal(String),
@@ -23,30 +23,43 @@ pub enum HistoryError {
 #[allow(clippy::too_many_lines)] // Single-site reader: ownership probe + read_range + translation + title/end-reason probes share a pagination cursor.
 pub async fn read_thread(
     state: &BackendState,
-    owner_id: minos_domain::DeviceId,
+    account_id: &str,
     params: ReadThreadParams,
 ) -> Result<ReadThreadResponse, HistoryError> {
-    let owner_device_id: Option<String> =
-        match sqlx::query_scalar("SELECT owner_device_id FROM threads WHERE thread_id = ?1")
-            .bind(&params.thread_id)
-            .fetch_optional(&state.store)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    target: "minos_backend::ingest::history",
-                    error = %e,
-                    thread_id = %params.thread_id,
-                    "read_thread.owner_probe failed"
-                );
-                return Err(HistoryError::Internal("read_thread failed".into()));
-            }
-        };
-    let Some(owner_device_id) = owner_device_id else {
+    // ADR-0020: scope by account_id, not owner device_id. The thread row's
+    // owner_device_id is dereferenced through the devices table to get the
+    // owning account; if it doesn't match the caller's bearer-resolved
+    // account, return NotFound (do not leak existence across accounts).
+    //
+    // sqlx::query_scalar against a nullable column with `fetch_optional`
+    // returns `Option<Option<String>>`:
+    //   outer Option = thread row exists
+    //   inner Option = devices.account_id is non-NULL
+    let owner_account_id: Option<Option<String>> = match sqlx::query_scalar(
+        "SELECT d.account_id
+           FROM threads t
+           LEFT JOIN devices d ON d.device_id = t.owner_device_id
+          WHERE t.thread_id = ?1",
+    )
+    .bind(&params.thread_id)
+    .fetch_optional(&state.store)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::ingest::history",
+                error = %e,
+                thread_id = %params.thread_id,
+                "read_thread.owner_probe failed"
+            );
+            return Err(HistoryError::Internal("read_thread failed".into()));
+        }
+    };
+    let Some(Some(found)) = owner_account_id else {
         return Err(HistoryError::NotFound);
     };
-    if owner_device_id != owner_id.to_string() {
+    if found.as_str() != account_id {
         return Err(HistoryError::NotFound);
     }
 

@@ -1,8 +1,9 @@
 //! `GET /v1/threads*` handlers.
 //!
-//! All three routes require the caller to be an authenticated, paired
-//! device. The HTTP handlers scope every query to the caller's pairing
-//! peer (the `owner_device_id` on the `threads` row).
+//! All three routes require the caller to be authenticated (bearer-bound
+//! device row). After ADR-0020 the listing/read APIs scope by the
+//! caller's `account_id` (one iOS account may be paired with multiple
+//! Macs); the legacy device-keyed pairing lookup has been retired.
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -44,12 +45,11 @@ fn err(code: &'static str, message: impl Into<String>) -> Json<ErrorEnvelope> {
     })
 }
 
-/// Resolve the caller's authenticated session AND assert it is paired.
-/// Returns the *peer* `DeviceId` (the host who owns the threads being
-/// read) and the bearer's `account_id`, so handlers can scope queries to
-/// `owner_device_id = peer` AND `owner_device.account_id = account_id`
-/// (Phase 2 Task 2.6 / spec §5.5).
-async fn require_paired_session(
+/// Resolve the caller's authenticated session. Returns the caller's
+/// `DeviceId` (used for tracing only) and the bearer's `account_id`, so
+/// handlers can scope queries to `owner_device.account_id = account_id`
+/// (Phase 2 Task 2.6 / spec §5.5; ADR-0020).
+async fn require_authed_session(
     state: &BackendState,
     headers: &HeaderMap,
 ) -> Result<(minos_domain::DeviceId, String), (StatusCode, Json<ErrorEnvelope>)> {
@@ -59,33 +59,15 @@ async fn require_paired_session(
             auth::AuthError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, err("unauthorized", m)),
             auth::AuthError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, err("internal", m)),
         })?;
-    if !outcome.authenticated_with_secret {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            err("unauthorized", "X-Device-Secret required"),
-        ));
-    }
     // Phase 2 Task 2.6: require a bearer JWT bound to the same device id;
-    // the resolved `account_id` scopes the thread list / read.
+    // the resolved `account_id` scopes the thread list / read. After
+    // ADR-0020 the device-secret check on iOS is dropped — the bearer is
+    // the trust root.
     let bearer_outcome = bearer::require(state, headers).map_err(|e| {
         let (s, m) = e.into_response_tuple();
         (s, err("unauthorized", m))
     })?;
-    let owner = crate::store::pairings::get_pair(&state.store, outcome.device_id)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                err("internal", e.to_string()),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                err("unauthorized", "session is not paired"),
-            )
-        })?;
-    Ok((owner, bearer_outcome.account_id))
+    Ok((outcome.device_id, bearer_outcome.account_id))
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,11 +82,10 @@ async fn list_threads(
     headers: HeaderMap,
     Query(q): Query<ListThreadsQuery>,
 ) -> Result<Json<ListThreadsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let (owner, account_id) = require_paired_session(&state, &headers).await?;
-    let owner_s = Some(owner.to_string());
+    let (_caller, account_id) = require_authed_session(&state, &headers).await?;
     let threads = crate::store::threads::list(
         &state.store,
-        owner_s.as_deref(),
+        None, // no owner-device filter; account scope below
         q.agent,
         q.before_ts_ms,
         q.limit.min(500),
@@ -136,13 +117,13 @@ async fn read_thread(
     Path(thread_id): Path<String>,
     Query(q): Query<ReadThreadQuery>,
 ) -> Result<Json<ReadThreadResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let (owner, _account_id) = require_paired_session(&state, &headers).await?;
+    let (_caller, account_id) = require_authed_session(&state, &headers).await?;
     let params = ReadThreadParams {
         thread_id: thread_id.clone(),
         from_seq: q.from_seq,
         limit: q.limit,
     };
-    let resp = crate::ingest::history::read_thread(&state, owner, params)
+    let resp = crate::ingest::history::read_thread(&state, &account_id, params)
         .await
         .map_err(|e| match e {
             crate::ingest::history::HistoryError::NotFound => (
@@ -161,7 +142,7 @@ async fn get_thread_last_seq(
     headers: HeaderMap,
     Path(thread_id): Path<String>,
 ) -> Result<Json<GetThreadLastSeqResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let _ = require_paired_session(&state, &headers).await?;
+    let _ = require_authed_session(&state, &headers).await?;
     let last_seq = crate::store::raw_events::last_seq(&state.store, &thread_id)
         .await
         .map_err(|e| {
