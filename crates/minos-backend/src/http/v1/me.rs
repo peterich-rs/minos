@@ -9,7 +9,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
-use minos_protocol::{MacSummary, MeMacsResponse};
+use minos_protocol::{HostSummary, MeMacsResponse};
 
 use crate::auth::bearer;
 use crate::http::v1::pairing::{err_body, ErrorEnvelope};
@@ -65,7 +65,7 @@ async fn get_me_macs(
                     err_body("internal", e.to_string()),
                 )
             })?;
-        let mac_display_name = if let Some(r) = row {
+        let host_display_name = if let Some(r) = row {
             r.display_name
         } else {
             tracing::warn!(
@@ -75,9 +75,9 @@ async fn get_me_macs(
             );
             "unknown".into()
         };
-        macs.push(MacSummary {
-            mac_device_id: p.mac_device_id,
-            mac_display_name,
+        macs.push(HostSummary {
+            host_device_id: p.mac_device_id,
+            host_display_name,
             paired_at_ms: p.paired_at_ms,
             paired_via_device_id: p.paired_via_device_id,
         });

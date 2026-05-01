@@ -38,7 +38,7 @@ pub use minos_domain::{
     PairingState,
 };
 pub use minos_protocol::{
-    AuthSummary, ListThreadsParams, ListThreadsResponse, MacSummary, ReadThreadParams,
+    AuthSummary, HostSummary, ListThreadsParams, ListThreadsResponse, ReadThreadParams,
     ReadThreadResponse, StartAgentResponse, ThreadSummary,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
@@ -140,7 +140,7 @@ impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
     }
 }
 
-/// Dart-visible mirror of `minos_protocol::MacSummary`. One row in
+/// Dart-visible mirror of `minos_protocol::HostSummary`. One row in
 /// `/v1/me/macs`.
 pub struct MacSummaryDto {
     pub mac_device_id: String,
@@ -149,11 +149,11 @@ pub struct MacSummaryDto {
     pub paired_via_device_id: String,
 }
 
-impl From<MacSummary> for MacSummaryDto {
-    fn from(s: MacSummary) -> Self {
+impl From<HostSummary> for MacSummaryDto {
+    fn from(s: HostSummary) -> Self {
         Self {
-            mac_device_id: s.mac_device_id.to_string(),
-            mac_display_name: s.mac_display_name,
+            mac_device_id: s.host_device_id.to_string(),
+            mac_display_name: s.host_display_name,
             paired_at_ms: s.paired_at_ms,
             paired_via_device_id: s.paired_via_device_id.to_string(),
         }

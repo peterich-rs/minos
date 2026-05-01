@@ -22,6 +22,18 @@ const TARGETS: &[&str] = &[
 
 const PATTERN: &str = r"\b(mac|ios)_(device_id|display_name|client|pairings|host|secret)\b|\bMacSummary\b|\bIosClient\b|MeMacsResponse|account_mac_pairings";
 
+/// SQL migrations that mention the old `mac_*` vocabulary by design
+/// (0012 created the original `account_mac_pairings` table; 0013 renames
+/// it to `account_host_pairings`; 0014 rewrites the role CHECK list to
+/// drop `ios-client` in favor of `mobile-client`). They are immutable
+/// history that the lint is *not* trying to gate — the rename is enforced
+/// going forward.
+const HISTORICAL_MIGRATIONS: &[&str] = &[
+    "0012_account_mac_pairings.sql",
+    "0013_rename_account_mac_to_host.sql",
+    "0014_rename_role_ios_client_to_mobile_client.sql",
+];
+
 pub fn run(repo_root: &Path) -> anyhow::Result<()> {
     let mut hits: Vec<String> = Vec::new();
     for t in TARGETS {
@@ -29,8 +41,19 @@ pub fn run(repo_root: &Path) -> anyhow::Result<()> {
         if !dir.exists() {
             continue;
         }
+        let mut args: Vec<String> = vec![
+            "-n".into(),
+            "--no-heading".into(),
+            "-e".into(),
+            PATTERN.into(),
+        ];
+        for excluded in HISTORICAL_MIGRATIONS {
+            args.push("-g".into());
+            args.push(format!("!{excluded}"));
+        }
+        args.push(dir.to_str().unwrap().to_string());
         let out = Command::new("rg")
-            .args(["-n", "--no-heading", "-e", PATTERN, dir.to_str().unwrap()])
+            .args(args.iter().map(String::as_str))
             .output()?;
         if !out.stdout.is_empty() {
             hits.push(String::from_utf8_lossy(&out.stdout).into_owned());

@@ -28,7 +28,7 @@ use futures_util::{SinkExt, StreamExt};
 use minos_domain::{AgentName, ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
     AuthSummary, Envelope, EventKind, GetThreadLastSeqParams, GetThreadLastSeqResponse,
-    ListClisResponse, ListThreadsParams, ListThreadsResponse, MacSummary, PairingQrPayload,
+    HostSummary, ListClisResponse, ListThreadsParams, ListThreadsResponse, PairingQrPayload,
     ReadThreadParams, ReadThreadResponse, RefreshResponse, SendUserMessageRequest,
     StartAgentRequest, StartAgentResponse,
 };
@@ -510,7 +510,7 @@ impl MobileClient {
     }
 
     /// List every Mac paired to the caller's account.
-    pub async fn list_paired_macs(&self) -> Result<Vec<MacSummary>, MinosError> {
+    pub async fn list_paired_macs(&self) -> Result<Vec<HostSummary>, MinosError> {
         let access = self.access_token_or_unauthorized().await?;
         let http = self.http_client_no_secret()?;
         let resp = http.list_paired_macs(&access).await?;

@@ -29,13 +29,13 @@ pub struct MePeerResponse {
 /// routing.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct MeMacsResponse {
-    pub macs: Vec<MacSummary>,
+    pub macs: Vec<HostSummary>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct MacSummary {
-    pub mac_device_id: DeviceId,
-    pub mac_display_name: String,
+pub struct HostSummary {
+    pub host_device_id: DeviceId,
+    pub host_display_name: String,
     pub paired_at_ms: i64,
     pub paired_via_device_id: DeviceId,
 }
@@ -280,9 +280,9 @@ mod tests {
     #[test]
     fn me_macs_response_round_trips() {
         let macs = MeMacsResponse {
-            macs: vec![MacSummary {
-                mac_device_id: DeviceId::new(),
-                mac_display_name: "Mac-mini".into(),
+            macs: vec![HostSummary {
+                host_device_id: DeviceId::new(),
+                host_display_name: "Mac-mini".into(),
                 paired_at_ms: 1_714_000_000_000,
                 paired_via_device_id: DeviceId::new(),
             }],
