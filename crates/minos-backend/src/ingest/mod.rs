@@ -10,8 +10,11 @@
 //!    synthetic `UiEventMessage::Error` so mobile sees something deterministic
 //!    rather than a silent drop.
 //! 4. For each produced UI event, wraps it in an `Envelope::Event` /
-//!    `EventKind::UiEventMessage` and fans it out to every device paired
-//!    with `owner_device_id` that has a live session.
+//!    `EventKind::UiEventMessage` and fans it out to every iOS device
+//!    on every account paired to the ingesting Mac (`owner_device_id`).
+//!    See [`broadcast_to_peers_of`] for the
+//!    `account_mac_pairings → devices` walk introduced in ADR-0020 /
+//!    Phase G.
 //!
 //! Fan-out is bounded: the SessionHandle's outbox is a fixed-size
 //! `mpsc::channel(256)`; full channels drop the one frame with a warn log
@@ -28,7 +31,7 @@ use sqlx::SqlitePool;
 use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
 use crate::session::SessionRegistry;
-use crate::store::{pairings, raw_events, threads};
+use crate::store::{raw_events, threads};
 
 /// Process one `Envelope::Ingest` frame.
 #[allow(clippy::too_many_arguments)] // Single-site dispatcher; splitting obscures the 4-step pipeline.
@@ -211,23 +214,36 @@ fn sanitize_title(text: &str) -> Option<String> {
     Some(trimmed.chars().take(80).collect())
 }
 
-/// Look up every peer for `device_id` in the DB, find each live session in
-/// the registry (if any), and try-send `env` on its outbox. Misses
-/// (unpaired device, peer offline, full outbox) are logged at debug/warn and
-/// swallowed — ingest must stay crash-safe.
+/// Look up every account paired to `mac_device_id` (the ingesting Mac),
+/// resolve every iOS device under each account, and try-send `env` on
+/// each live session's outbox. Misses (no paired accounts, peer offline,
+/// full outbox) are logged at debug/warn and swallowed — ingest must
+/// stay crash-safe.
+///
+/// ADR-0020 / Phase G: replaces the legacy device-keyed
+/// `pairings::get_peers` lookup. Pair table is now keyed on
+/// `(mac_device_id, mobile_account_id)`, so we walk
+/// account_mac_pairings → devices(account_id) → live registry.
 async fn broadcast_to_peers_of(
     pool: &SqlitePool,
     registry: &SessionRegistry,
-    device_id: minos_domain::DeviceId,
+    mac_device_id: minos_domain::DeviceId,
     env: &Envelope,
 ) {
-    let peers = match pairings::get_peers(pool, device_id).await {
-        Ok(p) if !p.is_empty() => p,
+    // Find every account paired to this Mac. If there are none, the Mac
+    // is unpaired — drop the event.
+    let pairs = match crate::store::account_mac_pairings::list_accounts_for_mac(
+        pool,
+        mac_device_id,
+    )
+    .await
+    {
+        Ok(v) if !v.is_empty() => v,
         Ok(_) => {
             tracing::debug!(
                 target: "minos_backend::ingest",
-                device = %device_id,
-                "no peers paired; dropping ui event"
+                mac = %mac_device_id,
+                "no accounts paired; dropping ui event"
             );
             return;
         }
@@ -235,33 +251,57 @@ async fn broadcast_to_peers_of(
             tracing::warn!(
                 target: "minos_backend::ingest",
                 error = ?e,
-                "failed to look up peers"
+                "failed to list accounts paired to mac"
             );
             return;
         }
     };
 
-    for peer in peers {
-        let Some(handle) = registry.get(peer) else {
-            tracing::debug!(
-                target: "minos_backend::ingest",
-                peer = %peer,
-                "peer not live; dropping ui event"
-            );
-            continue;
+    for pair in pairs {
+        let devices = match crate::store::devices::list_by_account(
+            pool,
+            &pair.mobile_account_id,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::ingest",
+                    error = ?e,
+                    account = %pair.mobile_account_id,
+                    "failed to list devices for account"
+                );
+                continue;
+            }
         };
 
-        // Route through `try_send_current` so a reconnect race (peer reconnects
-        // between `get` and the send) cannot let a superseded socket consume
-        // the live UI event. The replacement session will catch up via the
-        // next ingest tick or via list/read_thread on its own (re)attach.
-        if let Err(e) = registry.try_send_current(&handle, env.clone()) {
-            tracing::warn!(
-                target: "minos_backend::ingest",
-                peer = %peer,
-                error = ?e,
-                "peer outbox full or superseded; dropping ui event"
-            );
+        for device in devices
+            .iter()
+            .filter(|d| d.role == minos_domain::DeviceRole::IosClient)
+        {
+            let Some(handle) = registry.get(device.device_id) else {
+                tracing::debug!(
+                    target: "minos_backend::ingest",
+                    peer = %device.device_id,
+                    "peer not live; dropping ui event"
+                );
+                continue;
+            };
+
+            // Route through `try_send_current` so a reconnect race
+            // (peer reconnects between `get` and the send) cannot let a
+            // superseded socket consume the live UI event. The
+            // replacement session will catch up via list/read_thread on
+            // its own (re)attach.
+            if let Err(e) = registry.try_send_current(&handle, env.clone()) {
+                tracing::warn!(
+                    target: "minos_backend::ingest",
+                    peer = %device.device_id,
+                    error = ?e,
+                    "peer outbox full or superseded; dropping ui event"
+                );
+            }
         }
     }
 }

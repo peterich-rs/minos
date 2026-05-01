@@ -249,6 +249,59 @@ where
     }))
 }
 
+/// List all device rows owned by `account_id`.
+///
+/// Used by the ingest fan-out (`broadcast_to_peers_of`) to find every
+/// iOS recipient under a given Mac's paired account. Ordered by
+/// `created_at ASC` so iteration order is stable across calls — the
+/// caller filters by `role` so order between roles doesn't matter, but
+/// stability still helps tests.
+pub async fn list_by_account(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<Vec<DeviceRow>, BackendError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id
+        FROM devices
+        WHERE account_id = ?
+        ORDER BY created_at ASC
+        "#,
+        account_id,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "list_by_account".to_string(),
+        message: e.to_string(),
+    })?;
+    rows.into_iter()
+        .map(|r| {
+            let device_id =
+                Uuid::parse_str(&r.device_id)
+                    .map(DeviceId)
+                    .map_err(|e| BackendError::StoreDecode {
+                        column: "devices.device_id".to_string(),
+                        message: e.to_string(),
+                    })?;
+            let role =
+                DeviceRole::from_str(&r.role).map_err(|e| BackendError::StoreDecode {
+                    column: "devices.role".to_string(),
+                    message: e,
+                })?;
+            Ok(DeviceRow {
+                device_id,
+                display_name: r.display_name,
+                role,
+                secret_hash: r.secret_hash,
+                created_at: r.created_at,
+                last_seen_at: r.last_seen_at,
+                account_id: r.account_id,
+            })
+        })
+        .collect()
+}
+
 /// Return the argon2id `secret_hash` for a device, or `None` if the device
 /// exists but has not completed pairing (hash column NULL) or does not
 /// exist at all.
