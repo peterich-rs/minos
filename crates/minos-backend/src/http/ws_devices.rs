@@ -169,6 +169,15 @@ pub async fn upgrade(
 
         activate_live_session(registry.as_ref(), &handle);
 
+        // Phase D / spec §9: emit `IngestCheckpoint` as the next frame
+        // after the initial `Unpaired` for agent-hosts so the daemon can
+        // reconcile its local DB watermark against what the backend has
+        // durably persisted. Mobile clients ingest no events and skip
+        // this frame.
+        if role == DeviceRole::AgentHost {
+            push_ingest_checkpoint(&store, &handle, device_id).await;
+        }
+
         if let Err(e) = run_session(socket, handle, outbox_rx, registry, store, translators).await {
             tracing::warn!(
                 target: "minos_backend::http",
@@ -237,6 +246,51 @@ async fn close_socket(ws: &mut WebSocket, code: u16, reason: &'static str) {
             reason: reason.into(),
         })))
         .await;
+}
+
+/// Compute the per-thread `MAX(seq)` checkpoint for `owner_device_id` and
+/// push it onto the device handle's outbox as `Event::IngestCheckpoint`.
+///
+/// Runs only for agent-hosts, immediately after the initial `Unpaired`
+/// frame. The daemon uses this to detect gaps between its local
+/// watermark and what the backend has durably persisted, and replays
+/// missing rows (or falls back to JSONL recovery) — see Phase D
+/// `Reconciliator`. A DB error here is logged and swallowed: the
+/// reconnect succeeds without a checkpoint, and the daemon will get a
+/// fresh one on the next reconnect.
+async fn push_ingest_checkpoint(
+    store: &sqlx::SqlitePool,
+    handle: &SessionHandle,
+    device_id: DeviceId,
+) {
+    let last_seq_per_thread =
+        match crate::store::raw_events::last_seq_per_owner(store, &device_id.to_string()).await {
+            Ok(map) => map,
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::http",
+                    error = %e,
+                    device_id = %device_id,
+                    "failed to compute IngestCheckpoint; skipping frame"
+                );
+                return;
+            }
+        };
+
+    let frame = Envelope::Event {
+        version: 1,
+        event: EventKind::IngestCheckpoint {
+            last_seq_per_thread,
+        },
+    };
+    if let Err(e) = handle.outbox.try_send(frame) {
+        tracing::warn!(
+            target: "minos_backend::http",
+            error = ?e,
+            device_id = %device_id,
+            "failed to push IngestCheckpoint onto outbox"
+        );
+    }
 }
 
 fn activate_live_session(registry: &SessionRegistry, handle: &SessionHandle) {

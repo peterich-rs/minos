@@ -207,6 +207,39 @@ pub async fn read_range(
         .collect()
 }
 
+/// Return the largest `seq` per thread across every thread owned by
+/// `owner_device_id`. Threads with zero raw events are omitted (the
+/// `INNER JOIN` excludes them).
+///
+/// Used by `/v1/devices/ws` to compute the `IngestCheckpoint` frame the
+/// daemon receives on connect (Phase D / spec §9 reconciliation): the
+/// daemon compares each backend max against its local watermark and
+/// replays the gap.
+pub async fn last_seq_per_owner(
+    pool: &SqlitePool,
+    owner_device_id: &str,
+) -> Result<std::collections::HashMap<String, u64>, BackendError> {
+    let rows = sqlx::query_as::<_, (String, i64)>(
+        r"SELECT t.thread_id, MAX(r.seq)
+           FROM raw_events r
+           INNER JOIN threads t ON t.thread_id = r.thread_id
+           WHERE t.owner_device_id = ?1
+           GROUP BY t.thread_id",
+    )
+    .bind(owner_device_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.last_seq_per_owner".into(),
+        message: e.to_string(),
+    })?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(thread_id, max_seq)| (thread_id, u64::try_from(max_seq).unwrap_or(0)))
+        .collect())
+}
+
 /// Return the largest `seq` ever persisted for `thread_id`, or `0` if no
 /// rows exist. Used by the agent-host to decide whether to re-ingest on
 /// startup (`GET /v1/threads/{id}/last_seq`).
@@ -362,6 +395,55 @@ mod tests {
         let pool = memory_pool().await;
         seed_host_and_thread(&pool).await;
         assert_eq!(last_seq(&pool, "thr1").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn last_seq_per_owner_groups_by_thread() {
+        let pool = memory_pool().await;
+        sqlx::query(
+            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
+               VALUES ('host_a','HostA','agent-host',0,0),
+                      ('host_b','HostB','agent-host',0,0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms)
+               VALUES ('thr_1','codex','host_a',0,0),
+                      ('thr_2','codex','host_a',0,0),
+                      ('thr_3','codex','host_b',0,0),
+                      ('thr_empty','codex','host_a',0,0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (tid, seq) in [("thr_1", 7), ("thr_1", 3), ("thr_2", 12), ("thr_3", 1)] {
+            insert_if_absent(
+                &pool,
+                tid,
+                seq,
+                AgentName::Codex,
+                &serde_json::json!({}),
+                0,
+            )
+            .await
+            .unwrap();
+        }
+
+        let map = last_seq_per_owner(&pool, "host_a").await.unwrap();
+        // thr_empty has no raw_events row → excluded by the INNER JOIN.
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("thr_1").copied(), Some(7));
+        assert_eq!(map.get("thr_2").copied(), Some(12));
+        assert!(map.get("thr_3").is_none(), "must not leak host_b's thread");
+    }
+
+    #[tokio::test]
+    async fn last_seq_per_owner_empty_for_unknown_owner() {
+        let pool = memory_pool().await;
+        let map = last_seq_per_owner(&pool, "ghost").await.unwrap();
+        assert!(map.is_empty());
     }
 
     #[tokio::test]
