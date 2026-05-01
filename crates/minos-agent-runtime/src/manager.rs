@@ -47,13 +47,82 @@ impl AgentManager {
     pub fn new(config: AgentRuntimeConfig, caps: InstanceCaps) -> Self {
         let (events_tx, _) = broadcast::channel(256);
         let (manager_tx, _) = broadcast::channel(64);
-        Self {
+        let mgr = Self {
             config: Arc::new(config),
             caps,
             instances: Arc::new(Mutex::new(HashMap::new())),
             threads: Arc::new(Mutex::new(HashMap::new())),
             events_tx,
             manager_tx,
+        };
+        mgr.spawn_reaper();
+        mgr
+    }
+
+    fn spawn_reaper(&self) {
+        let caps = self.caps.clone();
+        let instances = self.instances.clone();
+        let threads = self.threads.clone();
+        let manager_tx = self.manager_tx.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let mut to_reap: Vec<PathBuf> = Vec::new();
+                {
+                    let ig = instances.lock().await;
+                    for (ws, inst) in ig.iter() {
+                        let last = *inst.last_activity_at.lock().await;
+                        let idle = last.elapsed() >= caps.idle_timeout;
+                        let tids = inst.thread_ids().await;
+                        let tg = threads.lock().await;
+                        let any_running = tids.iter().any(|t| {
+                            tg.get(t)
+                                .map(|h| matches!(h.current_state(), ThreadState::Running { .. }))
+                                .unwrap_or(false)
+                        });
+                        drop(tg);
+                        if idle && !any_running {
+                            to_reap.push(ws.clone());
+                        }
+                    }
+                }
+                for ws in to_reap {
+                    Self::reap_static(&instances, &threads, &manager_tx, &ws).await;
+                }
+            }
+        });
+    }
+
+    async fn reap_static(
+        instances: &Arc<Mutex<HashMap<PathBuf, Arc<AppServerInstance>>>>,
+        threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+        manager_tx: &broadcast::Sender<ManagerEvent>,
+        ws: &Path,
+    ) {
+        let inst = match instances.lock().await.remove(ws) {
+            Some(i) => i,
+            None => return,
+        };
+        let tids = inst.thread_ids().await;
+        let workspace = inst.workspace.clone();
+        let tg = threads.lock().await;
+        for tid in &tids {
+            if let Some(h) = tg.get(tid) {
+                let _ = h.transition(ThreadState::Suspended {
+                    reason: PauseReason::InstanceReaped,
+                });
+            }
+        }
+        drop(tg);
+        let _ = manager_tx.send(ManagerEvent::InstanceCrashed {
+            workspace,
+            affected_threads: tids,
+        });
+        let child_opt = inst.child.lock().await.take();
+        drop(inst);
+        if let Some(mut child) = child_opt {
+            let _ = child.kill().await;
         }
     }
 
@@ -278,9 +347,80 @@ impl AgentManager {
 
     async fn lru_evict(
         &self,
-        _map: &mut HashMap<PathBuf, Arc<AppServerInstance>>,
+        map: &mut HashMap<PathBuf, Arc<AppServerInstance>>,
     ) -> anyhow::Result<()> {
-        anyhow::bail!("evict unimplemented (C19)")
+        let mut candidates: Vec<(PathBuf, std::time::Instant)> = Vec::new();
+        let tg = self.threads.lock().await;
+        for (ws, inst) in map.iter() {
+            let tids = inst.thread_ids().await;
+            let any_running = tids.iter().any(|t| {
+                tg.get(t)
+                    .map(|h| matches!(h.current_state(), ThreadState::Running { .. }))
+                    .unwrap_or(false)
+            });
+            if !any_running {
+                candidates.push((ws.clone(), *inst.last_activity_at.lock().await));
+            }
+        }
+        drop(tg);
+        candidates.sort_by_key(|(_, t)| *t);
+        let victim = candidates.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!("TooManyInstances: every instance has a Running thread")
+        })?;
+        let inst = map.remove(&victim.0).expect("victim was in map");
+        let tids = inst.thread_ids().await;
+        let workspace = inst.workspace.clone();
+        let tg = self.threads.lock().await;
+        for tid in &tids {
+            if let Some(h) = tg.get(tid) {
+                let _ = h.transition(ThreadState::Suspended {
+                    reason: PauseReason::InstanceReaped,
+                });
+            }
+        }
+        drop(tg);
+        let _ = self.manager_tx.send(ManagerEvent::InstanceCrashed {
+            workspace,
+            affected_threads: tids,
+        });
+        let child_opt = inst.child.lock().await.take();
+        drop(inst);
+        if let Some(mut child) = child_opt {
+            let _ = child.kill().await;
+        }
+        Ok(())
+    }
+
+    /// Test-only helper: run one pass of the reaper synchronously. Production
+    /// code spawns the periodic loop in [`AgentManager::spawn_reaper`].
+    #[doc(hidden)]
+    pub async fn tick_reaper_once(&self) {
+        let mut to_reap: Vec<PathBuf> = Vec::new();
+        {
+            let ig = self.instances.lock().await;
+            for (ws, inst) in ig.iter() {
+                let last = *inst.last_activity_at.lock().await;
+                let idle = last.elapsed() >= self.caps.idle_timeout;
+                let tids = inst.thread_ids().await;
+                let tg = self.threads.lock().await;
+                let any_running = tids.iter().any(|t| {
+                    tg.get(t)
+                        .map(|h| matches!(h.current_state(), ThreadState::Running { .. }))
+                        .unwrap_or(false)
+                });
+                drop(tg);
+                if idle && !any_running {
+                    to_reap.push(ws.clone());
+                }
+            }
+        }
+        for ws in to_reap {
+            self.reap_instance(&ws).await;
+        }
+    }
+
+    async fn reap_instance(&self, ws: &Path) {
+        Self::reap_static(&self.instances, &self.threads, &self.manager_tx, ws).await;
     }
 
     pub async fn send_user_message(
