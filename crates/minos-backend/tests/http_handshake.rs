@@ -155,10 +155,10 @@ async fn devices_first_connect_emits_unpaired_event() {
 
 // ADR-0020 / Phase G: the activate hook now always emits `Unpaired` as the
 // initial frame; the legacy `PeerOffline` based on a single-peer paired_with
-// slot was deleted alongside the device-keyed pairings module. Multi-mac
+// slot was deleted alongside the device-keyed pairings module. Multi-host
 // account-scoped presence rebuild on connect is deferred to Phase M.
 #[tokio::test]
-#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-mac coverage"]
+#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-host coverage"]
 async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not_live() {
     use futures::StreamExt;
 

@@ -16,9 +16,9 @@ async fn paired_pair_with_account(
     state: &minos_backend::http::BackendState,
     email: &str,
 ) -> (DeviceId, DeviceId, minos_domain::DeviceSecret, String) {
-    let mac = DeviceId::new();
+    let host = DeviceId::new();
     let ios = DeviceId::new();
-    insert_device(&state.store, mac, "Mac", DeviceRole::AgentHost, 0)
+    insert_device(&state.store, host, "Mac", DeviceRole::AgentHost, 0)
         .await
         .unwrap();
     insert_device(&state.store, ios, "iPhone", DeviceRole::MobileClient, 0)
@@ -31,7 +31,7 @@ async fn paired_pair_with_account(
     // assertions and signature-compat callers happy.
     let secret = minos_domain::DeviceSecret::generate();
     let hash = minos_backend::pairing::secret::hash_secret(&secret).unwrap();
-    minos_backend::store::devices::upsert_secret_hash(&state.store, mac, &hash)
+    minos_backend::store::devices::upsert_secret_hash(&state.store, host, &hash)
         .await
         .unwrap();
 
@@ -41,17 +41,17 @@ async fn paired_pair_with_account(
     let account = minos_backend::store::accounts::create(&state.store, email, "phc")
         .await
         .unwrap();
-    minos_backend::store::devices::set_account_id(&state.store, &mac, &account.account_id)
+    minos_backend::store::devices::set_account_id(&state.store, &host, &account.account_id)
         .await
         .unwrap();
     minos_backend::store::devices::set_account_id(&state.store, &ios, &account.account_id)
         .await
         .unwrap();
-    account_host_pairings::insert_pair(&state.store, mac, &account.account_id, ios, 0)
+    account_host_pairings::insert_pair(&state.store, host, &account.account_id, ios, 0)
         .await
         .unwrap();
 
-    (mac, ios, secret, account.account_id)
+    (host, ios, secret, account.account_id)
 }
 
 /// Convenience: signed bearer JWT bound to the given (account_id, device_id).

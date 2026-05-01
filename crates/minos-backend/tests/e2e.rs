@@ -330,10 +330,10 @@ async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
 // ADR-0020 / Phase G: single-peer presence tracking
 // (`PeerOnline`/`PeerOffline` on connect/disconnect) was deleted with the
 // device-keyed pairings module. The activate hook now always emits
-// `Unpaired`. Multi-mac account-scoped presence rebuild is deferred to
+// `Unpaired`. Multi-host account-scoped presence rebuild is deferred to
 // Phase M.
 #[tokio::test]
-#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-mac coverage"]
+#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-host coverage"]
 async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
@@ -357,7 +357,7 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     store::devices::set_account_id(&relay.pool, &ios_id, &account_id).await?;
     store::account_host_pairings::insert_pair(&relay.pool, mac_id, &account_id, ios_id, 0).await?;
 
-    let mut mac = connect_client(
+    let mut host = connect_client(
         &relay,
         mac_id,
         DeviceRole::AgentHost,
@@ -365,12 +365,12 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
         Some("mac"),
     )
     .await?;
-    match recv_envelope(&mut mac).await? {
+    match recv_envelope(&mut host).await? {
         Envelope::Event {
             event: EventKind::PeerOffline { peer_device_id },
             ..
         } => assert_eq!(peer_device_id, ios_id),
-        other => panic!("expected initial PeerOffline on mac, got {other:?}"),
+        other => panic!("expected initial PeerOffline on host, got {other:?}"),
     }
 
     let mut ios = connect_client(
@@ -389,27 +389,27 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
         other => panic!("expected initial PeerOnline on ios, got {other:?}"),
     }
 
-    match recv_envelope(&mut mac).await? {
+    match recv_envelope(&mut host).await? {
         Envelope::Event {
             event: EventKind::PeerOnline { peer_device_id },
             ..
         } => assert_eq!(peer_device_id, ios_id),
-        other => panic!("expected PeerOnline on mac after ios connect, got {other:?}"),
+        other => panic!("expected PeerOnline on host after ios connect, got {other:?}"),
     }
 
     ios.send(Message::Close(None)).await.ok();
     drop(ios);
 
-    match recv_envelope(&mut mac).await? {
+    match recv_envelope(&mut host).await? {
         Envelope::Event {
             event: EventKind::PeerOffline { peer_device_id },
             ..
         } => assert_eq!(peer_device_id, ios_id),
-        other => panic!("expected PeerOffline on mac after ios disconnect, got {other:?}"),
+        other => panic!("expected PeerOffline on host after ios disconnect, got {other:?}"),
     }
 
-    mac.send(Message::Close(None)).await.ok();
-    drop(mac);
+    host.send(Message::Close(None)).await.ok();
+    drop(host);
 
     Ok(())
 }

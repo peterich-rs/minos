@@ -179,13 +179,13 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
 
     // Pre-seed: a Mac (with a hashed secret) and a paired iOS device under
     // a real account; ADR-0020 keys fan-out off
-    // `account_host_pairings(mac, account)` and walks devices(account_id) to
+    // `account_host_pairings(host, account)` and walks devices(account_id) to
     // find the iOS receivers, so the iOS row needs `account_id` set and no
     // secret hash.
     let host_id = DeviceId::new();
     let host_secret = DeviceSecret::generate();
     let host_hash = hash_secret(&host_secret)?;
-    store::devices::insert_device(&relay.pool, host_id, "host", DeviceRole::AgentHost, 0).await?;
+    store::devices::insert_device(&relay.pool, host_id, "mac", DeviceRole::AgentHost, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
 
     let account_id = store::accounts::create(&relay.pool, "ingest@example.com", "phc")
@@ -209,7 +209,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
 
     // Drain the initial Unpaired presence frame (Phase G activate hook
     // emits Unpaired on every upgrade until Phase M re-introduces
-    // multi-mac presence).
+    // multi-host presence).
     let _initial_presence = recv_envelope(&mut phone).await?;
 
     let mut host = connect_client(
@@ -217,7 +217,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
         host_id,
         DeviceRole::AgentHost,
         Some(host_secret.as_str()),
-        Some("host"),
+        Some("mac"),
         None,
     )
     .await?;
@@ -279,7 +279,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
     let host_secret = DeviceSecret::generate();
     let host_hash = hash_secret(&host_secret)?;
 
-    store::devices::insert_device(&relay.pool, host_id, "host", DeviceRole::AgentHost, 0).await?;
+    store::devices::insert_device(&relay.pool, host_id, "mac", DeviceRole::AgentHost, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
 
     let mut host = connect_client(
@@ -287,7 +287,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
         host_id,
         DeviceRole::AgentHost,
         Some(host_secret.as_str()),
-        Some("host"),
+        Some("mac"),
         None,
     )
     .await?;
@@ -325,7 +325,7 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
     let host_id = DeviceId::new();
     let host_secret = DeviceSecret::generate();
     let host_hash = hash_secret(&host_secret)?;
-    store::devices::insert_device(&relay.pool, host_id, "host", DeviceRole::AgentHost, 0).await?;
+    store::devices::insert_device(&relay.pool, host_id, "mac", DeviceRole::AgentHost, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
 
     let account_id = store::accounts::create(&relay.pool, "title@example.com", "phc")
@@ -351,7 +351,7 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
         host_id,
         DeviceRole::AgentHost,
         Some(host_secret.as_str()),
-        Some("host"),
+        Some("mac"),
         None,
     )
     .await?;

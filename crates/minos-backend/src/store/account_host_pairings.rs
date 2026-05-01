@@ -36,7 +36,7 @@ pub struct PairRow {
 /// (account already paired to this Mac); `Ok(true)` on insert.
 ///
 /// The `ON CONFLICT DO NOTHING` clause makes the call idempotent for
-/// the (mac, account) couple while still letting the caller
+/// the (host, account) couple while still letting the caller
 /// distinguish "newly created" from "already present" via the bool
 /// return — used by the pairing handler to decide whether to emit the
 /// `Paired` event.
@@ -147,7 +147,7 @@ pub async fn list_accounts_for_host(
         .collect()
 }
 
-/// Does the (mac, account) pair exist?
+/// Does the (host, account) pair exist?
 pub async fn exists(
     pool: &SqlitePool,
     host_device_id: DeviceId,
@@ -177,7 +177,7 @@ pub async fn exists(
     Ok(row.is_some())
 }
 
-/// Delete a specific (mac, account) pair. Returns rows-deleted (0 or 1).
+/// Delete a specific (host, account) pair. Returns rows-deleted (0 or 1).
 pub async fn delete_pair(
     pool: &SqlitePool,
     host_device_id: DeviceId,
@@ -223,7 +223,7 @@ mod tests {
     /// pre-pair); iOS is inserted via `insert_ios_device` which sets
     /// `account_id` during creation. `secret_hash` stays NULL on iOS as
     /// required by the new ADR-0020 rail.
-    async fn setup_one_mac_one_account() -> (
+    async fn setup_one_host_one_account() -> (
         sqlx::SqlitePool,
         String,   // account_id
         DeviceId, // host_device_id
@@ -231,70 +231,70 @@ mod tests {
     ) {
         let pool = memory_pool().await;
         let account_id = insert_account(&pool, "user@example.com").await;
-        let mac = DeviceId::new();
-        insert_device(&pool, mac, "Mac-mini", DeviceRole::AgentHost, T0)
+        let host = DeviceId::new();
+        insert_device(&pool, host, "Mac-mini", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         let mobile = insert_ios_device(&pool, &account_id).await;
-        (pool, account_id, mac, mobile)
+        (pool, account_id, host, mobile)
     }
 
     #[tokio::test]
     async fn insert_and_list_round_trip() {
-        let (pool, account, mac, mobile) = setup_one_mac_one_account().await;
-        let inserted = insert_pair(&pool, mac, &account, mobile, 100)
+        let (pool, account, host, mobile) = setup_one_host_one_account().await;
+        let inserted = insert_pair(&pool, host, &account, mobile, 100)
             .await
             .unwrap();
         assert!(inserted);
-        let macs = list_hosts_for_account(&pool, &account).await.unwrap();
-        assert_eq!(macs.len(), 1);
-        assert_eq!(macs[0].host_device_id, mac);
-        assert_eq!(macs[0].paired_via_device_id, mobile);
-        assert_eq!(macs[0].mobile_account_id, account);
-        assert_eq!(macs[0].paired_at_ms, 100);
+        let hosts = list_hosts_for_account(&pool, &account).await.unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].host_device_id, host);
+        assert_eq!(hosts[0].paired_via_device_id, mobile);
+        assert_eq!(hosts[0].mobile_account_id, account);
+        assert_eq!(hosts[0].paired_at_ms, 100);
     }
 
     #[tokio::test]
     async fn unique_violation_returns_false() {
-        let (pool, account, mac, mobile) = setup_one_mac_one_account().await;
-        assert!(insert_pair(&pool, mac, &account, mobile, 100)
+        let (pool, account, host, mobile) = setup_one_host_one_account().await;
+        assert!(insert_pair(&pool, host, &account, mobile, 100)
             .await
             .unwrap());
-        assert!(!insert_pair(&pool, mac, &account, mobile, 200)
+        assert!(!insert_pair(&pool, host, &account, mobile, 200)
             .await
             .unwrap());
     }
 
     #[tokio::test]
     async fn delete_pair_removes_row() {
-        let (pool, account, mac, mobile) = setup_one_mac_one_account().await;
-        insert_pair(&pool, mac, &account, mobile, 100)
+        let (pool, account, host, mobile) = setup_one_host_one_account().await;
+        insert_pair(&pool, host, &account, mobile, 100)
             .await
             .unwrap();
-        let n = delete_pair(&pool, mac, &account).await.unwrap();
+        let n = delete_pair(&pool, host, &account).await.unwrap();
         assert_eq!(n, 1);
-        assert!(!exists(&pool, mac, &account).await.unwrap());
+        assert!(!exists(&pool, host, &account).await.unwrap());
     }
 
     #[tokio::test]
     async fn delete_pair_on_missing_returns_zero() {
-        let (pool, account, mac, _mobile) = setup_one_mac_one_account().await;
-        let n = delete_pair(&pool, mac, &account).await.unwrap();
+        let (pool, account, host, _mobile) = setup_one_host_one_account().await;
+        let n = delete_pair(&pool, host, &account).await.unwrap();
         assert_eq!(n, 0);
     }
 
     #[tokio::test]
     async fn one_mac_to_many_accounts() {
-        let (pool, account_a, mac, mobile_a) = setup_one_mac_one_account().await;
+        let (pool, account_a, host, mobile_a) = setup_one_host_one_account().await;
         let account_b = insert_account(&pool, "b@example.com").await;
         let mobile_b = insert_ios_device(&pool, &account_b).await;
-        insert_pair(&pool, mac, &account_a, mobile_a, 100)
+        insert_pair(&pool, host, &account_a, mobile_a, 100)
             .await
             .unwrap();
-        insert_pair(&pool, mac, &account_b, mobile_b, 200)
+        insert_pair(&pool, host, &account_b, mobile_b, 200)
             .await
             .unwrap();
-        let accounts = list_accounts_for_host(&pool, mac).await.unwrap();
+        let accounts = list_accounts_for_host(&pool, host).await.unwrap();
         assert_eq!(accounts.len(), 2);
         // ordered most-recent first
         assert_eq!(accounts[0].mobile_account_id, account_b);
@@ -303,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn exists_returns_false_when_missing() {
-        let (pool, account, mac, _mobile) = setup_one_mac_one_account().await;
-        assert!(!exists(&pool, mac, &account).await.unwrap());
+        let (pool, account, host, _mobile) = setup_one_host_one_account().await;
+        assert!(!exists(&pool, host, &account).await.unwrap());
     }
 }
