@@ -1128,9 +1128,19 @@ fn handle_text_frame(
                     ts_ms,
                 });
             }
-            EventKind::Unpaired | EventKind::ServerShutdown => {
+            EventKind::ServerShutdown => {
                 let _ = state_tx.send(ConnectionState::Disconnected);
                 drain_pending(pending);
+            }
+            EventKind::Unpaired => {
+                // ADR-0020 / Phase G: the backend now emits Unpaired as
+                // the initial activation frame for every iOS WS upgrade
+                // (and on subsequent multi-mac account state changes).
+                // Treat it as an advisory "refresh paired-mac list"
+                // signal rather than a "tear-down everything" — dropping
+                // pending here would race forward_rpc callers issued
+                // immediately after pair_with_qr_json returned.
+                tracing::debug!(target: "minos_mobile::client", "ignoring Unpaired event (advisory)");
             }
             _ => tracing::debug!(?event, "mobile: ignored event"),
         },
@@ -1963,7 +1973,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_text_frame_unpaired_event_drains_pending() {
+    async fn handle_text_frame_unpaired_event_is_advisory_does_not_drain() {
+        // ADR-0020 / Phase G: the backend emits an initial Unpaired
+        // frame on every iOS WS activation. Dropping pending RPCs on
+        // that signal would race forward_rpc callers fired immediately
+        // after pair_with_qr_json returned. Verify the iPhone client
+        // ignores Unpaired (treats it as advisory).
+        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
+        let (tx, _rx) = oneshot::channel::<RpcReply>();
+        pending.insert(1, tx);
+        let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (state_tx, _state_rx) = watch::channel(ConnectionState::Connected);
+
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::Unpaired,
+        };
+        let text = serde_json::to_string(&env).unwrap();
+        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+
+        // Pending entry must survive the Unpaired event.
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handle_text_frame_server_shutdown_event_drains_pending() {
         let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
         let (tx, rx) = oneshot::channel::<RpcReply>();
         pending.insert(1, tx);
@@ -1972,7 +2006,7 @@ mod tests {
 
         let env = Envelope::Event {
             version: 1,
-            event: EventKind::Unpaired,
+            event: EventKind::ServerShutdown,
         };
         let text = serde_json::to_string(&env).unwrap();
         handle_text_frame(&text, &ui_tx, &state_tx, &pending);

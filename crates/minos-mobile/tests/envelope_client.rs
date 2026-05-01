@@ -412,6 +412,10 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
     .await
     .expect("resume must end in Disconnected after 4401 close");
 
+    // ADR-0020: tear down the reconnect loop explicitly so the spawned
+    // backend's read.next() can return. See the matching note in the
+    // CF-Access test below.
+    let _ = client.logout().await;
     backend.await.unwrap();
 }
 
@@ -451,6 +455,13 @@ async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
     // CF-Access headers; nothing more to verify on the WS side. The
     // post-Phase-C `list_threads` round-trip lives in
     // `list_threads_round_trips_over_envelope` (real backend, HTTP-backed).
+    //
+    // ADR-0020: now that the resume path drives the bearer-only reconnect
+    // loop, we have to explicitly tear it down before dropping — otherwise
+    // the loop keeps holding the WS task handles and the backend's
+    // read.next() never returns. logout() clears the auth state, aborts
+    // the reconnect handle, and shuts down the outbound WS in one shot.
+    let _ = client.logout().await;
     drop(client);
     backend.await.unwrap();
 }
