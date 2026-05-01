@@ -249,6 +249,9 @@ Email is normalized to lowercase before lookup (the `COLLATE NOCASE` index makes
 
 ### 5.4 Auth middleware coexistence
 
+> **Superseded 2026-05-01 by [ADR-0020](../../adr/0020-server-centric-auth-and-account-pairs.md).** iOS rail no longer requires `X-Device-Secret`; bearer alone authenticates iOS. Mac rail (CF Access + device-secret) is unchanged. The table below documents the historical dual-rail design.
+
+
 A new module `crates/minos-backend/src/auth/bearer.rs` extracts `Authorization: Bearer` and verifies the JWT. It coexists with the existing `crates/minos-backend/src/http/auth.rs` (device-secret) — different routes need different rails:
 
 | Route | Device rail | Bearer rail | Notes |
@@ -990,6 +993,8 @@ The plan document derived from this spec must include a step verifying step 3 ag
 - **Account switch race.** If the user logs in as account B on a device that was account A's, the brief window between "new device.account_id written" and "Riverpod cache invalidated" can show stale account-A data. Plan must order: sign out → secure storage clear → cache invalidate → sign in.
 
 ### 12.2 Open questions (resolved during brainstorm)
+
+> **Superseded 2026-05-01 by [ADR-0020](../../adr/0020-server-centric-auth-and-account-pairs.md).** The "single device" decision below is no longer current. Pair model is now (mac_device, mobile_account); iOS auth is bearer-only.
 
 All architectural questions were resolved during the spec discussion:
 
