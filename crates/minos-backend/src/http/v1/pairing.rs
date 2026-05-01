@@ -21,6 +21,7 @@ pub fn router() -> Router<BackendState> {
         .route("/pairing/tokens", post(post_tokens))
         .route("/pairing/consume", post(post_consume))
         .route("/pairing", delete(delete_pairing_legacy))
+        .route("/pairings/:mac_device_id", delete(delete_pair_for_mac))
 }
 
 #[derive(Debug, Serialize)]
@@ -277,13 +278,66 @@ async fn post_consume(
 }
 
 /// `DELETE /v1/pairing` legacy route. The Phase 2 / pre-ADR-0020 path
-/// is gone; Phase E2 introduces `DELETE /v1/pairings/{mac_device_id}`
-/// with bearer auth. Until that route lands, the legacy endpoint
-/// returns 410 Gone so any old client surfaces a clear error rather
-/// than silently dropping the call.
+/// is gone; new clients call `DELETE /v1/pairings/{mac_device_id}` with
+/// a bearer JWT. This stub returns 410 Gone so any old client surfaces a
+/// clear error rather than silently dropping the call.
 async fn delete_pairing_legacy() -> (StatusCode, Json<ErrorEnvelope>) {
     (
         StatusCode::GONE,
         err_body("replaced", "Use DELETE /v1/pairings/{mac_device_id}"),
     )
+}
+
+/// `DELETE /v1/pairings/:mac_device_id`. Bearer-authenticated;
+/// dissolves the pair between the bearer's account and `mac_device_id`,
+/// and pushes `Event::Unpaired` to the Mac's live session if any.
+async fn delete_pair_for_mac(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    axum::extract::Path(mac_device_id): axum::extract::Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
+    let bearer_outcome = bearer::require(&state, &headers).map_err(|e| {
+        let (s, m) = e.into_response_tuple();
+        (s, err_body("unauthorized", m))
+    })?;
+    let mac_id = uuid::Uuid::parse_str(&mac_device_id)
+        .map(minos_domain::DeviceId)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                err_body("bad_request", "invalid mac_device_id"),
+            )
+        })?;
+
+    let n = crate::store::account_mac_pairings::delete_pair(
+        &state.store,
+        mac_id,
+        &bearer_outcome.account_id,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err_body("internal", e.to_string()),
+        )
+    })?;
+
+    if n == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            err_body("not_found", "pair does not exist"),
+        ));
+    }
+
+    if let Some(mac_handle) = state.registry.get(mac_id) {
+        let _ = state.registry.try_send_current(
+            &mac_handle,
+            Envelope::Event {
+                version: 1,
+                event: EventKind::Unpaired,
+            },
+        );
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
