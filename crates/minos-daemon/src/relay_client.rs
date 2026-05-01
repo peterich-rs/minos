@@ -697,6 +697,18 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
                 "ignoring UiEventMessage on the host side"
             );
         }
+        EventKind::IngestCheckpoint {
+            last_seq_per_thread,
+        } => {
+            // Backend → daemon reconciliation checkpoint. Wired into the
+            // Reconciliator in Phase D Task D5; for now just acknowledge
+            // arrival so the protocol enum stays exhaustively matched.
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                threads = last_seq_per_thread.len(),
+                "received IngestCheckpoint (reconciliation wiring pending)"
+            );
+        }
     }
 }
 

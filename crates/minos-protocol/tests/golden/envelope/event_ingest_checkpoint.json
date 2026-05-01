@@ -1,0 +1,9 @@
+{
+  "kind": "event",
+  "v": 1,
+  "type": "ingest_checkpoint",
+  "last_seq_per_thread": {
+    "thr_abc": 7,
+    "thr_def": 3
+  }
+}

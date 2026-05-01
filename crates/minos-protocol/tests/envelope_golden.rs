@@ -132,6 +132,23 @@ fn event_server_shutdown() {
 }
 
 #[test]
+fn event_ingest_checkpoint() {
+    let env = round_trip("event_ingest_checkpoint.json");
+    let Envelope::Event { version, event } = env else {
+        panic!("expected Event");
+    };
+    assert_eq!(version, 1);
+    let EventKind::IngestCheckpoint {
+        last_seq_per_thread,
+    } = event
+    else {
+        panic!("expected IngestCheckpoint");
+    };
+    assert_eq!(last_seq_per_thread.get("thr_abc").copied(), Some(7));
+    assert_eq!(last_seq_per_thread.get("thr_def").copied(), Some(3));
+}
+
+#[test]
 fn ingest() {
     let env = round_trip("ingest.json");
     let Envelope::Ingest {

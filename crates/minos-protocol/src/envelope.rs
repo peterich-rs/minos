@@ -130,6 +130,17 @@ pub enum EventKind {
         ui: minos_ui_protocol::UiEventMessage,
         ts_ms: i64,
     },
+    /// Backend → Daemon. Sent as the first frame after the agent-host
+    /// `/v1/devices/ws` upgrade authenticates. Carries the backend's
+    /// per-thread `MAX(seq)` so the daemon can detect gaps between its
+    /// local DB watermark and what the backend has durably persisted, and
+    /// replay missing rows (or fall back to JSONL recovery).
+    ///
+    /// Only emitted to agent-hosts; mobile clients ingest no events and
+    /// receive `UiEventMessage` instead.
+    IngestCheckpoint {
+        last_seq_per_thread: std::collections::HashMap<String, u64>,
+    },
 }
 
 #[cfg(test)]
@@ -294,6 +305,41 @@ mod tests {
         assert!(s.contains(r#""agent":"codex""#));
         let back: Envelope = serde_json::from_str(&s).unwrap();
         assert_eq!(e, back);
+    }
+
+    #[test]
+    fn event_ingest_checkpoint_round_trips() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("thr_a".to_string(), 7u64);
+        map.insert("thr_b".to_string(), 3u64);
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::IngestCheckpoint {
+                last_seq_per_thread: map.clone(),
+            },
+        };
+        round_trip(&env);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["kind"], "event");
+        assert_eq!(v["type"], "ingest_checkpoint");
+        let lsp = &v["last_seq_per_thread"];
+        assert_eq!(lsp["thr_a"], 7);
+        assert_eq!(lsp["thr_b"], 3);
+    }
+
+    #[test]
+    fn event_ingest_checkpoint_empty_map_round_trips() {
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::IngestCheckpoint {
+                last_seq_per_thread: std::collections::HashMap::new(),
+            },
+        };
+        round_trip(&env);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["type"], "ingest_checkpoint");
+        assert!(v["last_seq_per_thread"].is_object());
+        assert_eq!(v["last_seq_per_thread"].as_object().unwrap().len(), 0);
     }
 
     #[test]
