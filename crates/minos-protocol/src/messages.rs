@@ -131,7 +131,6 @@ pub struct SendUserMessageRequest {
 pub struct PairingQrPayload {
     #[serde(default = "default_pairing_qr_version")]
     pub v: u8,
-    #[serde(alias = "mac_display_name")]
     pub host_display_name: String,
     #[serde(alias = "token")]
     pub pairing_token: String,
@@ -368,14 +367,15 @@ mod new_type_tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn pairing_qr_payload_accepts_legacy_mac_field_names() {
+    fn pairing_qr_payload_ignores_legacy_unknown_fields() {
         // Legacy QR payloads may still carry `backend_url` and CF Access
         // fields — `serde` ignores unknown fields by default, so this is
         // a forward-compat read of older Mac builds. The struct itself no
-        // longer carries them.
+        // longer carries them. The `mac_display_name` alias was dropped in
+        // Phase B; new payloads must use `host_display_name`.
         let back: PairingQrPayload = serde_json::from_value(serde_json::json!({
             "backend_url": "wss://minos.fan-nn.top/devices",
-            "mac_display_name": "Mac",
+            "host_display_name": "Mac",
             "token": "tok"
         }))
         .unwrap();
