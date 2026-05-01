@@ -70,12 +70,26 @@ pub fn run_dir() -> Result<PathBuf, MinosError> {
     ensure_subdir("run")
 }
 
+/// Process-global mutex serializing every test that mutates `MINOS_HOME`.
+/// Both `paths::tests` and `logging::tests` (which set `MINOS_HOME` to a
+/// tempdir to redirect log paths) must acquire this before `set_var` so the
+/// two modules don't race when run as one cargo-test binary.
+#[cfg(test)]
+pub(crate) static MINOS_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        MINOS_HOME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn minos_home_prefers_env_override() {
+        let _g = lock();
         std::env::set_var("MINOS_HOME", "/tmp/minos-home-test");
         let resolved = minos_home().unwrap();
         assert_eq!(resolved, PathBuf::from("/tmp/minos-home-test"));
@@ -84,6 +98,7 @@ mod tests {
 
     #[test]
     fn state_dir_is_under_minos_home() {
+        let _g = lock();
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("MINOS_HOME", tmp.path());
         let s = state_dir().unwrap();
@@ -94,6 +109,7 @@ mod tests {
 
     #[test]
     fn db_path_is_under_db_dir() {
+        let _g = lock();
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("MINOS_HOME", tmp.path());
         let p = db_path().unwrap();
@@ -106,6 +122,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let _g = lock();
             let tmp = tempfile::tempdir().unwrap();
             std::env::set_var("MINOS_HOME", tmp.path());
             let s = secrets_dir().unwrap();

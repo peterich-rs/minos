@@ -1,6 +1,6 @@
 //! mars-xlog wiring for the Mac-side daemon process.
 //!
-//! Layout: `~/Library/Logs/Minos/<name_prefix>-YYYYMMDD.xlog`. Use prefix
+//! Layout: `$MINOS_HOME/logs/<name_prefix>-YYYYMMDD.xlog`. Use prefix
 //! `daemon` per spec §9.4. Decoder: `decode_mars_nocrypt_log_file.py` from
 //! the upstream Mars repo (Tencent).
 
@@ -15,19 +15,9 @@ static HANDLE: OnceLock<XlogLayerHandle> = OnceLock::new();
 
 const NAME_PREFIX: &str = "daemon";
 
-#[must_use]
-pub fn log_dir() -> PathBuf {
-    // Tests opt out of HOME-based pathing by setting MINOS_LOG_DIR; keeps
-    // each test's log directory isolated without mutating process-global HOME.
-    if let Ok(d) = std::env::var("MINOS_LOG_DIR") {
-        return PathBuf::from(d);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    if cfg!(target_os = "macos") {
-        PathBuf::from(home).join("Library/Logs/Minos")
-    } else {
-        PathBuf::from(home).join(".minos/logs")
-    }
+#[allow(clippy::missing_errors_doc)]
+pub fn log_dir() -> Result<PathBuf, MinosError> {
+    crate::paths::logs_dir()
 }
 
 /// Idempotent global initialization. Subsequent calls are no-ops.
@@ -36,11 +26,7 @@ pub fn init() -> Result<(), MinosError> {
     if HANDLE.get().is_some() {
         return Ok(());
     }
-    let dir = log_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| MinosError::StoreIo {
-        path: dir.display().to_string(),
-        message: e.to_string(),
-    })?;
+    let dir = log_dir()?;
 
     let cfg = XlogConfig::new(dir.to_string_lossy().to_string(), NAME_PREFIX);
     let logger = Xlog::init(cfg, LogLevel::Info).map_err(|e| MinosError::StoreIo {
@@ -97,7 +83,7 @@ pub fn today() -> Result<PathBuf, MinosError> {
         Xlog::flush_all(true);
     }
 
-    let dir = log_dir();
+    let dir = log_dir()?;
     // mars-xlog filename convention (verified in `mars-xlog-core`
     // `file_manager::build_path_for_index`): `{prefix}_{YYYYMMDD}.xlog` using
     // `chrono::Local` for the day key. Using UTC here would produce an
@@ -117,43 +103,42 @@ pub fn today() -> Result<PathBuf, MinosError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::LazyLock;
     use tempfile::{tempdir, TempDir};
 
-    // All three logging tests share process-global state (mars-xlog's
-    // registry, the tracing subscriber, and `MINOS_LOG_DIR`). The `Mutex`
-    // serializes them, and the `LazyLock<TempDir>` pins a single tempdir
-    // that every test can reuse so `Xlog::init` is consistent across calls
-    // (mars-xlog rejects re-init with a different dir for the same prefix).
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-    static SHARED_LOG_DIR: LazyLock<TempDir> = LazyLock::new(|| tempdir().expect("shared tempdir"));
+    // The shared `MINOS_HOME` lock from `crate::paths` serializes every test
+    // (including those in `paths::tests`) that mutates the env var, so the
+    // two modules don't race when run as one cargo-test binary. The
+    // `LazyLock<TempDir>` pins a single tempdir that every test can reuse so
+    // `Xlog::init` is consistent across calls (mars-xlog rejects re-init
+    // with a different dir for the same prefix).
+    static SHARED_HOME: LazyLock<TempDir> = LazyLock::new(|| tempdir().expect("shared tempdir"));
 
-    fn use_shared_log_dir() {
-        std::env::set_var("MINOS_LOG_DIR", SHARED_LOG_DIR.path());
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::paths::MINOS_HOME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn use_shared_home() {
+        std::env::set_var("MINOS_HOME", SHARED_HOME.path());
     }
 
     #[test]
     fn init_creates_log_dir_and_emits_once() {
-        let _guard = TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Use MINOS_LOG_DIR override so test logs go to a tempdir without
-        // mutating process-global HOME (HOME mutation triggers warnings under
-        // the upcoming Rust unsafe-env story).
-        use_shared_log_dir();
+        let _g = lock();
+        use_shared_home();
         init().unwrap();
         // Idempotent
         init().unwrap();
-        let computed = log_dir();
+        let computed = log_dir().unwrap();
         assert!(computed.exists());
     }
 
     #[test]
     fn today_returns_existing_path_after_a_log() {
-        let _guard = TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        use_shared_log_dir();
+        let _g = lock();
+        use_shared_home();
         init().unwrap();
 
         // Emit one log record so mars-xlog opens the day's file.
@@ -167,18 +152,17 @@ mod tests {
 
     #[test]
     fn today_errors_before_any_log_written() {
-        let _guard = TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Point at a *fresh* tempdir that has no xlog file. We explicitly do
-        // NOT use the shared log dir here — we want the path to not exist.
+        let _g = lock();
+        // Point at a *fresh* MINOS_HOME so the resolved logs dir has no xlog
+        // file yet. We explicitly do NOT use the shared home here.
         let dir = tempdir().unwrap();
-        std::env::set_var("MINOS_LOG_DIR", dir.path());
+        std::env::set_var("MINOS_HOME", dir.path());
         // Don't call init() — we want the path to not exist.
         // However, init() is idempotent and static across the test binary, so
         // if a sibling test called init() first, subsequent calls are no-ops
-        // and log_dir() still returns the tempdir we just set. This test is
-        // rigorous only on fresh test runs; we make the assertion conservative.
+        // and log_dir() still returns the same tempdir-derived path. This
+        // test is rigorous only on fresh test runs; we make the assertion
+        // conservative.
         let r = today();
         match r {
             Err(MinosError::StoreIo { .. }) => { /* expected */ }
@@ -186,7 +170,7 @@ mod tests {
                 // Prior init() opened a file in a DIFFERENT dir — tolerate that.
                 assert!(
                     !p.starts_with(dir.path()),
-                    "today() returned a file in the fresh dir despite no init"
+                    "today() returned a file in the fresh home despite no init"
                 );
             }
             Err(other) => panic!("unexpected error: {other:?}"),

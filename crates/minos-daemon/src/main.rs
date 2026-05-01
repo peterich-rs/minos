@@ -109,7 +109,10 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
 fn resolve_paths(args: &CliPaths) -> Result<ResolvedPaths, Box<dyn std::error::Error>> {
     if args.platform_paths {
         let data_dir = args.data_dir.clone().unwrap_or_else(platform_data_dir);
-        let log_dir = args.log_dir.clone().unwrap_or_else(platform_log_dir);
+        let log_dir = match args.log_dir.clone() {
+            Some(p) => p,
+            None => platform_log_dir()?,
+        };
         return Ok(ResolvedPaths {
             minos_home: None,
             data_dir,
@@ -156,8 +159,8 @@ fn platform_data_dir() -> PathBuf {
     }
 }
 
-fn platform_log_dir() -> PathBuf {
-    minos_daemon::logging::log_dir()
+fn platform_log_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(minos_daemon::logging::log_dir()?)
 }
 
 fn expand_tilde(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
