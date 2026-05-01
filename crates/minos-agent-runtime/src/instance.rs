@@ -52,4 +52,11 @@ impl AppServerInstance {
     pub async fn thread_ids(&self) -> Vec<String> {
         self.threads.lock().await.iter().cloned().collect()
     }
+
+    /// Start a fresh thread on this instance via the codex `thread/start`
+    /// JSON-RPC. The real codex spawn lands in C12; until then this returns
+    /// an error so callers can drive coverage of the surrounding orchestration.
+    pub(crate) async fn start_thread(&self) -> anyhow::Result<String> {
+        anyhow::bail!("start_thread unimplemented (C12)")
+    }
 }

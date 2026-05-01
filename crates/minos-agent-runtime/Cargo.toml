@@ -18,6 +18,8 @@ uniffi = ["dep:uniffi", "minos-domain/uniffi"]
 minos-codex-protocol = { path = "../minos-codex-protocol", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
