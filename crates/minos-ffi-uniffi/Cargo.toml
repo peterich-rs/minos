@@ -15,6 +15,7 @@ minos-daemon = { path = "../minos-daemon", version = "0.1.0", features = ["uniff
 minos-domain = { path = "../minos-domain", version = "0.1.0", features = ["uniffi"] }
 minos-pairing = { path = "../minos-pairing", version = "0.1.0", features = ["uniffi"] }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0", features = ["uniffi"] }
+minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0", features = ["uniffi"] }
 uniffi = { workspace = true, features = ["tokio"] }
 
 [build-dependencies]

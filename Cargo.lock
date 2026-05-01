@@ -2355,6 +2355,7 @@ dependencies = [
  "minos-domain",
  "minos-pairing",
  "minos-protocol",
+ "minos-ui-protocol",
  "uniffi",
 ]
 

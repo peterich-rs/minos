@@ -50,6 +50,9 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// completed yet.
   Future<String?> activeHost();
 
+  /// Permanently close the given thread. Idempotent.
+  Future<void> closeThread({required String threadId});
+
   /// Current connection state, read from the watch-channel cache. Cheap and
   /// synchronous.
   ConnectionState currentState();
@@ -58,6 +61,11 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
   /// `forget_peer` (single-peer) call.
   Future<void> forgetHost({required String hostDeviceId});
+
+  /// Pause an in-flight turn on the given thread. Best-effort. The thread
+  /// transitions to `Suspended { UserInterrupt }` regardless of whether the
+  /// codex side acknowledges in time.
+  Future<void> interruptThread({required String threadId});
 
   /// Detect the CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
@@ -143,10 +151,6 @@ abstract class MobileClient implements RustOpaqueInterface {
     required AgentName agent,
     required String prompt,
   });
-
-  /// Stop the currently-running agent (if any). Idempotent on the
-  /// no-active-session path.
-  Future<void> stopAgent();
 
   /// Subscribe to auth-state transitions. Emits the current cached frame
   /// immediately, then every subsequent change. The spawned task exits

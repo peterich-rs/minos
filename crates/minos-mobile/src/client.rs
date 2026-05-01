@@ -664,10 +664,9 @@ impl MobileClient {
         Ok(())
     }
 
-    /// Stop the agent currently running on the paired Mac. The daemon's
-    /// `stop_agent` RPC takes `()` (no `StopAgentRequest` struct exists),
-    /// so we serialise `serde_json::Value::Null` as the params payload.
-    pub async fn stop_agent(&self) -> Result<(), MinosError> {
+    /// Pause an in-flight turn on the named thread. Best-effort. Replaces
+    /// the legacy `stop_agent` RPC (retired in Phase C task C16).
+    pub async fn interrupt_thread(&self, thread_id: String) -> Result<(), MinosError> {
         let outbox = self
             .outbox
             .lock()
@@ -675,17 +674,49 @@ impl MobileClient {
             .clone()
             .ok_or(MinosError::NotConnected)?;
         let target = self.require_active_host().await?;
+        let req = minos_protocol::InterruptThreadRequest {
+            thread_id: thread_id.clone(),
+        };
         let _: () = forward_rpc(
             &self.pending,
             &self.next_id,
             &outbox,
             target,
-            "minos_stop_agent",
-            serde_json::Value::Null,
+            "minos_interrupt_thread",
+            req,
             Duration::from_secs(10),
             Some(RpcTraceContext {
-                thread_id: None,
-                request_summary: Some("stop active agent".into()),
+                thread_id: Some(thread_id),
+                request_summary: Some("interrupt thread".into()),
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Permanently close the named thread. Idempotent.
+    pub async fn close_thread(&self, thread_id: String) -> Result<(), MinosError> {
+        let outbox = self
+            .outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or(MinosError::NotConnected)?;
+        let target = self.require_active_host().await?;
+        let req = minos_protocol::CloseThreadRequest {
+            thread_id: thread_id.clone(),
+        };
+        let _: () = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            target,
+            "minos_close_thread",
+            req,
+            Duration::from_secs(10),
+            Some(RpcTraceContext {
+                thread_id: Some(thread_id),
+                request_summary: Some("close thread".into()),
             }),
         )
         .await?;
@@ -764,16 +795,14 @@ impl MobileClient {
         }
     }
 
-    /// Log out of the current session. Best-effort `stop_agent` (2s
-    /// timeout) so the daemon doesn't keep a session running for an
-    /// account that's no longer holding the iOS client; then call the
-    /// backend's `/v1/auth/logout` to revoke the named refresh token;
-    /// then wipe the local auth state and drop the WS. Spec §5.4 / §8.3.
+    /// Log out of the current session. Wipes local auth state and drops the
+    /// WS; the daemon's per-thread close happens via `close_thread` (Phase C
+    /// rewrite — the legacy `stop_agent` RPC is gone). Spec §5.4 / §8.3.
     pub async fn logout(&self) -> Result<(), MinosError> {
-        // Best-effort agent stop so the Mac doesn't stay in a running
-        // session if the user logs out mid-thread. Failures are silenced
-        // — we still want to clear local state on logout.
-        let _ = tokio::time::timeout(Duration::from_secs(2), self.stop_agent()).await;
+        // Pre-Phase-C this called `stop_agent` to halt the active session.
+        // Post-Phase-C the daemon owns multiple threads; logout no longer
+        // closes them implicitly. The Mac side reaps idle threads via the
+        // manager's reaper (C19) once the iOS client disconnects.
 
         let session = self.auth_session.read().await.clone();
         if let Some(s) = session {
@@ -1933,9 +1962,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_agent_returns_not_connected_when_disconnected() {
+    async fn close_thread_returns_not_connected_when_disconnected() {
         let client = MobileClient::new_with_in_memory_store("iPhone".into());
-        let res = client.stop_agent().await;
+        let res = client.close_thread("thr".into()).await;
         assert!(matches!(res, Err(MinosError::NotConnected)));
     }
 

@@ -43,5 +43,8 @@ pub use minos_domain::{
     AgentDescriptor, AgentName, AgentStatus, DeviceId, DeviceSecret, PeerState, RelayLinkState,
 };
 pub use minos_protocol::{
-    AgentLaunchMode, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    AgentLaunchMode, CloseReason, CloseThreadRequest, GetThreadParams, GetThreadResponse,
+    InterruptThreadRequest, ListThreadsParams, ListThreadsResponse, PauseReason,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState, ThreadSummary,
 };
+pub use minos_ui_protocol::ThreadEndReason;

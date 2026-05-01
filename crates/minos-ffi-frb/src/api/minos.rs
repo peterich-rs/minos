@@ -384,10 +384,16 @@ impl MobileClient {
         self.0.send_user_message(session_id, text).await
     }
 
-    /// Stop the currently-running agent (if any). Idempotent on the
-    /// no-active-session path.
-    pub async fn stop_agent(&self) -> Result<(), MinosError> {
-        self.0.stop_agent().await
+    /// Pause an in-flight turn on the given thread. Best-effort. The thread
+    /// transitions to `Suspended { UserInterrupt }` regardless of whether the
+    /// codex side acknowledges in time.
+    pub async fn interrupt_thread(&self, thread_id: String) -> Result<(), MinosError> {
+        self.0.interrupt_thread(thread_id).await
+    }
+
+    /// Permanently close the given thread. Idempotent.
+    pub async fn close_thread(&self, thread_id: String) -> Result<(), MinosError> {
+        self.0.close_thread(thread_id).await
     }
 
     // ─────────────────────────── lifecycle hooks ───────────────────────────
