@@ -60,6 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Doctor => doctor(&resolved_paths).await,
         Command::Start(args) => {
             minos_daemon::logging::init()?;
+            let home = paths::minos_home()?;
+            tracing::info!(minos_home = %home.display(), "daemon starting");
             start(args, &resolved_paths).await
         }
     }
