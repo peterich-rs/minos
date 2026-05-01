@@ -125,6 +125,43 @@ impl FakeCodexServer {
         )
     }
 
+    /// Spawn a perpetually-running auto-responder masquerading as
+    /// `codex app-server`. Accepts every incoming WS connection and replies
+    /// to typed JSON-RPC requests with synthetic results derived from the
+    /// request method. Useful for the multi-session smoke test (C22) where
+    /// the real codex protocol shape is irrelevant.
+    pub async fn bind_auto_responder() -> (Self, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("FakeCodexServer failed to bind loopback port");
+        let port = listener
+            .local_addr()
+            .expect("FakeCodexServer local_addr failed")
+            .port();
+        let server_request_ids = Arc::new(Mutex::new(Vec::<String>::new()));
+        let accept_task = tokio::spawn(async move {
+            loop {
+                let (stream, _peer) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => return,
+                };
+                tokio::spawn(async move {
+                    let Ok(ws) = accept_async(stream).await else {
+                        return;
+                    };
+                    auto_respond(ws).await;
+                });
+            }
+        });
+        (
+            Self {
+                accept_task,
+                server_request_ids,
+            },
+            port,
+        )
+    }
+
     /// Shut down the accept task, surfacing any panic it produced.
     ///
     /// If the script task already finished on its own (naturally or via
@@ -255,6 +292,127 @@ async fn run_script(
                 return;
             }
         }
+    }
+}
+
+/// Auto-responder that handles every typed JSON-RPC method `AgentManager`
+/// fires. Returns canned successes; thread ids are minted from a Uuid so each
+/// `thread/start` returns a fresh value. No script discipline — the test
+/// owns the assertions on observable side-effects, not on the codex protocol
+/// shape.
+async fn auto_respond(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) {
+    let (mut tx, mut rx) = ws.split();
+    while let Some(frame) = rx.next().await {
+        let text = match frame {
+            Ok(Message::Text(t)) => t.to_string(),
+            Ok(Message::Binary(b)) => String::from_utf8(b.to_vec()).unwrap_or_default(),
+            Ok(_) => continue,
+            Err(_) => return,
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let method = parsed
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let id = parsed.get("id").cloned();
+        // Notifications (no id) are silently consumed.
+        let Some(id) = id else { continue };
+        let result = match method.as_str() {
+            "initialize" => serde_json::json!({
+                "supportedNotifications": [],
+                "protocolVersion": "0.0.0-fake",
+                "agentName": "fake-codex",
+                "agentVersion": "0.0.0",
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            }),
+            "thread/start" => {
+                let thread_id = format!("fake-{}", uuid::Uuid::new_v4());
+                fake_thread_response(&thread_id)
+            }
+            "thread/resume" => {
+                let thread_id = parsed
+                    .get("params")
+                    .and_then(|p| p.get("threadId"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("fake-resume")
+                    .to_string();
+                fake_thread_response(&thread_id)
+            }
+            "turn/start" => serde_json::json!({
+                "turn": {
+                    "id": format!("turn-{}", uuid::Uuid::new_v4()),
+                    "items": [],
+                    "status": "inProgress"
+                }
+            }),
+            "turn/interrupt" => serde_json::json!({}),
+            _ => serde_json::json!({}),
+        };
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        });
+        if tx.send(Message::text(response.to_string())).await.is_err() {
+            return;
+        }
+    }
+}
+
+fn fake_thread_response(thread_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "approvalPolicy": "never",
+        "approvalsReviewer": "user",
+        "cwd": "/tmp",
+        "instructionSources": [],
+        "model": "fake",
+        "modelProvider": "fake",
+        "sandbox": { "type": "dangerFullAccess" },
+        "thread": {
+            "id": thread_id,
+            "cliVersion": "0.0.0-fake",
+            "createdAt": 0,
+            "cwd": "/tmp",
+            "ephemeral": true,
+            "modelProvider": "fake",
+            "preview": "",
+            "source": "appServer",
+            "status": { "type": "idle" },
+            "turns": [],
+            "updatedAt": 0
+        }
+    })
+}
+
+/// Fluent helper: spin up an [`auto_respond`] backend on a fresh port and
+/// pin the manager's `test_ws_url` to it. Returns the server handle so the
+/// test can hold it alive for the duration. C22 multi-session smoke is the
+/// canonical caller.
+pub struct FakeCodexBackend {
+    server: FakeCodexServer,
+}
+
+impl FakeCodexBackend {
+    /// Bind a fresh fake codex backend and return both the handle and the
+    /// loopback URL the manager should connect to. Callers wire the URL in
+    /// via `cfg.test_ws_url`.
+    pub async fn install() -> (Self, url::Url) {
+        let (server, port) = FakeCodexServer::bind_auto_responder().await;
+        let url = url::Url::parse(&format!("ws://127.0.0.1:{port}"))
+            .expect("loopback URL is well-formed");
+        (Self { server }, url)
+    }
+
+    /// Tear the fake down — useful when the test wants to assert codex is
+    /// gone before exercising reaper / shutdown behaviours.
+    pub async fn stop(self) {
+        self.server.stop().await;
     }
 }
 

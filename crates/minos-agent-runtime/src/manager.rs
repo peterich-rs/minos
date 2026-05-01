@@ -219,6 +219,24 @@ impl AgentManager {
         let workspace_buf = workspace.to_path_buf();
         let workspace_display = workspace_buf.display().to_string();
 
+        // Test seam: when `cfg.test_ws_url` is set, skip the real codex spawn
+        // and connect directly to the fake URL. Production builds never enable
+        // this path because `test_ws_url` is `#[cfg(feature = "test-support")]`.
+        #[cfg(feature = "test-support")]
+        if let Some(url) = self.config.test_ws_url.clone() {
+            let client = CodexClient::connect(&url)
+                .await
+                .map_err(|e| anyhow::anyhow!("fake codex WS connect failed: {e}"))?;
+            let client = Arc::new(client);
+            // Test path: skip the JSON-RPC handshake. The FakeCodexBackend
+            // (see crate::test_support) replies to the typed calls fired by
+            // start_thread / send_user_message / interrupt_turn with canned
+            // responses, so the handshake adds no test value.
+            let (crash_tx, _crash_rx) = tokio::sync::mpsc::channel::<()>(1);
+            let inst = build_fake_instance(workspace_buf.clone(), client, crash_tx).await;
+            return Ok(inst);
+        }
+
         // Pick a free port + spawn `codex app-server --listen ws://...`.
         let port = pick_free_port(self.config.ws_port_range.clone())?;
         let url =
@@ -389,6 +407,28 @@ impl AgentManager {
             let _ = child.kill().await;
         }
         Ok(())
+    }
+
+    /// Test-only snapshot of which workspaces have an open instance.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn open_workspaces(&self) -> Vec<PathBuf> {
+        self.instances.lock().await.keys().cloned().collect()
+    }
+
+    /// Test-only count of currently tracked threads.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn thread_count(&self) -> usize {
+        self.threads.lock().await.len()
+    }
+
+    /// Test-only state snapshot for a single thread.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn thread_state(&self, thread_id: &str) -> Option<ThreadState> {
+        self.threads
+            .lock()
+            .await
+            .get(thread_id)
+            .map(|h| h.current_state())
     }
 
     /// Test-only helper: run one pass of the reaper synchronously. Production
@@ -615,6 +655,27 @@ impl AgentManager {
 pub struct StartAgentOutcome {
     pub thread_id: String,
     pub cwd: PathBuf,
+}
+
+#[cfg(feature = "test-support")]
+async fn build_fake_instance(
+    workspace: PathBuf,
+    client: Arc<CodexClient>,
+    crash_signal: tokio::sync::mpsc::Sender<()>,
+) -> Arc<AppServerInstance> {
+    use std::collections::HashSet;
+    use std::time::Instant;
+    use tokio::sync::Mutex;
+    let now = Instant::now();
+    Arc::new(AppServerInstance {
+        workspace,
+        child: Mutex::new(None),
+        client,
+        threads: Mutex::new(HashSet::new()),
+        spawned_at: now,
+        last_activity_at: Mutex::new(now),
+        crash_signal,
+    })
 }
 
 /// Pick the first free port in `range` by bind-probing.
