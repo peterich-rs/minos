@@ -12,8 +12,8 @@
 //!    never gets a `DeviceSecret`; its row keeps `secret_hash = NULL` per
 //!    ADR-0020 (the iOS rail is bearer-JWT only).
 //!
-//! The `(mac_device_id, mobile_account_id)` pair row in
-//! `account_mac_pairings` is inserted by the HTTP handler post-commit —
+//! The `(host_device_id, mobile_account_id)` pair row in
+//! `account_host_pairings` is inserted by the HTTP handler post-commit —
 //! see `http::v1::pairing::post_consume`. `consume_token` does not see
 //! the bearer's `account_id`, so it cannot insert the pair itself.
 //!

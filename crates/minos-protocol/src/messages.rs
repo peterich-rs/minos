@@ -371,8 +371,8 @@ mod new_type_tests {
         // Legacy QR payloads may still carry `backend_url` and CF Access
         // fields — `serde` ignores unknown fields by default, so this is
         // a forward-compat read of older Mac builds. The struct itself no
-        // longer carries them. The `mac_display_name` alias was dropped in
-        // Phase B; new payloads must use `host_display_name`.
+        // longer carries them. The legacy display-name alias was dropped
+        // in Phase B; new payloads must use `host_display_name`.
         let back: PairingQrPayload = serde_json::from_value(serde_json::json!({
             "backend_url": "wss://minos.fan-nn.top/devices",
             "host_display_name": "Mac",

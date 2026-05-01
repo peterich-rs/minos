@@ -1,7 +1,7 @@
-//! Integration tests for `GET /v1/me/macs` and the legacy
+//! Integration tests for `GET /v1/me/hosts` and the legacy
 //! `/v1/me/peer` 410 redirect (see ADR-0020).
 //!
-//! `/v1/me/macs` is bearer-only; iOS callers see every Mac paired to
+//! `/v1/me/hosts` is bearer-only; iOS callers see every Mac paired to
 //! their account. The legacy `/v1/me/peer` always returns
 //! `410 Gone` with an `error.code == "replaced"` body so older Mac
 //! daemons get a clear migration signal.
@@ -28,13 +28,13 @@ async fn get_me_peer_returns_410_gone() {
 }
 
 #[tokio::test]
-async fn get_me_macs_without_bearer_returns_401() {
+async fn get_me_hosts_without_bearer_returns_401() {
     let state = backend_state().await;
     let mut app = router(state);
 
     let req = Request::builder()
         .method(Method::GET)
-        .uri("/v1/me/macs")
+        .uri("/v1/me/hosts")
         .body(Body::empty())
         .unwrap();
     let (status, body) = common::send(&mut app, req).await;

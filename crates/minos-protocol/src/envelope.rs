@@ -40,7 +40,7 @@ pub enum Envelope {
         #[serde(rename = "v")]
         version: u8,
         /// The Mac device this forward should be routed to. Backend
-        /// validates against the caller's account_mac_pairings rows.
+        /// validates against the caller's account_host_pairings rows.
         /// Mismatch → routing error (PeerOffline).
         target_device_id: DeviceId,
         /// Opaque payload (JSON-RPC 2.0 by convention between Minos

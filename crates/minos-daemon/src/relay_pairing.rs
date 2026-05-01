@@ -46,7 +46,7 @@ mod tests {
         let back: RelayQrPayload = serde_json::from_str(&j).unwrap();
         assert_eq!(qr, back);
         assert!(!j.contains("\"host\""));
-        assert!(!j.contains("mac_display_name"));
+        assert!(j.contains("host_display_name"));
         assert!(!j.contains("\"token\""));
         assert!(!j.contains("port"));
     }

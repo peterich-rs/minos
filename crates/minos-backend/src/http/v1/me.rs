@@ -1,7 +1,7 @@
 //! `GET /v1/me/*` — caller's session-scoped views.
 //!
 //! Post ADR-0020 the legacy `GET /v1/me/peer` is replaced by
-//! `GET /v1/me/macs`, which lists every Mac paired to the caller's
+//! `GET /v1/me/hosts`, which lists every Mac paired to the caller's
 //! account. The legacy route returns `410 Gone` so older Mac daemons
 //! see an explicit migration signal rather than a silent shape change.
 
@@ -17,12 +17,12 @@ use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
     Router::new()
-        .route("/me/macs", get(get_me_macs))
+        .route("/me/hosts", get(get_me_hosts))
         .route("/me/peer", get(get_me_peer_legacy))
 }
 
 /// Return every Mac paired to the caller's `account_id`. Bearer-only.
-async fn get_me_macs(
+async fn get_me_hosts(
     State(state): State<BackendState>,
     headers: HeaderMap,
 ) -> Result<Json<MeHostsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
@@ -31,7 +31,7 @@ async fn get_me_macs(
         (s, err_body("unauthorized", m))
     })?;
 
-    let pairs = crate::store::account_mac_pairings::list_macs_for_account(
+    let pairs = crate::store::account_host_pairings::list_hosts_for_account(
         &state.store,
         &bearer_outcome.account_id,
     )
@@ -41,7 +41,7 @@ async fn get_me_macs(
             target: "minos_backend::v1::me",
             error = %e,
             account_id = %bearer_outcome.account_id,
-            "list_macs_for_account failed",
+            "list_hosts_for_account failed",
         );
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -51,14 +51,14 @@ async fn get_me_macs(
 
     let mut hosts = Vec::with_capacity(pairs.len());
     for p in pairs {
-        let row = crate::store::devices::get_device(&state.store, p.mac_device_id)
+        let row = crate::store::devices::get_device(&state.store, p.host_device_id)
             .await
             .map_err(|e| {
                 tracing::warn!(
                     target: "minos_backend::v1::me",
                     error = %e,
-                    mac = %p.mac_device_id,
-                    "get_device(mac) failed",
+                    host = %p.host_device_id,
+                    "get_device(host) failed",
                 );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -70,13 +70,13 @@ async fn get_me_macs(
         } else {
             tracing::warn!(
                 target: "minos_backend::v1::me",
-                mac = %p.mac_device_id,
+                host = %p.host_device_id,
                 "pair row references device with no devices row; using placeholder name",
             );
             "unknown".into()
         };
         hosts.push(HostSummary {
-            host_device_id: p.mac_device_id,
+            host_device_id: p.host_device_id,
             host_display_name,
             paired_at_ms: p.paired_at_ms,
             paired_via_device_id: p.paired_via_device_id,
@@ -87,11 +87,11 @@ async fn get_me_macs(
 }
 
 /// Legacy `/v1/me/peer` always returns 410. Older Mac daemons that hit
-/// this should migrate to `/v1/me/macs` (or rely on `EventKind::Paired`
+/// this should migrate to `/v1/me/hosts` (or rely on `EventKind::Paired`
 /// at WS upgrade time, which already includes peer info).
 async fn get_me_peer_legacy() -> (StatusCode, Json<ErrorEnvelope>) {
     (
         StatusCode::GONE,
-        err_body("replaced", "Use GET /v1/me/macs"),
+        err_body("replaced", "Use GET /v1/me/hosts"),
     )
 }

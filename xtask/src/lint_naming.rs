@@ -22,13 +22,15 @@ const TARGETS: &[&str] = &[
 
 const PATTERN: &str = r"\b(mac|ios)_(device_id|display_name|client|pairings|host|secret)\b|\bMacSummary\b|\bIosClient\b|MeMacsResponse|account_mac_pairings";
 
-/// SQL migrations that mention the old `mac_*` vocabulary by design
-/// (0012 created the original `account_mac_pairings` table; 0013 renames
-/// it to `account_host_pairings`; 0014 rewrites the role CHECK list to
-/// drop `ios-client` in favor of `mobile-client`). They are immutable
-/// history that the lint is *not* trying to gate — the rename is enforced
-/// going forward.
+/// SQL migrations that mention the old `mac_*` vocabulary by design.
+/// 0011 references `account_mac_pairings` in a comment as the
+/// replacement-table; 0012 created that table; 0013 renames it to
+/// `account_host_pairings`; 0014 rewrites the role CHECK list to drop
+/// `ios-client` in favor of `mobile-client`. They are immutable history
+/// that the lint is *not* trying to gate — the rename is enforced going
+/// forward.
 const HISTORICAL_MIGRATIONS: &[&str] = &[
+    "0011_drop_legacy_pairings.sql",
     "0012_account_mac_pairings.sql",
     "0013_rename_account_mac_to_host.sql",
     "0014_rename_role_ios_client_to_mobile_client.sql",

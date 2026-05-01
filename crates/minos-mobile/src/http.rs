@@ -2,8 +2,8 @@
 //!
 //! The mobile client uses this for the pre-WS pairing handshake (POST
 //! `/v1/pairing/consume`), for listing the account's paired Macs
-//! (`GET /v1/me/macs`), and for tearing a specific pair down
-//! (`DELETE /v1/pairings/:mac_device_id`). The post-pair `Forward` /
+//! (`GET /v1/me/hosts`), and for tearing a specific pair down
+//! (`DELETE /v1/pairings/:host_device_id`). The post-pair `Forward` /
 //! `Forwarded` and event push traffic still flows over the WebSocket.
 //!
 //! ADR-0020 removed the iOS device-secret rail; every iOS-originated
@@ -114,7 +114,7 @@ impl MobileHttpClient {
         }
     }
 
-    /// Tear down a specific account_mac_pairings row. The path-bound
+    /// Tear down a specific account_host_pairings row. The path-bound
     /// `host_device_id` is the Mac to forget; bearer-only auth post
     /// ADR-0020.
     pub async fn delete_pair(
@@ -148,8 +148,8 @@ impl MobileHttpClient {
         &self,
         access_token: &str,
     ) -> Result<MeHostsResponse, MinosError> {
-        let url = format!("{}/v1/me/macs", self.base);
-        let trace_id = start_http_trace(Method::GET.as_str(), "/v1/me/macs", None, None);
+        let url = format!("{}/v1/me/hosts", self.base);
+        let trace_id = start_http_trace(Method::GET.as_str(), "/v1/me/hosts", None, None);
         let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();

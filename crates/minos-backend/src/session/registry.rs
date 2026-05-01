@@ -16,7 +16,7 @@
 //! slot. A Mac can be paired to multiple iOS accounts, so a single
 //! `Option<DeviceId>` field cannot represent live pairing. iOS callers
 //! stamp `target_device_id` on the wire (`Envelope::Forward`) and the
-//! envelope dispatcher validates against `account_mac_pairings::exists`
+//! envelope dispatcher validates against `account_host_pairings::exists`
 //! for the caller's account.
 //!
 //! Values are cheap to clone (one `Arc` + one `mpsc::Sender` bump), so the

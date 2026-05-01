@@ -2,7 +2,7 @@
 //!
 //! Submodules:
 //! - [`devices`] — device rows + per-device secret hashes.
-//! - [`account_mac_pairings`] — account ↔ Mac pair table (ADR-0020).
+//! - [`account_host_pairings`] — account ↔ Mac pair table (ADR-0020).
 //!   Replaces the legacy device-keyed `pairings` module.
 //! - [`tokens`] — one-shot pairing tokens with atomic consume + GC.
 
@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 
 use crate::error::BackendError;
 
-pub mod account_mac_pairings;
+pub mod account_host_pairings;
 pub mod accounts;
 pub mod devices;
 pub mod raw_events;

@@ -34,12 +34,12 @@ part 'auth_provider.g.dart';
 ///      cached peer display name so a stale label from the previous
 ///      account doesn't briefly flash in the partners list. The
 ///      server-side `account_mac_pairings` rows are already
-///      account-scoped, so the next `listPairedMacs` sync naturally
+///      account-scoped, so the next `listPairedHosts` sync naturally
 ///      yields the new account's Macs.
 ///   3. The first `Authenticated` frame fires; this controller calls
 ///      `resumePersistedSession()` which spins up the WS for the new
 ///      account.
-///   4. The Partners tab calls `listPairedMacs` and shows whatever
+///   4. The Partners tab calls `listPairedHosts` and shows whatever
 ///      Macs are paired to the new account (possibly empty → the user
 ///      taps "Add partner" to scan a QR).
 @Riverpod(keepAlive: true)

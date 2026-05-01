@@ -13,7 +13,7 @@
 //!    `EventKind::UiEventMessage` and fans it out to every iOS device
 //!    on every account paired to the ingesting Mac (`owner_device_id`).
 //!    See [`broadcast_to_peers_of`] for the
-//!    `account_mac_pairings → devices` walk introduced in ADR-0020 /
+//!    `account_host_pairings → devices` walk introduced in ADR-0020 /
 //!    Phase G.
 //!
 //! Fan-out is bounded: the SessionHandle's outbox is a fixed-size
@@ -214,7 +214,7 @@ fn sanitize_title(text: &str) -> Option<String> {
     Some(trimmed.chars().take(80).collect())
 }
 
-/// Look up every account paired to `mac_device_id` (the ingesting Mac),
+/// Look up every account paired to `host_device_id` (the ingesting Mac),
 /// resolve every iOS device under each account, and try-send `env` on
 /// each live session's outbox. Misses (no paired accounts, peer offline,
 /// full outbox) are logged at debug/warn and swallowed — ingest must
@@ -222,37 +222,38 @@ fn sanitize_title(text: &str) -> Option<String> {
 ///
 /// ADR-0020 / Phase G: replaces the legacy device-keyed
 /// `pairings::get_peers` lookup. Pair table is now keyed on
-/// `(mac_device_id, mobile_account_id)`, so we walk
-/// account_mac_pairings → devices(account_id) → live registry.
+/// `(host_device_id, mobile_account_id)`, so we walk
+/// account_host_pairings → devices(account_id) → live registry.
 async fn broadcast_to_peers_of(
     pool: &SqlitePool,
     registry: &SessionRegistry,
-    mac_device_id: minos_domain::DeviceId,
+    host_device_id: minos_domain::DeviceId,
     env: &Envelope,
 ) {
     // Find every account paired to this Mac. If there are none, the Mac
     // is unpaired — drop the event.
-    let pairs = match crate::store::account_mac_pairings::list_accounts_for_mac(pool, mac_device_id)
-        .await
-    {
-        Ok(v) if !v.is_empty() => v,
-        Ok(_) => {
-            tracing::debug!(
-                target: "minos_backend::ingest",
-                mac = %mac_device_id,
-                "no accounts paired; dropping ui event"
-            );
-            return;
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "minos_backend::ingest",
-                error = ?e,
-                "failed to list accounts paired to mac"
-            );
-            return;
-        }
-    };
+    let pairs =
+        match crate::store::account_host_pairings::list_accounts_for_host(pool, host_device_id)
+            .await
+        {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => {
+                tracing::debug!(
+                    target: "minos_backend::ingest",
+                    mac = %host_device_id,
+                    "no accounts paired; dropping ui event"
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::ingest",
+                    error = ?e,
+                    "failed to list accounts paired to mac"
+                );
+                return;
+            }
+        };
 
     for pair in pairs {
         let devices =

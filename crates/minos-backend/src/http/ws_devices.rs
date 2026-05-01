@@ -50,7 +50,7 @@
 //! The HTTP `/v1/pairing/*` routes apply role / state gates per route
 //! (see `http::v1::pairing`). On the WebSocket itself the dispatcher
 //! only handles `Forward` and `Ingest`: `Forward` validates the wire
-//! `target_device_id` against `account_mac_pairings::exists` for the
+//! `target_device_id` against `account_host_pairings::exists` for the
 //! caller's account and synthesises a JSON-RPC "peer offline" response
 //! on mismatch; `Ingest` is restricted to the `AgentHost` role.
 
@@ -225,7 +225,7 @@ async fn revalidate_live_session_auth(
         // ADR-0020 / Phase G: there is no single-valued `paired_with`
         // slot to seed. Both UnpairedExisting and Authenticated rows
         // simply admit the socket; routing decisions happen at
-        // forward-time against `account_mac_pairings`.
+        // forward-time against `account_host_pairings`.
         Classification::UnpairedExisting | Classification::Authenticated => Ok(()),
     }
 }

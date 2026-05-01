@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n        SELECT pair_id\n        FROM account_mac_pairings\n        WHERE mac_device_id = ? AND mobile_account_id = ?\n        LIMIT 1\n        ",
+  "query": "\n        SELECT pair_id\n        FROM account_host_pairings\n        WHERE host_device_id = ? AND mobile_account_id = ?\n        LIMIT 1\n        ",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "2c6495060b387353744f895760b7dc75b976fad95f2c73b310e235cd6a6fface"
+  "hash": "08d3fa31f38bb08168d928a9992242abfb4a8008f2905a4e07330181d2a1ddeb"
 }

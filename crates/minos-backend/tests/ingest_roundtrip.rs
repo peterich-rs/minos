@@ -106,7 +106,7 @@ async fn connect_client(
     }
     // Phase 2 Task 2.2 / ADR-0020: iOS upgrades require a bearer JWT bound
     // to the same `X-Device-Id`. The bearer also seeds `session.account_id`
-    // which the new account_mac_pairings fan-out path keys on.
+    // which the new account_host_pairings fan-out path keys on.
     if role == DeviceRole::MobileClient {
         let acct = account_id.expect("iOS connect requires a real account_id");
         let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), acct, &device_id.to_string())
@@ -179,7 +179,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
 
     // Pre-seed: a Mac (with a hashed secret) and a paired iOS device under
     // a real account; ADR-0020 keys fan-out off
-    // `account_mac_pairings(mac, account)` and walks devices(account_id) to
+    // `account_host_pairings(mac, account)` and walks devices(account_id) to
     // find the iOS receivers, so the iOS row needs `account_id` set and no
     // secret hash.
     let host_id = DeviceId::new();
@@ -192,7 +192,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
-    store::account_mac_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
+    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
         .await?;
 
     // Phone connects first so it has a live session by the time the host
@@ -332,7 +332,7 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
-    store::account_mac_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
+    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
         .await?;
 
     let mut phone = connect_client(

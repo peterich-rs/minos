@@ -209,7 +209,7 @@ class MinosCore implements MinosCoreProtocol {
   ///
   /// Cross-account migration: post ADR-0020 the pairing is account-scoped
   /// on the server (`account_mac_pairings`). Logging in as a different
-  /// account simply yields a different `listPairedMacs` result on the
+  /// account simply yields a different `listPairedHosts` result on the
   /// next WS upgrade — no local "forget" call is needed. The peer display
   /// name from the previous account is cleared so a stale label doesn't
   /// show up before the first Mac sync.
@@ -227,7 +227,7 @@ class MinosCore implements MinosCoreProtocol {
         await _secure.savePeerDisplayName(null);
       } catch (_) {
         // Best effort: a keychain write failure here is harmless — the
-        // next listPairedMacs sync will overwrite the cached label.
+        // next listPairedHosts sync will overwrite the cached label.
       }
     }
     try {

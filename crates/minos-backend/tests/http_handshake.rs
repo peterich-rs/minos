@@ -164,7 +164,7 @@ async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not
 
     let (base, _task, pool) = spawn_relay().await;
 
-    // Seed a paired Mac + iOS via the new account_mac_pairings rail so the
+    // Seed a paired Mac + iOS via the new account_host_pairings rail so the
     // body still type-checks. The body's `PeerOffline` assertion no longer
     // matches the activate hook's behaviour and is left unchanged for when
     // Phase M reinstates these semantics.
@@ -183,7 +183,7 @@ async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not
         .unwrap()
         .account_id;
     let ios_id = store::test_support::insert_ios_device(&pool, &account_id).await;
-    store::account_mac_pairings::insert_pair(&pool, mac_id, &account_id, ios_id, 0)
+    store::account_host_pairings::insert_pair(&pool, mac_id, &account_id, ios_id, 0)
         .await
         .unwrap();
 

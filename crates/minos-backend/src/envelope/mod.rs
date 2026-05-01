@@ -430,24 +430,21 @@ pub async fn handle_forward(
         return Some(synth_peer_offline_forwarded(session.device_id, &payload));
     };
 
-    let paired = match crate::store::account_mac_pairings::exists(
-        store,
-        target_device_id,
-        &account_id,
-    )
-    .await
-    {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(
-                target: "minos_backend::envelope",
-                error = %e,
-                target = %target_device_id,
-                "account_mac_pairings::exists failed; synthesising peer_offline"
-            );
-            return Some(synth_peer_offline_forwarded(session.device_id, &payload));
-        }
-    };
+    let paired =
+        match crate::store::account_host_pairings::exists(store, target_device_id, &account_id)
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::envelope",
+                    error = %e,
+                    target = %target_device_id,
+                    "account_host_pairings::exists failed; synthesising peer_offline"
+                );
+                return Some(synth_peer_offline_forwarded(session.device_id, &payload));
+            }
+        };
     if !paired {
         tracing::warn!(
             target: "minos_backend::envelope",
@@ -567,7 +564,7 @@ async fn close_with(ws: &mut WebSocket, code: u16, reason: &'static str) {
 mod tests {
     use super::*;
     use crate::session::registry::OUTBOX_CAPACITY;
-    use crate::store::account_mac_pairings;
+    use crate::store::account_host_pairings;
     use crate::store::devices::insert_device;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
     use minos_domain::{DeviceId, DeviceRole};
@@ -584,7 +581,7 @@ mod tests {
             .await
             .unwrap();
         let ios = insert_ios_device(&pool, &account).await;
-        account_mac_pairings::insert_pair(&pool, mac, &account, ios, T0)
+        account_host_pairings::insert_pair(&pool, mac, &account, ios, T0)
             .await
             .unwrap();
         (pool, account, mac, ios)
@@ -719,7 +716,7 @@ mod tests {
             .unwrap();
         let ios_a = insert_ios_device(&pool, &account).await;
         let ios_b = insert_ios_device(&pool, &account).await;
-        account_mac_pairings::insert_pair(&pool, mac_id, &account, ios_b, T0)
+        account_host_pairings::insert_pair(&pool, mac_id, &account, ios_b, T0)
             .await
             .unwrap();
 

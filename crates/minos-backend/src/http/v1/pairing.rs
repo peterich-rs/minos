@@ -1,4 +1,4 @@
-//! `POST /v1/pairing/*` and `DELETE /v1/pairings/:mac_device_id` handlers.
+//! `POST /v1/pairing/*` and `DELETE /v1/pairings/:host_device_id` handlers.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -21,7 +21,7 @@ pub fn router() -> Router<BackendState> {
         .route("/pairing/tokens", post(post_tokens))
         .route("/pairing/consume", post(post_consume))
         .route("/pairing", delete(delete_pairing_legacy))
-        .route("/pairings/:mac_device_id", delete(delete_pair_for_mac))
+        .route("/pairings/:host_device_id", delete(delete_pair_for_host))
 }
 
 #[derive(Debug, Serialize)]
@@ -153,10 +153,10 @@ async fn post_consume(
     let issuer_id = pairing_outcome.issuer_device_id;
 
     // Insert the (Mac, mobile_account) pair OUTSIDE the consume_token
-    // transaction — `account_mac_pairings::insert_pair` only takes a
+    // transaction — `account_host_pairings::insert_pair` only takes a
     // `&SqlitePool`, and the handler is the first place we have the
     // bearer's `account_id`. Idempotent via `ON CONFLICT DO NOTHING`.
-    if let Err(e) = crate::store::account_mac_pairings::insert_pair(
+    if let Err(e) = crate::store::account_host_pairings::insert_pair(
         &state.store,
         issuer_id,
         &account_id,
@@ -242,7 +242,7 @@ async fn post_consume(
                 issuer = %issuer_id,
                 "Event::Paired delivery failed; compensating",
             );
-            let _ = crate::store::account_mac_pairings::delete_pair(
+            let _ = crate::store::account_host_pairings::delete_pair(
                 &state.store,
                 issuer_id,
                 &account_id,
@@ -264,7 +264,7 @@ async fn post_consume(
             "issuer offline at pair time; compensating",
         );
         let _ =
-            crate::store::account_mac_pairings::delete_pair(&state.store, issuer_id, &account_id)
+            crate::store::account_host_pairings::delete_pair(&state.store, issuer_id, &account_id)
                 .await;
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -279,40 +279,40 @@ async fn post_consume(
 }
 
 /// `DELETE /v1/pairing` legacy route. The Phase 2 / pre-ADR-0020 path
-/// is gone; new clients call `DELETE /v1/pairings/{mac_device_id}` with
+/// is gone; new clients call `DELETE /v1/pairings/{host_device_id}` with
 /// a bearer JWT. This stub returns 410 Gone so any old client surfaces a
 /// clear error rather than silently dropping the call.
 async fn delete_pairing_legacy() -> (StatusCode, Json<ErrorEnvelope>) {
     (
         StatusCode::GONE,
-        err_body("replaced", "Use DELETE /v1/pairings/{mac_device_id}"),
+        err_body("replaced", "Use DELETE /v1/pairings/{host_device_id}"),
     )
 }
 
-/// `DELETE /v1/pairings/:mac_device_id`. Bearer-authenticated;
-/// dissolves the pair between the bearer's account and `mac_device_id`,
+/// `DELETE /v1/pairings/:host_device_id`. Bearer-authenticated;
+/// dissolves the pair between the bearer's account and `host_device_id`,
 /// and pushes `Event::Unpaired` to the Mac's live session if any.
-async fn delete_pair_for_mac(
+async fn delete_pair_for_host(
     State(state): State<BackendState>,
     headers: HeaderMap,
-    axum::extract::Path(mac_device_id): axum::extract::Path<String>,
+    axum::extract::Path(host_device_id): axum::extract::Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
     let bearer_outcome = bearer::require(&state, &headers).map_err(|e| {
         let (s, m) = e.into_response_tuple();
         (s, err_body("unauthorized", m))
     })?;
-    let mac_id = uuid::Uuid::parse_str(&mac_device_id)
+    let host_id = uuid::Uuid::parse_str(&host_device_id)
         .map(minos_domain::DeviceId)
         .map_err(|_| {
             (
                 StatusCode::BAD_REQUEST,
-                err_body("bad_request", "invalid mac_device_id"),
+                err_body("bad_request", "invalid host_device_id"),
             )
         })?;
 
-    let n = crate::store::account_mac_pairings::delete_pair(
+    let n = crate::store::account_host_pairings::delete_pair(
         &state.store,
-        mac_id,
+        host_id,
         &bearer_outcome.account_id,
     )
     .await
@@ -330,9 +330,9 @@ async fn delete_pair_for_mac(
         ));
     }
 
-    if let Some(mac_handle) = state.registry.get(mac_id) {
+    if let Some(host_handle) = state.registry.get(host_id) {
         let _ = state.registry.try_send_current(
-            &mac_handle,
+            &host_handle,
             Envelope::Event {
                 version: 1,
                 event: EventKind::Unpaired,

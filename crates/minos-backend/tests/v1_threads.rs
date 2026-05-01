@@ -3,7 +3,7 @@ use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
-use minos_backend::store::{account_mac_pairings, devices::insert_device};
+use minos_backend::store::{account_host_pairings, devices::insert_device};
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::ListThreadsResponse;
 
@@ -36,7 +36,7 @@ async fn paired_pair_with_account(
         .unwrap();
 
     // Phase 2 Task 2.6 / ADR-0020: link both device rows to a real
-    // account_id, then record the pair via the account_mac_pairings table
+    // account_id, then record the pair via the account_host_pairings table
     // (the legacy device-keyed `pairings` module has been retired).
     let account = minos_backend::store::accounts::create(&state.store, email, "phc")
         .await
@@ -47,7 +47,7 @@ async fn paired_pair_with_account(
     minos_backend::store::devices::set_account_id(&state.store, &ios, &account.account_id)
         .await
         .unwrap();
-    account_mac_pairings::insert_pair(&state.store, mac, &account.account_id, ios, 0)
+    account_host_pairings::insert_pair(&state.store, mac, &account.account_id, ios, 0)
         .await
         .unwrap();
 

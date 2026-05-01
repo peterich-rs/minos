@@ -146,8 +146,8 @@ async fn post_pairing_consume_happy_path_pairs_account_and_mac() {
     assert_eq!(resp.peer_device_id, mac_id);
     assert_eq!(resp.peer_name, "Mac");
 
-    // Pair row committed in account_mac_pairings.
-    assert!(minos_backend::store::account_mac_pairings::exists(
+    // Pair row committed in account_host_pairings.
+    assert!(minos_backend::store::account_host_pairings::exists(
         &state.store,
         mac_id,
         &account.account_id,
@@ -306,7 +306,7 @@ async fn post_pairing_consume_rejects_agent_host_role() {
 #[tokio::test]
 async fn delete_pairing_legacy_route_returns_410_gone() {
     // Phase E2: legacy `DELETE /v1/pairing` is replaced by
-    // `DELETE /v1/pairings/{mac_device_id}` (bearer-authenticated). The
+    // `DELETE /v1/pairings/{host_device_id}` (bearer-authenticated). The
     // legacy route now returns 410 Gone with a directive message.
     let state = backend_state().await;
     let mut app = router(state);
