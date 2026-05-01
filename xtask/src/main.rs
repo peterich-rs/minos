@@ -761,10 +761,14 @@ fn gen_uniffi() -> Result<()> {
 }
 
 fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
+    // Phase C retired the legacy single-session `AgentState`; the multi-thread
+    // `ThreadState` enum (in `minos-agent-runtime`) is its replacement. The
+    // `AgentStateObserver` protocol survives but its `on_state` argument now
+    // carries `ThreadState`.
     require_generated_text(
         &out_dir.join("minos_agent_runtime.swift"),
-        "public enum AgentState",
-        "generated Swift enum for runtime-owned AgentState",
+        "public enum ThreadState",
+        "generated Swift enum for runtime-owned ThreadState",
     )?;
     require_generated_text(
         &out_dir.join("minos_daemon.swift"),
@@ -795,6 +799,16 @@ fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
         &out_dir.join("minos_protocol.swift"),
         "public struct SendUserMessageRequest",
         "generated Swift record for SendUserMessageRequest",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct InterruptThreadRequest",
+        "generated Swift record for InterruptThreadRequest (Phase C)",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct CloseThreadRequest",
+        "generated Swift record for CloseThreadRequest (Phase C)",
     )?;
 
     Ok(())
