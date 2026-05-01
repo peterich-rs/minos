@@ -103,32 +103,35 @@ async fn recover_parses_valid_lines_and_writes_with_jsonl_recovery_source() {
     // recovery for the others.
     let codex_root = tmp.path();
     std::fs::create_dir_all(codex_root.join(".codex/sessions")).unwrap();
-    let lines = vec![
+    let lines = [
         serde_json::json!({"recovered_seq": 1, "ts_ms": 100}).to_string(),
         "{not valid json".to_string(),
         serde_json::json!({"recovered_seq": 2, "ts_ms": 200}).to_string(),
         serde_json::json!({"recovered_seq": 3, "ts_ms": 300}).to_string(),
     ]
     .join("\n");
-    std::fs::write(
-        codex_root.join(".codex/sessions/sess-uuid-1.jsonl"),
-        lines,
-    )
-    .unwrap();
+    std::fs::write(codex_root.join(".codex/sessions/sess-uuid-1.jsonl"), lines).unwrap();
 
-    recover_with_root("thr-Z", &[1, 2, 3], Some("sess-uuid-1"), codex_root, &writer)
-        .await
-        .unwrap();
+    recover_with_root(
+        "thr-Z",
+        &[1, 2, 3],
+        Some("sess-uuid-1"),
+        codex_root,
+        &writer,
+    )
+    .await
+    .unwrap();
 
     // Allow EventWriter's 5ms batch window to flush.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE thread_id = ? AND source = 'jsonl_recovery'")
-            .bind("thr-Z")
-            .fetch_one(store.pool())
-            .await
-            .unwrap();
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM events WHERE thread_id = ? AND source = 'jsonl_recovery'",
+    )
+    .bind("thr-Z")
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
     assert_eq!(count, 3, "3 valid lines should be recovered");
 
     // Sanity: nothing leaked into the 'live' source.

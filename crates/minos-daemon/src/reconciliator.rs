@@ -182,7 +182,9 @@ impl Reconciliator {
         // Detect gaps. `expected.contains(&seq)` would be O(n²); convert
         // present-seqs to a set lookup for the linear filter below.
         let present: std::collections::BTreeSet<u64> = all_seqs.iter().copied().collect();
-        let missing: Vec<u64> = (from_seq..=to_seq).filter(|s| !present.contains(s)).collect();
+        let missing: Vec<u64> = (from_seq..=to_seq)
+            .filter(|s| !present.contains(s))
+            .collect();
         if !missing.is_empty() {
             tracing::warn!(
                 target: "minos_daemon::reconciliator",

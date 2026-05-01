@@ -13,6 +13,12 @@
 //!    `jsonl_recover`, which feeds 11 events through `EventWriter`
 //!    tagged `source = 'jsonl_recovery'`.
 
+// SQLite stores seq + ts_ms as i64 even where the Rust-side semantics
+// use u64. The bind-site casts mirror the same allow used by the
+// production store/event_writer code so the SQL surface stays readable
+// without `try_from`-shaped clutter.
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+
 use minos_daemon::reconciliator::Reconciliator;
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
@@ -85,10 +91,7 @@ async fn reconciliation_replays_missing_seqs() {
     while let Ok(Some(env)) =
         tokio::time::timeout(std::time::Duration::from_millis(500), relay_out_rx.recv()).await
     {
-        if let Envelope::Ingest {
-            thread_id, seq, ..
-        } = env
-        {
+        if let Envelope::Ingest { thread_id, seq, .. } = env {
             assert_eq!(thread_id, "thr-X");
             got.push(seq);
         }

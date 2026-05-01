@@ -121,7 +121,10 @@ pub async fn recover_with_root(
         // The codex JSONL line carries its own ts; if absent we fall
         // back to 0. The downstream events table has no NOT NULL
         // constraint that this would violate.
-        let ts_ms = payload.get("ts_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+        let ts_ms = payload
+            .get("ts_ms")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
         let ingest = RawIngest {
             agent: AgentKind::Codex,
             thread_id: thread_id.to_string(),

@@ -205,10 +205,9 @@ async fn devices_ws_emits_checkpoint_after_unpaired_for_agent_host() -> anyhow::
     match recv_envelope(&mut ws).await? {
         Envelope::Event {
             version: 1,
-            event:
-                EventKind::IngestCheckpoint {
-                    last_seq_per_thread,
-                },
+            event: EventKind::IngestCheckpoint {
+                last_seq_per_thread,
+            },
         } => {
             assert_eq!(last_seq_per_thread.get("thr_1").copied(), Some(7));
             assert_eq!(last_seq_per_thread.get("thr_2").copied(), Some(3));
@@ -237,10 +236,9 @@ async fn devices_ws_emits_empty_checkpoint_when_no_threads() -> anyhow::Result<(
     let _ = recv_envelope(&mut ws).await?; // Unpaired
     match recv_envelope(&mut ws).await? {
         Envelope::Event {
-            event:
-                EventKind::IngestCheckpoint {
-                    last_seq_per_thread,
-                },
+            event: EventKind::IngestCheckpoint {
+                last_seq_per_thread,
+            },
             ..
         } => assert!(last_seq_per_thread.is_empty()),
         other => panic!("expected empty IngestCheckpoint, got {other:?}"),
@@ -285,15 +283,15 @@ async fn devices_ws_does_not_emit_checkpoint_for_mobile_client() -> anyhow::Resu
         Err(_) => {
             // Idle within the window → mobile got no checkpoint, as required.
         }
-        Ok(Ok(env)) => match env {
-            Envelope::Event {
+        Ok(Ok(env)) => {
+            if let Envelope::Event {
                 event: EventKind::IngestCheckpoint { .. },
                 ..
-            } => {
+            } = env
+            {
                 panic!("mobile client must not receive IngestCheckpoint")
             }
-            _ => {}
-        },
+        }
         Ok(Err(e)) => return Err(e),
     }
 

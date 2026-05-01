@@ -419,16 +419,9 @@ mod tests {
         .await
         .unwrap();
         for (tid, seq) in [("thr_1", 7), ("thr_1", 3), ("thr_2", 12), ("thr_3", 1)] {
-            insert_if_absent(
-                &pool,
-                tid,
-                seq,
-                AgentName::Codex,
-                &serde_json::json!({}),
-                0,
-            )
-            .await
-            .unwrap();
+            insert_if_absent(&pool, tid, seq, AgentName::Codex, &serde_json::json!({}), 0)
+                .await
+                .unwrap();
         }
 
         let map = last_seq_per_owner(&pool, "host_a").await.unwrap();
@@ -436,7 +429,7 @@ mod tests {
         assert_eq!(map.len(), 2);
         assert_eq!(map.get("thr_1").copied(), Some(7));
         assert_eq!(map.get("thr_2").copied(), Some(12));
-        assert!(map.get("thr_3").is_none(), "must not leak host_b's thread");
+        assert!(!map.contains_key("thr_3"), "must not leak host_b's thread");
     }
 
     #[tokio::test]
