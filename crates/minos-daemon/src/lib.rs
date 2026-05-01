@@ -3,11 +3,13 @@
 pub mod agent;
 pub mod config;
 pub mod handle;
+pub mod jsonl_recover;
 #[cfg(target_os = "macos")]
 pub mod keychain_store;
 pub mod local_state;
 pub mod logging;
 pub mod paths;
+pub mod reconciliator;
 pub mod relay_client;
 pub mod relay_http;
 pub mod relay_pairing;
