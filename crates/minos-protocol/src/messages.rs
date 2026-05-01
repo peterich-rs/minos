@@ -95,9 +95,16 @@ pub enum AgentLaunchMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentRequest {
     pub agent: AgentName,
-    /// Optional driver selector. Absent ⇒ `Jsonl`, preserving the wire shape
-    /// for clients that pre-date the field (mobile relay payloads, older
-    /// daemon revs).
+    /// Workspace directory the codex app-server child should treat as its
+    /// `cwd`. Multi-session manager keys instances by workspace, so two
+    /// `start_agent` calls for the same workspace share an instance and
+    /// distinct calls for different workspaces spawn distinct codex children.
+    /// Carried as a string for FFI portability (UniFFI does not lift `PathBuf`).
+    pub workspace: String,
+    /// Optional driver selector. Absent ⇒ `Server` post-Phase-C, preserving
+    /// the wire shape for clients that pre-date the field. The `Jsonl` variant
+    /// is retained for compatibility but no longer drives a JSONL exec path —
+    /// it is silently treated as `Server`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<AgentLaunchMode>,
 }
@@ -118,6 +125,71 @@ pub struct StartAgentResponse {
 pub struct SendUserMessageRequest {
     pub session_id: String,
     pub text: String,
+}
+
+/// Parameters for the `interrupt_thread` RPC. See spec §5.2.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterruptThreadRequest {
+    pub thread_id: String,
+}
+
+/// Parameters for the `close_thread` RPC. See spec §5.2.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloseThreadRequest {
+    pub thread_id: String,
+}
+
+/// Parameters for the `get_thread` RPC. See spec §5.2.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetThreadParams {
+    pub thread_id: String,
+}
+
+/// Mirror of `minos_agent_runtime::ThreadState` published over the wire.
+/// The runtime crate does not depend on this crate (and vice versa), so the
+/// enum is duplicated here with the same `tag = "kind"` / `snake_case` shape.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ThreadState {
+    Starting,
+    Idle,
+    Running { turn_started_at_ms: i64 },
+    Suspended { reason: PauseReason },
+    Resuming,
+    Closed { reason: CloseReason },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseReason {
+    UserInterrupt,
+    CodexCrashed,
+    DaemonRestart,
+    InstanceReaped,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseReason {
+    UserClose,
+    TerminalError,
+}
+
+/// Response from the `get_thread` RPC. Wraps the existing `ThreadSummary`
+/// metadata with the live `ThreadState` snapshot so the mobile UI can both
+/// render the history list entry and decide whether to draw the running
+/// indicator without a second round-trip.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetThreadResponse {
+    pub thread: ThreadSummary,
+    pub state: ThreadState,
 }
 
 /// Deep-link QR payload minted by the Mac and scanned by iOS. Carries a
@@ -158,6 +230,7 @@ pub struct RequestPairingQrResponse {
 
 /// Compact summary of one persisted thread, returned by `list_threads`
 /// for the mobile history list.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ThreadSummary {
     pub thread_id: String,
@@ -172,6 +245,7 @@ pub struct ThreadSummary {
 
 /// Parameters for `list_threads`. `before_ts_ms` paginates older entries;
 /// `agent` filters by CLI kind.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListThreadsParams {
     pub limit: u32,
@@ -183,6 +257,7 @@ pub struct ListThreadsParams {
 
 /// Response from `list_threads`; `next_before_ts_ms` is set iff there is
 /// a strictly older page the caller can request.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListThreadsResponse {
     pub threads: Vec<ThreadSummary>,
@@ -308,12 +383,14 @@ mod tests {
     fn start_agent_request_round_trip() {
         let req = StartAgentRequest {
             agent: AgentName::Codex,
+            workspace: "/Users/fan/dev".into(),
             mode: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        // Default-mode payload must keep the historical wire shape so a
-        // pre-mode mobile client / relay rev still parses cleanly.
+        // Default-mode payload omits the optional `mode` field.
         assert!(!json.contains("mode"));
+        // Workspace is mandatory post-Phase-C and must serialize.
+        assert!(json.contains("workspace"));
         let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
     }
@@ -322,6 +399,7 @@ mod tests {
     fn start_agent_request_with_mode_round_trip() {
         let req = StartAgentRequest {
             agent: AgentName::Codex,
+            workspace: "/Users/fan/dev".into(),
             mode: Some(AgentLaunchMode::Server),
         };
         let json = serde_json::to_string(&req).unwrap();
@@ -332,9 +410,10 @@ mod tests {
 
     #[test]
     fn start_agent_request_pre_mode_payload_decodes() {
-        let json = r#"{"agent":"codex"}"#;
+        let json = r#"{"agent":"codex","workspace":"/w"}"#;
         let req: StartAgentRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.agent, AgentName::Codex);
+        assert_eq!(req.workspace, "/w");
         assert_eq!(req.mode, None);
     }
 

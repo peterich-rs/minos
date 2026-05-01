@@ -281,8 +281,35 @@ impl DaemonHandle {
     }
 
     #[allow(clippy::missing_errors_doc)]
-    pub async fn stop_agent(&self) -> Result<(), MinosError> {
-        self.inner.agent.stop_agent().await
+    pub async fn interrupt_thread(
+        &self,
+        req: minos_protocol::InterruptThreadRequest,
+    ) -> Result<(), MinosError> {
+        self.inner.agent.interrupt_thread(req).await
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn close_thread(
+        &self,
+        req: minos_protocol::CloseThreadRequest,
+    ) -> Result<(), MinosError> {
+        self.inner.agent.close_thread(req).await
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn list_threads(
+        &self,
+        req: minos_protocol::ListThreadsParams,
+    ) -> Result<minos_protocol::ListThreadsResponse, MinosError> {
+        self.inner.agent.list_threads(req).await
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn get_thread(
+        &self,
+        req: minos_protocol::GetThreadParams,
+    ) -> Result<minos_protocol::GetThreadResponse, MinosError> {
+        self.inner.agent.get_thread(req).await
     }
 
     #[must_use]

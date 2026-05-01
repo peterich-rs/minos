@@ -11,6 +11,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
+
 mod claude;
 mod codex;
 mod error;

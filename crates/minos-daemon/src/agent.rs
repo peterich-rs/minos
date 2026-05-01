@@ -6,8 +6,10 @@ use minos_agent_runtime::{
 };
 use minos_domain::MinosError;
 use minos_protocol::{
-    AgentLaunchMode as ProtoAgentLaunchMode, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse,
+    AgentLaunchMode as ProtoAgentLaunchMode, CloseReason as ProtoCloseReason, CloseThreadRequest,
+    GetThreadParams, GetThreadResponse, InterruptThreadRequest, ListThreadsParams,
+    ListThreadsResponse, PauseReason as ProtoPauseReason, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -96,12 +98,18 @@ impl AgentGlue {
         &self,
         req: StartAgentRequest,
     ) -> Result<StartAgentResponse, MinosError> {
-        // Phase C plan deviation: the protocol's `StartAgentRequest` does not
-        // yet carry a `workspace` field (introduced by C16). Until the FFI
-        // rewrite lands we route every legacy `start_agent` call through the
-        // daemon's default workspace dir.
-        let _ = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
-        let workspace = self.default_workspace.clone();
+        // Plan note (C16): `Jsonl` is treated identically to `Server` because
+        // the JSONL exec path was retired in C18. The mode field stays in the
+        // wire shape for forward-compatibility but is effectively ignored.
+        let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
+        // An empty `workspace` falls back to the daemon's default workspace
+        // dir for clients (mobile pre-Phase-D) that have not been updated to
+        // pick a directory yet.
+        let workspace = if req.workspace.is_empty() {
+            self.default_workspace.clone()
+        } else {
+            PathBuf::from(&req.workspace)
+        };
         let outcome = self
             .manager
             .start_agent(req.agent, workspace)
@@ -126,19 +134,74 @@ impl AgentGlue {
             .map_err(map_anyhow)
     }
 
-    pub async fn stop_agent(&self) -> Result<(), MinosError> {
-        // Legacy surface: `stop_agent` becomes `close_thread` on whichever
-        // thread is most recently active. Multi-thread support comes via
-        // `close_thread` (C16+).
-        let snap = self.manager.list_threads().await;
-        if let Some(s) = snap.first() {
-            self.manager
-                .close_thread(&s.thread_id)
-                .await
-                .map_err(map_anyhow)?;
-        }
+    pub async fn interrupt_thread(
+        &self,
+        req: InterruptThreadRequest,
+    ) -> Result<(), MinosError> {
+        self.manager
+            .interrupt_thread(&req.thread_id)
+            .await
+            .map_err(map_anyhow)
+    }
+
+    pub async fn close_thread(&self, req: CloseThreadRequest) -> Result<(), MinosError> {
+        self.manager
+            .close_thread(&req.thread_id)
+            .await
+            .map_err(map_anyhow)?;
         let _ = self.state_tx.send(AgentState::Idle);
         Ok(())
+    }
+
+    pub async fn list_threads(
+        &self,
+        req: ListThreadsParams,
+    ) -> Result<ListThreadsResponse, MinosError> {
+        let _ = req; // Filter / agent / pagination plumbing lands with the
+        // SQLite-backed history list (C21+).
+        let snap = self.manager.list_threads().await;
+        let threads: Vec<ThreadSummary> = snap
+            .into_iter()
+            .map(|s| ThreadSummary {
+                thread_id: s.thread_id,
+                agent: minos_domain::AgentName::Codex,
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+                end_reason: None,
+            })
+            .collect();
+        Ok(ListThreadsResponse {
+            threads,
+            next_before_ts_ms: None,
+        })
+    }
+
+    pub async fn get_thread(
+        &self,
+        req: GetThreadParams,
+    ) -> Result<GetThreadResponse, MinosError> {
+        let snap = self.manager.list_threads().await;
+        let s = snap
+            .into_iter()
+            .find(|s| s.thread_id == req.thread_id)
+            .ok_or_else(|| MinosError::AgentSessionIdMismatch)?;
+        let thread = ThreadSummary {
+            thread_id: s.thread_id.clone(),
+            agent: minos_domain::AgentName::Codex,
+            title: None,
+            first_ts_ms: 0,
+            last_ts_ms: 0,
+            message_count: 0,
+            ended_at_ms: None,
+            end_reason: None,
+        };
+        Ok(GetThreadResponse {
+            thread,
+            state: state_to_proto(&s.state),
+        })
     }
 
     #[must_use]
@@ -183,5 +246,41 @@ fn map_anyhow(e: anyhow::Error) -> MinosError {
     MinosError::CodexProtocolError {
         method: "agent_manager".into(),
         message: e.to_string(),
+    }
+}
+
+fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState {
+    use minos_agent_runtime::ThreadState as RtState;
+    match state {
+        RtState::Starting => ProtoThreadState::Starting,
+        RtState::Idle => ProtoThreadState::Idle,
+        RtState::Running { turn_started_at_ms } => ProtoThreadState::Running {
+            turn_started_at_ms: *turn_started_at_ms,
+        },
+        RtState::Suspended { reason } => ProtoThreadState::Suspended {
+            reason: pause_to_proto(reason),
+        },
+        RtState::Resuming => ProtoThreadState::Resuming,
+        RtState::Closed { reason } => ProtoThreadState::Closed {
+            reason: close_to_proto(reason),
+        },
+    }
+}
+
+fn pause_to_proto(r: &minos_agent_runtime::PauseReason) -> ProtoPauseReason {
+    use minos_agent_runtime::PauseReason as Rt;
+    match r {
+        Rt::UserInterrupt => ProtoPauseReason::UserInterrupt,
+        Rt::CodexCrashed => ProtoPauseReason::CodexCrashed,
+        Rt::DaemonRestart => ProtoPauseReason::DaemonRestart,
+        Rt::InstanceReaped => ProtoPauseReason::InstanceReaped,
+    }
+}
+
+fn close_to_proto(r: &minos_agent_runtime::CloseReason) -> ProtoCloseReason {
+    use minos_agent_runtime::CloseReason as Rt;
+    match r {
+        Rt::UserClose => ProtoCloseReason::UserClose,
+        Rt::TerminalError => ProtoCloseReason::TerminalError,
     }
 }

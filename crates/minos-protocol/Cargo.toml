@@ -7,7 +7,7 @@ authors.workspace = true
 description = "Minos JSON-RPC contract: messages, events, and the MinosRpc service trait."
 
 [features]
-uniffi = ["dep:uniffi", "minos-domain/uniffi"]
+uniffi = ["dep:uniffi", "minos-domain/uniffi", "minos-ui-protocol/uniffi"]
 
 [dependencies]
 minos-domain = { path = "../minos-domain", version = "0.1.0" }

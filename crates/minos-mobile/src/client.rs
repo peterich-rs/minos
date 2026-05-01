@@ -605,7 +605,15 @@ impl MobileClient {
             .clone()
             .ok_or(MinosError::NotConnected)?;
         let target = self.require_active_host().await?;
-        let req = StartAgentRequest { agent, mode: None };
+        // Pre-Phase-D mobile flows do not yet pick a workspace; the daemon
+        // currently maps an empty path back to its default workspace dir
+        // (`paths::minos_home()/workspaces`). The Phase-C plan accepts that
+        // mobile is broken against the new FFI until apps catch up.
+        let req = StartAgentRequest {
+            agent,
+            workspace: String::new(),
+            mode: None,
+        };
         let resp: StartAgentResponse = forward_rpc(
             &self.pending,
             &self.next_id,

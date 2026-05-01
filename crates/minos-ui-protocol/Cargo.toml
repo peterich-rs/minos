@@ -6,12 +6,16 @@ license.workspace = true
 authors.workspace = true
 description = "Unified UI event protocol: translators from each agent CLI to a single UiEventMessage shape."
 
+[features]
+uniffi = ["dep:uniffi", "minos-domain/uniffi"]
+
 [dependencies]
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }
 thiserror    = { workspace = true }
 tracing      = { workspace = true }
+uniffi       = { workspace = true, optional = true }
 uuid         = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]

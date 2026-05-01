@@ -18,8 +18,10 @@ use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::envelope::Envelope;
 use minos_protocol::{
-    HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse,
+    InterruptThreadRequest, ListClisResponse, ListThreadsParams, ListThreadsResponse,
+    MinosRpcServer, PairRequest, PairResponse, SendUserMessageRequest, StartAgentRequest,
+    StartAgentResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -70,8 +72,29 @@ impl MinosRpcServer for RpcServerImpl {
         self.agent.send_user_message(req).await.map_err(rpc_err)
     }
 
-    async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()> {
-        self.agent.stop_agent().await.map_err(rpc_err)
+    async fn interrupt_thread(
+        &self,
+        req: InterruptThreadRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.interrupt_thread(req).await.map_err(rpc_err)
+    }
+
+    async fn close_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.close_thread(req).await.map_err(rpc_err)
+    }
+
+    async fn list_threads(
+        &self,
+        req: ListThreadsParams,
+    ) -> jsonrpsee::core::RpcResult<ListThreadsResponse> {
+        self.agent.list_threads(req).await.map_err(rpc_err)
+    }
+
+    async fn get_thread(
+        &self,
+        req: GetThreadParams,
+    ) -> jsonrpsee::core::RpcResult<GetThreadResponse> {
+        self.agent.get_thread(req).await.map_err(rpc_err)
     }
 }
 
@@ -138,7 +161,34 @@ pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Va
             };
             into_jsonrpc(id, server.send_user_message(req).await)
         }
-        "minos_stop_agent" => into_jsonrpc(id, server.stop_agent().await),
+        "minos_interrupt_thread" => {
+            let req: InterruptThreadRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.interrupt_thread(req).await)
+        }
+        "minos_close_thread" => {
+            let req: CloseThreadRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.close_thread(req).await)
+        }
+        "minos_list_threads" => {
+            let req: ListThreadsParams = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.list_threads(req).await)
+        }
+        "minos_get_thread" => {
+            let req: GetThreadParams = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.get_thread(req).await)
+        }
         // `subscribe_events` cannot meaningfully cross a forwarded RPC
         // boundary — the peer would need a streaming subscription which
         // the envelope protocol does not model. Reject explicitly.
