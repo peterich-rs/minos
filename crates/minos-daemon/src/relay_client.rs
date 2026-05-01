@@ -178,6 +178,7 @@ impl RelayClient {
             rpc_server,
             peer_store: persistence.peer_store,
             last_error: persistence.last_error,
+            reconciliator: persistence.reconciliator,
         };
 
         let task = tokio::spawn(run_dispatch(dispatch_ctx, shutdown_rx));
@@ -273,6 +274,11 @@ pub struct PersistenceCtx {
     /// paths (HTTP 401, WS close 4401/4400). Drained on `DaemonHandle::
     /// last_error`.
     pub last_error: Arc<StdMutex<Option<MinosError>>>,
+    /// Phase D: dispatched whenever the backend pushes
+    /// `Event::IngestCheckpoint` post-auth. `None` in test fixtures that
+    /// don't exercise reconciliation; production wires the daemon's
+    /// `Reconciliator` here.
+    pub reconciliator: Option<Arc<crate::reconciliator::Reconciliator>>,
 }
 
 /// Shared state plumbed into the dispatcher. Built once at spawn time; the
@@ -305,6 +311,9 @@ struct DispatchCtx {
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
     /// One-shot fatal-error signal drained by `DaemonHandle::last_error`.
     last_error: Arc<StdMutex<Option<MinosError>>>,
+    /// Reconciliator invoked on every `Event::IngestCheckpoint`. `None`
+    /// in test fixtures that don't exercise reconciliation.
+    reconciliator: Option<Arc<crate::reconciliator::Reconciliator>>,
 }
 
 /// Outcome of a single connect-attempt cycle. Drives the outer
@@ -700,14 +709,31 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
         EventKind::IngestCheckpoint {
             last_seq_per_thread,
         } => {
-            // Backend → daemon reconciliation checkpoint. Wired into the
-            // Reconciliator in Phase D Task D5; for now just acknowledge
-            // arrival so the protocol enum stays exhaustively matched.
+            // Backend → daemon reconciliation checkpoint. Spawn the
+            // on_checkpoint pass off the dispatch loop so DB IO never
+            // back-pressures the WS read; failures are logged and
+            // swallowed (the next reconnect produces a fresh checkpoint).
             tracing::debug!(
                 target: "minos_daemon::relay_client",
                 threads = last_seq_per_thread.len(),
-                "received IngestCheckpoint (reconciliation wiring pending)"
+                "received IngestCheckpoint"
             );
+            if let Some(reconciliator) = ctx.reconciliator.clone() {
+                tokio::spawn(async move {
+                    if let Err(e) = reconciliator.on_checkpoint(last_seq_per_thread).await {
+                        tracing::warn!(
+                            target: "minos_daemon::relay_client",
+                            error = %e,
+                            "reconciliation failed"
+                        );
+                    }
+                });
+            } else {
+                tracing::debug!(
+                    target: "minos_daemon::relay_client",
+                    "no Reconciliator wired (test fixture); dropping IngestCheckpoint"
+                );
+            }
         }
     }
 }

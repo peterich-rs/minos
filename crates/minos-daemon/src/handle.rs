@@ -116,7 +116,7 @@ impl DaemonHandle {
             paths::minos_home()?.join("workspaces"),
             subprocess_env.clone(),
             store.clone(),
-            agent_out_tx,
+            agent_out_tx.clone(),
         ));
 
         // The relay-client dispatches forwarded peer JSON-RPC into this
@@ -139,6 +139,17 @@ impl DaemonHandle {
 
         let backend_url = config.resolved_backend_url().to_owned();
 
+        // Phase D: the Reconciliator handles `Event::IngestCheckpoint`
+        // frames from the backend. It needs the local store + the
+        // EventWriter (so JSONL fallback writes go through the single
+        // writer) + the same outbound channel the AgentGlue uses (so
+        // replay events ride the same /devices WS).
+        let reconciliator = Arc::new(crate::reconciliator::Reconciliator::new(
+            store.clone(),
+            agent.writer.clone(),
+            agent_out_tx.clone(),
+        ));
+
         let (relay, link_rx, peer_rx) = RelayClient::spawn(
             config,
             self_device_id,
@@ -150,6 +161,7 @@ impl DaemonHandle {
             PersistenceCtx {
                 peer_store: peer_store.clone(),
                 last_error: last_error.clone(),
+                reconciliator: Some(reconciliator),
             },
         );
 
