@@ -39,6 +39,10 @@ pub enum Envelope {
         /// Protocol version.
         #[serde(rename = "v")]
         version: u8,
+        /// The Mac device this forward should be routed to. Backend
+        /// validates against the caller's account_mac_pairings rows.
+        /// Mismatch → routing error (PeerOffline).
+        target_device_id: DeviceId,
         /// Opaque payload (JSON-RPC 2.0 by convention between Minos
         /// clients, but the relay does not read it).
         payload: serde_json::Value,
@@ -96,11 +100,11 @@ pub enum EventKind {
         peer_device_id: DeviceId,
         /// Display name the iPhone registered during `pair`.
         peer_name: String,
-        /// Long-lived bearer secret the Mac should persist and present on
-        /// subsequent WS connects. `DeviceSecret` serialises transparently
-        /// (no redaction on the wire); redaction is applied only to
-        /// `Debug`/`Display` formatters — see `minos_domain::ids`.
-        your_device_secret: DeviceSecret,
+        /// Long-lived bearer secret for the Mac recipient. `None` when this
+        /// event is delivered to an iOS recipient (iOS rail is bearer-only;
+        /// see ADR-0020).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        your_device_secret: Option<DeviceSecret>,
     },
     /// The paired peer's WebSocket came online.
     PeerOnline {
@@ -149,6 +153,7 @@ mod tests {
     fn forward_round_trips() {
         let env = Envelope::Forward {
             version: 1,
+            target_device_id: DeviceId::new(),
             payload: serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "list_clis",
@@ -158,6 +163,20 @@ mod tests {
         round_trip(&env);
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["kind"], "forward");
+    }
+
+    #[test]
+    fn forward_with_target_round_trips() {
+        let target = DeviceId::new();
+        let env = Envelope::Forward {
+            version: 1,
+            target_device_id: target,
+            payload: serde_json::json!({"jsonrpc": "2.0", "method": "ping", "id": 1}),
+        };
+        round_trip(&env);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["kind"], "forward");
+        assert_eq!(v["target_device_id"].as_str().unwrap(), target.0.to_string());
     }
 
     #[test]
@@ -182,7 +201,7 @@ mod tests {
             event: EventKind::Paired {
                 peer_device_id: DeviceId::new(),
                 peer_name: "Mac-mini".into(),
-                your_device_secret: DeviceSecret("sek".into()),
+                your_device_secret: Some(DeviceSecret("sek".into())),
             },
         };
         round_trip(&env);
@@ -191,6 +210,22 @@ mod tests {
         assert_eq!(v["type"], "paired");
         // Plaintext secret MUST appear on the wire (no redaction via serde).
         assert_eq!(v["your_device_secret"], "sek");
+    }
+
+    #[test]
+    fn paired_event_with_no_secret_round_trips() {
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::Paired {
+                peer_device_id: DeviceId::new(),
+                peer_name: "iPhone".into(),
+                your_device_secret: None,
+            },
+        };
+        round_trip(&env);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["type"], "paired");
+        assert!(v.get("your_device_secret").is_none() || v["your_device_secret"].is_null());
     }
 
     #[test]

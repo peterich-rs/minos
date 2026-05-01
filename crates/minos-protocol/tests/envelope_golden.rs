@@ -43,7 +43,10 @@ fn round_trip(name: &str) -> Envelope {
 #[test]
 fn forward() {
     let env = round_trip("forward.json");
-    let Envelope::Forward { version, payload } = env else {
+    let Envelope::Forward {
+        version, payload, ..
+    } = env
+    else {
         panic!("expected Forward");
     };
     assert_eq!(version, 1);
@@ -85,8 +88,8 @@ fn event_paired() {
     assert_eq!(peer_name, "Mac-mini");
     // DeviceSecret is transparent on the wire (redaction is Debug/Display only).
     assert_eq!(
-        your_device_secret.as_str(),
-        "Sg3AfM5V0_3Vp1IvGxPzWwXhE-3HXfLQyIJzj6TZAmE"
+        your_device_secret.as_ref().map(|s| s.as_str()),
+        Some("Sg3AfM5V0_3Vp1IvGxPzWwXhE-3HXfLQyIJzj6TZAmE")
     );
 }
 
