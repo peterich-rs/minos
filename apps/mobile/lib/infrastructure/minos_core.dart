@@ -53,20 +53,19 @@ class MinosCore implements MinosCoreProtocol {
   /// recovering from a stale persisted snapshot when resume fails.
   ///
   /// The recovery branch matters because the Rust client retains the
-  /// persisted device id even when the secret is no longer valid: a
-  /// subsequent `pair` would otherwise re-use that identity against an
+  /// persisted device id even when the bearer is no longer valid: a
+  /// subsequent reconnect would otherwise re-use that identity against an
   /// authenticated row on the backend and be rejected with 401. Dropping
   /// the snapshot lets the next pair attempt mint a fresh device.
   ///
   /// Phase 8.9: WS startup is now gated on the persisted auth tuple. If
-  /// the snapshot has paired-device fields but no `accessToken`, we hand
-  /// back the rehydrated client *without* calling `resumePersistedSession`
-  /// — the AuthController's stream listener will trigger the WS resume
-  /// after the user logs in (`AuthAuthenticated`).
+  /// the snapshot has a device id but no `accessToken`, we hand back the
+  /// rehydrated client *without* calling `resumePersistedSession` — the
+  /// AuthController's stream listener will trigger the WS resume after
+  /// the user logs in (`AuthAuthenticated`).
   ///
   /// Auth-only snapshots are valid too: login/register happens before QR
-  /// pairing, so cold launch must keep the bearer tuple and stable device id
-  /// while skipping WS resume until a `deviceSecret` exists.
+  /// pairing, so cold launch must keep the bearer tuple and stable device id.
   @visibleForTesting
   static Future<MobileClient> resolveClient({
     required SecurePairingStore secure,
@@ -90,10 +89,9 @@ class MinosCore implements MinosCoreProtocol {
       }
     }
 
-    if (persisted.accessToken == null || persisted.deviceSecret == null) {
-      // Paired-but-logged-out or authenticated-before-pairing. Don't attempt
-      // the WS yet; either AuthController will retry after login, or the user
-      // can add a runtime from Profile.
+    if (persisted.accessToken == null) {
+      // Paired-but-logged-out. Don't attempt the WS yet; AuthController
+      // will retry resume after the next login.
       return client;
     }
     try {
@@ -121,15 +119,24 @@ class MinosCore implements MinosCoreProtocol {
   }
 
   @override
-  Future<void> forgetPeer() async {
-    await _client.forgetPeer();
-    await _secure.clearAll();
+  Future<void> forgetMac(String macDeviceId) async {
+    await _client.forgetMac(macDeviceId: macDeviceId);
   }
+
+  @override
+  Future<List<MacSummaryDto>> listPairedMacs() => _client.listPairedMacs();
+
+  @override
+  Future<String?> activeMac() => _client.activeMac();
+
+  @override
+  Future<void> setActiveMac(String macDeviceId) =>
+      _client.setActiveMac(macDeviceId: macDeviceId);
 
   @override
   Future<bool> hasPersistedPairing() async {
     final state = await _secure.loadState();
-    return state?.deviceId != null && state?.deviceSecret != null;
+    return state?.deviceId != null && state?.accessToken != null;
   }
 
   @override
@@ -188,25 +195,24 @@ class MinosCore implements MinosCoreProtocol {
   Future<void> logout() async {
     await _client.logout();
     // Mirror the Rust-side wipe into the Dart keychain so a cold relaunch
-    // doesn't rehydrate the dead session. The pairing tuple is left
-    // intact so the next account login on this device can reuse it.
+    // doesn't rehydrate the dead session. The persisted device id is left
+    // intact so the next account login on this device reuses it.
     await _secure.clearAuth();
   }
 
-  /// Cross-account migration + post-auth persistence (Phase 11.3).
+  /// Post-auth persistence (Phase 11.3 + ADR-0020).
   ///
-  /// After a successful `register` / `login` we have to:
+  /// After a successful `register` / `login` we mirror the freshly minted
+  /// auth tuple from the Rust core into the Dart keychain so a cold
+  /// relaunch can rehydrate `auth_session` synchronously and the
+  /// AuthController's first frame is already `Authenticated`.
   ///
-  /// 1. Drop the existing pairing if the previously persisted paired snapshot
-  ///    belonged to a *different* account. The Mac-side device row is
-  ///    account-scoped, so reusing the prior `DeviceSecret` against a
-  ///    new account would be rejected on the next WS upgrade — better to
-  ///    force the user through pairing now than surface a confusing 401
-  ///    later.
-  /// 2. Mirror the freshly minted auth tuple from the Rust core into the
-  ///    Dart keychain so a cold relaunch can rehydrate
-  ///    `auth_session` synchronously and the AuthController's first
-  ///    frame is already `Authenticated`.
+  /// Cross-account migration: post ADR-0020 the pairing is account-scoped
+  /// on the server (`account_mac_pairings`). Logging in as a different
+  /// account simply yields a different `listPairedMacs` result on the
+  /// next WS upgrade — no local "forget" call is needed. The peer display
+  /// name from the previous account is cleared so a stale label doesn't
+  /// show up before the first Mac sync.
   ///
   /// Best-effort throughout: the Rust side is the source of truth for
   /// the live session, so a keychain write failure does not invalidate
@@ -214,16 +220,14 @@ class MinosCore implements MinosCoreProtocol {
   Future<void> _onAuthLanded(String newAccountId) async {
     final prior = await _secure.loadState();
     final priorAccountId = prior?.accountId;
-    if (priorAccountId != null &&
-        priorAccountId != newAccountId &&
-        prior?.deviceSecret != null) {
-      // Stale pairing belongs to a different account — drop it so the
-      // route gate flips to `pairing` for the new account.
+    if (priorAccountId != null && priorAccountId != newAccountId) {
+      // Different account: clear the peer display name from the previous
+      // account so the partners list re-fetches from the server.
       try {
-        await forgetPeer();
+        await _secure.savePeerDisplayName(null);
       } catch (_) {
-        // Best effort: even if the WS-side teardown fails, the next
-        // pair_consume call mints a fresh device secret.
+        // Best effort: a keychain write failure here is harmless — the
+        // next listPairedMacs sync will overwrite the cached label.
       }
     }
     try {
@@ -272,12 +276,13 @@ class MinosCore implements MinosCoreProtocol {
   }
 
   Future<void> _rollbackFailedPersistedPairSave() async {
-    try {
-      await _client.forgetPeer();
-    } catch (_) {
-      // Best effort: if the session is already gone we still want to wipe any
-      // partially persisted keychain snapshot before surfacing the failure.
-    }
+    // ADR-0020: with bearer-only auth the server's `account_mac_pairings`
+    // row is the source of truth for the pairing — we can't atomically
+    // un-pair without the just-minted mac_device_id, which the failed
+    // persistedPairingState() may not have surfaced. Best-effort: drop
+    // any partial keychain snapshot so the next launch starts clean. The
+    // user can forget the Mac explicitly from the Partners tab if the
+    // server-side pairing turns out to be stale.
     try {
       await _secure.clearAll();
     } catch (_) {

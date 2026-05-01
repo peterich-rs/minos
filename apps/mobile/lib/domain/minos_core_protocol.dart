@@ -5,15 +5,29 @@ import 'package:minos/src/rust/api/minos.dart';
 /// the Rust-owned opaque class) keeps the layers mockable in unit tests.
 abstract class MinosCoreProtocol {
   /// Submit a raw QR v2 JSON payload to the Rust core. Completes when the
-  /// `Pair` RPC returns; the Rust side persists the minted `DeviceSecret`
+  /// `Pair` RPC returns; the Rust side persists the minted device id
   /// in its pairing store before this future resolves.
   Future<void> pairWithQrJson(String qrJson);
 
-  /// Forget the paired backend; drops credentials and tears down the WS.
-  Future<void> forgetPeer();
+  /// Forget a specific paired Mac (by `mac_device_id`). After ADR-0020 the
+  /// pairing is account-scoped on the server: this drops the
+  /// `account_mac_pairings` row and tears down the WS to that Mac.
+  Future<void> forgetMac(String macDeviceId);
+
+  /// Paired Mac partners for the current account. Returns an empty list
+  /// when no Macs are paired or the WS hasn't synced yet.
+  Future<List<MacSummaryDto>> listPairedMacs();
+
+  /// `mac_device_id` of the Mac currently selected as the routing target,
+  /// or `null` when no active Mac is set.
+  Future<String?> activeMac();
+
+  /// Set the routing target. Subsequent `Forward` envelopes will be
+  /// `target_device_id`-stamped to this Mac.
+  Future<void> setActiveMac(String macDeviceId);
 
   /// Whether the durable store contains enough state to represent an
-  /// already-paired device, even if the current WebSocket is offline.
+  /// authenticated device, even if the current WebSocket is offline.
   Future<bool> hasPersistedPairing();
 
   /// Display name of the currently paired peer, sourced from the QR's

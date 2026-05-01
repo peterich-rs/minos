@@ -91,7 +91,16 @@ class _FakeCore implements MinosCoreProtocol {
   Future<void> pairWithQrJson(String qrJson) async {}
 
   @override
-  Future<void> forgetPeer() async {}
+  Future<void> forgetMac(String macDeviceId) async {}
+
+  @override
+  Future<List<MacSummaryDto>> listPairedMacs() async => const <MacSummaryDto>[];
+
+  @override
+  Future<String?> activeMac() async => null;
+
+  @override
+  Future<void> setActiveMac(String macDeviceId) async {}
 
   @override
   Future<bool> hasPersistedPairing() async => false;

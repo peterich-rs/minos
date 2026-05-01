@@ -29,13 +29,14 @@ void main() {
   });
 
   test(
-    'pairWithQrJson rolls back the live session when keychain persistence fails',
+    'pairWithQrJson clears local state when keychain persistence fails',
     () async {
+      // ADR-0020: with bearer-only auth the rollback can't atomically
+      // un-pair on the server (no mac_device_id available from a failed
+      // persistedPairingState). The client only wipes its own keychain
+      // snapshot and re-throws.
       const qrJson = '{"v":2}';
-      const persisted = PersistedPairingState(
-        deviceId: 'dev-123',
-        deviceSecret: 'sec-456',
-      );
+      const persisted = PersistedPairingState(deviceId: 'dev-123');
       final persistError = StateError('keychain write failed');
 
       when(
@@ -45,7 +46,6 @@ void main() {
         () => client.persistedPairingState(),
       ).thenAnswer((_) async => persisted);
       when(() => secureStore.saveState(persisted)).thenThrow(persistError);
-      when(() => client.forgetPeer()).thenAnswer((_) async {});
       when(() => secureStore.clearAll()).thenAnswer((_) async {});
 
       final core = MinosCore.forTesting(
@@ -61,17 +61,13 @@ void main() {
       verify(() => client.pairWithQrJson(qrJson: qrJson)).called(1);
       verify(() => client.persistedPairingState()).called(1);
       verify(() => secureStore.saveState(persisted)).called(1);
-      verify(() => client.forgetPeer()).called(1);
       verify(() => secureStore.clearAll()).called(1);
     },
   );
 
   test('pairWithQrJson does not clear secure storage on success', () async {
     const qrJson = '{"v":2}';
-    const persisted = PersistedPairingState(
-      deviceId: 'dev-123',
-      deviceSecret: 'sec-456',
-    );
+    const persisted = PersistedPairingState(deviceId: 'dev-123');
 
     when(() => client.pairWithQrJson(qrJson: qrJson)).thenAnswer((_) async {});
     when(
@@ -84,7 +80,6 @@ void main() {
     await core.pairWithQrJson(qrJson);
 
     verify(() => secureStore.saveState(persisted)).called(1);
-    verifyNever(() => client.forgetPeer());
     verifyNever(() => secureStore.clearAll());
   });
 
@@ -112,7 +107,6 @@ void main() {
     test('returns the rehydrated client when resume succeeds', () async {
       const persisted = PersistedPairingState(
         deviceId: 'dev-123',
-        deviceSecret: 'sec-456',
         accessToken: 'access',
         accessExpiresAtMs: 1700000000000,
         refreshToken: 'refresh',
@@ -149,10 +143,8 @@ void main() {
       () async {
         // Phase 8.9: paired-but-logged-out cold launch must not poke the
         // WS — let the AuthController drive resume after the user logs in.
-        const persisted = PersistedPairingState(
-          deviceId: 'dev-paired',
-          deviceSecret: 'sec-paired',
-        );
+        // Post ADR-0020 a deviceId-only snapshot represents this state.
+        const persisted = PersistedPairingState(deviceId: 'dev-paired');
         final rehydrated = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
         when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
@@ -177,10 +169,13 @@ void main() {
     );
 
     test(
-      'rehydrates auth-only snapshot without trying to resume websocket',
+      'rehydrates auth-only snapshot and resumes the WS',
       () async {
+        // Post ADR-0020: deviceId + full auth tuple is the canonical
+        // logged-in shape. resolveClient drives both refreshSession and
+        // resumePersistedSession.
         const persisted = PersistedPairingState(
-          deviceId: 'dev-auth-only',
+          deviceId: 'dev-auth',
           accessToken: 'access',
           accessExpiresAtMs: 1700000000000,
           refreshToken: 'refresh',
@@ -194,6 +189,9 @@ void main() {
           () => rehydrated.persistedPairingState(),
         ).thenAnswer((_) async => persisted);
         when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
+        when(
+          () => rehydrated.resumePersistedSession(),
+        ).thenAnswer((_) async {});
 
         final result = await MinosCore.resolveClient(
           secure: secureStore,
@@ -206,8 +204,7 @@ void main() {
 
         expect(result, same(rehydrated));
         verify(() => rehydrated.refreshSession()).called(1);
-        verify(() => secureStore.saveState(persisted)).called(1);
-        verifyNever(() => rehydrated.resumePersistedSession());
+        verify(() => rehydrated.resumePersistedSession()).called(1);
         verifyNever(() => secureStore.clearAll());
       },
     );
@@ -249,7 +246,6 @@ void main() {
       () async {
         const persisted = PersistedPairingState(
           deviceId: 'dev-stale',
-          deviceSecret: 'sec-revoked',
           accessToken: 'access',
           accessExpiresAtMs: 1700000000000,
           refreshToken: 'refresh',
@@ -292,11 +288,10 @@ void main() {
     );
 
     test(
-      'keeps persisted pairing when resume fails due to transient connection loss',
+      'keeps persisted snapshot when resume fails due to transient connection loss',
       () async {
         const persisted = PersistedPairingState(
           deviceId: 'dev-123',
-          deviceSecret: 'sec-456',
           accessToken: 'access',
           accessExpiresAtMs: 1700000000000,
           refreshToken: 'refresh',
@@ -343,7 +338,6 @@ void main() {
 
     PersistedPairingState pairedFor(String? accountId) => PersistedPairingState(
       deviceId: 'dev-old',
-      deviceSecret: 'sec-old',
       accessToken: accountId == null ? null : 'access',
       accessExpiresAtMs: accountId == null ? null : 1700000000000,
       refreshToken: accountId == null ? null : 'refresh',
@@ -356,7 +350,6 @@ void main() {
       () async {
         const fresh = PersistedPairingState(
           deviceId: 'dev-old',
-          deviceSecret: 'sec-old',
           accessToken: 'access-new',
           accessExpiresAtMs: 1700000099000,
           refreshToken: 'refresh-new',
@@ -385,17 +378,20 @@ void main() {
 
         expect(result, newAccountSummary);
         verify(() => secureStore.saveState(fresh)).called(1);
-        verifyNever(() => client.forgetPeer());
+        verifyNever(() => secureStore.savePeerDisplayName(null));
         verifyNever(() => secureStore.clearAll());
       },
     );
 
     test(
-      'login as a different account drops the stale pairing then persists',
+      'login as a different account clears the cached peer display name',
       () async {
+        // ADR-0020: account_mac_pairings is account-scoped on the server,
+        // so we no longer call forget_peer locally during cross-account
+        // login. We just clear the cached display name so the partners
+        // list can re-sync from the server without flashing a stale label.
         const fresh = PersistedPairingState(
-          deviceId: null,
-          deviceSecret: null,
+          deviceId: 'dev-old',
           accessToken: 'access-new',
           accessExpiresAtMs: 1700000099000,
           refreshToken: 'refresh-new',
@@ -405,8 +401,9 @@ void main() {
         when(
           () => secureStore.loadState(),
         ).thenAnswer((_) async => pairedFor('acc-prior'));
-        when(() => client.forgetPeer()).thenAnswer((_) async {});
-        when(() => secureStore.clearAll()).thenAnswer((_) async {});
+        when(
+          () => secureStore.savePeerDisplayName(null),
+        ).thenAnswer((_) async {});
         when(
           () => client.login(email: 'new@example.com', password: 'pw'),
         ).thenAnswer((_) async => newAccountSummary);
@@ -421,50 +418,9 @@ void main() {
         );
         await core.login(email: 'new@example.com', password: 'pw');
 
-        verify(() => client.forgetPeer()).called(1);
-        verify(() => secureStore.clearAll()).called(1);
+        verify(() => secureStore.savePeerDisplayName(null)).called(1);
         verify(() => secureStore.saveState(fresh)).called(1);
-      },
-    );
-
-    test(
-      'login as a different account with auth-only state does not forget peer',
-      () async {
-        const fresh = PersistedPairingState(
-          deviceId: 'dev-auth-only',
-          accessToken: 'access-new',
-          accessExpiresAtMs: 1700000099000,
-          refreshToken: 'refresh-new',
-          accountId: 'acc-new',
-          accountEmail: 'new@example.com',
-        );
-        when(() => secureStore.loadState()).thenAnswer(
-          (_) async => const PersistedPairingState(
-            deviceId: 'dev-auth-only',
-            accessToken: 'access-old',
-            accessExpiresAtMs: 1700000000000,
-            refreshToken: 'refresh-old',
-            accountId: 'acc-prior',
-            accountEmail: 'old@example.com',
-          ),
-        );
-        when(
-          () => client.login(email: 'new@example.com', password: 'pw'),
-        ).thenAnswer((_) async => newAccountSummary);
-        when(
-          () => client.persistedPairingState(),
-        ).thenAnswer((_) async => fresh);
-        when(() => secureStore.saveState(fresh)).thenAnswer((_) async {});
-
-        final core = MinosCore.forTesting(
-          client: client,
-          secureStore: secureStore,
-        );
-        await core.login(email: 'new@example.com', password: 'pw');
-
-        verifyNever(() => client.forgetPeer());
         verifyNever(() => secureStore.clearAll());
-        verify(() => secureStore.saveState(fresh)).called(1);
       },
     );
 
@@ -472,8 +428,7 @@ void main() {
       'register on a fresh device (no prior accountId) skips the migration branch',
       () async {
         const fresh = PersistedPairingState(
-          deviceId: null,
-          deviceSecret: null,
+          deviceId: 'dev-fresh',
           accessToken: 'access-new',
           accessExpiresAtMs: 1700000099000,
           refreshToken: 'refresh-new',
@@ -496,21 +451,20 @@ void main() {
         );
         await core.register(email: 'new@example.com', password: 'pw');
 
-        verifyNever(() => client.forgetPeer());
+        verifyNever(() => secureStore.savePeerDisplayName(null));
         verifyNever(() => secureStore.clearAll());
         verify(() => secureStore.saveState(fresh)).called(1);
       },
     );
 
     test(
-      'login after a logged-out cold launch (paired but no accountId) keeps the pairing',
+      'login after a logged-out cold launch (deviceId-only) keeps the device id',
       () async {
-        // Post-logout state: pairing tuple intact, auth tuple missing →
-        // the device is bound to no account in particular, so any new
-        // account's login should reuse the device.
+        // Post-logout state: device id intact, auth tuple missing → the
+        // device is bound to no account in particular, so any new account's
+        // login should reuse the device.
         const fresh = PersistedPairingState(
           deviceId: 'dev-old',
-          deviceSecret: 'sec-old',
           accessToken: 'access-new',
           accessExpiresAtMs: 1700000099000,
           refreshToken: 'refresh-new',
@@ -534,7 +488,7 @@ void main() {
         );
         await core.login(email: 'new@example.com', password: 'pw');
 
-        verifyNever(() => client.forgetPeer());
+        verifyNever(() => secureStore.savePeerDisplayName(null));
         verifyNever(() => secureStore.clearAll());
         verify(() => secureStore.saveState(fresh)).called(1);
       },
@@ -542,21 +496,28 @@ void main() {
   });
 
   group('hasPersistedPairing', () {
-    test('returns true when secure storage has a resumable snapshot', () async {
-      when(() => secureStore.loadState()).thenAnswer(
-        (_) async => const PersistedPairingState(
-          deviceId: 'dev-123',
-          deviceSecret: 'sec-456',
-        ),
-      );
+    test(
+      'returns true when secure storage has a fully authenticated snapshot',
+      () async {
+        when(() => secureStore.loadState()).thenAnswer(
+          (_) async => const PersistedPairingState(
+            deviceId: 'dev-123',
+            accessToken: 'access',
+            accessExpiresAtMs: 1700000000000,
+            refreshToken: 'refresh',
+            accountId: 'acc',
+            accountEmail: 'u@example.com',
+          ),
+        );
 
-      final core = MinosCore.forTesting(
-        client: client,
-        secureStore: secureStore,
-      );
+        final core = MinosCore.forTesting(
+          client: client,
+          secureStore: secureStore,
+        );
 
-      expect(await core.hasPersistedPairing(), isTrue);
-    });
+        expect(await core.hasPersistedPairing(), isTrue);
+      },
+    );
 
     test('returns false when secure storage is empty', () async {
       when(() => secureStore.loadState()).thenAnswer((_) async => null);
@@ -569,24 +530,23 @@ void main() {
       expect(await core.hasPersistedPairing(), isFalse);
     });
 
-    test('returns false for an authenticated pre-pair snapshot', () async {
-      when(() => secureStore.loadState()).thenAnswer(
-        (_) async => const PersistedPairingState(
-          deviceId: 'dev-auth-only',
-          accessToken: 'access',
-          accessExpiresAtMs: 1700000000000,
-          refreshToken: 'refresh',
-          accountId: 'acc',
-          accountEmail: 'u@example.com',
-        ),
-      );
+    test(
+      'returns false for a deviceId-only (logged-out) snapshot',
+      () async {
+        // Post ADR-0020: hasPersistedPairing now means "logged in" — a
+        // deviceId-only snapshot represents the post-logout state and
+        // should send the user back to login, not the chat surface.
+        when(() => secureStore.loadState()).thenAnswer(
+          (_) async => const PersistedPairingState(deviceId: 'dev-paired'),
+        );
 
-      final core = MinosCore.forTesting(
-        client: client,
-        secureStore: secureStore,
-      );
+        final core = MinosCore.forTesting(
+          client: client,
+          secureStore: secureStore,
+        );
 
-      expect(await core.hasPersistedPairing(), isFalse);
-    });
+        expect(await core.hasPersistedPairing(), isFalse);
+      },
+    );
   });
 }
