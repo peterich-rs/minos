@@ -31,6 +31,7 @@ pub mod ingest;
 pub(crate) mod process;
 pub mod runtime;
 pub mod state;
+pub mod state_machine;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -41,3 +42,4 @@ pub use runtime::{
     AgentLaunchMode, AgentRuntime, AgentRuntimeConfig, RawIngest, StartAgentOutcome,
 };
 pub use state::AgentState;
+pub use state_machine::{CloseReason, PauseReason, ThreadState};
