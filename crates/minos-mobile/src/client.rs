@@ -441,7 +441,7 @@ impl MobileClient {
         // ADR-0020 — no DeviceSecret is minted to the iOS rail.
         self.store.save_device(&self.device_id).await?;
         self.store
-            .save_active_mac(&pair_resp.peer_device_id)
+            .save_active_host(&pair_resp.peer_device_id)
             .await?;
 
         // Step 2: open the WS bearer-authenticated. The reconnect loop
@@ -452,11 +452,11 @@ impl MobileClient {
         Ok(())
     }
 
-    /// Tear down a specific paired Mac. The path-bound `mac` is the Mac
+    /// Tear down a specific paired Mac. The path-bound `host` is the Mac
     /// to forget. Idempotent. Clears the active-mac slot only when it
-    /// matches the deleted Mac so a concurrent `set_active_mac` to a
+    /// matches the deleted Mac so a concurrent `set_active_host` to a
     /// different Mac is preserved.
-    pub async fn forget_mac(&self, mac: DeviceId) -> Result<(), MinosError> {
+    pub async fn forget_host(&self, host: DeviceId) -> Result<(), MinosError> {
         let backend_url = crate::build_config::BACKEND_URL;
         let cf = crate::build_config::cf_access();
         let access = self.access_token_or_unauthorized().await?;
@@ -464,10 +464,10 @@ impl MobileClient {
         // Best-effort delete on the backend. Failure here must not block
         // local cleanup — the user re-pairs to recover.
         if let Ok(http) = crate::http::MobileHttpClient::new(backend_url, self.device_id, cf) {
-            let _ = http.delete_pair(&access, mac).await;
+            let _ = http.delete_pair(&access, host).await;
         }
 
-        self.store.clear_active_if(&mac).await?;
+        self.store.clear_active_if(&host).await?;
 
         // If we forgot the *active* mac and the WS is currently up, the
         // backend will emit Unpaired and the recv loop will tear the WS
@@ -510,32 +510,32 @@ impl MobileClient {
     }
 
     /// List every Mac paired to the caller's account.
-    pub async fn list_paired_macs(&self) -> Result<Vec<HostSummary>, MinosError> {
+    pub async fn list_paired_hosts(&self) -> Result<Vec<HostSummary>, MinosError> {
         let access = self.access_token_or_unauthorized().await?;
         let http = self.http_client_no_secret()?;
-        let resp = http.list_paired_macs(&access).await?;
+        let resp = http.list_paired_hosts(&access).await?;
         Ok(resp.hosts)
     }
 
     /// Override the active forward target. Subsequent `Envelope::Forward`
     /// frames stamp this Mac's id. Persisted so cold-launch restores the
     /// same target.
-    pub async fn set_active_mac(&self, mac: DeviceId) -> Result<(), MinosError> {
-        self.store.save_active_mac(&mac).await
+    pub async fn set_active_host(&self, host: DeviceId) -> Result<(), MinosError> {
+        self.store.save_active_host(&host).await
     }
 
     /// Read the current active Mac id, or `None` if none has been paired
     /// yet (or every paired Mac has been forgotten).
-    pub async fn active_mac(&self) -> Result<Option<DeviceId>, MinosError> {
-        self.store.load_active_mac().await
+    pub async fn active_host(&self) -> Result<Option<DeviceId>, MinosError> {
+        self.store.load_active_host().await
     }
 
     /// Resolve the active Mac id for outbound forward-RPCs, or surface
     /// `NotConnected` (no specific "no active mac" variant — the caller
     /// experience is identical: the WS exists but has no routable target).
-    async fn require_active_mac(&self) -> Result<DeviceId, MinosError> {
+    async fn require_active_host(&self) -> Result<DeviceId, MinosError> {
         self.store
-            .load_active_mac()
+            .load_active_host()
             .await?
             .ok_or(MinosError::NotConnected)
     }
@@ -566,7 +566,7 @@ impl MobileClient {
             .await
             .clone()
             .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_mac().await?;
+        let target = self.require_active_host().await?;
         let resp: ListClisResponse = forward_rpc(
             &self.pending,
             &self.next_id,
@@ -604,7 +604,7 @@ impl MobileClient {
             .await
             .clone()
             .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_mac().await?;
+        let target = self.require_active_host().await?;
         let req = StartAgentRequest { agent, mode: None };
         let resp: StartAgentResponse = forward_rpc(
             &self.pending,
@@ -635,7 +635,7 @@ impl MobileClient {
             .await
             .clone()
             .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_mac().await?;
+        let target = self.require_active_host().await?;
         let thread_id = session_id.clone();
         let text_len = text.len();
         let req = SendUserMessageRequest { session_id, text };
@@ -666,7 +666,7 @@ impl MobileClient {
             .await
             .clone()
             .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_mac().await?;
+        let target = self.require_active_host().await?;
         let _: () = forward_rpc(
             &self.pending,
             &self.next_id,

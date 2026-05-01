@@ -240,25 +240,25 @@ impl MobileClient {
     /// `forget_peer` (single-peer) call.
     pub async fn forget_mac(&self, mac_device_id: String) -> Result<(), MinosError> {
         let mac = parse_device_id(&mac_device_id)?;
-        self.0.forget_mac(mac).await
+        self.0.forget_host(mac).await
     }
 
     /// List every Mac paired to the caller's account.
     pub async fn list_paired_macs(&self) -> Result<Vec<MacSummaryDto>, MinosError> {
-        let macs = self.0.list_paired_macs().await?;
+        let macs = self.0.list_paired_hosts().await?;
         Ok(macs.into_iter().map(MacSummaryDto::from).collect())
     }
 
     /// Override the active Mac the next forward-RPC routes to.
     pub async fn set_active_mac(&self, mac_device_id: String) -> Result<(), MinosError> {
         let mac = parse_device_id(&mac_device_id)?;
-        self.0.set_active_mac(mac).await
+        self.0.set_active_host(mac).await
     }
 
     /// Read the current active Mac id, or `None` if no pair has been
     /// completed yet.
     pub async fn active_mac(&self) -> Result<Option<String>, MinosError> {
-        Ok(self.0.active_mac().await?.map(|id| id.to_string()))
+        Ok(self.0.active_host().await?.map(|id| id.to_string()))
     }
 
     /// Request a page of thread summaries.

@@ -69,16 +69,16 @@ pub trait MobilePairingStore: Send + Sync {
 
     /// Persist the active-Mac DeviceId — the Mac that subsequent
     /// `Envelope::Forward` frames target. Set by `pair_with_qr_json` after
-    /// a successful consume; updated by `set_active_mac` when the user
+    /// a successful consume; updated by `set_active_host` when the user
     /// switches between paired Macs in `/v1/me/macs`.
-    async fn save_active_mac(&self, mac: &DeviceId) -> Result<(), MinosError>;
+    async fn save_active_host(&self, host: &DeviceId) -> Result<(), MinosError>;
     /// Read the currently-active Mac id, or `None` if no pair has been
     /// completed yet.
-    async fn load_active_mac(&self) -> Result<Option<DeviceId>, MinosError>;
+    async fn load_active_host(&self) -> Result<Option<DeviceId>, MinosError>;
     /// Conditionally clear the active-Mac slot — only if it currently
-    /// equals `mac`. Used by `forget_mac` to avoid clobbering a
-    /// concurrent `set_active_mac` that targeted a different Mac.
-    async fn clear_active_if(&self, mac: &DeviceId) -> Result<(), MinosError>;
+    /// equals `host`. Used by `forget_host` to avoid clobbering a
+    /// concurrent `set_active_host` that targeted a different Mac.
+    async fn clear_active_if(&self, host: &DeviceId) -> Result<(), MinosError>;
 
     /// Persist the slack.ai-style account-auth tuple. Implementations must
     /// store all five fields atomically; readers see either every field or
@@ -113,7 +113,7 @@ pub struct InMemoryPairingStore {
 #[derive(Default, Clone)]
 struct InMemoryState {
     device: Option<DeviceId>,
-    active_mac: Option<DeviceId>,
+    active_host: Option<DeviceId>,
     auth: Option<PersistedAuth>,
 }
 
@@ -128,7 +128,7 @@ impl InMemoryPairingStore {
         Self {
             inner: RwLock::new(InMemoryState {
                 device,
-                active_mac: None,
+                active_host: None,
                 auth,
             }),
         }
@@ -145,19 +145,19 @@ impl MobilePairingStore for InMemoryPairingStore {
         Ok(())
     }
 
-    async fn save_active_mac(&self, mac: &DeviceId) -> Result<(), MinosError> {
-        self.inner.write().await.active_mac = Some(*mac);
+    async fn save_active_host(&self, host: &DeviceId) -> Result<(), MinosError> {
+        self.inner.write().await.active_host = Some(*host);
         Ok(())
     }
 
-    async fn load_active_mac(&self) -> Result<Option<DeviceId>, MinosError> {
-        Ok(self.inner.read().await.active_mac)
+    async fn load_active_host(&self) -> Result<Option<DeviceId>, MinosError> {
+        Ok(self.inner.read().await.active_host)
     }
 
-    async fn clear_active_if(&self, mac: &DeviceId) -> Result<(), MinosError> {
+    async fn clear_active_if(&self, host: &DeviceId) -> Result<(), MinosError> {
         let mut guard = self.inner.write().await;
-        if guard.active_mac == Some(*mac) {
-            guard.active_mac = None;
+        if guard.active_host == Some(*host) {
+            guard.active_host = None;
         }
         Ok(())
     }
@@ -210,34 +210,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn active_mac_round_trip_and_conditional_clear() {
+    async fn active_host_round_trip_and_conditional_clear() {
         let store = InMemoryPairingStore::new();
-        assert!(store.load_active_mac().await.unwrap().is_none());
+        assert!(store.load_active_host().await.unwrap().is_none());
 
-        let mac_a = DeviceId::new();
-        let mac_b = DeviceId::new();
+        let host_a = DeviceId::new();
+        let host_b = DeviceId::new();
 
-        store.save_active_mac(&mac_a).await.unwrap();
-        assert_eq!(store.load_active_mac().await.unwrap(), Some(mac_a));
+        store.save_active_host(&host_a).await.unwrap();
+        assert_eq!(store.load_active_host().await.unwrap(), Some(host_a));
 
         // clear_active_if must NOT clear when the live value differs.
-        store.clear_active_if(&mac_b).await.unwrap();
+        store.clear_active_if(&host_b).await.unwrap();
         assert_eq!(
-            store.load_active_mac().await.unwrap(),
-            Some(mac_a),
+            store.load_active_host().await.unwrap(),
+            Some(host_a),
             "non-matching clear must be a no-op"
         );
 
         // clear_active_if matching value clears it.
-        store.clear_active_if(&mac_a).await.unwrap();
-        assert!(store.load_active_mac().await.unwrap().is_none());
+        store.clear_active_if(&host_a).await.unwrap();
+        assert!(store.load_active_host().await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn clear_all_wipes_every_field() {
         let store = InMemoryPairingStore::new();
         store.save_device(&DeviceId::new()).await.unwrap();
-        store.save_active_mac(&DeviceId::new()).await.unwrap();
+        store.save_active_host(&DeviceId::new()).await.unwrap();
         store
             .save_auth(
                 "access".into(),
@@ -251,7 +251,7 @@ mod tests {
 
         store.clear_all().await.unwrap();
         assert!(store.load_device().await.unwrap().is_none());
-        assert!(store.load_active_mac().await.unwrap().is_none());
+        assert!(store.load_active_host().await.unwrap().is_none());
         assert!(store.load_auth().await.unwrap().is_none());
     }
 

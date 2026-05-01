@@ -115,14 +115,14 @@ impl MobileHttpClient {
     }
 
     /// Tear down a specific account_mac_pairings row. The path-bound
-    /// `mac_device_id` is the Mac to forget; bearer-only auth post
+    /// `host_device_id` is the Mac to forget; bearer-only auth post
     /// ADR-0020.
     pub async fn delete_pair(
         &self,
         access_token: &str,
-        mac_device_id: DeviceId,
+        host_device_id: DeviceId,
     ) -> Result<(), MinosError> {
-        let path = format!("/v1/pairings/{mac_device_id}");
+        let path = format!("/v1/pairings/{host_device_id}");
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(Method::DELETE.as_str(), &path, None, None);
         let request = self.request_without_body(Method::DELETE, &url, Some(access_token))?;
@@ -144,7 +144,7 @@ impl MobileHttpClient {
     }
 
     /// List every Mac paired to the caller's account. Bearer-only.
-    pub async fn list_paired_macs(
+    pub async fn list_paired_hosts(
         &self,
         access_token: &str,
     ) -> Result<MeHostsResponse, MinosError> {
