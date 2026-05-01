@@ -26,6 +26,7 @@ minos-transport = { path = "../minos-transport", version = "0.1.0" }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 sqlx = { workspace = true }
+anyhow = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
@@ -51,9 +52,7 @@ minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", feat
 # test can spin up an in-process broker without leaking a production
 # dependency cycle (daemon is the backend's client, not vice versa).
 minos-backend = { path = "../minos-backend", version = "0.1.0" }
-anyhow = { workspace = true }
 axum = { workspace = true }
-sqlx = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 pretty_assertions = { workspace = true }
