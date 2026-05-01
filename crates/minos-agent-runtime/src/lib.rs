@@ -29,6 +29,7 @@ pub(crate) mod codex_client;
 pub(crate) mod exec_jsonl;
 pub mod ingest;
 pub mod instance;
+pub mod manager;
 pub mod manager_event;
 pub(crate) mod process;
 pub mod runtime;
@@ -41,6 +42,7 @@ pub mod test_support;
 
 pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
+pub use manager::{AgentManager, InstanceCaps};
 pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;
 pub use runtime::{
