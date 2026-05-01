@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use minos_agent_runtime::{
-    AgentLaunchMode, AgentManager, AgentRuntimeConfig, AgentState, InstanceCaps, RawIngest,
+    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest, ThreadState,
 };
 use minos_domain::MinosError;
 use minos_protocol::{
@@ -33,8 +33,8 @@ pub struct AgentGlue {
     /// Watch channel mirroring the most recently observed thread state. The
     /// legacy FFI surface exposes a single `state_stream()` shaped like the
     /// pre-Phase-C `AgentRuntime`. Multi-thread fan-out lands in C17.
-    state_tx: Arc<watch::Sender<AgentState>>,
-    state_rx: watch::Receiver<AgentState>,
+    state_tx: Arc<watch::Sender<ThreadState>>,
+    state_rx: watch::Receiver<ThreadState>,
     /// Default workspace dir used when `start_agent` is invoked under the
     /// legacy surface (no workspace param). Resolved once at construction
     /// time.
@@ -83,7 +83,7 @@ impl AgentGlue {
             }
         });
 
-        let (state_tx, state_rx) = watch::channel(AgentState::Idle);
+        let (state_tx, state_rx) = watch::channel(ThreadState::Idle);
         let state_tx = Arc::new(state_tx);
         Self {
             manager,
@@ -116,11 +116,11 @@ impl AgentGlue {
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
-        let _ = self.state_tx.send(AgentState::Running {
-            agent: req.agent,
-            thread_id: outcome.thread_id.clone(),
-            started_at: std::time::SystemTime::now(),
-        });
+        // Legacy single-state mirror: emit Idle (not Running) because the
+        // multi-thread manager keeps per-thread state internally; the
+        // single-channel mirror just signals "something is alive". The mobile
+        // / Swift surfaces will switch to per-thread state streams in C17/D.
+        let _ = self.state_tx.send(ThreadState::Idle);
         Ok(StartAgentResponse {
             session_id: outcome.thread_id,
             cwd,
@@ -149,7 +149,7 @@ impl AgentGlue {
             .close_thread(&req.thread_id)
             .await
             .map_err(map_anyhow)?;
-        let _ = self.state_tx.send(AgentState::Idle);
+        let _ = self.state_tx.send(ThreadState::Idle);
         Ok(())
     }
 
@@ -210,12 +210,12 @@ impl AgentGlue {
     }
 
     #[must_use]
-    pub fn current_state(&self) -> AgentState {
+    pub fn current_state(&self) -> ThreadState {
         self.state_rx.borrow().clone()
     }
 
     #[must_use]
-    pub fn state_stream(&self) -> watch::Receiver<AgentState> {
+    pub fn state_stream(&self) -> watch::Receiver<ThreadState> {
         self.state_rx.clone()
     }
 

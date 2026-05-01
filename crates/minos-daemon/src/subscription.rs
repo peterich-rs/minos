@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use minos_agent_runtime::AgentState;
+use minos_agent_runtime::ThreadState;
 use minos_domain::{ConnectionState, PeerState, RelayLinkState};
 use tokio::sync::{oneshot, watch};
 
@@ -47,7 +47,7 @@ pub trait ConnectionStateObserver: Send + Sync {
 
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait AgentStateObserver: Send + Sync {
-    fn on_state(&self, state: AgentState);
+    fn on_state(&self, state: ThreadState);
 }
 
 /// Relay-link push observer. Swift implements this protocol; Rust calls
@@ -100,7 +100,7 @@ pub(crate) fn spawn_observer(
 }
 
 pub(crate) fn spawn_agent_observer(
-    mut rx: watch::Receiver<AgentState>,
+    mut rx: watch::Receiver<ThreadState>,
     observer: Arc<dyn AgentStateObserver>,
 ) -> Arc<Subscription> {
     observer.on_state(rx.borrow().clone());
@@ -198,7 +198,7 @@ mod tests {
     }
 
     impl AgentStateObserver for CountingAgentObserver {
-        fn on_state(&self, _: AgentState) {
+        fn on_state(&self, _: ThreadState) {
             self.hits.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -246,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_observer_receives_initial_and_subsequent_states() {
-        let (tx, rx) = watch::channel(AgentState::Idle);
+        let (tx, rx) = watch::channel(ThreadState::Idle);
         let hits = Arc::new(AtomicU32::new(0));
         let obs = Arc::new(CountingAgentObserver { hits: hits.clone() });
 
@@ -254,10 +254,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(hits.load(Ordering::SeqCst) >= 1, "initial snapshot missed");
 
-        tx.send(AgentState::Starting {
-            agent: AgentName::Codex,
-        })
-        .unwrap();
+        tx.send(ThreadState::Starting).unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(hits.load(Ordering::SeqCst) >= 2, "change not delivered");
 
@@ -265,7 +262,7 @@ mod tests {
         let hits_before_cancel_send = hits.load(Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(20)).await;
 
-        let _ = tx.send(AgentState::Stopping);
+        let _ = tx.send(ThreadState::Idle);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(
             hits.load(Ordering::SeqCst),
@@ -276,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_cancel_is_idempotent() {
-        let (_tx, rx) = watch::channel(AgentState::Idle);
+        let (_tx, rx) = watch::channel(ThreadState::Idle);
         let hits = Arc::new(AtomicU32::new(0));
         let obs = Arc::new(CountingAgentObserver { hits });
         let sub = spawn_agent_observer(rx, obs);

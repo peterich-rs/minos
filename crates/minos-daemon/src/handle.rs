@@ -322,7 +322,7 @@ impl DaemonHandle {
     }
 
     #[must_use]
-    pub fn current_agent_state(&self) -> crate::AgentState {
+    pub fn current_agent_state(&self) -> crate::ThreadState {
         self.inner.agent.current_state()
     }
 }

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ThreadState {
@@ -11,6 +12,7 @@ pub enum ThreadState {
     Closed { reason: CloseReason },
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PauseReason {
@@ -20,6 +22,7 @@ pub enum PauseReason {
     InstanceReaped,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CloseReason {

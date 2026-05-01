@@ -21,7 +21,7 @@ pub use handle::*;
 #[cfg(target_os = "macos")]
 pub use keychain_store::KeychainTrustedDeviceStore;
 pub use local_state::LocalState;
-pub use minos_agent_runtime::AgentState;
+pub use minos_agent_runtime::ThreadState;
 pub use relay_client::RelayClient;
 pub use relay_pairing::{PeerRecord, RelayQrPayload};
 pub use subscription::{

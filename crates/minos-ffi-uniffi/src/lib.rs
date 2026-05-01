@@ -34,7 +34,6 @@ pub fn kind_message(kind: ErrorKind, lang: Lang) -> String {
     kind.user_message(lang).to_string()
 }
 
-pub use minos_agent_runtime::AgentState;
 pub use minos_daemon::{
     AgentStateObserver, DaemonHandle, PeerRecord, PeerStateObserver, RelayConfig,
     RelayLinkStateObserver, RelayQrPayload, Subscription,

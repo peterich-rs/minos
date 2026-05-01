@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
-use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, RawIngest};
+use minos_agent_runtime::{AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest};
 use minos_domain::AgentName;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
@@ -224,21 +224,21 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
     fs::create_dir_all(&workspace_root)
         .with_context(|| format!("mkdir {}", workspace_root.display()))?;
 
-    let mut cfg = AgentRuntimeConfig::new(workspace_root);
+    let mut cfg = AgentRuntimeConfig::new(workspace_root.clone());
     cfg.codex_bin = Some(codex_bin);
     cfg.handshake_call_timeout = Duration::from_secs(30);
-    let runtime = AgentRuntime::new(cfg);
+    let manager = std::sync::Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
 
-    let outcome = runtime
-        .start(AgentName::Codex)
+    let outcome = manager
+        .start_agent(AgentName::Codex, workspace_root)
         .await
         .context("codex smoke: start_agent failed")?;
-    let session_id = outcome.session_id;
-    let watcher = tokio::spawn(wait_for_codex_ok_token(runtime.ingest_stream()));
+    let thread_id = outcome.thread_id;
+    let watcher = tokio::spawn(wait_for_codex_ok_token(manager.ingest_stream()));
 
     let result = async {
-        runtime
-            .send_user_message(&session_id, "reply with the word ok")
+        manager
+            .send_user_message(&thread_id, "reply with the word ok".into())
             .await
             .context("codex smoke: send_user_message failed")?;
         watcher
@@ -248,10 +248,10 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
     }
     .await;
 
-    let stop_result = runtime
-        .stop()
+    let stop_result = manager
+        .close_thread(&thread_id)
         .await
-        .context("codex smoke: stop_agent failed");
+        .context("codex smoke: close_thread failed");
 
     match (result, stop_result) {
         (Ok(()), Ok(())) => Ok(()),

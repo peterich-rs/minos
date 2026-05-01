@@ -132,6 +132,7 @@ impl CodexProcess {
     /// SIGTERM → 3 s wait → SIGKILL escalation. Returns the child's
     /// [`ExitStatus`]. Safe to call multiple times — a second call with no
     /// child returns a synthetic success status.
+    #[allow(dead_code)]
     pub(crate) async fn stop_graceful(&mut self) -> Result<ExitStatus, MinosError> {
         let Some(mut child) = self.child.take() else {
             // Return a synthetic "already exited" status. We don't track the
@@ -194,6 +195,7 @@ impl Drop for CodexProcess {
 /// - Unix signal: `"signal <NAME>"` (canonical SIG* name when we recognise it,
 ///   or the numeric form otherwise).
 /// - Windows (non-Unix): `"exit code N"` using the raw status.
+#[allow(dead_code)]
 pub(crate) fn reason_from_exit(status: ExitStatus) -> String {
     #[cfg(unix)]
     {
@@ -216,6 +218,7 @@ pub(crate) fn reason_from_exit(status: ExitStatus) -> String {
 }
 
 #[cfg(unix)]
+#[allow(dead_code)]
 fn signal_name(sig: i32) -> String {
     // Canonical names for the signals codex is likely to die of. Anything
     // else falls through to the numeric form; that's enough for
