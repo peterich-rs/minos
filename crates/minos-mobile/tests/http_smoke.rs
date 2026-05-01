@@ -7,7 +7,7 @@
 #![allow(clippy::duration_suboptimal_units)]
 
 use minos_backend::http::{router, test_support::backend_state};
-use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError};
+use minos_domain::{DeviceId, DeviceRole, MinosError};
 use minos_mobile::http::MobileHttpClient;
 use minos_protocol::PairConsumeRequest;
 
@@ -45,10 +45,10 @@ async fn pair_consume_round_trips_against_real_backend() {
     let consumer_id = DeviceId::new();
     let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), consumer_id, None).unwrap();
 
-    // Phase 2 made `/v1/pairing/consume` bearer-gated. Register an account
-    // bound to this device id so we can stamp the Bearer.
+    // ADR-0020: bearer-only iOS rail. Register an account bound to this
+    // device id so we can stamp the Bearer.
     let auth = client
-        .register("pairsmoke@example.com", "testpass1", None)
+        .register("pairsmoke@example.com", "testpass1")
         .await
         .unwrap();
 
@@ -65,7 +65,6 @@ async fn pair_consume_round_trips_against_real_backend() {
 
     assert_eq!(resp.peer_device_id, mac_id);
     assert_eq!(resp.peer_name, "Mac");
-    assert_eq!(resp.your_device_secret.as_str().len(), 43);
     let _ = mac_outbox.recv().await.unwrap(); // Event::Paired delivered
 }
 
@@ -88,7 +87,7 @@ async fn auth_register_round_trips_against_real_backend() {
     let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None).unwrap();
 
     let resp = client
-        .register("smoke@example.com", "testpass1", None)
+        .register("smoke@example.com", "testpass1")
         .await
         .expect("register should succeed");
     assert_eq!(resp.account.email, "smoke@example.com");
@@ -104,11 +103,11 @@ async fn auth_register_then_login_then_refresh_roundtrip() {
     let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None).unwrap();
 
     let registered = client
-        .register("flow@example.com", "testpass1", None)
+        .register("flow@example.com", "testpass1")
         .await
         .unwrap();
     let logged_in = client
-        .login("flow@example.com", "testpass1", None)
+        .login("flow@example.com", "testpass1")
         .await
         .unwrap();
     assert_ne!(
@@ -117,7 +116,7 @@ async fn auth_register_then_login_then_refresh_roundtrip() {
     );
 
     let refreshed = client
-        .refresh(&logged_in.refresh_token, None)
+        .refresh(&logged_in.refresh_token)
         .await
         .expect("refresh should succeed against the live backend");
     assert!(!refreshed.access_token.is_empty());
@@ -132,7 +131,7 @@ async fn auth_register_with_weak_password_maps_to_weak_password_variant() {
     let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None).unwrap();
 
     let err = client
-        .register("weak@example.com", "short", None)
+        .register("weak@example.com", "short")
         .await
         .expect_err("8-char minimum should reject `short`");
     assert!(
@@ -147,11 +146,11 @@ async fn auth_login_with_wrong_password_maps_to_invalid_credentials() {
     let device_id = DeviceId::new();
     let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None).unwrap();
     let _ = client
-        .register("wrong@example.com", "testpass1", None)
+        .register("wrong@example.com", "testpass1")
         .await
         .unwrap();
     let err = client
-        .login("wrong@example.com", "incorrect", None)
+        .login("wrong@example.com", "incorrect")
         .await
         .expect_err("wrong password must be rejected");
     assert!(
@@ -166,11 +165,11 @@ async fn auth_register_duplicate_email_maps_to_email_taken() {
     let device_id = DeviceId::new();
     let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None).unwrap();
     let _ = client
-        .register("dup@example.com", "testpass1", None)
+        .register("dup@example.com", "testpass1")
         .await
         .unwrap();
     let err = client
-        .register("dup@example.com", "testpass2", None)
+        .register("dup@example.com", "testpass2")
         .await
         .expect_err("duplicate email must be rejected");
     assert!(
@@ -179,99 +178,24 @@ async fn auth_register_duplicate_email_maps_to_email_taken() {
     );
 }
 
-/// Regression: once the device row has `secret_hash != NULL`, every
-/// `/v1/auth/*` call MUST include `X-Device-Secret` or backend
-/// `authenticate()` returns 401 `unauthorized`. The mobile client is
-/// expected to stamp the persisted `DeviceSecret` onto register/login/
-/// refresh/logout once it has one — otherwise a logged-out paired user
-/// hits "操作未授权，请确认登录状态" on the next login.
-#[tokio::test(flavor = "multi_thread")]
-async fn auth_login_after_pairing_requires_device_secret() {
-    let state = backend_state().await;
-    let mac_id = DeviceId::new();
-    minos_backend::store::devices::insert_device(
-        &state.store,
-        mac_id,
-        "Mac",
-        DeviceRole::AgentHost,
-        0,
-    )
-    .await
-    .unwrap();
-    let svc = minos_backend::pairing::PairingService::new(state.store.clone());
-    let (token, _) = svc
-        .request_token(mac_id, std::time::Duration::from_secs(300))
-        .await
-        .unwrap();
-    let (handle, _mac_outbox) =
-        minos_backend::session::SessionHandle::new(mac_id, DeviceRole::AgentHost);
-    state.registry.insert(handle);
-
-    let app = router(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-
-    let device_id = DeviceId::new();
-    let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None).unwrap();
-
-    // Register on first-connect, then pair to write `secret_hash` on the
-    // backend's device row.
-    let auth = client
-        .register("paired-relogin@example.com", "testpass1", None)
-        .await
-        .expect("first-connect register succeeds without device-secret");
-    let pair_resp = client
-        .pair_consume(
-            PairConsumeRequest {
-                token,
-                device_name: "iPhone".into(),
-            },
-            &auth.access_token,
-        )
-        .await
-        .expect("pair_consume returns the freshly-issued device secret");
-    let secret: DeviceSecret = pair_resp.your_device_secret;
-
-    // Without the device-secret, login must 401 — proves the bug exists
-    // before the fix.
-    let err = client
-        .login("paired-relogin@example.com", "testpass1", None)
-        .await
-        .expect_err("paired login without x-device-secret must be rejected");
-    assert!(
-        matches!(err, MinosError::Unauthorized { .. }),
-        "unexpected error: {err:?}"
-    );
-
-    // With the device-secret stamped, login succeeds again.
-    let ok = client
-        .login("paired-relogin@example.com", "testpass1", Some(&secret))
-        .await
-        .expect("paired login with x-device-secret succeeds");
-    assert!(!ok.access_token.is_empty());
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn auth_logout_revokes_the_named_refresh_token() {
     let addr = spawn_backend().await;
     let device_id = DeviceId::new();
     let client = MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None).unwrap();
     let resp = client
-        .register("logout@example.com", "testpass1", None)
+        .register("logout@example.com", "testpass1")
         .await
         .unwrap();
 
     client
-        .logout(&resp.access_token, &resp.refresh_token, None)
+        .logout(&resp.access_token, &resp.refresh_token)
         .await
         .expect("logout should return 204");
 
     // After logout, the same refresh token must no longer be accepted.
     let err = client
-        .refresh(&resp.refresh_token, None)
+        .refresh(&resp.refresh_token)
         .await
         .expect_err("revoked refresh token must be rejected");
     assert!(

@@ -139,14 +139,13 @@ async fn authenticated_client(backend: &RealBackend, email: &str) -> MobileClien
     )
     .unwrap();
     let resp = http
-        .register(email, "testpass1", None)
+        .register(email, "testpass1")
         .await
         .expect("register against test backend");
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let persisted = PersistedPairingState {
         device_id: Some(device_id.to_string()),
-        device_secret: None,
         access_token: Some(resp.access_token),
         access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
         refresh_token: Some(resp.refresh_token),
@@ -232,17 +231,12 @@ async fn list_threads_round_trips_over_envelope() {
     let backend_url = format!("ws://{}/devices", backend.addr);
     client.pair_with_qr_json_at(qr, &backend_url).await.unwrap();
 
-    // After Phase B+C, MobileClient::list_threads goes through `http_creds`
-    // which now hardcodes `build_config::BACKEND_URL`. The test backend
-    // listens on a per-test ephemeral port, so we drive the round-trip
-    // through `MobileHttpClient` directly using the same secret/access
-    // tuple the rehydrated client persisted post-pair.
+    // After ADR-0020, MobileClient::list_threads is bearer-only. The
+    // mobile client itself uses build_config::BACKEND_URL; tests drive
+    // the round-trip through MobileHttpClient directly with the same
+    // bearer the rehydrated client persisted post-pair.
     let persisted = client.persisted_pairing_state().await.unwrap();
     let device_id = client.device_id();
-    let device_secret = persisted
-        .device_secret
-        .clone()
-        .expect("pair persisted a device secret");
     let access = persisted
         .access_token
         .clone()
@@ -251,7 +245,6 @@ async fn list_threads_round_trips_over_envelope() {
     let http = minos_mobile::http::MobileHttpClient::new(&backend_url, device_id, None).unwrap();
     let resp = http
         .list_threads(
-            &minos_domain::DeviceSecret(device_secret),
             &access,
             ListThreadsParams {
                 limit: 50,
@@ -277,12 +270,8 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
     let persisted = client.persisted_pairing_state().await.unwrap();
     // Backend URL and CF Access fields no longer round-trip through
     // PersistedPairingState — they live in compile-time build_config.
+    // ADR-0020 also dropped the device_secret from the snapshot.
     assert!(persisted.device_id.is_some());
-    let secret = persisted
-        .device_secret
-        .clone()
-        .expect("pair must persist a device secret");
-    assert_eq!(secret.len(), 43, "DeviceSecret base64url is 43 chars");
 
     // The auth tuple is populated since the test pre-registered an account.
     let access_token = persisted.access_token.clone().expect("auth set by helper");
@@ -290,28 +279,19 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
 
     let rehydrated = MobileClient::new_with_persisted_state("iPhone".into(), persisted.clone());
     let restored = rehydrated.persisted_pairing_state().await.unwrap();
-    let expected = PersistedPairingState {
-        device_id: persisted.device_id.clone(),
-        device_secret: Some(secret),
-        access_token: persisted.access_token.clone(),
-        access_expires_at_ms: persisted.access_expires_at_ms,
-        refresh_token: persisted.refresh_token.clone(),
-        account_id: persisted.account_id.clone(),
-        account_email: persisted.account_email.clone(),
-    };
-    assert_eq!(restored, expected);
+    assert_eq!(restored, persisted);
 }
 
 // ── resume_persisted_session: WS-only fake backend ──────────────────────
 
-/// Accept the resume WS handshake, assert expected `X-Device-*` and
-/// CF-Access headers were forwarded, then keep the socket open until the
-/// client closes. After Phase C the `list_threads` query rides HTTP, so
-/// the fake doesn't need to handle any envelope frames here.
+/// Accept the resume WS handshake, assert expected `X-Device-*`, the
+/// Bearer token, and CF-Access headers were forwarded, then keep the
+/// socket open until the client closes. ADR-0020 made the iOS rail
+/// bearer-only — no `X-Device-Secret` header is asserted any more.
 async fn fake_backend_resume_handshake(
     listener: TcpListener,
     expected_device_id: String,
-    expected_device_secret: String,
+    expected_bearer: String,
     expected_cf_access: Option<(String, String)>,
 ) {
     let (stream, _) = listener.accept().await.expect("accept");
@@ -326,11 +306,15 @@ async fn fake_backend_resume_handshake(
                     .and_then(|value| value.to_str().ok()),
                 Some(expected_device_id.as_str())
             );
+            assert!(
+                headers.get("X-Device-Secret").is_none(),
+                "ADR-0020: iOS rail must not stamp X-Device-Secret"
+            );
             assert_eq!(
                 headers
-                    .get("X-Device-Secret")
+                    .get("Authorization")
                     .and_then(|value| value.to_str().ok()),
-                Some(expected_device_secret.as_str())
+                Some(format!("Bearer {expected_bearer}").as_str())
             );
             if let Some((id, secret)) = &expected_cf_access {
                 assert_eq!(
@@ -395,16 +379,16 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
     let device_id = DeviceId::new();
     let backend = tokio::spawn(fake_backend_resume_rejects_with_4401(listener));
 
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let client = MobileClient::new_with_persisted_state(
         "iPhone".into(),
         PersistedPairingState {
             device_id: Some(device_id.to_string()),
-            device_secret: Some("sec_revoked".into()),
-            access_token: None,
-            access_expires_at_ms: None,
-            refresh_token: None,
-            account_id: None,
-            account_email: None,
+            access_token: Some("rev_bearer".into()),
+            access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
+            refresh_token: Some("rev_refresh".into()),
+            account_id: Some("acct-rev".into()),
+            account_email: Some("rev@example.com".into()),
         },
     );
 
@@ -439,20 +423,20 @@ async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
     let backend = tokio::spawn(fake_backend_resume_handshake(
         listener,
         device_id.to_string(),
-        "sec_resume".into(),
+        "bearer_resume".into(),
         Some(("cf-id".into(), "cf-secret".into())),
     ));
 
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let client = MobileClient::new_with_persisted_state(
         "iPhone".into(),
         PersistedPairingState {
             device_id: Some(device_id.to_string()),
-            device_secret: Some("sec_resume".into()),
-            access_token: None,
-            access_expires_at_ms: None,
-            refresh_token: None,
-            account_id: None,
-            account_email: None,
+            access_token: Some("bearer_resume".into()),
+            access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
+            refresh_token: Some("refresh_resume".into()),
+            account_id: Some("acct-resume".into()),
+            account_email: Some("resume@example.com".into()),
         },
     );
 

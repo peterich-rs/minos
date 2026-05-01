@@ -280,7 +280,6 @@ async fn run_pair_then_tail(
         "← peer_device_id={} peer_name={}",
         pair_resp.peer_device_id, pair_resp.peer_name
     );
-    let secret = pair_resp.your_device_secret;
 
     let mut request = backend
         .to_string()
@@ -299,13 +298,6 @@ async fn run_pair_then_tail(
             .to_string()
             .parse()
             .context("encode device-role header")?,
-    );
-    request.headers_mut().insert(
-        HeaderName::from_static("x-device-secret"),
-        secret
-            .as_str()
-            .parse()
-            .context("encode device-secret header")?,
     );
     request.headers_mut().insert(
         HeaderName::from_static("x-device-name"),
@@ -365,7 +357,6 @@ async fn run_smoke_session(
     let now_ms = chrono::Utc::now().timestamp_millis();
     let persisted = PersistedPairingState {
         device_id: None,
-        device_secret: None,
         access_token: Some(auth.access_token),
         access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
         refresh_token: Some(auth.refresh_token),

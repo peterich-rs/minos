@@ -123,14 +123,13 @@ async fn registered_client(addr: std::net::SocketAddr, email: &str) -> MobileCli
         minos_mobile::http::MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, None)
             .unwrap();
     let resp = http
-        .register(email, "testpass1", None)
+        .register(email, "testpass1")
         .await
         .expect("register");
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let persisted = PersistedPairingState {
         device_id: Some(device_id.to_string()),
-        device_secret: None,
         access_token: Some(resp.access_token),
         access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
         refresh_token: Some(resp.refresh_token),
