@@ -38,8 +38,8 @@ pub use minos_domain::{
     PairingState,
 };
 pub use minos_protocol::{
-    AuthSummary, ListThreadsParams, ListThreadsResponse, ReadThreadParams, ReadThreadResponse,
-    StartAgentResponse, ThreadSummary,
+    AuthSummary, ListThreadsParams, ListThreadsResponse, MacSummary, ReadThreadParams,
+    ReadThreadResponse, StartAgentResponse, ThreadSummary,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
@@ -99,12 +99,14 @@ pub struct UiEventFrame {
 /// session on cold launch. All five auth fields are persisted as a tuple —
 /// either every one is present or all are `None`.
 ///
+/// ADR-0020 dropped the device_secret from this snapshot — the iOS rail
+/// is bearer-only.
+///
 /// Backend URL and CF Access service-token headers were dropped from the
 /// snapshot when pairing transitioned to compile-time `build_config` — the
 /// transport-edge values never round-trip through durable storage now.
 pub struct PersistedPairingState {
     pub device_id: Option<String>,
-    pub device_secret: Option<String>,
     pub access_token: Option<String>,
     pub access_expires_at_ms: Option<i64>,
     pub refresh_token: Option<String>,
@@ -116,7 +118,6 @@ impl From<minos_mobile::PersistedPairingState> for PersistedPairingState {
     fn from(state: minos_mobile::PersistedPairingState) -> Self {
         Self {
             device_id: state.device_id,
-            device_secret: state.device_secret,
             access_token: state.access_token,
             access_expires_at_ms: state.access_expires_at_ms,
             refresh_token: state.refresh_token,
@@ -130,12 +131,31 @@ impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
     fn from(state: PersistedPairingState) -> Self {
         Self {
             device_id: state.device_id,
-            device_secret: state.device_secret,
             access_token: state.access_token,
             access_expires_at_ms: state.access_expires_at_ms,
             refresh_token: state.refresh_token,
             account_id: state.account_id,
             account_email: state.account_email,
+        }
+    }
+}
+
+/// Dart-visible mirror of `minos_protocol::MacSummary`. One row in
+/// `/v1/me/macs`.
+pub struct MacSummaryDto {
+    pub mac_device_id: String,
+    pub mac_display_name: String,
+    pub paired_at_ms: i64,
+    pub paired_via_device_id: String,
+}
+
+impl From<MacSummary> for MacSummaryDto {
+    fn from(s: MacSummary) -> Self {
+        Self {
+            mac_device_id: s.mac_device_id.to_string(),
+            mac_display_name: s.mac_display_name,
+            paired_at_ms: s.paired_at_ms,
+            paired_via_device_id: s.paired_via_device_id.to_string(),
         }
     }
 }
@@ -215,10 +235,30 @@ impl MobileClient {
         self.0.resume_persisted_session().await
     }
 
-    /// Forget the paired backend; clears secure storage and tears down the
-    /// WS. Idempotent.
-    pub async fn forget_peer(&self) -> Result<(), MinosError> {
-        self.0.forget_peer().await
+    /// Forget a specific paired Mac. The path-bound `mac_device_id` is
+    /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
+    /// `forget_peer` (single-peer) call.
+    pub async fn forget_mac(&self, mac_device_id: String) -> Result<(), MinosError> {
+        let mac = parse_device_id(&mac_device_id)?;
+        self.0.forget_mac(mac).await
+    }
+
+    /// List every Mac paired to the caller's account.
+    pub async fn list_paired_macs(&self) -> Result<Vec<MacSummaryDto>, MinosError> {
+        let macs = self.0.list_paired_macs().await?;
+        Ok(macs.into_iter().map(MacSummaryDto::from).collect())
+    }
+
+    /// Override the active Mac the next forward-RPC routes to.
+    pub async fn set_active_mac(&self, mac_device_id: String) -> Result<(), MinosError> {
+        let mac = parse_device_id(&mac_device_id)?;
+        self.0.set_active_mac(mac).await
+    }
+
+    /// Read the current active Mac id, or `None` if no pair has been
+    /// completed yet.
+    pub async fn active_mac(&self) -> Result<Option<String>, MinosError> {
+        Ok(self.0.active_mac().await?.map(|id| id.to_string()))
     }
 
     /// Request a page of thread summaries.
@@ -388,6 +428,20 @@ impl MobileClient {
             }
         });
     }
+}
+
+/// Parse a UUID-shaped device id string emitted from Dart back into a
+/// `minos_domain::DeviceId`. Surfaces `MinosError::StoreCorrupt` on
+/// malformed input — the Dart side is expected to round-trip the same
+/// strings it received from `MacSummaryDto.mac_device_id`, so this is a
+/// best-effort guard rather than a user-facing error path.
+fn parse_device_id(s: &str) -> Result<minos_domain::DeviceId, MinosError> {
+    uuid::Uuid::parse_str(s)
+        .map(minos_domain::DeviceId)
+        .map_err(|e| MinosError::StoreCorrupt {
+            path: "device_id".into(),
+            message: format!("invalid uuid '{s}': {e}"),
+        })
 }
 
 // ────────────────────────────── free functions ──────────────────────────────

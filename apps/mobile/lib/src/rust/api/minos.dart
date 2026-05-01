@@ -8,8 +8,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `frb_runtime`, `spawn_state_forwarder`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `frb_runtime`, `parse_device_id`, `spawn_state_forwarder`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -46,16 +46,24 @@ Stream<RequestTraceRecord> subscribeRequestTraces() =>
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>>
 abstract class MobileClient implements RustOpaqueInterface {
+  /// Read the current active Mac id, or `None` if no pair has been
+  /// completed yet.
+  Future<String?> activeMac();
+
   /// Current connection state, read from the watch-channel cache. Cheap and
   /// synchronous.
   ConnectionState currentState();
 
-  /// Forget the paired backend; clears secure storage and tears down the
-  /// WS. Idempotent.
-  Future<void> forgetPeer();
+  /// Forget a specific paired Mac. The path-bound `mac_device_id` is
+  /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
+  /// `forget_peer` (single-peer) call.
+  Future<void> forgetMac({required String macDeviceId});
 
   /// Detect the CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
+
+  /// List every Mac paired to the caller's account.
+  Future<List<MacSummaryDto>> listPairedMacs();
 
   /// Request a page of thread summaries.
   Future<ListThreadsResponse> listThreads({required ListThreadsParams req});
@@ -124,6 +132,9 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String sessionId,
     required String text,
   });
+
+  /// Override the active Mac the next forward-RPC routes to.
+  Future<void> setActiveMac({required String macDeviceId});
 
   /// Start a new agent session and return the daemon-issued `session_id`
   /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
@@ -349,6 +360,39 @@ class LogRecord {
           tsMs == other.tsMs;
 }
 
+/// Dart-visible mirror of `minos_protocol::MacSummary`. One row in
+/// `/v1/me/macs`.
+class MacSummaryDto {
+  final String macDeviceId;
+  final String macDisplayName;
+  final PlatformInt64 pairedAtMs;
+  final String pairedViaDeviceId;
+
+  const MacSummaryDto({
+    required this.macDeviceId,
+    required this.macDisplayName,
+    required this.pairedAtMs,
+    required this.pairedViaDeviceId,
+  });
+
+  @override
+  int get hashCode =>
+      macDeviceId.hashCode ^
+      macDisplayName.hashCode ^
+      pairedAtMs.hashCode ^
+      pairedViaDeviceId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MacSummaryDto &&
+          runtimeType == other.runtimeType &&
+          macDeviceId == other.macDeviceId &&
+          macDisplayName == other.macDisplayName &&
+          pairedAtMs == other.pairedAtMs &&
+          pairedViaDeviceId == other.pairedViaDeviceId;
+}
+
 enum MessageRole { user, assistant, system }
 
 @freezed
@@ -465,12 +509,14 @@ enum PairingState { unpaired, awaitingPeer, paired }
 /// session on cold launch. All five auth fields are persisted as a tuple —
 /// either every one is present or all are `None`.
 ///
+/// ADR-0020 dropped the device_secret from this snapshot — the iOS rail
+/// is bearer-only.
+///
 /// Backend URL and CF Access service-token headers were dropped from the
 /// snapshot when pairing transitioned to compile-time `build_config` — the
 /// transport-edge values never round-trip through durable storage now.
 class PersistedPairingState {
   final String? deviceId;
-  final String? deviceSecret;
   final String? accessToken;
   final PlatformInt64? accessExpiresAtMs;
   final String? refreshToken;
@@ -479,7 +525,6 @@ class PersistedPairingState {
 
   const PersistedPairingState({
     this.deviceId,
-    this.deviceSecret,
     this.accessToken,
     this.accessExpiresAtMs,
     this.refreshToken,
@@ -490,7 +535,6 @@ class PersistedPairingState {
   @override
   int get hashCode =>
       deviceId.hashCode ^
-      deviceSecret.hashCode ^
       accessToken.hashCode ^
       accessExpiresAtMs.hashCode ^
       refreshToken.hashCode ^
@@ -503,7 +547,6 @@ class PersistedPairingState {
       other is PersistedPairingState &&
           runtimeType == other.runtimeType &&
           deviceId == other.deviceId &&
-          deviceSecret == other.deviceSecret &&
           accessToken == other.accessToken &&
           accessExpiresAtMs == other.accessExpiresAtMs &&
           refreshToken == other.refreshToken &&

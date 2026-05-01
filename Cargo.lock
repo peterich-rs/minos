@@ -2341,6 +2341,7 @@ dependencies = [
  "minos-ui-protocol",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
