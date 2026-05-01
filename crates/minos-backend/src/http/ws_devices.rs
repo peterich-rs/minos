@@ -220,7 +220,7 @@ async fn revalidate_live_session_auth(
         )));
     }
 
-    match auth::classify(Some(row), provided_secret)? {
+    match auth::classify(Some(row), provided_secret, expected_role)? {
         Classification::FirstConnect => Err(ActivationAuthError::Unauthorized(
             "device row missing during websocket activation".to_string(),
         )),
@@ -410,7 +410,7 @@ mod tests {
         let existing = store::devices::get_device(&pool, id).await.unwrap();
         let role =
             auth::resolve_device_role(existing.as_ref(), Some(DeviceRole::AgentHost)).unwrap();
-        let classification = auth::classify(existing, Some(secret.as_str())).unwrap();
+        let classification = auth::classify(existing, Some(secret.as_str()), role).unwrap();
         assert!(matches!(classification, Classification::Authenticated));
 
         store::devices::upsert_secret_hash(&pool, id, &replacement_hash)

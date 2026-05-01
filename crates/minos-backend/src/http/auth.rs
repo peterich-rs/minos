@@ -75,7 +75,7 @@ pub async fn authenticate(
         .map_err(|e| AuthError::Internal(e.to_string()))?;
     let role = resolve_device_role(existing.as_ref(), requested_role)?;
 
-    let classification = classify(existing, device_secret.as_deref())?;
+    let classification = classify(existing, device_secret.as_deref(), role)?;
     let authenticated_with_secret = matches!(classification, Classification::Authenticated);
 
     if matches!(classification, Classification::FirstConnect) {
@@ -124,11 +124,19 @@ pub enum Classification {
 pub fn classify(
     row: Option<DeviceRow>,
     provided_secret: Option<&str>,
+    role: DeviceRole,
 ) -> Result<Classification, AuthError> {
+    let _ = role; // documents that this fn is now aware of role; iOS rail
+                  // (secret_hash NULL) collapses to UnpairedExisting per ADR-0020.
     match row {
         None => Ok(Classification::FirstConnect),
         Some(r) => match r.secret_hash {
-            None => Ok(Classification::UnpairedExisting),
+            None => {
+                // iOS rail: bearer-only after ADR-0020. A NULL secret_hash
+                // is the steady state for iOS rows. Mac rows would only
+                // be NULL pre-pair (FirstConnect-like).
+                Ok(Classification::UnpairedExisting)
+            }
             Some(hash) => {
                 let Some(secret) = provided_secret else {
                     return Err(AuthError::Unauthorized(
@@ -312,7 +320,7 @@ mod tests {
 
     #[test]
     fn classify_no_row_is_first_connect() {
-        let out = classify(None, None).unwrap();
+        let out = classify(None, None, DeviceRole::IosClient).unwrap();
         assert!(matches!(out, Classification::FirstConnect));
     }
 
@@ -327,7 +335,7 @@ mod tests {
             last_seen_at: 0,
             account_id: None,
         };
-        let out = classify(Some(row), None).unwrap();
+        let out = classify(Some(row), None, DeviceRole::IosClient).unwrap();
         assert!(matches!(out, Classification::UnpairedExisting));
     }
 
@@ -342,7 +350,7 @@ mod tests {
             last_seen_at: 0,
             account_id: None,
         };
-        let err = classify(Some(row), None).unwrap_err();
+        let err = classify(Some(row), None, DeviceRole::IosClient).unwrap_err();
         assert!(
             matches!(err, AuthError::Unauthorized(ref m) if m.contains("X-Device-Secret required"))
         );
@@ -362,7 +370,7 @@ mod tests {
             last_seen_at: 0,
             account_id: None,
         };
-        let out = classify(Some(row), Some(plain.as_str())).unwrap();
+        let out = classify(Some(row), Some(plain.as_str()), DeviceRole::IosClient).unwrap();
         assert!(matches!(out, Classification::Authenticated));
     }
 
@@ -379,7 +387,7 @@ mod tests {
             last_seen_at: 0,
             account_id: None,
         };
-        let err = classify(Some(row), Some("wrong-secret")).unwrap_err();
+        let err = classify(Some(row), Some("wrong-secret"), DeviceRole::IosClient).unwrap_err();
         assert!(matches!(err, AuthError::Unauthorized(ref m) if m.contains("does not match")));
     }
 
@@ -396,7 +404,37 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let out = classify(Some(row), None).unwrap();
+        let out = classify(Some(row), None, DeviceRole::AgentHost).unwrap();
         assert!(matches!(out, Classification::UnpairedExisting));
+    }
+
+    #[test]
+    fn classify_ios_with_null_secret_hash_passes_without_secret() {
+        let row = DeviceRow {
+            device_id: DeviceId::new(),
+            display_name: "x".to_string(),
+            role: DeviceRole::IosClient,
+            secret_hash: None,
+            created_at: 0,
+            last_seen_at: 0,
+            account_id: None,
+        };
+        let res = classify(Some(row), None, DeviceRole::IosClient).unwrap();
+        assert!(matches!(res, Classification::UnpairedExisting));
+    }
+
+    #[test]
+    fn classify_mac_with_secret_hash_but_no_secret_provided_returns_401() {
+        let row = DeviceRow {
+            device_id: DeviceId::new(),
+            display_name: "mac".to_string(),
+            role: DeviceRole::AgentHost,
+            secret_hash: Some("$argon2id$v=19$m=19456,t=2,p=1$abc$def".to_string()),
+            created_at: 0,
+            last_seen_at: 0,
+            account_id: None,
+        };
+        let err = classify(Some(row), None, DeviceRole::AgentHost).unwrap_err();
+        assert!(matches!(err, AuthError::Unauthorized(_)));
     }
 }
