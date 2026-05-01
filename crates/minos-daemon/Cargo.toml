@@ -25,6 +25,7 @@ minos-cli-detect = { path = "../minos-cli-detect", version = "0.1.0" }
 minos-transport = { path = "../minos-transport", version = "0.1.0" }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
+sqlx = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
