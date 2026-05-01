@@ -9,15 +9,15 @@
 //!    - **No row**: insert a fresh row with `secret_hash = NULL`; the
 //!      session goes live in Unpaired mode; first server frame is
 //!      `Event::Unpaired`.
-//!    - **Row exists with `secret_hash`**: require a matching
-//!      `X-Device-Secret`; on mismatch reject pre-upgrade with `401`. On
-//!      match, look up the paired peer via `pairings::get_pair`, seed the
-//!      handle's `paired_with`, and push `Event::PeerOnline` or
-//!      `Event::PeerOffline` as the first server frame based on live
-//!      registry membership.
-//!    - **Row exists with `secret_hash = NULL`** (e.g. previous Unpaired
-//!      handshake by the same device): ignore any provided secret and
-//!      re-enter Unpaired mode — the next `Pair` RPC will upsert the hash.
+//!    - **Row exists with `secret_hash`** (Mac rail): require a matching
+//!      `X-Device-Secret`; on mismatch reject pre-upgrade with `401`.
+//!      After ADR-0020 the WS handle's `paired_with` slot is left empty
+//!      because a Mac may be paired to multiple iOS accounts; presence
+//!      reconstruction is account-scoped and happens via the Phase G
+//!      broadcast rather than seeding a single peer here.
+//!    - **Row exists with `secret_hash = NULL`** (iOS rail or pre-pair
+//!      Mac): ignore any provided secret and re-enter Unpaired mode —
+//!      the iOS rail authenticates via bearer alone after ADR-0020.
 //! 3. `WebSocketUpgrade::on_upgrade(|ws| activate_live_session(...);
 //!    run_session(...))`.
 //!
@@ -225,9 +225,11 @@ async fn revalidate_live_session_auth(
             "device row missing during websocket activation".to_string(),
         )),
         Classification::UnpairedExisting => Ok(None),
-        Classification::Authenticated => store::pairings::get_pair(store, device_id)
-            .await
-            .map_err(|e| ActivationAuthError::Internal(e.to_string())),
+        // ADR-0020: paired_with is no longer single-valued. The Mac may have
+        // multiple paired iOS accounts; presence rebuild is account-scoped and
+        // happens via Phase G's broadcast. Returning None here means the WS
+        // upgrade does not seed a single peer in the handle's paired_with slot.
+        Classification::Authenticated => Ok(None),
     }
 }
 
@@ -358,23 +360,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revalidate_live_session_auth_returns_current_pairing_for_authenticated_reconnect() {
+    async fn revalidate_live_session_auth_returns_none_for_authenticated_mac_reconnect() {
+        // ADR-0020: paired_with is no longer single-valued. An authenticated
+        // Mac may have multiple paired iOS accounts; presence rebuild is
+        // account-scoped and happens via Phase G's broadcast, so the
+        // activation hook returns Ok(None) and does not seed a single
+        // peer in the handle's paired_with slot.
         let pool = memory_pool().await;
         let mac_id = DeviceId::new();
-        let ios_id = DeviceId::new();
         let secret = minos_domain::DeviceSecret::generate();
         let hash = crate::pairing::secret::hash_secret(&secret).unwrap();
 
         insert_device(&pool, mac_id, "mac", DeviceRole::AgentHost, 0)
             .await
             .unwrap();
-        insert_device(&pool, ios_id, "ios", DeviceRole::IosClient, 0)
-            .await
-            .unwrap();
         store::devices::upsert_secret_hash(&pool, mac_id, &hash)
-            .await
-            .unwrap();
-        store::pairings::insert_pairing(&pool, mac_id, ios_id, 0)
             .await
             .unwrap();
 
@@ -388,7 +388,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(paired_with, Some(ios_id));
+        assert_eq!(paired_with, None);
     }
 
     #[tokio::test]
