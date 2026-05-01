@@ -605,7 +605,7 @@ impl MobileClient {
             .clone()
             .ok_or(MinosError::NotConnected)?;
         let target = self.require_active_mac().await?;
-        let req = StartAgentRequest { agent };
+        let req = StartAgentRequest { agent, mode: None };
         let resp: StartAgentResponse = forward_rpc(
             &self.pending,
             &self.next_id,

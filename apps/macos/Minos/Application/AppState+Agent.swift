@@ -19,20 +19,33 @@ extension AppState {
     }
 
     @MainActor
-    func startAgent() async {
+    func startAgent(mode: AgentLaunchMode = .jsonl) async {
         guard phase == .running, let daemon else { return }
 
         clearAgentError()
         currentSession = nil
 
+        let modeLabel = mode.logLabel
+        agentLogger.info("startAgent requested · mode=\(modeLabel, privacy: .public)")
+
         do {
-            currentSession = try await daemon.startAgent(.init(agent: .codex))
+            let session = try await daemon.startAgent(.init(agent: .codex, mode: mode))
+            currentSession = session
+            agentLogger.info(
+                "startAgent ok · mode=\(modeLabel, privacy: .public) · sessionId=\(session.sessionId, privacy: .public)"
+            )
         } catch let error as MinosError {
             currentSession = nil
             agentState = .idle
+            agentLogger.error(
+                "startAgent failed · mode=\(modeLabel, privacy: .public) · \(error.technicalDetails, privacy: .public)"
+            )
             presentAgentError(error)
         } catch {
-            agentLogger.error("Unexpected start-agent error: \(String(describing: error), privacy: .public)")
+            let detail = String(describing: error)
+            agentLogger.error(
+                "Unexpected start-agent error · mode=\(modeLabel, privacy: .public) · \(detail, privacy: .public)"
+            )
         }
     }
 
@@ -41,12 +54,16 @@ extension AppState {
         guard phase == .running, let daemon, let currentSession else { return }
 
         clearAgentError()
+        agentLogger.info(
+            "sendUserMessage(ping) · sessionId=\(currentSession.sessionId, privacy: .public)"
+        )
 
         do {
             try await daemon.sendUserMessage(.init(sessionId: currentSession.sessionId, text: "ping"))
         } catch let error as MinosError {
             self.currentSession = nil
             agentState = .idle
+            agentLogger.error("sendUserMessage(ping) failed · \(error.technicalDetails, privacy: .public)")
             presentAgentError(error)
         } catch {
             agentLogger.error("Unexpected agent ping error: \(String(describing: error), privacy: .public)")
@@ -58,13 +75,16 @@ extension AppState {
         guard phase == .running, let daemon else { return }
 
         clearAgentError()
+        agentLogger.info("stopAgent requested")
 
         do {
             try await daemon.stopAgent()
             currentSession = nil
+            agentLogger.info("stopAgent ok")
         } catch let error as MinosError {
             currentSession = nil
             agentState = .idle
+            agentLogger.error("stopAgent failed · \(error.technicalDetails, privacy: .public)")
             presentAgentError(error)
         } catch {
             agentLogger.error("Unexpected stop-agent error: \(String(describing: error), privacy: .public)")
@@ -92,6 +112,17 @@ extension AppState {
             await MainActor.run {
                 self?.agentError = nil
             }
+        }
+    }
+}
+
+extension AgentLaunchMode {
+    /// Stable, ASCII-only label that matches the Rust-side `tracing` field —
+    /// pairing the two streams together when reading logs side-by-side.
+    var logLabel: String {
+        switch self {
+        case .jsonl: return "jsonl"
+        case .server: return "server"
         }
     }
 }

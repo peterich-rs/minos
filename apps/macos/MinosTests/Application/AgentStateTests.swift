@@ -35,9 +35,29 @@ final class AgentStateTests: XCTestCase {
 
         await appState.startAgent()
 
-        XCTAssertEqual(daemon.startAgentCalls, [StartAgentRequest(agent: .codex)])
+        XCTAssertEqual(
+            daemon.startAgentCalls,
+            [StartAgentRequest(agent: .codex, mode: .jsonl)]
+        )
         XCTAssertEqual(appState.currentSession?.sessionId, "t1")
         XCTAssertNil(appState.agentError)
+    }
+
+    @MainActor
+    func testStartAgentServerModeForwardsModeToDaemon() async {
+        let daemon = MockDaemon(
+            startAgentResult: .success(
+                MockDaemon.makeStartAgentResponse(sessionId: "t1", cwd: "/w")
+            )
+        )
+        let appState = await bootedAppState(with: daemon)
+
+        await appState.startAgent(mode: .server)
+
+        XCTAssertEqual(
+            daemon.startAgentCalls,
+            [StartAgentRequest(agent: .codex, mode: .server)]
+        )
     }
 
     @MainActor
@@ -47,7 +67,10 @@ final class AgentStateTests: XCTestCase {
 
         await appState.startAgent()
 
-        XCTAssertEqual(daemon.startAgentCalls, [StartAgentRequest(agent: .codex)])
+        XCTAssertEqual(
+            daemon.startAgentCalls,
+            [StartAgentRequest(agent: .codex, mode: .jsonl)]
+        )
         XCTAssertEqual(appState.agentState, .idle)
         XCTAssertEqual(appState.agentError, .AgentAlreadyRunning)
     }

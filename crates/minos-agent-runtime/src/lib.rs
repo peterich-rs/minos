@@ -36,5 +36,7 @@ pub mod state;
 pub mod test_support;
 
 pub use ingest::{Ingestor, IngestorHandle};
-pub use runtime::{AgentRuntime, AgentRuntimeConfig, RawIngest, StartAgentOutcome};
+pub use runtime::{
+    AgentLaunchMode, AgentRuntime, AgentRuntimeConfig, RawIngest, StartAgentOutcome,
+};
 pub use state::AgentState;

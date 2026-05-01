@@ -56,6 +56,31 @@ use crate::exec_jsonl;
 use crate::process::{reason_from_exit, CodexProcess};
 use crate::state::AgentState;
 
+/// Which codex driver `start` should bring up. Mirror of
+/// `minos_protocol::AgentLaunchMode` to keep the runtime crate independent of
+/// the protocol crate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AgentLaunchMode {
+    /// `codex exec --json` per turn — production default. Subprocess only
+    /// exists while a turn runs; sessions are resumable across turns.
+    #[default]
+    Jsonl,
+    /// `codex app-server --listen ws://…` long-running, WebSocket-driven.
+    /// Used by the macOS dev surface to A/B against the JSONL path.
+    Server,
+}
+
+impl AgentLaunchMode {
+    /// Stable string label suitable for tracing fields and log search.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            AgentLaunchMode::Jsonl => "jsonl",
+            AgentLaunchMode::Server => "server",
+        }
+    }
+}
+
 /// One raw native event emitted by an agent CLI, as captured by the
 /// `event_pump_task`. The backend's ingest handler (plan §B6) persists
 /// these verbatim under `(thread_id, seq)` and runs the per-agent
@@ -263,9 +288,23 @@ impl AgentRuntime {
         self.inner.subprocess_env.read().unwrap().clone()
     }
 
-    /// Start a codex session. See spec §5.1 "Start sequence" for the
-    /// step-by-step contract.
+    /// Start a codex session in the default `Jsonl` mode. Kept as a thin
+    /// wrapper over [`AgentRuntime::start_with_mode`] so existing call sites
+    /// (and the wider `Idle → Starting → Running` contract in spec §5.1) are
+    /// unaffected.
     pub async fn start(&self, agent: AgentName) -> Result<StartAgentOutcome, MinosError> {
+        self.start_with_mode(agent, AgentLaunchMode::Jsonl).await
+    }
+
+    /// Start a codex session under an explicit driver. `Jsonl` is the
+    /// production default; `Server` spawns `codex app-server --listen` and
+    /// drives it over WebSocket — the macOS dev surface flips between the two
+    /// to compare end-to-end behaviour.
+    pub async fn start_with_mode(
+        &self,
+        agent: AgentName,
+        mode: AgentLaunchMode,
+    ) -> Result<StartAgentOutcome, MinosError> {
         // Validation: state must be Idle.
         {
             let current = self.inner.state_tx.borrow().clone();
@@ -279,27 +318,57 @@ impl AgentRuntime {
             return Err(MinosError::AgentNotSupported { agent });
         }
 
+        info!(
+            target: "minos_agent_runtime::runtime",
+            agent = agent.bin_name(),
+            mode = mode.label(),
+            "agent start requested",
+        );
+
         // Announce "Starting" so observers see the transition even if spawn fails.
         let _ = self.inner.state_tx.send(AgentState::Starting { agent });
 
         // Execute the start sequence; on any failure roll state back to Idle.
-        match self.start_inner(agent).await {
-            Ok(outcome) => Ok(outcome),
+        match self.start_inner(agent, mode).await {
+            Ok(outcome) => {
+                info!(
+                    target: "minos_agent_runtime::runtime",
+                    agent = agent.bin_name(),
+                    mode = mode.label(),
+                    session_id = %outcome.session_id,
+                    "agent start succeeded",
+                );
+                Ok(outcome)
+            }
             Err(e) => {
+                warn!(
+                    target: "minos_agent_runtime::runtime",
+                    agent = agent.bin_name(),
+                    mode = mode.label(),
+                    error = %e,
+                    "agent start failed",
+                );
                 let _ = self.inner.state_tx.send(AgentState::Idle);
                 Err(e)
             }
         }
     }
 
-    async fn start_inner(&self, agent: AgentName) -> Result<StartAgentOutcome, MinosError> {
+    async fn start_inner(
+        &self,
+        agent: AgentName,
+        mode: AgentLaunchMode,
+    ) -> Result<StartAgentOutcome, MinosError> {
         // --- Test seam: skip spawn + port probe, use a pre-bound fake URL ---
         #[cfg(feature = "test-support")]
         if let Some(url) = &self.inner.cfg.test_ws_url {
             return self.start_on_url(agent, url.clone(), None).await;
         }
 
-        self.start_exec_session(agent).await
+        match mode {
+            AgentLaunchMode::Jsonl => self.start_exec_session(agent).await,
+            AgentLaunchMode::Server => self.start_app_server_session(agent).await,
+        }
     }
 
     async fn start_exec_session(&self, agent: AgentName) -> Result<StartAgentOutcome, MinosError> {
@@ -350,6 +419,58 @@ impl AgentRuntime {
             session_id: thread_id,
             cwd: self.cwd_for_session(),
         })
+    }
+
+    /// Spawn `codex app-server --listen ws://127.0.0.1:<port>` and connect to
+    /// it via WebSocket. The previous production path that lived here was
+    /// stripped when JSONL became the default (commit 2e87290); we resurrect
+    /// it as the second dev/test entry point so the macOS surface can A/B the
+    /// two drivers without rebuilding.
+    async fn start_app_server_session(
+        &self,
+        agent: AgentName,
+    ) -> Result<StartAgentOutcome, MinosError> {
+        let workspace_root = ensure_workspace_dir(&self.inner.cfg.workspace_root)?;
+        let workspace_display = workspace_root.display().to_string();
+
+        let port = pick_free_port(self.inner.cfg.ws_port_range.clone())?;
+        let url =
+            Url::parse(&format!("ws://127.0.0.1:{port}")).expect("127.0.0.1:<port> is a valid URL");
+
+        let bin = self
+            .inner
+            .cfg
+            .codex_bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(agent.bin_name()));
+
+        let sandbox_arg = format!(
+            "sandbox_permissions=['disk-full-read-access','disk-write-folder={workspace_display}']"
+        );
+        let listen_arg = format!("ws://127.0.0.1:{port}");
+        let args: Vec<&str> = vec![
+            "app-server",
+            "--listen",
+            &listen_arg,
+            "-c",
+            "approval_policy=never",
+            "-c",
+            &sandbox_arg,
+            "-c",
+            "shell_environment_policy.inherit=all",
+        ];
+        let env = self.subprocess_env_snapshot();
+        let mut process = CodexProcess::spawn(&bin, &args, &env)?;
+        process.stderr_drain();
+        info!(
+            target: "minos_agent_runtime::runtime",
+            bin = %bin.display(),
+            port,
+            workspace = %workspace_display,
+            "spawned codex app-server",
+        );
+
+        self.start_on_url(agent, url, Some(process)).await
     }
 
     /// Shared tail of the start sequence: connect WS, initialize + thread/start,
@@ -548,7 +669,15 @@ impl AgentRuntime {
                     let res =
                         tokio::time::timeout(TURN_START_TIMEOUT, client.call_typed(params)).await;
                     return match res {
-                        Ok(Ok(_response)) => Ok(()),
+                        Ok(Ok(response)) => {
+                            info!(
+                                target: "minos_agent_runtime::runtime",
+                                thread_id = %session_id,
+                                turn_id = %response.turn.id,
+                                "turn/start ok",
+                            );
+                            Ok(())
+                        }
                         Ok(Err(e)) => Err(e),
                         Err(_elapsed) => Err(MinosError::CodexProtocolError {
                             method: "turn/start".into(),
@@ -747,8 +876,8 @@ impl AgentRuntime {
 }
 
 /// Choose the first free port in `range` by bind-probing. Mirrors
-/// `minos-daemon::handle::start_on_port_range`.
-#[cfg(test)]
+/// `minos-daemon::handle::start_on_port_range`. Used by the app-server launch
+/// path (and the original test-only port-pick assertions).
 fn pick_free_port(range: std::ops::RangeInclusive<u16>) -> Result<u16, MinosError> {
     let (first, last) = (*range.start(), *range.end());
     for port in range {
@@ -896,6 +1025,62 @@ fn spawn_supervisor(
     })
 }
 
+/// Pull a few interesting fields out of a codex notification's `params` and
+/// emit one INFO log per frame so the daemon log shows the live event stream
+/// for the active turn. Kept conservative on payload size — text previews are
+/// truncated to 80 characters to avoid flooding the log on long replies.
+fn log_notification(method: &str, params: &Value, thread_id: &str) {
+    let turn_id = params.get("turnId").and_then(Value::as_str);
+    let item = params.get("item");
+    let item_type = item.and_then(|i| i.get("type")).and_then(Value::as_str);
+    // For `item/agentMessage/delta` the streaming text lives at top-level
+    // `delta`; everywhere else we read the item body so the log captures
+    // what the user typed (`userMessage.content[].text`) and what the model
+    // ultimately replied (`agentMessage.text`, `reasoning.text`).
+    let text_preview = if method == "item/agentMessage/delta" {
+        params.get("delta").and_then(Value::as_str).map(truncate_80)
+    } else {
+        item.and_then(extract_item_text).map(|s| truncate_80(&s))
+    };
+    info!(
+        target: "minos_agent_runtime::runtime",
+        thread_id = %thread_id,
+        turn_id = turn_id.unwrap_or(""),
+        item_type = item_type.unwrap_or(""),
+        text = text_preview.as_deref().unwrap_or(""),
+        method = %method,
+        "codex notification",
+    );
+}
+
+/// Best-effort text extractor for codex thread items. Tries the common shapes
+/// in order: `item.text` (agentMessage / reasoning final), `item.content[]`
+/// (userMessage — array of typed content blocks). Returns `None` when there's
+/// no useful text to log (e.g. tool calls, file changes — those carry their
+/// own structured fields the translator turns into UI later).
+fn extract_item_text(item: &Value) -> Option<String> {
+    if let Some(s) = item.get("text").and_then(Value::as_str) {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(arr) = item.get("content").and_then(Value::as_array) {
+        let joined: String = arr
+            .iter()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !joined.is_empty() {
+            return Some(joined);
+        }
+    }
+    None
+}
+
+fn truncate_80(s: &str) -> String {
+    s.chars().take(80).collect()
+}
+
 async fn event_pump_loop(
     client: Arc<CodexClient>,
     ingest_tx: broadcast::Sender<RawIngest>,
@@ -906,6 +1091,7 @@ async fn event_pump_loop(
     while let Some(inbound) = client.next_inbound().await {
         match inbound {
             Inbound::Notification { method, params } => {
+                log_notification(&method, &params, &thread_id);
                 let payload = serde_json::json!({ "method": method, "params": params });
                 let ingest = RawIngest {
                     agent,
@@ -975,8 +1161,9 @@ async fn event_pump_loop(
             Inbound::Closed => break,
         }
     }
-    debug!(
+    info!(
         target: "minos_agent_runtime::runtime",
+        thread_id = %thread_id,
         "event pump exiting (WS closed)",
     );
     // Inform the supervisor that the WS is gone. Fire the signal once; the

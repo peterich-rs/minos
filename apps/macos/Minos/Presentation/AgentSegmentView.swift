@@ -46,9 +46,16 @@ struct AgentSegmentView: View {
     private var debugControls: some View {
         switch appState.agentState {
         case .idle:
-            Button("启动 Codex（测试）") {
-                Task {
-                    await appState.startAgent()
+            HStack(spacing: 8) {
+                Button("启动 Codex (jsonl)") {
+                    Task {
+                        await appState.startAgent(mode: .jsonl)
+                    }
+                }
+                Button("启动 Codex (server)") {
+                    Task {
+                        await appState.startAgent(mode: .server)
+                    }
                 }
             }
             .buttonStyle(.bordered)

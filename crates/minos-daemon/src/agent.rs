@@ -1,9 +1,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, AgentState, RawIngest};
+use minos_agent_runtime::{
+    AgentLaunchMode, AgentRuntime, AgentRuntimeConfig, AgentState, RawIngest,
+};
 use minos_domain::MinosError;
-use minos_protocol::{SendUserMessageRequest, StartAgentRequest, StartAgentResponse};
+use minos_protocol::{
+    AgentLaunchMode as ProtoAgentLaunchMode, SendUserMessageRequest, StartAgentRequest,
+    StartAgentResponse,
+};
 use tokio::sync::{broadcast, watch};
 
 use crate::subscription::{AgentStateObserver, Subscription};
@@ -35,7 +40,8 @@ impl AgentGlue {
         req: StartAgentRequest,
     ) -> Result<StartAgentResponse, MinosError> {
         self.refresh_subprocess_env().await;
-        let out = self.runtime.start(req.agent).await?;
+        let mode = req.mode.map_or(AgentLaunchMode::Jsonl, runtime_mode);
+        let out = self.runtime.start_with_mode(req.agent, mode).await?;
         Ok(StartAgentResponse {
             session_id: out.session_id,
             cwd: out.cwd,
@@ -79,5 +85,12 @@ impl AgentGlue {
     async fn refresh_subprocess_env(&self) {
         let env = minos_cli_detect::capture_user_shell_env().await;
         self.runtime.replace_subprocess_env(env);
+    }
+}
+
+fn runtime_mode(mode: ProtoAgentLaunchMode) -> AgentLaunchMode {
+    match mode {
+        ProtoAgentLaunchMode::Jsonl => AgentLaunchMode::Jsonl,
+        ProtoAgentLaunchMode::Server => AgentLaunchMode::Server,
     }
 }

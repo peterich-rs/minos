@@ -76,11 +76,30 @@ pub struct HealthResponse {
 
 pub type ListClisResponse = Vec<AgentDescriptor>;
 
+/// Which codex driver to spawn — selectable at start time so dev/test
+/// surfaces can compare the two paths side-by-side without rebuilding.
+/// `Jsonl` is the production default (`codex exec --json` per turn); `Server`
+/// spawns `codex app-server --listen ws://…` and connects via WebSocket.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+pub enum AgentLaunchMode {
+    #[default]
+    #[serde(rename = "jsonl")]
+    Jsonl,
+    #[serde(rename = "server")]
+    Server,
+}
+
 /// Parameters for the `start_agent` RPC. See spec §5.2.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentRequest {
     pub agent: AgentName,
+    /// Optional driver selector. Absent ⇒ `Jsonl`, preserving the wire shape
+    /// for clients that pre-date the field (mobile relay payloads, older
+    /// daemon revs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AgentLaunchMode>,
 }
 
 /// Result of a successful `start_agent` RPC — carries the codex `thread_id`
@@ -290,10 +309,34 @@ mod tests {
     fn start_agent_request_round_trip() {
         let req = StartAgentRequest {
             agent: AgentName::Codex,
+            mode: None,
         };
         let json = serde_json::to_string(&req).unwrap();
+        // Default-mode payload must keep the historical wire shape so a
+        // pre-mode mobile client / relay rev still parses cleanly.
+        assert!(!json.contains("mode"));
         let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
+    }
+
+    #[test]
+    fn start_agent_request_with_mode_round_trip() {
+        let req = StartAgentRequest {
+            agent: AgentName::Codex,
+            mode: Some(AgentLaunchMode::Server),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"mode\":\"server\""));
+        let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn start_agent_request_pre_mode_payload_decodes() {
+        let json = r#"{"agent":"codex"}"#;
+        let req: StartAgentRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.agent, AgentName::Codex);
+        assert_eq!(req.mode, None);
     }
 
     #[test]

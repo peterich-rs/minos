@@ -42,4 +42,6 @@ pub use minos_daemon::{
 pub use minos_domain::{
     AgentDescriptor, AgentName, AgentStatus, DeviceId, DeviceSecret, PeerState, RelayLinkState,
 };
-pub use minos_protocol::{SendUserMessageRequest, StartAgentRequest, StartAgentResponse};
+pub use minos_protocol::{
+    AgentLaunchMode, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+};
