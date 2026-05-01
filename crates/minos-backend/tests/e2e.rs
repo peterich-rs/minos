@@ -295,10 +295,18 @@ async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
         "method": "list_clis",
         "id": 7,
     });
+    // The iOS session has account_id "e2e-acct" from the bearer; no Mac is
+    // paired to that account, so the Forward's iOS→Mac path will fail the
+    // `account_mac_pairings::exists` gate and the relay should synthesise a
+    // peer_offline error back to the same socket. We use a fresh DeviceId
+    // for the target so it deterministically misses both the pair table and
+    // any live registry slot.
+    let target_mac = DeviceId::new();
     send_envelope(
         &mut second,
         &Envelope::Forward {
             version: 1,
+            target_device_id: target_mac,
             payload: payload_req.clone(),
         },
     )
@@ -319,7 +327,13 @@ async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
     Ok(())
 }
 
+// ADR-0020 / Phase G: single-peer presence tracking
+// (`PeerOnline`/`PeerOffline` on connect/disconnect) was deleted with the
+// device-keyed pairings module. The activate hook now always emits
+// `Unpaired`. Multi-mac account-scoped presence rebuild is deferred to
+// Phase M.
 #[tokio::test]
+#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-mac coverage"]
 async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
@@ -334,7 +348,14 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     store::devices::insert_device(&relay.pool, ios_id, "ios", DeviceRole::IosClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, mac_id, &mac_hash).await?;
     store::devices::upsert_secret_hash(&relay.pool, ios_id, &ios_hash).await?;
-    store::pairings::insert_pairing(&relay.pool, mac_id, ios_id, 0).await?;
+    // ADR-0020: insert via account_mac_pairings instead of legacy device-keyed
+    // pairings. The body of this test still asserts presence semantics that
+    // were removed in Phase G; #[ignore]'d at the test attribute.
+    let account_id = store::accounts::create(&relay.pool, "presence@example.com", "phc")
+        .await?
+        .account_id;
+    store::devices::set_account_id(&relay.pool, &ios_id, &account_id).await?;
+    store::account_mac_pairings::insert_pair(&relay.pool, mac_id, &account_id, ios_id, 0).await?;
 
     let mut mac = connect_client(
         &relay,

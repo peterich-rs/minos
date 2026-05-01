@@ -92,6 +92,7 @@ async fn connect_client(
     role: DeviceRole,
     secret: Option<&str>,
     name: Option<&str>,
+    account_id: Option<&str>,
 ) -> Result<WsClient, WsError> {
     let url: Uri = format!("ws://{}/devices", relay.addr).parse().unwrap();
     let mut builder = ClientRequestBuilder::new(url)
@@ -103,17 +104,13 @@ async fn connect_client(
     if let Some(n) = name {
         builder = builder.with_header("X-Device-Name", n.to_string());
     }
-    // Phase 2 Task 2.2: iOS upgrades require a bearer JWT bound to the
-    // same `X-Device-Id`. Synthesise one here so the ingest scenarios stay
-    // focused on translate/fan-out behaviour without dragging the auth
-    // endpoints into every test.
+    // Phase 2 Task 2.2 / ADR-0020: iOS upgrades require a bearer JWT bound
+    // to the same `X-Device-Id`. The bearer also seeds `session.account_id`
+    // which the new account_mac_pairings fan-out path keys on.
     if role == DeviceRole::IosClient {
-        let token = jwt::sign(
-            TEST_JWT_SECRET.as_bytes(),
-            "ingest-acct",
-            &device_id.to_string(),
-        )
-        .expect("test bearer signs cleanly");
+        let acct = account_id.expect("iOS connect requires a real account_id");
+        let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), acct, &device_id.to_string())
+            .expect("test bearer signs cleanly");
         builder = builder.with_header("Authorization", format!("Bearer {token}"));
     }
     let (ws, _resp) = tokio_tungstenite::connect_async(builder).await?;
@@ -180,19 +177,23 @@ async fn recv_ui_event(ws: &mut WsClient) -> anyhow::Result<(String, u64, UiEven
 async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    // Pre-seed: two devices, both paired, each with a hashed secret.
+    // Pre-seed: a Mac (with a hashed secret) and a paired iOS device under
+    // a real account; ADR-0020 keys fan-out off
+    // `account_mac_pairings(mac, account)` and walks devices(account_id) to
+    // find the iOS receivers, so the iOS row needs `account_id` set and no
+    // secret hash.
     let host_id = DeviceId::new();
-    let phone_id = DeviceId::new();
     let host_secret = DeviceSecret::generate();
-    let phone_secret = DeviceSecret::generate();
     let host_hash = hash_secret(&host_secret)?;
-    let phone_hash = hash_secret(&phone_secret)?;
-
     store::devices::insert_device(&relay.pool, host_id, "host", DeviceRole::AgentHost, 0).await?;
-    store::devices::insert_device(&relay.pool, phone_id, "phone", DeviceRole::IosClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
-    store::devices::upsert_secret_hash(&relay.pool, phone_id, &phone_hash).await?;
-    store::pairings::insert_pairing(&relay.pool, host_id, phone_id, 0).await?;
+
+    let account_id = store::accounts::create(&relay.pool, "ingest@example.com", "phc")
+        .await?
+        .account_id;
+    let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
+    store::account_mac_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
+        .await?;
 
     // Phone connects first so it has a live session by the time the host
     // sends Ingest.
@@ -200,12 +201,15 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
         &relay,
         phone_id,
         DeviceRole::IosClient,
-        Some(phone_secret.as_str()),
+        None,
         Some("phone"),
+        Some(&account_id),
     )
     .await?;
 
-    // Drain the initial presence frame (`PeerOffline`, since host isn't live yet).
+    // Drain the initial Unpaired presence frame (Phase G activate hook
+    // emits Unpaired on every upgrade until Phase M re-introduces
+    // multi-mac presence).
     let _initial_presence = recv_envelope(&mut phone).await?;
 
     let mut host = connect_client(
@@ -214,9 +218,10 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
         DeviceRole::AgentHost,
         Some(host_secret.as_str()),
         Some("host"),
+        None,
     )
     .await?;
-    // Host also gets a presence frame (PeerOnline for phone) — drain it.
+    // Host also gets the initial Unpaired frame — drain it.
     let _ = recv_envelope(&mut host).await?;
 
     // Host pushes one Ingest frame: a codex thread/started notification.
@@ -283,6 +288,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
         DeviceRole::AgentHost,
         Some(host_secret.as_str()),
         Some("host"),
+        None,
     )
     .await?;
     // Drain Unpaired presence frame.
@@ -317,24 +323,25 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
     let relay = spawn_relay().await?;
 
     let host_id = DeviceId::new();
-    let phone_id = DeviceId::new();
     let host_secret = DeviceSecret::generate();
-    let phone_secret = DeviceSecret::generate();
     let host_hash = hash_secret(&host_secret)?;
-    let phone_hash = hash_secret(&phone_secret)?;
-
     store::devices::insert_device(&relay.pool, host_id, "host", DeviceRole::AgentHost, 0).await?;
-    store::devices::insert_device(&relay.pool, phone_id, "phone", DeviceRole::IosClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
-    store::devices::upsert_secret_hash(&relay.pool, phone_id, &phone_hash).await?;
-    store::pairings::insert_pairing(&relay.pool, host_id, phone_id, 0).await?;
+
+    let account_id = store::accounts::create(&relay.pool, "title@example.com", "phc")
+        .await?
+        .account_id;
+    let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
+    store::account_mac_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
+        .await?;
 
     let mut phone = connect_client(
         &relay,
         phone_id,
         DeviceRole::IosClient,
-        Some(phone_secret.as_str()),
+        None,
         Some("phone"),
+        Some(&account_id),
     )
     .await?;
     let _ = recv_envelope(&mut phone).await?;
@@ -345,6 +352,7 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
         DeviceRole::AgentHost,
         Some(host_secret.as_str()),
         Some("host"),
+        None,
     )
     .await?;
     let _ = recv_envelope(&mut host).await?;

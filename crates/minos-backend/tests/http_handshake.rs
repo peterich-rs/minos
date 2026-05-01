@@ -151,35 +151,39 @@ async fn devices_first_connect_emits_unpaired_event() {
     );
 }
 
-// ── /devices: paired reconnect with peer offline → Event::PeerOffline ───
+// ── /devices: paired reconnect → Event::Unpaired (single-peer model removed) ─
 
+// ADR-0020 / Phase G: the activate hook now always emits `Unpaired` as the
+// initial frame; the legacy `PeerOffline` based on a single-peer paired_with
+// slot was deleted alongside the device-keyed pairings module. Multi-mac
+// account-scoped presence rebuild on connect is deferred to Phase M.
 #[tokio::test]
+#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-mac coverage"]
 async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not_live() {
     use futures::StreamExt;
 
     let (base, _task, pool) = spawn_relay().await;
 
-    // Seed a paired Mac + iOS, both with known secrets.
+    // Seed a paired Mac + iOS via the new account_mac_pairings rail so the
+    // body still type-checks. The body's `PeerOffline` assertion no longer
+    // matches the activate hook's behaviour and is left unchanged for when
+    // Phase M reinstates these semantics.
     let mac_id = DeviceId::new();
-    let ios_id = DeviceId::new();
     let mac_secret = DeviceSecret::generate();
-    let ios_secret = DeviceSecret::generate();
     let mac_hash = hash_secret(&mac_secret).unwrap();
-    let ios_hash = hash_secret(&ios_secret).unwrap();
 
     store::devices::insert_device(&pool, mac_id, "mac", DeviceRole::AgentHost, 0)
-        .await
-        .unwrap();
-    store::devices::insert_device(&pool, ios_id, "ios", DeviceRole::IosClient, 0)
         .await
         .unwrap();
     store::devices::upsert_secret_hash(&pool, mac_id, &mac_hash)
         .await
         .unwrap();
-    store::devices::upsert_secret_hash(&pool, ios_id, &ios_hash)
+    let account_id = store::accounts::create(&pool, "presence@example.com", "phc")
         .await
-        .unwrap();
-    store::pairings::insert_pairing(&pool, mac_id, ios_id, 0)
+        .unwrap()
+        .account_id;
+    let ios_id = store::test_support::insert_ios_device(&pool, &account_id).await;
+    store::account_mac_pairings::insert_pair(&pool, mac_id, &account_id, ios_id, 0)
         .await
         .unwrap();
 
