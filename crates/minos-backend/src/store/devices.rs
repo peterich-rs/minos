@@ -418,4 +418,19 @@ mod tests {
                 .unwrap();
         assert_eq!(raw_role, "browser-admin");
     }
+
+    #[tokio::test]
+    async fn ios_row_can_be_created_with_null_secret_hash() {
+        // ADR-0020 regression: the iOS rail is bearer-only and the
+        // device row's secret_hash must remain NULL for the lifetime
+        // of the row. This test pins the insert default so a future
+        // change can't silently start populating the column on iOS.
+        let pool = memory_pool().await;
+        let id = DeviceId::new();
+        insert_device(&pool, id, "iPhone", DeviceRole::IosClient, 0)
+            .await
+            .unwrap();
+        let row = get_device(&pool, id).await.unwrap().unwrap();
+        assert!(row.secret_hash.is_none());
+    }
 }
