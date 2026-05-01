@@ -2197,6 +2197,8 @@ dependencies = [
 name = "minos-agent-runtime"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
  "dashmap 6.1.0",
  "futures-util",
  "minos-agent-runtime",

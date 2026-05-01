@@ -123,6 +123,52 @@ impl AgentManager {
         anyhow::bail!("evict unimplemented (C19)")
     }
 
+    pub async fn send_user_message(
+        &self,
+        thread_id: &str,
+        text: String,
+    ) -> anyhow::Result<()> {
+        let handle = self
+            .threads
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("thread not found: {thread_id}"))?;
+        match handle.current_state() {
+            ThreadState::Idle => {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let new_state = ThreadState::Running {
+                    turn_started_at_ms: now_ms,
+                };
+                handle.transition(new_state.clone())?;
+                let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+                    thread_id: thread_id.to_string(),
+                    old: ThreadState::Idle,
+                    new: new_state,
+                    at_ms: now_ms,
+                });
+                let workspace = handle.workspace.clone();
+                let inst = self
+                    .instances
+                    .lock()
+                    .await
+                    .get(&workspace)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
+                inst.touch().await;
+                inst.send_user_message(thread_id, &text).await?;
+                Ok(())
+            }
+            ThreadState::Suspended { .. } => self.implicit_resume(thread_id, text).await,
+            other => anyhow::bail!("send_user_message rejected: state={:?}", other),
+        }
+    }
+
+    async fn implicit_resume(&self, _thread_id: &str, _text: String) -> anyhow::Result<()> {
+        anyhow::bail!("implicit_resume unimplemented (C13)")
+    }
+
     pub async fn list_threads(&self) -> Vec<crate::store_facing::ThreadSnapshot> {
         let g = self.threads.lock().await;
         g.values()

@@ -59,4 +59,32 @@ impl AppServerInstance {
     pub(crate) async fn start_thread(&self) -> anyhow::Result<String> {
         anyhow::bail!("start_thread unimplemented (C12)")
     }
+
+    /// Resume an existing codex thread under the same `thread_id`. Real
+    /// implementation lands in C13.
+    #[allow(dead_code)]
+    pub(crate) async fn start_thread_resume(
+        &self,
+        _thread_id: &str,
+        _codex_session_id: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("start_thread_resume unimplemented (C13)")
+    }
+
+    /// Forward a user turn to the codex app-server. Real implementation lands
+    /// in C12.
+    pub(crate) async fn send_user_message(
+        &self,
+        _thread_id: &str,
+        _text: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("send_user_message unimplemented (C12)")
+    }
+
+    /// Best-effort interrupt of an in-flight turn. Real implementation lands
+    /// in C12.
+    #[allow(dead_code)]
+    pub(crate) async fn interrupt_turn(&self, _thread_id: &str) -> anyhow::Result<()> {
+        anyhow::bail!("interrupt_turn unimplemented (C12)")
+    }
 }
