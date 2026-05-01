@@ -43,27 +43,19 @@ void main() {
     });
   });
 
-  test('saveState/loadState round-trips device credentials', () async {
+  test('saveState/loadState round-trips device id (no auth)', () async {
     final store = SecurePairingStore(storage: storage);
-    const state = PersistedPairingState(
-      deviceId: 'dev-123',
-      deviceSecret: 'sec-456',
-    );
+    const state = PersistedPairingState(deviceId: 'dev-123');
 
     await store.saveState(state);
 
-    expect(values, <String, String>{
-      'minos.device_id': 'dev-123',
-      'minos.device_secret': 'sec-456',
-    });
+    expect(values, <String, String>{'minos.device_id': 'dev-123'});
     expect(await store.loadState(), state);
   });
 
   test('clearAll removes every persisted credential key', () async {
     final store = SecurePairingStore(storage: storage);
-    await store.saveState(
-      const PersistedPairingState(deviceId: 'dev-123', deviceSecret: 'sec-456'),
-    );
+    await store.saveState(const PersistedPairingState(deviceId: 'dev-123'));
 
     await store.clearAll();
 
@@ -71,12 +63,27 @@ void main() {
     expect(await store.loadState(), isNull);
   });
 
-  test('loadState wipes incomplete core resume snapshots', () async {
+  test('loadState returns null when storage is empty', () async {
     final store = SecurePairingStore(storage: storage);
-    values.addAll(<String, String>{'minos.device_id': 'dev-123'});
 
     expect(await store.loadState(), isNull);
     expect(values, isEmpty);
+  });
+
+  test('loadState wipes pre-ADR-0020 device_secret legacy entry', () async {
+    final store = SecurePairingStore(storage: storage);
+    values.addAll(<String, String>{
+      'minos.device_id': 'dev-123',
+      // Legacy keychain entry from before ADR-0020. Must be wiped on the
+      // first cold launch after upgrade so the snapshot can't carry it
+      // forward.
+      'minos.device_secret': 'legacy-secret',
+    });
+
+    final loaded = await store.loadState();
+
+    expect(loaded, const PersistedPairingState(deviceId: 'dev-123'));
+    expect(values.containsKey('minos.device_secret'), isFalse);
   });
 
   // ---- Phase 4 auth fields ----
@@ -85,7 +92,6 @@ void main() {
     final store = SecurePairingStore(storage: storage);
     final state = PersistedPairingState(
       deviceId: 'dev-1',
-      deviceSecret: 'sec-1',
       accessToken: 'access-token-xyz',
       accessExpiresAtMs: 1700000000000,
       refreshToken: 'refresh-token-abc',
@@ -118,16 +124,12 @@ void main() {
     await store.saveState(state);
 
     expect(values['minos.device_id'], 'dev-1');
-    expect(values.containsKey('minos.device_secret'), isFalse);
     expect(await store.loadState(), state);
   });
 
   test('saveState skips auth keys when no auth tuple is present', () async {
     final store = SecurePairingStore(storage: storage);
-    const state = PersistedPairingState(
-      deviceId: 'dev-1',
-      deviceSecret: 'sec-1',
-    );
+    const state = PersistedPairingState(deviceId: 'dev-1');
 
     await store.saveState(state);
 
@@ -136,11 +138,10 @@ void main() {
     expect(values.containsKey('minos.account_id'), isFalse);
   });
 
-  test('clearAuth wipes only the auth tuple, leaving pairing intact', () async {
+  test('clearAuth wipes only the auth tuple, leaving device id intact', () async {
     final store = SecurePairingStore(storage: storage);
     final state = PersistedPairingState(
       deviceId: 'dev-1',
-      deviceSecret: 'sec-1',
       accessToken: 'access',
       accessExpiresAtMs: 1700000000000,
       refreshToken: 'refresh',
@@ -152,7 +153,6 @@ void main() {
     await store.clearAuth();
 
     expect(values['minos.device_id'], 'dev-1');
-    expect(values['minos.device_secret'], 'sec-1');
     expect(values.containsKey('minos.access_token'), isFalse);
     expect(values.containsKey('minos.access_expires_at_ms'), isFalse);
     expect(values.containsKey('minos.refresh_token'), isFalse);
@@ -164,7 +164,6 @@ void main() {
     final store = SecurePairingStore(storage: storage);
     values.addAll(<String, String>{
       'minos.device_id': 'dev-1',
-      'minos.device_secret': 'sec-1',
       // Missing access_expires_at_ms / refresh_token / account_id /
       // account_email — half-set tuple must be treated as corruption.
       'minos.access_token': 'access',

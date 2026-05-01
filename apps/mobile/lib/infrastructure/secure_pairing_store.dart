@@ -6,10 +6,16 @@ import 'package:minos/src/rust/api/minos.dart';
 /// The Rust `minos_mobile::MobileClient` keeps this state in its own
 /// in-memory `MobilePairingStore` for the lifetime of the process. This
 /// Dart-side store is what survives an app cold-start; it persists the
-/// Minos device credential **and** (since Phase 4) the account auth tuple
+/// Minos device id **and** (since Phase 4) the account auth tuple
 /// so the Rust core can rehydrate `auth_session` synchronously on cold
 /// launch via `MobileClient::new_with_persisted_state` and emit
 /// `AuthStateFrame::Authenticated` immediately.
+///
+/// ADR-0020 (server-centric pair): the iOS device no longer holds a
+/// `device_secret` — the bearer token alone authenticates the WS, and
+/// Mac partners are tracked server-side under `account_mac_pairings`.
+/// The legacy `minos.device_secret` keychain entry is wiped on the next
+/// cold launch by [loadState] (see "Legacy wipe" below).
 ///
 /// Backend URL and Cloudflare Access credentials are no longer persisted
 /// here — they live in `minos_mobile::build_config` (compile-time consts
@@ -22,7 +28,6 @@ class SecurePairingStore {
   final FlutterSecureStorage _storage;
 
   static const _keyDeviceId = 'minos.device_id';
-  static const _keyDeviceSecret = 'minos.device_secret';
 
   // Phase 4 auth fields. All five are written/read as a tuple — partial
   // snapshots are wiped on the next [loadState] call.
@@ -37,8 +42,10 @@ class SecurePairingStore {
   static const _keyPeerDisplayName = 'minos.peer_display_name';
 
   Future<PersistedPairingState?> loadState() async {
+    // Legacy wipe: pre ADR-0020 keychain entry. Best-effort; idempotent.
+    await _storage.delete(key: 'minos.device_secret');
+
     final deviceId = await _storage.read(key: _keyDeviceId);
-    final deviceSecret = await _storage.read(key: _keyDeviceSecret);
     final accessToken = await _storage.read(key: _keyAccessToken);
     final accessExpiresStr = await _storage.read(key: _keyAccessExpiresAtMs);
     final refreshToken = await _storage.read(key: _keyRefreshToken);
@@ -47,7 +54,6 @@ class SecurePairingStore {
 
     final hasAnyValue =
         deviceId != null ||
-        deviceSecret != null ||
         accessToken != null ||
         accessExpiresStr != null ||
         refreshToken != null ||
@@ -61,7 +67,6 @@ class SecurePairingStore {
 
     final state = PersistedPairingState(
       deviceId: deviceId,
-      deviceSecret: deviceSecret,
       accessToken: accessToken,
       accessExpiresAtMs: accessExpiresAtMs,
       refreshToken: refreshToken,
@@ -82,7 +87,6 @@ class SecurePairingStore {
 
   Future<void> saveState(PersistedPairingState state) async {
     await _writeOrDelete(_keyDeviceId, state.deviceId);
-    await _writeOrDelete(_keyDeviceSecret, state.deviceSecret);
 
     if (_hasCompleteAuth(state)) {
       await _writeOrDelete(_keyAccessToken, state.accessToken);
@@ -110,16 +114,15 @@ class SecurePairingStore {
     return _storage.write(key: _keyPeerDisplayName, value: trimmed);
   }
 
-  /// Wipe every key this store owns. Called from `forgetPeer`.
+  /// Wipe every key this store owns.
   Future<void> clearAll() async {
     await _storage.delete(key: _keyDeviceId);
-    await _storage.delete(key: _keyDeviceSecret);
     await _storage.delete(key: _keyPeerDisplayName);
     await _deleteAuthKeys();
   }
 
-  /// Wipe only the auth tuple — used by `logout` so the device credential
-  /// stays valid for the next account login on the same physical device.
+  /// Wipe only the auth tuple — used by `logout` so the device id stays
+  /// valid for the next account login on the same physical device.
   Future<void> clearAuth() async {
     await _deleteAuthKeys();
   }
@@ -131,16 +134,14 @@ class SecurePairingStore {
     return _storage.write(key: key, value: value);
   }
 
+  /// Snapshot is valid iff a stable [deviceId] is recorded **and** the
+  /// auth tuple is complete (handled separately by [_hasCompleteAuth]).
+  /// Post ADR-0020 the device-secret clause is gone — bearer-only auth
+  /// means a paired-but-logged-out branch keeps `deviceId` plus no auth
+  /// keys, and an authenticated-pre-pair branch keeps `deviceId` plus
+  /// the full auth tuple.
   bool _isValidSnapshot(PersistedPairingState state) {
-    if (state.deviceId == null) return false;
-    final hasDeviceSecret = state.deviceSecret != null;
-    final hasAnyAuth =
-        state.accessToken != null ||
-        state.accessExpiresAtMs != null ||
-        state.refreshToken != null ||
-        state.accountId != null ||
-        state.accountEmail != null;
-    return hasDeviceSecret || hasAnyAuth;
+    return state.deviceId != null;
   }
 
   /// All five auth fields must be present together — either every one is
