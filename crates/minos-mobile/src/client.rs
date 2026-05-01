@@ -514,7 +514,7 @@ impl MobileClient {
         let access = self.access_token_or_unauthorized().await?;
         let http = self.http_client_no_secret()?;
         let resp = http.list_paired_macs(&access).await?;
-        Ok(resp.macs)
+        Ok(resp.hosts)
     }
 
     /// Override the active forward target. Subsequent `Envelope::Forward`

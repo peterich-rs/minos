@@ -9,7 +9,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
-use minos_protocol::{HostSummary, MeMacsResponse};
+use minos_protocol::{HostSummary, MeHostsResponse};
 
 use crate::auth::bearer;
 use crate::http::v1::pairing::{err_body, ErrorEnvelope};
@@ -25,7 +25,7 @@ pub fn router() -> Router<BackendState> {
 async fn get_me_macs(
     State(state): State<BackendState>,
     headers: HeaderMap,
-) -> Result<Json<MeMacsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
+) -> Result<Json<MeHostsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let bearer_outcome = bearer::require(&state, &headers).map_err(|e| {
         let (s, m) = e.into_response_tuple();
         (s, err_body("unauthorized", m))
@@ -49,7 +49,7 @@ async fn get_me_macs(
         )
     })?;
 
-    let mut macs = Vec::with_capacity(pairs.len());
+    let mut hosts = Vec::with_capacity(pairs.len());
     for p in pairs {
         let row = crate::store::devices::get_device(&state.store, p.mac_device_id)
             .await
@@ -75,7 +75,7 @@ async fn get_me_macs(
             );
             "unknown".into()
         };
-        macs.push(HostSummary {
+        hosts.push(HostSummary {
             host_device_id: p.mac_device_id,
             host_display_name,
             paired_at_ms: p.paired_at_ms,
@@ -83,7 +83,7 @@ async fn get_me_macs(
         });
     }
 
-    Ok(Json(MeMacsResponse { macs }))
+    Ok(Json(MeHostsResponse { hosts }))
 }
 
 /// Legacy `/v1/me/peer` always returns 410. Older Mac daemons that hit

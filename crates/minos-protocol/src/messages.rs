@@ -28,8 +28,8 @@ pub struct MePeerResponse {
 /// device that performed the scan — recorded for audit; not used for
 /// routing.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct MeMacsResponse {
-    pub macs: Vec<HostSummary>,
+pub struct MeHostsResponse {
+    pub hosts: Vec<HostSummary>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -278,20 +278,20 @@ mod tests {
     }
 
     #[test]
-    fn me_macs_response_round_trips() {
-        let macs = MeMacsResponse {
-            macs: vec![HostSummary {
+    fn me_hosts_response_round_trips() {
+        let hosts = MeHostsResponse {
+            hosts: vec![HostSummary {
                 host_device_id: DeviceId::new(),
                 host_display_name: "Mac-mini".into(),
                 paired_at_ms: 1_714_000_000_000,
                 paired_via_device_id: DeviceId::new(),
             }],
         };
-        let json = serde_json::to_string(&macs).unwrap();
-        let back: MeMacsResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, macs);
+        let json = serde_json::to_string(&hosts).unwrap();
+        let back: MeHostsResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, hosts);
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(value["macs"].is_array());
+        assert!(value["hosts"].is_array());
     }
 
     #[test]

@@ -18,7 +18,7 @@ use http::{Method, Request, Response, StatusCode};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::{
     AuthRequest, AuthResponse, GetThreadLastSeqResponse, ListThreadsParams, ListThreadsResponse,
-    LogoutRequest, MeMacsResponse, PairConsumeRequest, PairResponse, ReadThreadParams,
+    LogoutRequest, MeHostsResponse, PairConsumeRequest, PairResponse, ReadThreadParams,
     ReadThreadResponse, RefreshRequest, RefreshResponse,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -144,18 +144,21 @@ impl MobileHttpClient {
     }
 
     /// List every Mac paired to the caller's account. Bearer-only.
-    pub async fn list_paired_macs(&self, access_token: &str) -> Result<MeMacsResponse, MinosError> {
+    pub async fn list_paired_macs(
+        &self,
+        access_token: &str,
+    ) -> Result<MeHostsResponse, MinosError> {
         let url = format!("{}/v1/me/macs", self.base);
         let trace_id = start_http_trace(Method::GET.as_str(), "/v1/me/macs", None, None);
         let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
-            let body: MeMacsResponse = decode_success_json(resp, "MeMacsResponse").await?;
+            let body: MeHostsResponse = decode_success_json(resp, "MeHostsResponse").await?;
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                Some(format!("macs={}", body.macs.len())),
+                Some(format!("hosts={}", body.hosts.len())),
                 None,
             );
             Ok(body)
