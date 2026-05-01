@@ -584,7 +584,11 @@ async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
                 return;
             };
             let response = invoke_forwarded(payload, &rpc_server).await;
-            let envelope = wrap_response_envelope(response);
+            // ADR-0020: the relay routes Envelope::Forward by
+            // target_device_id. The Mac's response targets the iOS
+            // device that originally called us — captured as `from` of
+            // the inbound Forwarded.
+            let envelope = wrap_response_envelope(response, from);
             // The relay re-wraps our Forward back to the originating peer
             // as Forwarded; correlation is the peers' responsibility (the
             // jsonrpc id is preserved end-to-end inside the payload).
@@ -613,7 +617,7 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
         EventKind::Paired {
             peer_device_id,
             peer_name,
-            your_device_secret,
+            your_device_secret: Some(your_device_secret),
         } => {
             let record = PeerRecord {
                 device_id: peer_device_id,
@@ -629,6 +633,19 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
                 peer_name,
                 online: true,
             });
+        }
+        EventKind::Paired {
+            your_device_secret: None,
+            ..
+        } => {
+            // ADR-0020: the iOS rail receives Paired events without a
+            // secret because the iOS bearer is the only credential. The
+            // Mac side should always be `Some` per the spec; defensive
+            // log + drop.
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                "Paired event delivered without your_device_secret on the Mac rail; ignoring"
+            );
         }
         EventKind::PeerOnline { peer_device_id } => {
             ctx.peer_tx.send_if_modified(|s| match s {

@@ -15,7 +15,7 @@ use std::time::Instant;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::types::ErrorObjectOwned;
 use minos_cli_detect::{detect_all, CommandRunner};
-use minos_domain::MinosError;
+use minos_domain::{DeviceId, MinosError};
 use minos_protocol::envelope::Envelope;
 use minos_protocol::{
     HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
@@ -194,10 +194,16 @@ fn parse_params<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, Str
 /// Wrap a fully formed JSON-RPC response into an `Envelope::Forward`
 /// suitable for pushing back through the outbound queue. Kept as a
 /// helper so the dispatch loop and tests share one phrasing.
+///
+/// Post-ADR-0020 `Envelope::Forward` requires a `target_device_id` so
+/// the backend can fan out to the correct iOS peer. The Mac daemon's
+/// response targets the device id that originated the request — pulled
+/// out of the inbound `Envelope::Forwarded { from, .. }` envelope.
 #[must_use]
-pub fn wrap_response_envelope(response: Value) -> Envelope {
+pub fn wrap_response_envelope(response: Value, target_device_id: DeviceId) -> Envelope {
     Envelope::Forward {
         version: 1,
+        target_device_id,
         payload: response,
     }
 }
@@ -310,10 +316,16 @@ mod tests {
     #[test]
     fn wrap_response_envelope_uses_forward_variant() {
         let v = json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}});
-        let env = wrap_response_envelope(v.clone());
+        let target = DeviceId::new();
+        let env = wrap_response_envelope(v.clone(), target);
         match env {
-            Envelope::Forward { version, payload } => {
+            Envelope::Forward {
+                version,
+                target_device_id,
+                payload,
+            } => {
                 assert_eq!(version, 1);
+                assert_eq!(target_device_id, target);
                 assert_eq!(payload, v);
             }
             other => panic!("expected Forward, got {other:?}"),
