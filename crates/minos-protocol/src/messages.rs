@@ -1,6 +1,6 @@
 //! Request and response payload types.
 
-use minos_domain::{AgentDescriptor, AgentName, DeviceId, DeviceSecret, PairingToken};
+use minos_domain::{AgentDescriptor, AgentName, DeviceId, PairingToken};
 use minos_ui_protocol::{ThreadEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,23 @@ pub struct MePeerResponse {
     pub paired_at_ms: i64,
 }
 
+/// Response body for `GET /v1/me/macs`. iOS callers receive every Mac
+/// paired to their `account_id`. `paired_via_device_id` is the mobile
+/// device that performed the scan — recorded for audit; not used for
+/// routing.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MeMacsResponse {
+    pub macs: Vec<MacSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MacSummary {
+    pub mac_device_id: DeviceId,
+    pub mac_display_name: String,
+    pub paired_at_ms: i64,
+    pub paired_via_device_id: DeviceId,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairRequest {
     pub device_id: DeviceId,
@@ -33,13 +50,13 @@ pub struct PairRequest {
     pub token: PairingToken,
 }
 
+/// Result of `POST /v1/pairings` (consume). iOS no longer receives a
+/// device secret — the rail is bearer-only post ADR-0020. Mac-side
+/// pair state is delivered separately via `EventKind::Paired`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairResponse {
-    /// Mirrors the envelope/local-RPC pair result naming so the legacy typed
-    /// jsonrpsee surface exposes the same contract.
     pub peer_device_id: DeviceId,
     pub peer_name: String,
-    pub your_device_secret: DeviceSecret,
 }
 
 /// Request body for `POST /v1/pairing/consume`. Distinct from
@@ -212,7 +229,6 @@ mod tests {
         let resp = PairResponse {
             peer_device_id: DeviceId::new(),
             peer_name: "MacBook".into(),
-            your_device_secret: DeviceSecret::generate(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -221,12 +237,42 @@ mod tests {
             serde_json::to_value(resp.peer_device_id).unwrap()
         );
         assert_eq!(value["peer_name"], serde_json::json!("MacBook"));
-        assert_eq!(
-            value["your_device_secret"],
-            serde_json::json!(resp.your_device_secret.as_str())
-        );
+        assert!(value.get("your_device_secret").is_none());
         let back: PairResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
+    }
+
+    #[test]
+    fn pair_response_no_secret_field_round_trip() {
+        let resp = PairResponse {
+            peer_device_id: DeviceId::new(),
+            peer_name: "iPhone".into(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value.get("your_device_secret").is_none(),
+            "secret must not appear"
+        );
+        let back: PairResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn me_macs_response_round_trips() {
+        let macs = MeMacsResponse {
+            macs: vec![MacSummary {
+                mac_device_id: DeviceId::new(),
+                mac_display_name: "Mac-mini".into(),
+                paired_at_ms: 1_714_000_000_000,
+                paired_via_device_id: DeviceId::new(),
+            }],
+        };
+        let json = serde_json::to_string(&macs).unwrap();
+        let back: MeMacsResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, macs);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value["macs"].is_array());
     }
 
     #[test]
