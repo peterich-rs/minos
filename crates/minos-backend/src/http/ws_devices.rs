@@ -167,7 +167,7 @@ pub async fn upgrade(
             }
         }
 
-        activate_live_session(registry.as_ref(), &handle).await;
+        activate_live_session(registry.as_ref(), &handle);
 
         if let Err(e) = run_session(socket, handle, outbox_rx, registry, store, translators).await {
             tracing::warn!(
@@ -239,7 +239,7 @@ async fn close_socket(ws: &mut WebSocket, code: u16, reason: &'static str) {
         .await;
 }
 
-async fn activate_live_session(registry: &SessionRegistry, handle: &SessionHandle) {
+fn activate_live_session(registry: &SessionRegistry, handle: &SessionHandle) {
     // ADR-0020 / Phase G: there is no single-valued `paired_with` slot
     // to derive an initial presence event from. Comprehensive multi-mac
     // presence rebuild on connect/disconnect is deferred to Phase M; for
@@ -372,7 +372,7 @@ mod tests {
             "pre-activation handle must not be live"
         );
 
-        activate_live_session(&registry, &handle).await;
+        activate_live_session(&registry, &handle);
 
         assert!(
             registry.get(device_id).is_some(),
@@ -404,13 +404,9 @@ mod tests {
         let device_id = DeviceId::new();
 
         let (first_handle, mut first_rx) = SessionHandle::new(device_id, DeviceRole::IosClient);
-        activate_live_session(&registry, &first_handle).await;
+        activate_live_session(&registry, &first_handle);
 
-        match first_rx
-            .recv()
-            .await
-            .expect("first session initial event")
-        {
+        match first_rx.recv().await.expect("first session initial event") {
             Envelope::Event {
                 event: EventKind::Unpaired,
                 ..
@@ -422,7 +418,7 @@ mod tests {
         let (replacement_handle, mut replacement_rx) =
             SessionHandle::new(device_id, DeviceRole::IosClient);
 
-        activate_live_session(&registry, &replacement_handle).await;
+        activate_live_session(&registry, &replacement_handle);
 
         revoked
             .changed()

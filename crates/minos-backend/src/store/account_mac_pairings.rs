@@ -257,16 +257,20 @@ mod tests {
     #[tokio::test]
     async fn unique_violation_returns_false() {
         let (pool, account, mac, mobile) = setup_one_mac_one_account().await;
-        assert!(insert_pair(&pool, mac, &account, mobile, 100).await.unwrap());
-        assert!(
-            !insert_pair(&pool, mac, &account, mobile, 200).await.unwrap()
-        );
+        assert!(insert_pair(&pool, mac, &account, mobile, 100)
+            .await
+            .unwrap());
+        assert!(!insert_pair(&pool, mac, &account, mobile, 200)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
     async fn delete_pair_removes_row() {
         let (pool, account, mac, mobile) = setup_one_mac_one_account().await;
-        insert_pair(&pool, mac, &account, mobile, 100).await.unwrap();
+        insert_pair(&pool, mac, &account, mobile, 100)
+            .await
+            .unwrap();
         let n = delete_pair(&pool, mac, &account).await.unwrap();
         assert_eq!(n, 1);
         assert!(!exists(&pool, mac, &account).await.unwrap());

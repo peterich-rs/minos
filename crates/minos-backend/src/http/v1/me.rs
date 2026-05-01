@@ -65,14 +65,16 @@ async fn get_me_macs(
                     err_body("internal", e.to_string()),
                 )
             })?;
-        let mac_display_name = row.map(|r| r.display_name).unwrap_or_else(|| {
+        let mac_display_name = if let Some(r) = row {
+            r.display_name
+        } else {
             tracing::warn!(
                 target: "minos_backend::v1::me",
                 mac = %p.mac_device_id,
                 "pair row references device with no devices row; using placeholder name",
             );
             "unknown".into()
-        });
+        };
         macs.push(MacSummary {
             mac_device_id: p.mac_device_id,
             mac_display_name,

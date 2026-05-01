@@ -176,7 +176,10 @@ mod tests {
         round_trip(&env);
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["kind"], "forward");
-        assert_eq!(v["target_device_id"].as_str().unwrap(), target.0.to_string());
+        assert_eq!(
+            v["target_device_id"].as_str().unwrap(),
+            target.0.to_string()
+        );
     }
 
     #[test]

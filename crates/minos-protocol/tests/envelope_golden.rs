@@ -88,7 +88,7 @@ fn event_paired() {
     assert_eq!(peer_name, "Mac-mini");
     // DeviceSecret is transparent on the wire (redaction is Debug/Display only).
     assert_eq!(
-        your_device_secret.as_ref().map(|s| s.as_str()),
+        your_device_secret.as_ref().map(minos_domain::DeviceSecret::as_str),
         Some("Sg3AfM5V0_3Vp1IvGxPzWwXhE-3HXfLQyIJzj6TZAmE")
     );
 }

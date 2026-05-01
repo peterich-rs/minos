@@ -277,18 +277,16 @@ pub async fn list_by_account(
     })?;
     rows.into_iter()
         .map(|r| {
-            let device_id =
-                Uuid::parse_str(&r.device_id)
-                    .map(DeviceId)
-                    .map_err(|e| BackendError::StoreDecode {
-                        column: "devices.device_id".to_string(),
-                        message: e.to_string(),
-                    })?;
-            let role =
-                DeviceRole::from_str(&r.role).map_err(|e| BackendError::StoreDecode {
-                    column: "devices.role".to_string(),
-                    message: e,
-                })?;
+            let device_id = Uuid::parse_str(&r.device_id).map(DeviceId).map_err(|e| {
+                BackendError::StoreDecode {
+                    column: "devices.device_id".to_string(),
+                    message: e.to_string(),
+                }
+            })?;
+            let role = DeviceRole::from_str(&r.role).map_err(|e| BackendError::StoreDecode {
+                column: "devices.role".to_string(),
+                message: e,
+            })?;
             Ok(DeviceRow {
                 device_id,
                 display_name: r.display_name,

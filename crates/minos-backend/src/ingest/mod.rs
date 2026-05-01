@@ -232,11 +232,8 @@ async fn broadcast_to_peers_of(
 ) {
     // Find every account paired to this Mac. If there are none, the Mac
     // is unpaired — drop the event.
-    let pairs = match crate::store::account_mac_pairings::list_accounts_for_mac(
-        pool,
-        mac_device_id,
-    )
-    .await
+    let pairs = match crate::store::account_mac_pairings::list_accounts_for_mac(pool, mac_device_id)
+        .await
     {
         Ok(v) if !v.is_empty() => v,
         Ok(_) => {
@@ -258,23 +255,19 @@ async fn broadcast_to_peers_of(
     };
 
     for pair in pairs {
-        let devices = match crate::store::devices::list_by_account(
-            pool,
-            &pair.mobile_account_id,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    target: "minos_backend::ingest",
-                    error = ?e,
-                    account = %pair.mobile_account_id,
-                    "failed to list devices for account"
-                );
-                continue;
-            }
-        };
+        let devices =
+            match crate::store::devices::list_by_account(pool, &pair.mobile_account_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_backend::ingest",
+                        error = ?e,
+                        account = %pair.mobile_account_id,
+                        "failed to list devices for account"
+                    );
+                    continue;
+                }
+            };
 
         for device in devices
             .iter()
