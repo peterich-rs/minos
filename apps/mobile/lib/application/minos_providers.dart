@@ -41,6 +41,55 @@ final runtimeAgentDescriptorsProvider = FutureProvider<List<AgentDescriptor>>((
   return ref.watch(minosCoreProvider).listClis();
 });
 
+/// Paired Macs for the current account. Drives the Partners list. Refresh
+/// happens via `ref.invalidate(pairedMacsProvider)` after a forget /
+/// successful pair — there is no polling stream yet, the user can pull
+/// the partners tab to refresh.
+final pairedMacsProvider = FutureProvider<List<MacSummaryDto>>((ref) {
+  return ref.watch(minosCoreProvider).listPairedMacs();
+});
+
+/// Routing target for `Forward` envelopes. `null` means no Mac is selected
+/// — the daemon falls back to broadcast-style fan-out when this is unset.
+@riverpod
+class ActiveMac extends _$ActiveMac {
+  @override
+  Future<String?> build() {
+    return ref.watch(minosCoreProvider).activeMac();
+  }
+
+  /// Set [macId] as the routing target. Updates state optimistically; if
+  /// the FRB call fails the state surfaces the error and re-reads the
+  /// core-side truth.
+  Future<void> setActive(String macId) async {
+    final previous = state;
+    state = AsyncValue.data(macId);
+    try {
+      await ref.read(minosCoreProvider).setActiveMac(macId);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      try {
+        state = AsyncValue.data(
+          await ref.read(minosCoreProvider).activeMac(),
+        );
+      } catch (_) {
+        state = previous;
+      }
+    }
+  }
+
+  /// Re-read the active mac from the core; used after a forget so the
+  /// cached value doesn't point at a no-longer-paired Mac.
+  Future<void> refresh() async {
+    state = const AsyncValue.loading();
+    try {
+      state = AsyncValue.data(await ref.read(minosCoreProvider).activeMac());
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+}
+
 /// Camera permission status + action helpers. The notifier is the single
 /// source of truth for the permission state driving the pairing UI.
 @riverpod

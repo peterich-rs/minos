@@ -107,6 +107,60 @@ final class ConnectionStateProvider
 
 String _$connectionStateHash() => r'7e2c58fcec3f59ae8890c0d5343a75bac0330ed8';
 
+/// Routing target for `Forward` envelopes. `null` means no Mac is selected
+/// — the daemon falls back to broadcast-style fan-out when this is unset.
+
+@ProviderFor(ActiveMac)
+final activeMacProvider = ActiveMacProvider._();
+
+/// Routing target for `Forward` envelopes. `null` means no Mac is selected
+/// — the daemon falls back to broadcast-style fan-out when this is unset.
+final class ActiveMacProvider
+    extends $AsyncNotifierProvider<ActiveMac, String?> {
+  /// Routing target for `Forward` envelopes. `null` means no Mac is selected
+  /// — the daemon falls back to broadcast-style fan-out when this is unset.
+  ActiveMacProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'activeMacProvider',
+        isAutoDispose: true,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$activeMacHash();
+
+  @$internal
+  @override
+  ActiveMac create() => ActiveMac();
+}
+
+String _$activeMacHash() => r'b0075c8f02d61041bc8bc1a58b71083291cfc185';
+
+/// Routing target for `Forward` envelopes. `null` means no Mac is selected
+/// — the daemon falls back to broadcast-style fan-out when this is unset.
+
+abstract class _$ActiveMac extends $AsyncNotifier<String?> {
+  FutureOr<String?> build();
+  @$mustCallSuper
+  @override
+  void runBuild() {
+    final ref = this.ref as $Ref<AsyncValue<String?>, String?>;
+    final element =
+        ref.element
+            as $ClassProviderElement<
+              AnyNotifier<AsyncValue<String?>, String?>,
+              AsyncValue<String?>,
+              Object?,
+              Object?
+            >;
+    element.handleCreate(ref, build);
+  }
+}
+
 /// Camera permission status + action helpers. The notifier is the single
 /// source of truth for the permission state driving the pairing UI.
 

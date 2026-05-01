@@ -151,7 +151,8 @@ class _AgentsTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final hasPairing = ref.watch(hasPersistedPairingProvider);
+    final macsAsync = ref.watch(pairedMacsProvider);
+    final activeAsync = ref.watch(activeMacProvider);
     final connection = ref.watch(connectionStateProvider).asData?.value;
 
     return SafeArea(
@@ -160,52 +161,100 @@ class _AgentsTab extends ConsumerWidget {
         children: <Widget>[
           const _LargeTitleBar(title: '伙伴', subtitle: '真人伙伴与已添加的 runtime 设备'),
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
-              children: <Widget>[
-                const _SectionLabel('真人伙伴'),
-                const _PartnerEmptyCard(
-                  icon: CupertinoIcons.person_2,
-                  title: '还没有真人伙伴',
-                  subtitle: '后端尚未开放真人伙伴列表；当前可以先添加 runtime 设备。',
-                ),
-                const SizedBox(height: 18),
-                const _SectionLabel('设备'),
-                hasPairing.when(
-                  loading: () => const _PartnerLoadingCard(),
-                  error: (error, _) => _PartnerEmptyCard(
-                    icon: CupertinoIcons.exclamationmark_triangle,
-                    title: '设备状态读取失败',
-                    subtitle: error.toString(),
+            child: RefreshIndicator(
+              onRefresh: () async {
+                ref.invalidate(pairedMacsProvider);
+                await ref.read(pairedMacsProvider.future);
+                await ref.read(activeMacProvider.notifier).refresh();
+              },
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+                children: <Widget>[
+                  const _SectionLabel('真人伙伴'),
+                  const _PartnerEmptyCard(
+                    icon: CupertinoIcons.person_2,
+                    title: '还没有真人伙伴',
+                    subtitle: '后端尚未开放真人伙伴列表；当前可以先添加 runtime 设备。',
                   ),
-                  data: (paired) {
-                    if (!paired) {
-                      return const _PartnerEmptyCard(
-                        icon: CupertinoIcons.desktopcomputer,
-                        title: '还没有设备伙伴',
-                        subtitle: '到「我的」页面点击「添加伙伴」，扫描 runtime 二维码。',
-                      );
-                    }
-                    return _GroupedCard(
-                      children: <Widget>[
-                        _RuntimePartnerRow(
-                          connection: connection,
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const _RuntimeProfilePage(),
+                  const SizedBox(height: 18),
+                  const _SectionLabel('设备'),
+                  macsAsync.when(
+                    loading: () => const _PartnerLoadingCard(),
+                    error: (error, _) => _PartnerEmptyCard(
+                      icon: CupertinoIcons.exclamationmark_triangle,
+                      title: '设备状态读取失败',
+                      subtitle: error.toString(),
+                    ),
+                    data: (macs) {
+                      if (macs.isEmpty) {
+                        return _GroupedCard(
+                          children: <Widget>[
+                            _AddPartnerRow(
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => const PairingPage(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      }
+                      final activeMacId = activeAsync.asData?.value;
+                      return _GroupedCard(
+                        children: <Widget>[
+                          for (var i = 0; i < macs.length; i++) ...<Widget>[
+                            if (i > 0) const _RowDivider(indent: 56),
+                            _MacRow(
+                              mac: macs[i],
+                              isActive:
+                                  activeMacId != null &&
+                                  activeMacId == macs[i].macDeviceId,
+                              connection: connection,
+                              onTap: () async {
+                                final wasActive =
+                                    activeMacId != null &&
+                                    activeMacId == macs[i].macDeviceId;
+                                if (wasActive) {
+                                  // Already active: open the runtime
+                                  // detail page so the user can browse
+                                  // CLIs, start a session, or remove this
+                                  // partner.
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) =>
+                                          const _RuntimeProfilePage(),
+                                    ),
+                                  );
+                                } else {
+                                  await ref
+                                      .read(activeMacProvider.notifier)
+                                      .setActive(macs[i].macDeviceId);
+                                }
+                              },
+                              onForget: () =>
+                                  _confirmForgetMac(context, ref, macs[i]),
+                            ),
+                          ],
+                          const _RowDivider(indent: 56),
+                          _AddPartnerRow(
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const PairingPage(),
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 12),
-                const _GroupedFooter(
-                  text:
-                      '设备伙伴承载 Agent runtime；点击设备主页可以查看它支持的 Agent CLI、发起会话或删除伙伴。',
-                ),
-              ],
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  const _GroupedFooter(
+                    text:
+                        '设备伙伴承载 Agent runtime；点击设备切换路由目标，向左滑动可删除伙伴。',
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -264,7 +313,8 @@ class _RuntimeProfilePage extends ConsumerWidget {
                         const SizedBox(width: 10),
                         Expanded(
                           child: OutlinedButton.icon(
-                            onPressed: () => _confirmForgetPeer(context, ref),
+                            onPressed: () =>
+                                _confirmForgetActiveMac(context, ref),
                             icon: const Icon(CupertinoIcons.delete),
                             label: const Text('删除伙伴'),
                           ),
@@ -389,18 +439,38 @@ class _PartnerEmptyCard extends StatelessWidget {
   }
 }
 
-class _RuntimePartnerRow extends ConsumerWidget {
-  const _RuntimePartnerRow({required this.connection, required this.onTap});
+/// One row per paired Mac in the Partners tab. Tap = set as active routing
+/// target; long-press shows a delete confirm. The row mirrors the visual
+/// shape of the legacy single-peer `_RuntimePartnerRow`: avatar +
+/// name/connection-line. The active Mac gets a checkmark on the right.
+///
+/// UI gap (deviceshell-MVP): no swipe-to-forget gesture yet — long-press is
+/// the only delete affordance. The Add Partner row + RefreshIndicator on
+/// the parent ListView cover the other interactions.
+class _MacRow extends StatelessWidget {
+  const _MacRow({
+    required this.mac,
+    required this.isActive,
+    required this.connection,
+    required this.onTap,
+    required this.onForget,
+  });
 
+  final MacSummaryDto mac;
+  final bool isActive;
   final ConnectionState? connection;
   final VoidCallback onTap;
+  final VoidCallback onForget;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final name = _resolvePeerDisplayName(ref);
+    final name = mac.macDisplayName.trim().isEmpty
+        ? 'Agent Runtime'
+        : mac.macDisplayName.trim();
     return InkWell(
       onTap: onTap,
+      onLongPress: onForget,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
@@ -418,7 +488,91 @@ class _RuntimePartnerRow extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 3),
-                  _ConnectionLine(state: connection),
+                  // Only show the live connection indicator on the active
+                  // Mac — the WS only carries one upstream session at a
+                  // time, so the indicator on inactive rows would be
+                  // misleading.
+                  if (isActive)
+                    _ConnectionLine(state: connection)
+                  else
+                    Text(
+                      '点击切换为当前路由目标',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (isActive)
+              Icon(
+                CupertinoIcons.check_mark,
+                size: 20,
+                color: theme.colorScheme.primary,
+              )
+            else
+              Icon(
+                CupertinoIcons.chevron_right,
+                size: 16,
+                color: theme.colorScheme.outline,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Trailing row in the partners list: tap to enter [PairingPage]. Mirrors
+/// the iOS-flat "Add Account" affordance.
+class _AddPartnerRow extends StatelessWidget {
+  const _AddPartnerRow({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: <Widget>[
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                CupertinoIcons.qrcode_viewfinder,
+                color: theme.colorScheme.primary,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    '添加伙伴',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '扫描 runtime 二维码',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -474,13 +628,25 @@ class _RuntimeProfileHeader extends ConsumerWidget {
   }
 }
 
-/// Reads the persisted peer display name and falls back to a generic
-/// label when it's still loading, missing, or comes back empty.
+/// Resolves a display name for the *active* Mac partner. After ADR-0020
+/// the Mac name comes from the server's `account_mac_pairings` row,
+/// surfaced via `pairedMacsProvider`. Falls back to the cached
+/// `peerDisplayName` (kept for legacy startup transitions) and finally
+/// a generic label so the row never renders empty.
 String _resolvePeerDisplayName(WidgetRef ref) {
   const fallback = 'Agent Runtime';
-  final value = ref.watch(peerDisplayNameProvider).asData?.value;
-  if (value == null) return fallback;
-  final trimmed = value.trim();
+  final activeId = ref.watch(activeMacProvider).asData?.value;
+  final macs = ref.watch(pairedMacsProvider).asData?.value;
+  if (activeId != null && macs != null) {
+    final match = macs.where((m) => m.macDeviceId == activeId).toList();
+    if (match.isNotEmpty) {
+      final trimmed = match.first.macDisplayName.trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+  }
+  final cached = ref.watch(peerDisplayNameProvider).asData?.value;
+  if (cached == null) return fallback;
+  final trimmed = cached.trim();
   return trimmed.isEmpty ? fallback : trimmed;
 }
 
@@ -1078,12 +1244,53 @@ class _RowDivider extends StatelessWidget {
   }
 }
 
-Future<void> _confirmForgetPeer(BuildContext context, WidgetRef ref) async {
+/// Forget the Mac currently set as the routing target. Surfaces an error
+/// dialog when no Mac is active (post-ADR-0020 forget needs an explicit
+/// `mac_device_id`). Used from `_RuntimeProfilePage`'s "delete partner"
+/// button.
+Future<void> _confirmForgetActiveMac(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final activeId = ref.read(activeMacProvider).asData?.value;
+  final macs = ref.read(pairedMacsProvider).asData?.value ?? const [];
+  final mac = activeId == null
+      ? null
+      : macs.where((m) => m.macDeviceId == activeId).toList();
+  if (mac == null || mac.isEmpty) {
+    await showCupertinoDialog<void>(
+      context: context,
+      builder: (ctx) => CupertinoAlertDialog(
+        title: const Text('未选中设备伙伴'),
+        content: const Text('请回到伙伴列表选择要删除的设备。'),
+        actions: <Widget>[
+          CupertinoDialogAction(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('好'),
+          ),
+        ],
+      ),
+    );
+    return;
+  }
+  await _confirmForgetMac(context, ref, mac.first);
+}
+
+/// Forget a specific paired Mac. Shared between the row-level long-press
+/// and the runtime-profile delete button.
+Future<void> _confirmForgetMac(
+  BuildContext context,
+  WidgetRef ref,
+  MacSummaryDto mac,
+) async {
+  final name = mac.macDisplayName.trim().isEmpty
+      ? 'Agent Runtime'
+      : mac.macDisplayName.trim();
   final confirmed = await showCupertinoDialog<bool>(
     context: context,
     builder: (ctx) => CupertinoAlertDialog(
       title: const Text('删除设备伙伴'),
-      content: const Text('这会清除当前设备绑定。再次使用需要重新添加伙伴。'),
+      content: Text('删除「$name」后再次使用需要重新扫码配对。'),
       actions: <Widget>[
         CupertinoDialogAction(
           onPressed: () => Navigator.of(ctx).pop(false),
@@ -1098,10 +1305,11 @@ Future<void> _confirmForgetPeer(BuildContext context, WidgetRef ref) async {
     ),
   );
   if (confirmed != true) return;
-  await ref.read(minosCoreProvider).forgetPeer();
-  ref.invalidate(hasPersistedPairingProvider);
+  await ref.read(minosCoreProvider).forgetMac(mac.macDeviceId);
+  ref.invalidate(pairedMacsProvider);
   ref.invalidate(runtimeAgentDescriptorsProvider);
-  if (context.mounted) {
+  await ref.read(activeMacProvider.notifier).refresh();
+  if (context.mounted && Navigator.of(context).canPop()) {
     Navigator.of(context).pop();
   }
 }
