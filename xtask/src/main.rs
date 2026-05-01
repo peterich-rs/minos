@@ -15,6 +15,7 @@ use tokio::runtime::Builder;
 use tokio::sync::broadcast::error::RecvError;
 
 mod gen_codex;
+mod lint_naming;
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "Minos build & codegen orchestration")]
@@ -56,6 +57,9 @@ enum Cmd {
     /// Regenerate `crates/minos-codex-protocol/src/generated/{types,methods}.rs`
     /// from the JSON schemas in `/schemas`. Run after editing `/schemas`.
     GenCodexProtocol,
+    /// Scan protocol/FFI/HTTP/SQL surfaces for `mac_*` / `ios_*` identifiers
+    /// (Phase B naming-sweep guard). Fails if any are found.
+    LintNaming,
 }
 
 fn main() -> Result<()> {
@@ -72,6 +76,7 @@ fn main() -> Result<()> {
         Cmd::BackendDbReset => backend_db_reset(),
         Cmd::BackendRun => backend_run(),
         Cmd::GenCodexProtocol => gen_codex::run(&workspace_root()?),
+        Cmd::LintNaming => lint_naming::run(&workspace_root()?),
     }
 }
 
@@ -93,6 +98,9 @@ fn check_all(with_codex: bool) -> Result<()> {
         ],
         &workspace_root,
     )?;
+
+    eprintln!("==> cargo xtask lint-naming");
+    lint_naming::run(&workspace_root)?;
 
     eprintln!("==> cargo test");
     run("cargo", &["test", "--workspace"], &workspace_root)?;
