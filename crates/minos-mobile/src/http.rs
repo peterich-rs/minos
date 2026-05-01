@@ -1,9 +1,13 @@
 //! HTTP client for the backend's `/v1/*` control plane.
 //!
 //! The mobile client uses this for the pre-WS pairing handshake (POST
-//! `/v1/pairing/consume`) and for tearing the pair down (DELETE
-//! `/v1/pairing`). The post-pair `Forward`/`Forwarded` and event push
-//! traffic still flows over the WebSocket.
+//! `/v1/pairing/consume`), for listing the account's paired Macs
+//! (`GET /v1/me/macs`), and for tearing a specific pair down
+//! (`DELETE /v1/pairings/:mac_device_id`). The post-pair `Forward` /
+//! `Forwarded` and event push traffic still flows over the WebSocket.
+//!
+//! ADR-0020 removed the iOS device-secret rail; every iOS-originated
+//! request authenticates with the bearer alone.
 
 use std::fmt::Write as _;
 use std::sync::Once;
@@ -11,11 +15,11 @@ use std::time::Duration;
 
 use http::header::CONTENT_TYPE;
 use http::{Method, Request, Response, StatusCode};
-use minos_domain::{DeviceId, DeviceSecret, MinosError};
+use minos_domain::{DeviceId, MinosError};
 use minos_protocol::{
     AuthRequest, AuthResponse, GetThreadLastSeqResponse, ListThreadsParams, ListThreadsResponse,
-    LogoutRequest, PairConsumeRequest, PairResponse, ReadThreadParams, ReadThreadResponse,
-    RefreshRequest, RefreshResponse,
+    LogoutRequest, MeMacsResponse, PairConsumeRequest, PairResponse, ReadThreadParams,
+    ReadThreadResponse, RefreshRequest, RefreshResponse,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -91,7 +95,7 @@ impl MobileHttpClient {
             None,
             Some(format!("device_name={}", req.device_name)),
         );
-        let request = self.request_with_json(Method::POST, &url, Some(access_token), None, &req)?;
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -110,10 +114,18 @@ impl MobileHttpClient {
         }
     }
 
-    pub async fn forget_pairing(&self, secret: &DeviceSecret) -> Result<(), MinosError> {
-        let url = format!("{}/v1/pairing", self.base);
-        let trace_id = start_http_trace(Method::DELETE.as_str(), "/v1/pairing", None, None);
-        let request = self.request_without_body(Method::DELETE, &url, None, Some(secret))?;
+    /// Tear down a specific account_mac_pairings row. The path-bound
+    /// `mac_device_id` is the Mac to forget; bearer-only auth post
+    /// ADR-0020.
+    pub async fn delete_pair(
+        &self,
+        access_token: &str,
+        mac_device_id: DeviceId,
+    ) -> Result<(), MinosError> {
+        let path = format!("/v1/pairings/{mac_device_id}");
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::DELETE.as_str(), &path, None, None);
+        let request = self.request_without_body(Method::DELETE, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status == StatusCode::NO_CONTENT || status == StatusCode::NOT_FOUND {
@@ -131,13 +143,35 @@ impl MobileHttpClient {
         }
     }
 
-    /// Phase 2 added a bearer requirement to `/v1/threads`. Callers must
-    /// supply both the device-secret and the access-token; the device-
-    /// secret authenticates the WS-paired device, the bearer scopes the
-    /// query to the caller's account.
+    /// List every Mac paired to the caller's account. Bearer-only.
+    pub async fn list_paired_macs(
+        &self,
+        access_token: &str,
+    ) -> Result<MeMacsResponse, MinosError> {
+        let url = format!("{}/v1/me/macs", self.base);
+        let trace_id = start_http_trace(Method::GET.as_str(), "/v1/me/macs", None, None);
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: MeMacsResponse = decode_success_json(resp, "MeMacsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("macs={}", body.macs.len())),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    /// Bearer-only after ADR-0020. Lists the calling account's threads.
     pub async fn list_threads(
         &self,
-        secret: &DeviceSecret,
         access_token: &str,
         params: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
@@ -159,8 +193,7 @@ impl MobileHttpClient {
             let agent_str = agent_str.trim_matches('"');
             let _ = write!(url, "&agent={agent_str}");
         }
-        let request =
-            self.request_without_body(Method::GET, &url, Some(access_token), Some(secret))?;
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -182,7 +215,6 @@ impl MobileHttpClient {
 
     pub async fn read_thread(
         &self,
-        secret: &DeviceSecret,
         access_token: &str,
         params: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
@@ -203,8 +235,7 @@ impl MobileHttpClient {
         if let Some(from) = params.from_seq {
             let _ = write!(url, "&from_seq={from}");
         }
-        let request =
-            self.request_without_body(Method::GET, &url, Some(access_token), Some(secret))?;
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -231,7 +262,6 @@ impl MobileHttpClient {
 
     pub async fn get_thread_last_seq(
         &self,
-        secret: &DeviceSecret,
         access_token: &str,
         thread_id: &str,
     ) -> Result<GetThreadLastSeqResponse, MinosError> {
@@ -242,8 +272,7 @@ impl MobileHttpClient {
             Some(thread_id.into()),
             None,
         );
-        let request =
-            self.request_without_body(Method::GET, &url, Some(access_token), Some(secret))?;
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -266,17 +295,12 @@ impl MobileHttpClient {
     // ─────────────────────────── auth endpoints ───────────────────────────
 
     /// `POST /v1/auth/register` — create an account on the backend.
-    ///
-    /// The pairing-rail `x-device-*` headers still authenticate the device;
-    /// the new account-rail bearer/refresh tokens come back in the body.
-    /// `device_secret` MUST be supplied if the device has been paired
-    /// before — backend `authenticate()` rejects an empty secret on a row
-    /// with `secret_hash != NULL`. Spec §5.2.
+    /// Bearer-only post ADR-0020; the iOS rail no longer carries
+    /// `X-Device-Secret`. Spec §5.2.
     pub async fn register(
         &self,
         email: &str,
         password: &str,
-        device_secret: Option<&DeviceSecret>,
     ) -> Result<AuthResponse, MinosError> {
         let url = format!("{}/v1/auth/register", self.base);
         let trace_id = start_http_trace(
@@ -289,21 +313,14 @@ impl MobileHttpClient {
             email: email.into(),
             password: password.into(),
         };
-        let request = self.request_with_json(Method::POST, &url, None, device_secret, &body)?;
+        let request = self.request_with_json(Method::POST, &url, None, &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         decode_auth_response(resp, trace_id).await
     }
 
     /// `POST /v1/auth/login` — authenticate an existing account.
-    ///
-    /// `device_secret` MUST be supplied if the device has been paired
-    /// before — same constraint as `register`. Spec §5.2.
-    pub async fn login(
-        &self,
-        email: &str,
-        password: &str,
-        device_secret: Option<&DeviceSecret>,
-    ) -> Result<AuthResponse, MinosError> {
+    /// Bearer-only post ADR-0020. Spec §5.2.
+    pub async fn login(&self, email: &str, password: &str) -> Result<AuthResponse, MinosError> {
         let url = format!("{}/v1/auth/login", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
@@ -315,22 +332,14 @@ impl MobileHttpClient {
             email: email.into(),
             password: password.into(),
         };
-        let request = self.request_with_json(Method::POST, &url, None, device_secret, &body)?;
+        let request = self.request_with_json(Method::POST, &url, None, &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         decode_auth_response(resp, trace_id).await
     }
 
     /// `POST /v1/auth/refresh` — rotate the bearer + refresh pair.
-    ///
-    /// The pairing-rail `x-device-*` headers must still be present so the
-    /// backend can confirm the device is paired; the body carries the
-    /// refresh-token plaintext (rotated server-side, returned new in the
-    /// response).
-    pub async fn refresh(
-        &self,
-        refresh_token: &str,
-        device_secret: Option<&DeviceSecret>,
-    ) -> Result<RefreshResponse, MinosError> {
+    /// Bearer-only post ADR-0020.
+    pub async fn refresh(&self, refresh_token: &str) -> Result<RefreshResponse, MinosError> {
         let url = format!("{}/v1/auth/refresh", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
@@ -341,23 +350,17 @@ impl MobileHttpClient {
         let body = RefreshRequest {
             refresh_token: refresh_token.into(),
         };
-        let request = self.request_with_json(Method::POST, &url, None, device_secret, &body)?;
+        let request = self.request_with_json(Method::POST, &url, None, &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         decode_refresh_response(resp, trace_id).await
     }
 
     /// `POST /v1/auth/logout` — revoke the named refresh token.
-    ///
-    /// 204 No Content is the success status. The bearer token in
-    /// `Authorization` authenticates the request; the body specifies which
-    /// refresh token to revoke (the backend supports rotating-multi-device,
-    /// so we name the specific one). Like the other auth endpoints, the
-    /// pairing-rail `x-device-secret` is required once the device is paired.
+    /// Bearer-only post ADR-0020.
     pub async fn logout(
         &self,
         access_token: &str,
         refresh_token: &str,
-        device_secret: Option<&DeviceSecret>,
     ) -> Result<(), MinosError> {
         let url = format!("{}/v1/auth/logout", self.base);
         let trace_id = start_http_trace(
@@ -369,8 +372,7 @@ impl MobileHttpClient {
         let body = LogoutRequest {
             refresh_token: refresh_token.into(),
         };
-        let request =
-            self.request_with_json(Method::POST, &url, Some(access_token), device_secret, &body)?;
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status == StatusCode::NO_CONTENT || status.is_success() {
@@ -388,9 +390,9 @@ impl MobileHttpClient {
         }
     }
 
-    /// Build a request stamped with the pairing-rail device headers + the
-    /// bearer token. Cb-Access is also stamped if configured. Use this for
-    /// any account-aware route the daemon adds in future phases.
+    /// Build a request stamped with the device-id + bearer token. CF-Access
+    /// is also stamped if configured. Use this for any account-aware route
+    /// the daemon adds in future phases.
     pub fn build_authed_request(
         &self,
         method: Method,
@@ -398,7 +400,7 @@ impl MobileHttpClient {
         access: &str,
     ) -> Result<Request<RequestBody>, MinosError> {
         let url = format!("{}{}", self.base, path);
-        self.request_without_body(method, &url, Some(access), None)
+        self.request_without_body(method, &url, Some(access))
     }
 
     fn request_with_json<T>(
@@ -406,7 +408,6 @@ impl MobileHttpClient {
         method: Method,
         url: &str,
         access_token: Option<&str>,
-        secret: Option<&DeviceSecret>,
         body: &T,
     ) -> Result<Request<RequestBody>, MinosError>
     where
@@ -416,7 +417,7 @@ impl MobileHttpClient {
             message: format!("encode request body {url}: {e}"),
         })?;
         Self::finish_request(
-            self.request_builder(method, url, access_token, secret)
+            self.request_builder(method, url, access_token)
                 .header(CONTENT_TYPE, "application/json"),
             payload,
             url,
@@ -428,10 +429,9 @@ impl MobileHttpClient {
         method: Method,
         url: &str,
         access_token: Option<&str>,
-        secret: Option<&DeviceSecret>,
     ) -> Result<Request<RequestBody>, MinosError> {
         Self::finish_request(
-            self.request_builder(method, url, access_token, secret),
+            self.request_builder(method, url, access_token),
             RequestBody::absent(),
             url,
         )
@@ -442,16 +442,12 @@ impl MobileHttpClient {
         method: Method,
         url: &str,
         access_token: Option<&str>,
-        secret: Option<&DeviceSecret>,
     ) -> http::request::Builder {
         let mut req = Request::builder()
             .method(method)
             .uri(url)
             .header("x-device-id", self.device_id.to_string())
             .header("x-device-role", self.device_role);
-        if let Some(secret) = secret {
-            req = req.header("x-device-secret", secret.as_str());
-        }
         if let Some(access_token) = access_token {
             req = req.header("authorization", format!("Bearer {access_token}"));
         }

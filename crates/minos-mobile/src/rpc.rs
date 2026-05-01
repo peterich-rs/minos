@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use dashmap::DashMap;
-use minos_domain::MinosError;
+use minos_domain::{DeviceId, MinosError};
 use minos_protocol::Envelope;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -55,6 +55,7 @@ pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
     pending: &DashMap<u64, oneshot::Sender<RpcReply>>,
     next_id: &AtomicU64,
     outbox: &mpsc::Sender<Envelope>,
+    target_device_id: DeviceId,
     method: &str,
     params: P,
     timeout: Duration,
@@ -87,6 +88,7 @@ pub(crate) async fn forward_rpc<P: Serialize, R: DeserializeOwned + 'static>(
     });
     let env = Envelope::Forward {
         version: 1,
+        target_device_id,
         payload,
     };
 
@@ -235,10 +237,12 @@ mod tests {
         let pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>> = Arc::new(DashMap::new());
         let next_id = Arc::new(AtomicU64::new(1));
         let (tx, _rx) = mpsc::channel::<Envelope>(8);
+        let target = DeviceId::new();
         let res: Result<Value, _> = forward_rpc(
             &pending,
             &next_id,
             &tx,
+            target,
             "minos_health",
             serde_json::Value::Null,
             Duration::from_millis(50),
@@ -254,6 +258,7 @@ mod tests {
         let pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>> = Arc::new(DashMap::new());
         let next_id = Arc::new(AtomicU64::new(7));
         let (tx, mut rx) = mpsc::channel::<Envelope>(8);
+        let target = DeviceId::new();
         let _join = tokio::spawn({
             let pending = pending.clone();
             let next_id = next_id.clone();
@@ -262,6 +267,7 @@ mod tests {
                     &pending,
                     &next_id,
                     &tx,
+                    target,
                     "minos_test_method",
                     serde_json::json!({"foo": "bar"}),
                     Duration::from_millis(200),
@@ -272,8 +278,13 @@ mod tests {
         });
         let env = rx.recv().await.expect("envelope must be sent");
         match env {
-            Envelope::Forward { version, payload } => {
+            Envelope::Forward {
+                version,
+                target_device_id,
+                payload,
+            } => {
                 assert_eq!(version, 1);
+                assert_eq!(target_device_id, target);
                 assert_eq!(payload["jsonrpc"], "2.0");
                 assert_eq!(payload["method"], "minos_test_method");
                 assert_eq!(payload["id"], 7);
@@ -293,6 +304,7 @@ mod tests {
             &pending,
             &next_id,
             &tx,
+            DeviceId::new(),
             "minos_health",
             serde_json::Value::Null,
             Duration::from_secs(5),
@@ -342,6 +354,7 @@ mod tests {
                 &pending_clone,
                 &next_id_clone,
                 &tx,
+                DeviceId::new(),
                 "minos_stop_agent",
                 serde_json::Value::Null,
                 Duration::from_secs(1),
@@ -405,6 +418,7 @@ mod tests {
             &pending,
             &next_id,
             &tx,
+            DeviceId::new(),
             "minos_health",
             serde_json::Value::Null,
             Duration::from_secs(5),
@@ -441,6 +455,7 @@ mod tests {
                 &pending_for_call,
                 &next_id_for_call,
                 &tx,
+                DeviceId::new(),
                 "minos_health",
                 serde_json::Value::Null,
                 Duration::from_secs(5),

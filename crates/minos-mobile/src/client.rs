@@ -9,9 +9,9 @@
 //!
 //! - Parse a scanned QR v2 payload (`PairingQrPayload` from
 //!   `minos_protocol::messages`) and persist its fields into the
-//!   [`MobilePairingStore`]: backend URL, CF Access tokens (if any),
-//!   eventually the `DeviceSecret` minted by the backend on successful
-//!   pair.
+//!   [`MobilePairingStore`]: the active-Mac DeviceId returned by
+//!   `/v1/pairing/consume` (no secret — ADR-0020 made the iOS rail
+//!   bearer-only).
 //! - Maintain a single outbound WebSocket; expose `ConnectionState` via a
 //!   `watch::Receiver` and live `UiEventFrame` over a `broadcast::Sender`.
 //!
@@ -25,12 +25,12 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceSecret, MinosError};
+use minos_domain::{AgentName, ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
     AuthSummary, Envelope, EventKind, GetThreadLastSeqParams, GetThreadLastSeqResponse,
-    ListClisResponse, ListThreadsParams, ListThreadsResponse, PairingQrPayload, ReadThreadParams,
-    ReadThreadResponse, RefreshResponse, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse,
+    ListClisResponse, ListThreadsParams, ListThreadsResponse, MacSummary, PairingQrPayload,
+    ReadThreadParams, ReadThreadResponse, RefreshResponse, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, RwLock};
@@ -152,12 +152,8 @@ impl MobileClient {
     /// minted one only if no persisted id is present.
     #[must_use]
     pub fn new_with_persisted_state(self_name: String, state: PersistedPairingState) -> Self {
-        let device = restored_device(&state);
-        let device_id = device
-            .as_ref()
-            .map(|(id, _)| *id)
-            .or_else(|| restored_device_id_only(&state))
-            .unwrap_or_default();
+        let device = restored_device_id_only(&state);
+        let device_id = device.unwrap_or_default();
         let auth_persisted = restored_auth(&state);
         let store = Arc::new(InMemoryPairingStore::from_parts(
             device,
@@ -241,17 +237,13 @@ impl MobileClient {
     /// Export the current pairing snapshot so Dart can mirror it into secure
     /// storage after pairing succeeds.
     pub async fn persisted_pairing_state(&self) -> Result<PersistedPairingState, MinosError> {
-        let device = self.store.load_device().await?;
+        let _ = self.store.load_device().await?;
         let auth = self.store.load_auth().await?;
 
         Ok(PersistedPairingState {
-            // Keep the device id even before pairing mints a DeviceSecret.
             // Bearer tokens are bound to this id, so a register/login ->
             // cold-launch -> pair flow must not silently rotate it.
             device_id: Some(self.device_id.to_string()),
-            device_secret: device
-                .as_ref()
-                .map(|(_, secret)| secret.as_str().to_string()),
             access_token: auth.as_ref().map(|a| a.access_token.clone()),
             access_expires_at_ms: auth.as_ref().map(|a| a.access_expires_at_ms),
             refresh_token: auth.as_ref().map(|a| a.refresh_token.clone()),
@@ -290,10 +282,10 @@ impl MobileClient {
             return Ok(());
         }
 
-        let Some((device_id, device_secret)) = self.store.load_device().await? else {
+        let Some(device_id) = self.store.load_device().await? else {
             return Err(MinosError::StoreCorrupt {
                 path: "persisted_pairing_state.device".into(),
-                message: "missing device_id/device_secret for resume".into(),
+                message: "missing device_id for resume".into(),
             });
         };
         if device_id != self.device_id {
@@ -331,14 +323,7 @@ impl MobileClient {
             .as_ref()
             .map(|s| s.access_token.clone());
 
-        let result = self
-            .connect(
-                backend_url,
-                device_secret.as_str(),
-                cf_access,
-                access.as_deref(),
-            )
-            .await;
+        let result = self.connect(backend_url, cf_access, access.as_deref()).await;
 
         match result {
             Ok(()) => {
@@ -376,9 +361,10 @@ impl MobileClient {
     }
 
     /// Scan a QR v2 payload (raw JSON). Calls `POST /v1/pairing/consume`
-    /// over HTTP at the compile-time `BACKEND_URL`, persists the returned
-    /// `DeviceSecret`, opens the authenticated WebSocket, and transitions
-    /// [`ConnectionState`] through `Pairing → Connected`.
+    /// over HTTP at the compile-time `BACKEND_URL`, records the paired
+    /// Mac as the active forward target, opens the authenticated
+    /// WebSocket, and transitions [`ConnectionState`] through
+    /// `Pairing → Connected`. Bearer-only post ADR-0020.
     ///
     /// The QR carries only `host_display_name`, `pairing_token`, and the
     /// expiry; backend URL and any CF Access edge credentials live in the
@@ -448,54 +434,57 @@ impl MobileClient {
             )
             .await?;
 
-        let device_secret = pair_resp.your_device_secret.clone();
+        // Persist the device id (rebound across runs) and remember the
+        // newly-paired Mac as the active forward target. Bearer-only post
+        // ADR-0020 — no DeviceSecret is minted to the iOS rail.
+        self.store.save_device(&self.device_id).await?;
         self.store
-            .save_device(&self.device_id, &device_secret)
+            .save_active_mac(&pair_resp.peer_device_id)
             .await?;
 
-        // Step 2: now open the WS with the freshly-issued secret. From here
-        // on every connect carries `X-Device-Secret` and `Authorization:
-        // Bearer` (the latter required by Phase 2 for ios-client uploads).
-        self.connect(backend_url, device_secret.as_str(), cf, Some(&access))
-            .await?;
+        // Step 2: open the WS bearer-authenticated. The reconnect loop
+        // re-uses the same auth_session.
+        self.connect(backend_url, cf, Some(&access)).await?;
 
         let _ = self.state_tx.send(ConnectionState::Connected);
         Ok(())
     }
 
-    /// Forget the current pairing. Clears secure storage, drops the
-    /// socket, and emits `Disconnected`. Idempotent.
-    pub async fn forget_peer(&self) -> Result<(), MinosError> {
-        let device = self.store.load_device().await?;
+    /// Tear down a specific paired Mac. The path-bound `mac` is the Mac
+    /// to forget. Idempotent. Clears the active-mac slot only when it
+    /// matches the deleted Mac so a concurrent `set_active_mac` to a
+    /// different Mac is preserved.
+    pub async fn forget_mac(&self, mac: DeviceId) -> Result<(), MinosError> {
         let backend_url = crate::build_config::BACKEND_URL;
         let cf = crate::build_config::cf_access();
+        let access = self.access_token_or_unauthorized().await?;
 
-        // Best-effort: ask the backend to tear down its side too. Failure
-        // here must not block the local-state cleanup below — the user
-        // re-pairs to recover.
-        if let Some((_, secret)) = device.as_ref() {
-            let http = crate::http::MobileHttpClient::new(backend_url, self.device_id, cf)?;
-            let _ = http.forget_pairing(secret).await;
+        // Best-effort delete on the backend. Failure here must not block
+        // local cleanup — the user re-pairs to recover.
+        if let Ok(http) = crate::http::MobileHttpClient::new(backend_url, self.device_id, cf) {
+            let _ = http.delete_pair(&access, mac).await;
         }
 
-        self.store.clear_all().await?;
-        self.shutdown_outbound().await;
-        let _ = self.state_tx.send(ConnectionState::Disconnected);
+        self.store.clear_active_if(&mac).await?;
+
+        // If we forgot the *active* mac and the WS is currently up, the
+        // backend will emit Unpaired and the recv loop will tear the WS
+        // down via the existing path. Don't preemptively shut it down
+        // here — multiple Macs may still be paired.
         Ok(())
     }
 
     // ─────────────────────────── history rpcs ────────────────────────────
 
-    /// Request a page of thread summaries from the backend. Phase 2 made
-    /// the route bearer-gated; callers must already have logged in.
+    /// Request a page of thread summaries from the backend. Bearer-only
+    /// post ADR-0020.
     pub async fn list_threads(
         &self,
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
-        let (backend_url, secret, cf) = self.http_creds().await?;
         let access = self.access_token_or_unauthorized().await?;
-        let http = crate::http::MobileHttpClient::new(backend_url, self.device_id, cf)?;
-        http.list_threads(&secret, &access, req).await
+        let http = self.http_client_no_secret()?;
+        http.list_threads(&access, req).await
     }
 
     /// Read a window of translated UI events from one thread.
@@ -503,10 +492,9 @@ impl MobileClient {
         &self,
         req: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
-        let (backend_url, secret, cf) = self.http_creds().await?;
         let access = self.access_token_or_unauthorized().await?;
-        let http = crate::http::MobileHttpClient::new(backend_url, self.device_id, cf)?;
-        http.read_thread(&secret, &access, req).await
+        let http = self.http_client_no_secret()?;
+        http.read_thread(&access, req).await
     }
 
     /// Host-only helper (mobile rarely uses this; included for parity).
@@ -514,11 +502,40 @@ impl MobileClient {
         &self,
         req: GetThreadLastSeqParams,
     ) -> Result<GetThreadLastSeqResponse, MinosError> {
-        let (backend_url, secret, cf) = self.http_creds().await?;
         let access = self.access_token_or_unauthorized().await?;
-        let http = crate::http::MobileHttpClient::new(backend_url, self.device_id, cf)?;
-        http.get_thread_last_seq(&secret, &access, &req.thread_id)
-            .await
+        let http = self.http_client_no_secret()?;
+        http.get_thread_last_seq(&access, &req.thread_id).await
+    }
+
+    /// List every Mac paired to the caller's account.
+    pub async fn list_paired_macs(&self) -> Result<Vec<MacSummary>, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        let http = self.http_client_no_secret()?;
+        let resp = http.list_paired_macs(&access).await?;
+        Ok(resp.macs)
+    }
+
+    /// Override the active forward target. Subsequent `Envelope::Forward`
+    /// frames stamp this Mac's id. Persisted so cold-launch restores the
+    /// same target.
+    pub async fn set_active_mac(&self, mac: DeviceId) -> Result<(), MinosError> {
+        self.store.save_active_mac(&mac).await
+    }
+
+    /// Read the current active Mac id, or `None` if none has been paired
+    /// yet (or every paired Mac has been forgotten).
+    pub async fn active_mac(&self) -> Result<Option<DeviceId>, MinosError> {
+        self.store.load_active_mac().await
+    }
+
+    /// Resolve the active Mac id for outbound forward-RPCs, or surface
+    /// `NotConnected` (no specific "no active mac" variant — the caller
+    /// experience is identical: the WS exists but has no routable target).
+    async fn require_active_mac(&self) -> Result<DeviceId, MinosError> {
+        self.store
+            .load_active_mac()
+            .await?
+            .ok_or(MinosError::NotConnected)
     }
 
     /// Pluck the live access token out of `auth_session`, or surface
@@ -547,10 +564,12 @@ impl MobileClient {
             .await
             .clone()
             .ok_or(MinosError::NotConnected)?;
+        let target = self.require_active_mac().await?;
         let resp: ListClisResponse = forward_rpc(
             &self.pending,
             &self.next_id,
             &outbox,
+            target,
             "minos_list_clis",
             serde_json::Value::Null,
             Duration::from_secs(10),
@@ -583,11 +602,13 @@ impl MobileClient {
             .await
             .clone()
             .ok_or(MinosError::NotConnected)?;
+        let target = self.require_active_mac().await?;
         let req = StartAgentRequest { agent };
         let resp: StartAgentResponse = forward_rpc(
             &self.pending,
             &self.next_id,
             &outbox,
+            target,
             "minos_start_agent",
             req,
             Duration::from_secs(60),
@@ -612,6 +633,7 @@ impl MobileClient {
             .await
             .clone()
             .ok_or(MinosError::NotConnected)?;
+        let target = self.require_active_mac().await?;
         let thread_id = session_id.clone();
         let text_len = text.len();
         let req = SendUserMessageRequest { session_id, text };
@@ -619,6 +641,7 @@ impl MobileClient {
             &self.pending,
             &self.next_id,
             &outbox,
+            target,
             "minos_send_user_message",
             req,
             Duration::from_secs(10),
@@ -641,10 +664,12 @@ impl MobileClient {
             .await
             .clone()
             .ok_or(MinosError::NotConnected)?;
+        let target = self.require_active_mac().await?;
         let _: () = forward_rpc(
             &self.pending,
             &self.next_id,
             &outbox,
+            target,
             "minos_stop_agent",
             serde_json::Value::Null,
             Duration::from_secs(10),
@@ -670,20 +695,16 @@ impl MobileClient {
     /// refresh tokens are stored both in memory (via `auth_session`) and
     /// in the durable store. The auth-state watch transitions to
     /// `Authenticated` and the reconnect loop starts. Spec §5.4 / §6.1.
-    ///
-    /// If the device has been paired before, the persisted `DeviceSecret`
-    /// is stamped onto the request so the backend's `authenticate()` rail
-    /// accepts the call — without it, a re-login on a previously-paired
-    /// device would 401 with `kind=unauthorized`.
     pub async fn register(
         &self,
         email: String,
         password: String,
     ) -> Result<AuthSummary, MinosError> {
         let http = self.http_client_no_secret()?;
-        let device = self.store.load_device().await?;
-        let secret = device.as_ref().map(|(_, s)| s);
-        let resp = http.register(&email, &password, secret).await?;
+        let resp = http.register(&email, &password).await?;
+        // Persist the device id pre-pair so cold-launch resumes against
+        // the same JWT-bound id.
+        self.store.save_device(&self.device_id).await?;
         let summary = self.adopt_auth_response(resp).await;
         self.ensure_reconnect_loop().await;
         Ok(summary)
@@ -691,12 +712,11 @@ impl MobileClient {
 
     /// Log into an existing account on the backend. Same shape as
     /// `register` modulo the create-vs-find behaviour on the server. Spec
-    /// §5.4. See `register` for the device-secret stamping note.
+    /// §5.4.
     pub async fn login(&self, email: String, password: String) -> Result<AuthSummary, MinosError> {
         let http = self.http_client_no_secret()?;
-        let device = self.store.load_device().await?;
-        let secret = device.as_ref().map(|(_, s)| s);
-        let resp = http.login(&email, &password, secret).await?;
+        let resp = http.login(&email, &password).await?;
+        self.store.save_device(&self.device_id).await?;
         let summary = self.adopt_auth_response(resp).await;
         self.ensure_reconnect_loop().await;
         Ok(summary)
@@ -715,9 +735,7 @@ impl MobileClient {
         })?;
         let _ = self.auth_state_tx.send(AuthStateFrame::Refreshing);
         let http = self.http_client_no_secret()?;
-        let device = self.store.load_device().await?;
-        let secret = device.as_ref().map(|(_, s)| s);
-        match http.refresh(&session.refresh_token, secret).await {
+        match http.refresh(&session.refresh_token).await {
             Ok(r) => {
                 self.adopt_refresh_response(session.account.clone(), r)
                     .await;
@@ -752,9 +770,7 @@ impl MobileClient {
             // Best-effort logout. If the network is down or the bearer is
             // already invalid we still wipe local state.
             if let Ok(http) = self.http_client_no_secret() {
-                let device = self.store.load_device().await.ok().flatten();
-                let secret = device.as_ref().map(|(_, sec)| sec);
-                let _ = http.logout(&s.access_token, &s.refresh_token, secret).await;
+                let _ = http.logout(&s.access_token, &s.refresh_token).await;
             }
         }
         self.clear_auth_session_and_disconnect().await;
@@ -924,28 +940,6 @@ impl MobileClient {
         }
     }
 
-    /// Resolve `(backend_url, device_secret, cf_access)` for HTTP-backed
-    /// thread queries. The URL and CF Access tuple come from compile-time
-    /// `build_config`; only the device-secret is sourced from the persisted
-    /// store.
-    async fn http_creds(
-        &self,
-    ) -> Result<(&'static str, DeviceSecret, Option<(String, String)>), MinosError> {
-        let (_, secret) =
-            self.store
-                .load_device()
-                .await?
-                .ok_or_else(|| MinosError::StoreCorrupt {
-                    path: "device".into(),
-                    message: "missing device secret".into(),
-                })?;
-        Ok((
-            crate::build_config::BACKEND_URL,
-            secret,
-            crate::build_config::cf_access(),
-        ))
-    }
-
     // ─────────────────────────── internals ────────────────────────────
 
     // The body is mostly header-stamping boilerplate that mirrors
@@ -955,7 +949,6 @@ impl MobileClient {
     async fn connect(
         &self,
         url: &str,
-        device_secret: &str,
         cf_access: Option<(String, String)>,
         access_token: Option<&str>,
     ) -> Result<(), MinosError> {
@@ -989,15 +982,6 @@ impl MobileClient {
         headers.insert(
             "X-Device-Role",
             "ios-client".parse().expect("static header value is valid"),
-        );
-        headers.insert(
-            "X-Device-Secret",
-            device_secret
-                .parse()
-                .map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "device_secret is not a valid header value".into(),
-                })?,
         );
         if let Some(tok) = access_token {
             headers.insert(
@@ -1325,29 +1309,8 @@ fn restored_auth(state: &PersistedPairingState) -> Option<crate::store::Persiste
     }
 }
 
-fn restored_device(state: &PersistedPairingState) -> Option<(DeviceId, DeviceSecret)> {
-    let (Some(device_id), Some(device_secret)) =
-        (state.device_id.as_deref(), state.device_secret.as_deref())
-    else {
-        return None;
-    };
-
-    match Uuid::parse_str(device_id) {
-        Ok(uuid) => Some((DeviceId(uuid), DeviceSecret(device_secret.to_string()))),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                device_id,
-                "mobile: ignoring malformed persisted device_id"
-            );
-            None
-        }
-    }
-}
-
-/// Restore just the device id when the device_secret hasn't been minted
-/// yet (post-register, pre-pair). The JWT's `did` claim binds the bearer
-/// to this id, so we MUST keep using the same value across the
+/// Restore the persisted device id. The JWT's `did` claim binds the
+/// bearer to this id, so we MUST keep using the same value across the
 /// register-then-pair flow.
 fn restored_device_id_only(state: &PersistedPairingState) -> Option<DeviceId> {
     let raw = state.device_id.as_deref()?;
@@ -1401,17 +1364,9 @@ async fn reconnect_loop(ctx: ReconnectContext) {
             continue;
         }
 
-        // Bail early if we don't have everything we need to connect: a
-        // device-secret (post-pair) and an active session. The backend
-        // URL and any CF Access edge tokens come from compile-time
-        // `build_config`. The loop will idle here until pair_with_qr_json
-        // completes.
+        // Idle until we have a session. The backend URL and any CF
+        // Access edge tokens come from compile-time `build_config`.
         let backend_url = crate::build_config::BACKEND_URL;
-        let device_opt = ctx.store.load_device().await.unwrap_or_default();
-        let Some((_, device_secret)) = device_opt else {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            continue;
-        };
 
         // Stale-access pre-emptive refresh: if we're within 2 minutes of
         // expiry, rotate first. The refresh updates auth_session in
@@ -1437,8 +1392,9 @@ async fn reconnect_loop(ctx: ReconnectContext) {
             .as_ref()
             .map(|s| s.access_token.clone());
         let Some(access) = access else {
-            // Auth was cleared mid-loop. Bail.
-            return;
+            // No session yet — idle and check again.
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
         };
 
         let cf = crate::build_config::cf_access();
@@ -1446,9 +1402,7 @@ async fn reconnect_loop(ctx: ReconnectContext) {
             .state_tx
             .send(ConnectionState::Reconnecting { attempt: 1 });
 
-        match connect_with_handles(&ctx, backend_url, device_secret.as_str(), cf, Some(&access))
-            .await
-        {
+        match connect_with_handles(&ctx, backend_url, cf, Some(&access)).await {
             Ok(()) => {
                 // Subscribe BEFORE publishing `Connected` so the recv_loop
                 // can't fire `Disconnected` between the send and the
@@ -1513,9 +1467,7 @@ async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
         }
     };
     let _ = ctx.auth_state_tx.send(AuthStateFrame::Refreshing);
-    let device = ctx.store.load_device().await.ok().flatten();
-    let secret = device.as_ref().map(|(_, s)| s);
-    match http.refresh(&session.refresh_token, secret).await {
+    match http.refresh(&session.refresh_token).await {
         Ok(r) => {
             let now_ms = chrono::Utc::now().timestamp_millis();
             let exp_ms = now_ms + r.expires_in * 1000;
@@ -1564,7 +1516,6 @@ async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
 async fn connect_with_handles(
     ctx: &ReconnectContext,
     url: &str,
-    device_secret: &str,
     cf_access: Option<(String, String)>,
     access_token: Option<&str>,
 ) -> Result<(), MinosError> {
@@ -1590,15 +1541,6 @@ async fn connect_with_handles(
     headers.insert(
         "X-Device-Role",
         "ios-client".parse().expect("static header value is valid"),
-    );
-    headers.insert(
-        "X-Device-Secret",
-        device_secret
-            .parse()
-            .map_err(|_| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: "device_secret is not a valid header value".into(),
-            })?,
     );
     if let Some(tok) = access_token {
         headers.insert(
@@ -1680,7 +1622,6 @@ mod tests {
     fn new_with_persisted_state_reuses_device_identity() {
         let persisted = PersistedPairingState {
             device_id: Some(DeviceId::new().to_string()),
-            device_secret: Some(DeviceSecret::generate().as_str().to_string()),
             access_token: Some("access".into()),
             access_expires_at_ms: Some(123_456),
             refresh_token: Some("refresh".into()),
@@ -1698,7 +1639,6 @@ mod tests {
     fn persisted_pairing_state_exports_device_id_before_pairing() {
         let persisted = PersistedPairingState {
             device_id: Some(DeviceId::new().to_string()),
-            device_secret: None,
             access_token: Some("access".into()),
             access_expires_at_ms: Some(123_456),
             refresh_token: Some("refresh".into()),
@@ -1777,12 +1717,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_threads_without_persisted_state_errors_store_corrupt() {
-        // After Phase C, list_threads is HTTP-backed: with no persisted
-        // device-secret it surfaces StoreCorrupt rather than the legacy
-        // "no live outbound channel" Disconnected error. The backend URL
-        // now lives in build_config so it never surfaces as a missing-
-        // path error.
+    async fn list_threads_without_persisted_state_errors_unauthorized() {
+        // ADR-0020 dropped the device-secret rail; list_threads is
+        // bearer-only. With no auth_session it surfaces Unauthorized
+        // (not StoreCorrupt — the device-secret is no longer required).
         let client = MobileClient::new_with_in_memory_store("test".into());
         let err = client
             .list_threads(ListThreadsParams {
@@ -1793,7 +1731,7 @@ mod tests {
             .await
             .expect_err("HTTP query with no creds must error");
         assert!(
-            matches!(err, MinosError::StoreCorrupt { ref path, .. } if path == "device"),
+            matches!(err, MinosError::Unauthorized { .. }),
             "unexpected error: {err:?}"
         );
     }
