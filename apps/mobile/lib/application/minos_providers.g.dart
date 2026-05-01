@@ -138,7 +138,7 @@ final class ActiveMacProvider
   ActiveMac create() => ActiveMac();
 }
 
-String _$activeMacHash() => r'b0075c8f02d61041bc8bc1a58b71083291cfc185';
+String _$activeMacHash() => r'ba3a53ca961ea670a034399ab349cc2741f091a5';
 
 /// Routing target for `Forward` envelopes. `null` means no Mac is selected
 /// — the daemon falls back to broadcast-style fan-out when this is unset.
