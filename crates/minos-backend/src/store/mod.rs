@@ -2,7 +2,8 @@
 //!
 //! Submodules:
 //! - [`devices`] — device rows + per-device secret hashes.
-//! - [`pairings`] — undirected device ↔ device pairings (canonical `a < b`).
+//! - [`account_mac_pairings`] — account ↔ Mac pair table (ADR-0020).
+//!   Replaces the legacy device-keyed `pairings` module.
 //! - [`tokens`] — one-shot pairing tokens with atomic consume + GC.
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -10,16 +11,15 @@ use sqlx::SqlitePool;
 
 use crate::error::BackendError;
 
+pub mod account_mac_pairings;
 pub mod accounts;
 pub mod devices;
-pub mod pairings;
 pub mod raw_events;
 pub mod refresh_tokens;
 pub mod threads;
 pub mod tokens;
 
 pub use devices::{get_device, get_secret_hash, insert_device, upsert_secret_hash, DeviceRow};
-pub use pairings::{delete_pair, get_pair, insert_pairing};
 pub use tokens::{consume_token, gc_expired, issue_token, ConsumedToken};
 
 /// Open the SQLite pool at `db_url` and run all embedded migrations.
@@ -68,6 +68,7 @@ pub async fn connect(db_url: &str) -> Result<SqlitePool, BackendError> {
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support {
     use super::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    use minos_domain::{DeviceId, DeviceRole};
 
     /// Fixed unix-epoch ms used as `now` in tests.
     pub const T0: i64 = 1_700_000_000_000;
@@ -86,5 +87,42 @@ pub mod test_support {
             .unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         pool
+    }
+
+    /// Insert an account row via `store::accounts::create` and return the
+    /// generated `account_id`. Uses a stub PHC string so callers don't have
+    /// to thread argon2 through every store-test fixture.
+    pub async fn insert_account(pool: &SqlitePool, email: &str) -> String {
+        crate::store::accounts::create(pool, email, "phc-test")
+            .await
+            .unwrap()
+            .account_id
+    }
+
+    /// Insert an iOS device row linked to `account_id` and return its
+    /// `DeviceId`. Post ADR-0020 the iOS rail keeps `secret_hash NULL`
+    /// (the server authenticates the iOS side via the bearer access
+    /// token, not a per-device secret) — this helper preserves that
+    /// invariant. Uses a runtime `sqlx::query` so the `account_id`
+    /// column can be set in a single insert without a follow-up
+    /// `UPDATE`.
+    pub async fn insert_ios_device(pool: &SqlitePool, account_id: &str) -> DeviceId {
+        let id = DeviceId::new();
+        let id_str = id.to_string();
+        let role_str = DeviceRole::IosClient.to_string();
+        sqlx::query(
+            "INSERT INTO devices (device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id)
+             VALUES (?, ?, ?, NULL, ?, ?, ?)",
+        )
+        .bind(&id_str)
+        .bind("iPhone")
+        .bind(&role_str)
+        .bind(T0)
+        .bind(T0)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
     }
 }

@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT pair_id, mac_device_id, mobile_account_id, paired_via_device_id, paired_at_ms\n        FROM account_mac_pairings\n        WHERE mac_device_id = ?\n        ORDER BY paired_at_ms DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "pair_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "mac_device_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "mobile_account_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "paired_via_device_id",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "paired_at_ms",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7248e35b407b9aabbd80d9a5f5267f4a98ff1ee8a997abd1223b4e34951d3161"
+}

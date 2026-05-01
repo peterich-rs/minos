@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO account_mac_pairings\n            (pair_id, mac_device_id, mobile_account_id, paired_via_device_id, paired_at_ms)\n        VALUES (?, ?, ?, ?, ?)\n        ON CONFLICT (mac_device_id, mobile_account_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "27c462b08b79cb275b771f6652bb3c8ef46da908347bf5ded9f3f4430053344c"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT pair_id\n        FROM account_mac_pairings\n        WHERE mac_device_id = ? AND mobile_account_id = ?\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "pair_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2c6495060b387353744f895760b7dc75b976fad95f2c73b310e235cd6a6fface"
+}
