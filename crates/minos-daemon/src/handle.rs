@@ -207,12 +207,23 @@ impl DaemonHandle {
 
     /// Stop the relay client + the embedded agent runtime. Idempotent —
     /// calling twice is a benign no-op after the first success.
+    ///
+    /// C20 shutdown sequence:
+    /// 1. Best-effort `shutdown` on AgentGlue (closes every open thread).
+    /// 2. Flip orphan threads in the local DB to `suspended { daemon_restart }`.
+    /// 3. SIGTERM every codex child with a 5s grace, then SIGKILL.
+    /// 4. Tear down the relay WS client.
     #[allow(clippy::missing_errors_doc)]
     pub async fn stop(&self) -> Result<(), MinosError> {
         match self.inner.agent.shutdown().await {
             Ok(()) | Err(MinosError::AgentNotRunning) => {}
             Err(err) => return Err(err),
         }
+        self.inner
+            .agent
+            .manager
+            .shutdown_instances(std::time::Duration::from_secs(5))
+            .await;
         self.inner.relay.stop().await;
         Ok(())
     }

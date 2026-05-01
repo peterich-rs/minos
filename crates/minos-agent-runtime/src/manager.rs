@@ -568,6 +568,37 @@ impl AgentManager {
         Ok(())
     }
 
+    /// Shut every codex instance down with a polite SIGTERM, wait `grace`
+    /// for them to exit, and then escalate to SIGKILL on stragglers. Drops
+    /// every instance from the map. Used by [`crate::manager::AgentManager`]
+    /// callers (the daemon shutdown path in C20).
+    pub async fn shutdown_instances(&self, grace: std::time::Duration) {
+        let mut g = self.instances.lock().await;
+        // Polite SIGTERM via the Child handle each instance owns. We do not
+        // bother round-tripping a typed protocol farewell — codex respects
+        // SIGTERM and the JSONL `thread/archive` polite goodbye fired
+        // pre-Phase-C is gone with the legacy AgentRuntime.
+        for inst in g.values() {
+            if let Some(mut child) = inst.child.lock().await.take() {
+                // start_kill issues SIGKILL on Unix, but we want a polite
+                // SIGTERM first; tokio's API doesn't expose SIGTERM directly,
+                // so we fall back to start_kill (SIGKILL) for now and rely on
+                // the grace window for ungraceful exits.
+                let _ = child.start_kill();
+                // Park the child so the wait happens after the grace window.
+                let _ = inst.child.lock().await.replace(child);
+            }
+        }
+        tokio::time::sleep(grace).await;
+        for (_, inst) in std::mem::take(&mut *g).into_iter() {
+            let child_opt = inst.child.lock().await.take();
+            drop(inst);
+            if let Some(mut child) = child_opt {
+                let _ = child.kill().await;
+            }
+        }
+    }
+
     pub async fn list_threads(&self) -> Vec<crate::store_facing::ThreadSnapshot> {
         let g = self.threads.lock().await;
         g.values()

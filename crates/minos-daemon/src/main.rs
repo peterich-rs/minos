@@ -100,11 +100,33 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
         println!("{}", serde_json::to_string_pretty(&qr)?);
     }
 
-    println!("status:     running (Ctrl-C to stop)");
-    tokio::signal::ctrl_c().await?;
+    println!("status:     running (Ctrl-C or SIGTERM to stop)");
+    wait_for_termination().await?;
     println!("status:     stopping");
     handle.stop().await?;
     Ok(())
+}
+
+/// Block until the process receives SIGINT (Ctrl-C) or SIGTERM. C20 shutdown
+/// sequence is driven by `DaemonHandle::stop`; this helper just unblocks the
+/// `start` future so the runtime can drive the shutdown.
+async fn wait_for_termination() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = signal(SignalKind::terminate())?;
+        let mut int = signal(SignalKind::interrupt())?;
+        tokio::select! {
+            _ = term.recv() => {},
+            _ = int.recv() => {},
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await?;
+        Ok(())
+    }
 }
 
 fn resolve_paths(args: &CliPaths) -> Result<ResolvedPaths, Box<dyn std::error::Error>> {
