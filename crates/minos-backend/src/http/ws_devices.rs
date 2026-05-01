@@ -11,10 +11,10 @@
 //!      `Event::Unpaired`.
 //!    - **Row exists with `secret_hash`** (Mac rail): require a matching
 //!      `X-Device-Secret`; on mismatch reject pre-upgrade with `401`.
-//!      After ADR-0020 the WS handle's `paired_with` slot is left empty
-//!      because a Mac may be paired to multiple iOS accounts; presence
+//!      After ADR-0020 the per-session `paired_with` slot is gone: a Mac
+//!      may be paired to multiple iOS accounts, so presence
 //!      reconstruction is account-scoped and happens via the Phase G
-//!      broadcast rather than seeding a single peer here.
+//!      ingest broadcast rather than seeding a single peer here.
 //!    - **Row exists with `secret_hash = NULL`** (iOS rail or pre-pair
 //!      Mac): ignore any provided secret and re-enter Unpaired mode —
 //!      the iOS rail authenticates via bearer alone after ADR-0020.
@@ -48,11 +48,11 @@
 //! # Unpaired-mode gating
 //!
 //! The HTTP `/v1/pairing/*` routes apply role / state gates per route
-//! (see `http::v1::pairing`). On the WebSocket itself the dispatcher only
-//! handles `Forward` and `Ingest`: `Forward` synthesises a JSON-RPC "peer
-//! offline" response when `session.paired_with` is `None` (the plan's
-//! "reject `Forward` entirely" in spirit) and `Ingest` is restricted to
-//! the `AgentHost` role.
+//! (see `http::v1::pairing`). On the WebSocket itself the dispatcher
+//! only handles `Forward` and `Ingest`: `Forward` validates the wire
+//! `target_device_id` against `account_mac_pairings::exists` for the
+//! caller's account and synthesises a JSON-RPC "peer offline" response
+//! on mismatch; `Ingest` is restricted to the `AgentHost` role.
 
 use std::sync::Arc;
 
@@ -139,9 +139,7 @@ pub async fn upgrade(
         )
         .await
         {
-            Ok(paired_with) => {
-                *handle.paired_with.write().await = paired_with;
-            }
+            Ok(()) => {}
             Err(ActivationAuthError::Unauthorized(message)) => {
                 tracing::info!(
                     target: "minos_backend::http",
@@ -203,7 +201,7 @@ async fn revalidate_live_session_auth(
     expected_role: DeviceRole,
     requested_role: Option<DeviceRole>,
     provided_secret: Option<&str>,
-) -> Result<Option<DeviceId>, ActivationAuthError> {
+) -> Result<(), ActivationAuthError> {
     let row = store::devices::get_device(store, device_id)
         .await
         .map_err(|e| ActivationAuthError::Internal(e.to_string()))?
@@ -224,12 +222,11 @@ async fn revalidate_live_session_auth(
         Classification::FirstConnect => Err(ActivationAuthError::Unauthorized(
             "device row missing during websocket activation".to_string(),
         )),
-        Classification::UnpairedExisting => Ok(None),
-        // ADR-0020: paired_with is no longer single-valued. The Mac may have
-        // multiple paired iOS accounts; presence rebuild is account-scoped and
-        // happens via Phase G's broadcast. Returning None here means the WS
-        // upgrade does not seed a single peer in the handle's paired_with slot.
-        Classification::Authenticated => Ok(None),
+        // ADR-0020 / Phase G: there is no single-valued `paired_with`
+        // slot to seed. Both UnpairedExisting and Authenticated rows
+        // simply admit the socket; routing decisions happen at
+        // forward-time against `account_mac_pairings`.
+        Classification::UnpairedExisting | Classification::Authenticated => Ok(()),
     }
 }
 
@@ -243,13 +240,14 @@ async fn close_socket(ws: &mut WebSocket, code: u16, reason: &'static str) {
 }
 
 async fn activate_live_session(registry: &SessionRegistry, handle: &SessionHandle) {
-    let paired_with = *handle.paired_with.read().await;
-
-    // Queue the initial event before publishing this handle in the live
-    // registry so it remains the first frame for the new socket.
+    // ADR-0020 / Phase G: there is no single-valued `paired_with` slot
+    // to derive an initial presence event from. Comprehensive multi-mac
+    // presence rebuild on connect/disconnect is deferred to Phase M; for
+    // now we emit `Unpaired` as the initial frame and skip per-peer
+    // PeerOnline broadcasts.
     let init_frame = Envelope::Event {
         version: 1,
-        event: initial_presence_event(paired_with, registry),
+        event: EventKind::Unpaired,
     };
     if let Err(e) = handle.outbox.try_send(init_frame) {
         tracing::warn!(
@@ -262,76 +260,12 @@ async fn activate_live_session(registry: &SessionRegistry, handle: &SessionHandl
 
     // Register only once the upgrade callback is running with the live
     // socket. Reconnects still revoke the prior live session.
-    let replaced_existing = if let Some(prev) = registry.insert(handle.clone()) {
+    if let Some(prev) = registry.insert(handle.clone()) {
         prev.revoke();
         tracing::info!(
             target: "minos_backend::http",
             device_id = %handle.device_id,
             "replaced previous session for device (reconnect)"
-        );
-        true
-    } else {
-        false
-    };
-
-    notify_live_peer_connected(registry, handle.device_id, paired_with, replaced_existing).await;
-}
-
-fn initial_presence_event(paired_with: Option<DeviceId>, registry: &SessionRegistry) -> EventKind {
-    match paired_with {
-        Some(peer)
-            if registry
-                .get(peer)
-                .is_some_and(|handle| !handle.outbox.is_closed()) =>
-        {
-            EventKind::PeerOnline {
-                peer_device_id: peer,
-            }
-        }
-        Some(peer) => EventKind::PeerOffline {
-            peer_device_id: peer,
-        },
-        None => EventKind::Unpaired,
-    }
-}
-
-async fn notify_live_peer_connected(
-    registry: &SessionRegistry,
-    device_id: DeviceId,
-    paired_with: Option<DeviceId>,
-    replaced_existing: bool,
-) {
-    if replaced_existing {
-        return;
-    }
-    let Some(peer) = paired_with else {
-        return;
-    };
-    let Some(peer_handle) = registry
-        .get(peer)
-        .filter(|handle| !handle.outbox.is_closed())
-    else {
-        return;
-    };
-    if peer_handle.role != DeviceRole::AgentHost
-        && *peer_handle.paired_with.read().await != Some(device_id)
-    {
-        return;
-    }
-
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::PeerOnline {
-            peer_device_id: device_id,
-        },
-    };
-    if let Err(e) = peer_handle.outbox.try_send(frame) {
-        tracing::warn!(
-            target: "minos_backend::http",
-            error = ?e,
-            device_id = %device_id,
-            peer = %peer,
-            "failed to push Event::PeerOnline to live peer"
         );
     }
 }
@@ -340,8 +274,6 @@ async fn notify_live_peer_connected(
 mod tests {
     use super::*;
     use crate::store::{devices::insert_device, test_support::memory_pool};
-    use pretty_assertions::assert_eq;
-    use tokio::sync::mpsc::error::TryRecvError;
 
     #[tokio::test]
     async fn revalidate_live_session_auth_allows_unpaired_existing_row() {
@@ -351,21 +283,17 @@ mod tests {
             .await
             .unwrap();
 
-        let paired_with =
-            revalidate_live_session_auth(&pool, id, DeviceRole::IosClient, None, None)
-                .await
-                .unwrap();
-
-        assert_eq!(paired_with, None);
+        revalidate_live_session_auth(&pool, id, DeviceRole::IosClient, None, None)
+            .await
+            .expect("UnpairedExisting must admit the socket");
     }
 
     #[tokio::test]
-    async fn revalidate_live_session_auth_returns_none_for_authenticated_mac_reconnect() {
-        // ADR-0020: paired_with is no longer single-valued. An authenticated
-        // Mac may have multiple paired iOS accounts; presence rebuild is
-        // account-scoped and happens via Phase G's broadcast, so the
-        // activation hook returns Ok(None) and does not seed a single
-        // peer in the handle's paired_with slot.
+    async fn revalidate_live_session_auth_admits_authenticated_mac_reconnect() {
+        // ADR-0020 / Phase G: the activation hook returns Ok(()) for an
+        // authenticated row. Presence rebuild is account-scoped and
+        // happens via Phase G's ingest broadcast — the handle no longer
+        // carries a per-session `paired_with` slot to seed.
         let pool = memory_pool().await;
         let mac_id = DeviceId::new();
         let secret = minos_domain::DeviceSecret::generate();
@@ -378,7 +306,7 @@ mod tests {
             .await
             .unwrap();
 
-        let paired_with = revalidate_live_session_auth(
+        revalidate_live_session_auth(
             &pool,
             mac_id,
             DeviceRole::AgentHost,
@@ -386,9 +314,7 @@ mod tests {
             Some(secret.as_str()),
         )
         .await
-        .unwrap();
-
-        assert_eq!(paired_with, None);
+        .expect("Authenticated row must admit the socket");
     }
 
     #[tokio::test]
@@ -467,50 +393,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn activate_live_session_notifies_peer_once_and_preserves_reconnect_revocation() {
+    async fn activate_live_session_revokes_prior_handle_on_reconnect() {
+        // ADR-0020 / Phase G: `paired_with` is gone, so peer presence
+        // notifications on connect are deferred to Phase M. The
+        // remaining contract for `activate_live_session` is: a
+        // reconnect for the same DeviceId must revoke the prior live
+        // handle and the new socket must observe the initial Unpaired
+        // frame.
         let registry = SessionRegistry::new();
-
         let device_id = DeviceId::new();
-        let peer_id = DeviceId::new();
 
-        let (peer_handle, mut peer_outbox_rx) = SessionHandle::new(peer_id, DeviceRole::AgentHost);
-        *peer_handle.paired_with.write().await = Some(device_id);
-        registry.insert(peer_handle.clone());
-
-        let (first_handle, mut first_outbox_rx) =
-            SessionHandle::new(device_id, DeviceRole::IosClient);
-        *first_handle.paired_with.write().await = Some(peer_id);
-
+        let (first_handle, mut first_rx) = SessionHandle::new(device_id, DeviceRole::IosClient);
         activate_live_session(&registry, &first_handle).await;
 
-        let first_frame = first_outbox_rx
+        match first_rx
             .recv()
             .await
-            .expect("first session should receive its initial event");
-        match first_frame {
+            .expect("first session initial event")
+        {
             Envelope::Event {
-                event: EventKind::PeerOnline { peer_device_id },
+                event: EventKind::Unpaired,
                 ..
-            } => assert_eq!(peer_device_id, peer_id),
-            other => panic!("expected initial Event::PeerOnline, got {other:?}"),
-        }
-
-        let peer_frame = peer_outbox_rx
-            .recv()
-            .await
-            .expect("peer should be notified when a fresh live session connects");
-        match peer_frame {
-            Envelope::Event {
-                event: EventKind::PeerOnline { peer_device_id },
-                ..
-            } => assert_eq!(peer_device_id, device_id),
-            other => panic!("expected peer Event::PeerOnline, got {other:?}"),
+            } => {}
+            other => panic!("expected initial Event::Unpaired, got {other:?}"),
         }
 
         let mut revoked = first_handle.subscribe_revocation();
-        let (replacement_handle, mut replacement_outbox_rx) =
+        let (replacement_handle, mut replacement_rx) =
             SessionHandle::new(device_id, DeviceRole::IosClient);
-        *replacement_handle.paired_with.write().await = Some(peer_id);
 
         activate_live_session(&registry, &replacement_handle).await;
 
@@ -523,22 +433,20 @@ mod tests {
             "prior live session should be marked revoked"
         );
 
-        let replacement_frame = replacement_outbox_rx
+        match replacement_rx
             .recv()
             .await
-            .expect("replacement session should receive its initial event");
-        match replacement_frame {
+            .expect("replacement initial event")
+        {
             Envelope::Event {
-                event: EventKind::PeerOnline { peer_device_id },
+                event: EventKind::Unpaired,
                 ..
-            } => assert_eq!(peer_device_id, peer_id),
-            other => panic!("expected replacement initial Event::PeerOnline, got {other:?}"),
+            } => {}
+            other => panic!("expected replacement initial Event::Unpaired, got {other:?}"),
         }
 
-        assert_eq!(
-            peer_outbox_rx.try_recv(),
-            Err(TryRecvError::Empty),
-            "reconnect should not emit a duplicate peer-online notification"
-        );
+        // Sanity: replacement is the live entry; first is gone.
+        let live = registry.get(device_id).expect("replacement still live");
+        assert!(live.same_session(&replacement_handle));
     }
 }

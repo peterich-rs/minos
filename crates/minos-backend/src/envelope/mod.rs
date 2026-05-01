@@ -12,8 +12,8 @@
 //!    ([`mpsc::Receiver<Envelope>`]) onto the wire. Anything that
 //!    originates server-side (peer forwards, events) lands here.
 //! 3. **Heartbeat**: every 15s send a WS `Ping`; if no `Pong` returns
-//!    within a role-based window (60s for Unpaired, 90s for Paired) close
-//!    the socket with code 1011 per plan §8.
+//!    within 90s (single window post ADR-0020 — see [`PAIRED_TIMEOUT`])
+//!    close the socket with code 1011 per plan §8.
 //!
 //! # WS type choice
 //!
@@ -30,10 +30,11 @@
 //!
 //! Matches plan risks §2: bounded per-peer backpressure + liveness.
 //!
-//! | State | Timeout | Tick | Close code |
-//! |---|---|---|---|
-//! | Unpaired | 60s | every 15s | 1011 (server error) |
-//! | Paired | 90s | every 15s | 1011 |
+//! Single 90s window post ADR-0020. The previous Unpaired/Paired split
+//! depended on the per-session `paired_with` slot, which is gone — a Mac
+//! may be paired to multiple iOS accounts, so there is no single boolean
+//! we could derive from the handle alone. Anonymous sockets (no auth)
+//! never reach this loop; they're rejected pre-upgrade.
 //!
 //! `last_pong_at` lives on [`SessionHandle`] and is updated from the read
 //! branch when we see a `Pong` frame. The heartbeat branch only reads it.
@@ -50,7 +51,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures::StreamExt;
-use minos_protocol::{Envelope, EventKind};
+use minos_protocol::Envelope;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
@@ -64,11 +65,15 @@ use crate::{
 /// interval; this is the lower of our two timeout windows' granularity.
 const HEARTBEAT_TICK: Duration = Duration::from_secs(15);
 
-/// Liveness window for a not-yet-paired session (spec §6 risks §2).
-const UNPAIRED_TIMEOUT: Duration = Duration::from_mins(1);
-
-/// Liveness window for a paired session. 90s doesn't fit the `from_mins`
-/// helper cleanly; keep the raw secs form for the intermediate value.
+/// Liveness window for an authenticated session. 90s doesn't fit the
+/// `from_mins` helper cleanly; keep the raw secs form for the
+/// intermediate value.
+///
+/// ADR-0020 / Phase G: there is no longer a separate "unpaired" timeout.
+/// Multi-mac removed the single `paired_with` slot, so the heartbeat
+/// can't decide which window to use from the handle alone. Anonymous
+/// sockets close at the auth-handshake step; once we're in this loop we
+/// always grant the longer (formerly "paired") window.
 const PAIRED_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// WS close code for heartbeat / internal server errors (RFC 6455).
@@ -114,9 +119,11 @@ pub async fn run_session(
 
     // Cleanup on any exit path: remove only if this is still the live
     // registry entry. A reconnect may already have replaced it.
-    if registry.remove_current(&session).is_some() {
-        notify_live_peer_disconnect(&session, &registry).await;
-    }
+    //
+    // ADR-0020 / Phase G: comprehensive multi-mac presence broadcast on
+    // disconnect is deferred to Phase M. We previously notified the single
+    // `paired_with` peer here; that field no longer exists.
+    let _ = registry.remove_current(&session);
 
     // Drain remaining outbox so the sender does not block; the receiver
     // goes out of scope right after anyway, but this keeps `Err` paths
@@ -240,8 +247,12 @@ async fn run_session_inner(
             // Heartbeat: periodic liveness probe + timeout check.
             _ = heartbeat.tick() => {
                 let elapsed = session.last_pong_at.read().await.elapsed();
-                let is_paired = session.paired_with.read().await.is_some();
-                let limit = if is_paired { PAIRED_TIMEOUT } else { UNPAIRED_TIMEOUT };
+                // ADR-0020: there is no per-session "paired" boolean
+                // anymore. Treat any authenticated session as engaged-class
+                // (longer timeout); truly anonymous (FirstConnect) sockets
+                // close on the AUTH timeout before reaching the heartbeat
+                // path.
+                let limit = PAIRED_TIMEOUT;
 
                 if elapsed > limit {
                     tracing::info!(
@@ -260,39 +271,6 @@ async fn run_session_inner(
     }
 
     Ok(())
-}
-
-async fn notify_live_peer_disconnect(session: &SessionHandle, registry: &SessionRegistry) {
-    let Some(peer) = *session.paired_with.read().await else {
-        return;
-    };
-    let Some(peer_handle) = registry
-        .get(peer)
-        .filter(|handle| !handle.outbox.is_closed())
-    else {
-        return;
-    };
-    if peer_handle.role != minos_domain::DeviceRole::AgentHost
-        && *peer_handle.paired_with.read().await != Some(session.device_id)
-    {
-        return;
-    }
-
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::PeerOffline {
-            peer_device_id: session.device_id,
-        },
-    };
-    if let Err(e) = peer_handle.outbox.try_send(frame) {
-        tracing::warn!(
-            target: "minos_backend::envelope",
-            error = ?e,
-            device = %session.device_id,
-            peer = %peer,
-            "failed to push Event::PeerOffline to live peer"
-        );
-    }
 }
 
 /// Serialise an envelope and send it as a text frame.
@@ -324,12 +302,18 @@ async fn dispatch_envelope(
     env: Envelope,
 ) -> bool {
     match env {
-        Envelope::Forward { version, payload } => {
+        Envelope::Forward {
+            version,
+            target_device_id,
+            payload,
+        } => {
             if version != 1 {
                 close_with(ws, CLOSE_CODE_BAD_REQUEST, "version_unsupported").await;
                 return false;
             }
-            if let Some(back_frame) = handle_forward(session, registry, payload).await {
+            if let Some(back_frame) =
+                handle_forward(session, registry, store, target_device_id, payload).await
+            {
                 return send_envelope(ws, &back_frame).await;
             }
             true
@@ -406,57 +390,98 @@ async fn dispatch_envelope(
 /// - Returns `Some(Envelope::Forwarded{..})` carrying a synthesised
 ///   JSON-RPC error when the peer is offline; caller sends it back to the
 ///   sender (spec §7.3 `(*)` note).
+///
+/// Post ADR-0020 / Phase G: `target_device_id` is stamped on the wire by
+/// the iOS sender (a single Mac it wants to reach). For Mac-side replies
+/// the same field carries the originating iOS device id; the backend
+/// double-checks the request_id → requester mapping first so legacy
+/// reply-only flows that don't yet stamp `target_device_id` keep working.
 pub async fn handle_forward(
     session: &SessionHandle,
     registry: &SessionRegistry,
+    store: &SqlitePool,
+    target_device_id: minos_domain::DeviceId,
     payload: serde_json::Value,
 ) -> Option<Envelope> {
     if session.role == minos_domain::DeviceRole::AgentHost {
         if let Some(reply_id) = json_rpc_id(&payload) {
+            // Try the reply-target mapping first; if found, prefer it
+            // over the wire-stamped target so legacy reply-only flows
+            // still work and so daemons that don't yet stamp
+            // `target_device_id` on replies stay routable.
             if let Some(target) = session.take_rpc_reply_target(reply_id) {
-                return match registry
-                    .route(session.device_id, target, payload.clone())
-                    .await
-                {
-                    Ok(()) => None,
-                    Err(BackendError::PeerOffline { .. }) => {
-                        Some(synth_peer_offline_forwarded(session.device_id, &payload))
-                    }
-                    Err(BackendError::PeerBackpressure { .. }) => Some(
-                        synth_peer_backpressure_forwarded(session.device_id, &payload),
-                    ),
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "minos_backend::envelope",
-                            error = %e,
-                            target = %target,
-                            "Mac response route failed"
-                        );
-                        Some(synth_peer_offline_forwarded(session.device_id, &payload))
-                    }
-                };
+                return route_or_synth(session, registry, target, payload).await;
             }
         }
+        // Mac-initiated forward to a specific iOS device. The route()
+        // helper's account-mismatch gate (registry.rs) already enforces
+        // same-account.
+        return route_or_synth(session, registry, target_device_id, payload).await;
     }
 
-    let peer = *session.paired_with.read().await;
-    let Some(peer) = peer else {
+    // iOS→Mac path: validate that target_device_id is paired to the iOS
+    // caller's account.
+    let Some(account_id) = session.account_id() else {
         tracing::warn!(
             target: "minos_backend::envelope",
             device = %session.device_id,
-            "forward from unpaired session; synthesising peer_offline"
+            "iOS forward without account_id; synthesising peer_offline"
         );
         return Some(synth_peer_offline_forwarded(session.device_id, &payload));
     };
 
+    let paired = match crate::store::account_mac_pairings::exists(
+        store,
+        target_device_id,
+        &account_id,
+    )
+    .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::envelope",
+                error = %e,
+                target = %target_device_id,
+                "account_mac_pairings::exists failed; synthesising peer_offline"
+            );
+            return Some(synth_peer_offline_forwarded(session.device_id, &payload));
+        }
+    };
+    if !paired {
+        tracing::warn!(
+            target: "minos_backend::envelope",
+            device = %session.device_id,
+            target = %target_device_id,
+            "iOS forward to unpaired Mac; synthesising peer_offline"
+        );
+        return Some(synth_peer_offline_forwarded(session.device_id, &payload));
+    }
+
+    // Stamp the reply correlation: when the Mac replies with the same
+    // jsonrpc id, the AgentHost branch above resolves it back to this
+    // sender via take_rpc_reply_target.
     if let Some(request_id) = json_rpc_id(&payload) {
-        if let Some(peer_handle) = registry.get(peer) {
+        if let Some(peer_handle) = registry.get(target_device_id) {
             peer_handle.remember_rpc_reply_target(request_id, session.device_id);
         }
     }
 
+    route_or_synth(session, registry, target_device_id, payload).await
+}
+
+/// Route `payload` from `session` to `target` via the registry,
+/// translating the routing error variants we care about into synthesised
+/// `Forwarded` JSON-RPC errors so the caller can ship them back to the
+/// sender.
+async fn route_or_synth(
+    session: &SessionHandle,
+    registry: &SessionRegistry,
+    target: minos_domain::DeviceId,
+    payload: serde_json::Value,
+) -> Option<Envelope> {
     match registry
-        .route(session.device_id, peer, payload.clone())
+        .route(session.device_id, target, payload.clone())
         .await
     {
         Ok(()) => None,
@@ -471,6 +496,7 @@ pub async fn handle_forward(
             tracing::warn!(
                 target: "minos_backend::envelope",
                 error = %e,
+                target = %target,
                 "forward route failed"
             );
             Some(synth_peer_offline_forwarded(session.device_id, &payload))
@@ -541,20 +567,38 @@ async fn close_with(ws: &mut WebSocket, code: u16, reason: &'static str) {
 mod tests {
     use super::*;
     use crate::session::registry::OUTBOX_CAPACITY;
-    use crate::store::test_support::memory_pool;
+    use crate::store::account_mac_pairings;
+    use crate::store::devices::insert_device;
+    use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
     use minos_domain::{DeviceId, DeviceRole};
     use pretty_assertions::assert_eq;
+
+    /// Shared fixture: an account, an iOS device on it, and a Mac
+    /// already paired to the account. Returns (pool, account_id, mac_id,
+    /// ios_id).
+    async fn paired_fixture() -> (sqlx::SqlitePool, String, DeviceId, DeviceId) {
+        let pool = memory_pool().await;
+        let account = insert_account(&pool, "user@example.com").await;
+        let mac = DeviceId::new();
+        insert_device(&pool, mac, "Mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        let ios = insert_ios_device(&pool, &account).await;
+        account_mac_pairings::insert_pair(&pool, mac, &account, ios, T0)
+            .await
+            .unwrap();
+        (pool, account, mac, ios)
+    }
 
     // ── handle_forward: peer offline synthesises JSON-RPC error ───────
 
     #[tokio::test]
     async fn handle_forward_peer_offline_synthesizes_jsonrpc_error() {
-        let _pool = memory_pool().await;
+        // Mac is paired in DB but no live session in the registry → offline.
+        let (pool, account, mac, ios) = paired_fixture().await;
         let registry = SessionRegistry::new();
-        let sender_id = DeviceId::new();
-        let (session, _rx) = SessionHandle::new(sender_id, DeviceRole::IosClient);
-        // Session IS paired but peer is NOT in the registry → offline.
-        *session.paired_with.write().await = Some(DeviceId::new());
+        let (session, _rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        session.set_account_id(account);
 
         let orig = serde_json::json!({
             "jsonrpc": "2.0",
@@ -562,7 +606,7 @@ mod tests {
             "id": 42,
             "params": {},
         });
-        let back = handle_forward(&session, &registry, orig).await;
+        let back = handle_forward(&session, &registry, &pool, mac, orig).await;
         let env = back.expect("must synthesise Forwarded error");
         match env {
             Envelope::Forwarded {
@@ -571,7 +615,7 @@ mod tests {
                 payload,
             } => {
                 assert_eq!(version, 1);
-                assert_eq!(from, sender_id);
+                assert_eq!(from, ios);
                 assert_eq!(payload["jsonrpc"], "2.0");
                 assert_eq!(payload["error"]["code"], -32001);
                 assert_eq!(payload["error"]["message"], "peer offline");
@@ -583,15 +627,18 @@ mod tests {
 
     #[tokio::test]
     async fn handle_forward_unpaired_synthesizes_jsonrpc_error_with_null_id() {
+        // No pairing row → exists() returns false → synth peer_offline.
+        let pool = memory_pool().await;
+        let account = insert_account(&pool, "user@example.com").await;
+        let ios = insert_ios_device(&pool, &account).await;
+        let mac_target = DeviceId::new(); // never paired
         let registry = SessionRegistry::new();
-        let sender_id = DeviceId::new();
-        let (session, _rx) = SessionHandle::new(sender_id, DeviceRole::IosClient);
-        // Session is NOT paired — unpaired forward must be rejected.
-        assert!(session.paired_with.read().await.is_none());
+        let (session, _rx) = SessionHandle::new(ios, DeviceRole::IosClient);
+        session.set_account_id(account);
 
         // Payload with no `id` key → synthesised id must be null.
         let orig = serde_json::json!({"method": "bogus"});
-        let back = handle_forward(&session, &registry, orig).await;
+        let back = handle_forward(&session, &registry, &pool, mac_target, orig).await;
         let env = back.expect("must synthesise Forwarded error");
         match env {
             Envelope::Forwarded { payload, .. } => {
@@ -601,23 +648,43 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn handle_forward_ios_without_account_synthesizes_peer_offline() {
+        let pool = memory_pool().await;
+        let registry = SessionRegistry::new();
+        let sender_id = DeviceId::new();
+        let target = DeviceId::new();
+        let (session, _rx) = SessionHandle::new(sender_id, DeviceRole::IosClient);
+        // No set_account_id → handler bails with peer_offline.
+
+        let orig = serde_json::json!({"method": "x", "id": 1});
+        let back = handle_forward(&session, &registry, &pool, target, orig).await;
+        let env = back.expect("missing account_id forces peer_offline");
+        match env {
+            Envelope::Forwarded { from, payload, .. } => {
+                assert_eq!(from, sender_id);
+                assert_eq!(payload["error"]["code"], -32001);
+            }
+            other => panic!("expected Forwarded, got {other:?}"),
+        }
+    }
+
     // ── handle_forward: happy path ────────────────────────────────────
 
     #[tokio::test]
     async fn handle_forward_happy_path_routes_via_registry() {
+        let (pool, account, mac, ios) = paired_fixture().await;
         let registry = SessionRegistry::new();
-        let a = DeviceId::new();
-        let b = DeviceId::new();
-        let (ha, _rxa) = SessionHandle::new(a, DeviceRole::IosClient);
-        let (hb, mut rxb) = SessionHandle::new(b, DeviceRole::AgentHost);
-        // Mark them paired in both directions.
-        *ha.paired_with.write().await = Some(b);
-        *hb.paired_with.write().await = Some(a);
+
+        let (ha, _rxa) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (hb, mut rxb) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        ha.set_account_id(account.clone());
+        hb.set_account_id(account);
         registry.insert(ha.clone());
         registry.insert(hb.clone());
 
         let payload = serde_json::json!({"jsonrpc": "2.0", "method": "ping", "id": 1});
-        let back = handle_forward(&ha, &registry, payload.clone()).await;
+        let back = handle_forward(&ha, &registry, &pool, mac, payload.clone()).await;
         assert!(
             back.is_none(),
             "happy path returns None; peer got the frame"
@@ -631,7 +698,7 @@ mod tests {
                 payload: p,
             } => {
                 assert_eq!(version, 1);
-                assert_eq!(from, a);
+                assert_eq!(from, ios);
                 assert_eq!(p, payload);
             }
             other => panic!("expected Forwarded, got {other:?}"),
@@ -640,19 +707,29 @@ mod tests {
 
     #[tokio::test]
     async fn handle_forward_routes_mac_reply_to_original_requester_by_jsonrpc_id() {
-        let registry = SessionRegistry::new();
+        // One Mac, two iOS clients on the same account; both pair the
+        // Mac. iOS-B sends a request, the Mac replies with the same id —
+        // the reply must reach iOS-B (the original requester) via the
+        // remembered rpc_reply_target, not iOS-A.
+        let pool = memory_pool().await;
+        let account = insert_account(&pool, "user@example.com").await;
         let mac_id = DeviceId::new();
-        let ios_a = DeviceId::new();
-        let ios_b = DeviceId::new();
+        insert_device(&pool, mac_id, "Mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        let ios_a = insert_ios_device(&pool, &account).await;
+        let ios_b = insert_ios_device(&pool, &account).await;
+        account_mac_pairings::insert_pair(&pool, mac_id, &account, ios_b, T0)
+            .await
+            .unwrap();
+
+        let registry = SessionRegistry::new();
         let (mac, _mac_rx) = SessionHandle::new(mac_id, DeviceRole::AgentHost);
         let (a, _a_rx) = SessionHandle::new(ios_a, DeviceRole::IosClient);
         let (b, mut b_rx) = SessionHandle::new(ios_b, DeviceRole::IosClient);
-        mac.set_account_id("acct".into());
-        a.set_account_id("acct".into());
-        b.set_account_id("acct".into());
-        *mac.paired_with.write().await = Some(ios_a);
-        *a.paired_with.write().await = Some(mac_id);
-        *b.paired_with.write().await = Some(mac_id);
+        mac.set_account_id(account.clone());
+        a.set_account_id(account.clone());
+        b.set_account_id(account);
         registry.insert(mac.clone());
         registry.insert(a);
         registry.insert(b.clone());
@@ -663,7 +740,7 @@ mod tests {
             "method": "minos_health",
             "params": {},
         });
-        let back = handle_forward(&b, &registry, request).await;
+        let back = handle_forward(&b, &registry, &pool, mac_id, request).await;
         assert!(back.is_none());
 
         let reply = serde_json::json!({
@@ -671,7 +748,12 @@ mod tests {
             "id": 42,
             "result": {"ok": true},
         });
-        let back = handle_forward(&mac, &registry, reply.clone()).await;
+        // The Mac's reply: `target_device_id` here is intentionally
+        // *wrong* (points at ios_a) so we prove the reply-target mapping
+        // wins over the wire-stamped target. This protects against
+        // legacy daemons that don't yet stamp `target_device_id` on
+        // replies.
+        let back = handle_forward(&mac, &registry, &pool, ios_a, reply.clone()).await;
         assert!(back.is_none());
 
         let frame = b_rx.recv().await.expect("ios_b receives the reply");
@@ -686,21 +768,20 @@ mod tests {
 
     #[tokio::test]
     async fn handle_forward_full_outbox_synthesizes_jsonrpc_backpressure_error() {
+        let (pool, account, mac, ios) = paired_fixture().await;
         let registry = SessionRegistry::new();
-        let a = DeviceId::new();
-        let b = DeviceId::new();
-        let (ha, _rxa) = SessionHandle::new(a, DeviceRole::IosClient);
-        let (hb, _rxb) = SessionHandle::new(b, DeviceRole::AgentHost);
-        *ha.paired_with.write().await = Some(b);
-        *hb.paired_with.write().await = Some(a);
+        let (ha, _rxa) = SessionHandle::new(ios, DeviceRole::IosClient);
+        let (hb, _rxb) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        ha.set_account_id(account.clone());
+        hb.set_account_id(account);
         registry.insert(ha.clone());
         registry.insert(hb);
 
         for id in 0..OUTBOX_CAPACITY {
             registry
                 .route(
-                    a,
-                    b,
+                    ios,
+                    mac,
                     serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "fill"}),
                 )
                 .await
@@ -708,11 +789,11 @@ mod tests {
         }
 
         let payload = serde_json::json!({"jsonrpc": "2.0", "method": "ping", "id": 2});
-        let back = handle_forward(&ha, &registry, payload).await;
+        let back = handle_forward(&ha, &registry, &pool, mac, payload).await;
         let env = back.expect("full outbox must synthesize a retryable error");
         match env {
             Envelope::Forwarded { from, payload, .. } => {
-                assert_eq!(from, a);
+                assert_eq!(from, ios);
                 assert_eq!(payload["error"]["code"], -32002);
                 assert_eq!(payload["error"]["message"], "peer backpressure");
                 assert_eq!(payload["id"], 2);

@@ -227,9 +227,10 @@ async fn post_consume(
                 your_device_secret: Some(pairing_outcome.issuer_secret.clone()),
             },
         };
-        // `paired_with` is retained until Phase G removes the field; left
-        // as a best-effort hint for any in-flight code that still reads it.
-        *issuer_handle.paired_with.write().await = Some(consumer_id);
+        // ADR-0020 / Phase G: the per-session `paired_with` slot is
+        // gone; routing is account-scoped. We still set `account_id`
+        // below so subsequent Mac→iOS forwards can pass the registry's
+        // account-mismatch gate.
         // Phase 2 Task 2.3: also seed the live Mac handle's `account_id`
         // so Mac→iOS routing (Task 2.4) does not have to wait for the Mac
         // to reconnect before routing scopes by account.

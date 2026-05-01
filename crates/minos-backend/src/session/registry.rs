@@ -7,14 +7,17 @@
 //! The handle carries:
 //!
 //! - the session's [`DeviceId`] (also the registry key);
-//! - a `paired_with` slot (`Arc<RwLock<Option<DeviceId>>>`) that mirrors the
-//!   current pairing state for this session. The backend updates this when
-//!   `consume_token` or `forget_peer` changes the DB — step 8 wires the
-//!   update path;
 //! - an **outbox**: `tokio::sync::mpsc::Sender<ServerFrame>` handed to the
 //!   per-socket writer task. Anything that wants to push a frame to this
 //!   device calls `registry.route(..)` or picks up the handle via `get`
 //!   and uses the sender directly.
+//!
+//! ADR-0020 / Phase G: there is no longer a per-session `paired_with`
+//! slot. A Mac can be paired to multiple iOS accounts, so a single
+//! `Option<DeviceId>` field cannot represent live pairing. iOS callers
+//! stamp `target_device_id` on the wire (`Envelope::Forward`) and the
+//! envelope dispatcher validates against `account_mac_pairings::exists`
+//! for the caller's account.
 //!
 //! Values are cheap to clone (one `Arc` + one `mpsc::Sender` bump), so the
 //! API returns owned clones rather than `DashMap` guards. This keeps
@@ -75,7 +78,7 @@ pub type ServerFrame = Envelope;
 ///
 /// Constructed by the WS accept handler (step 8); removed by the same
 /// handler on close. Cheaply clonable — clones share the outbox `Sender`,
-/// the `paired_with` lock, and the `last_pong_at` lock.
+/// the `account_id` lock, and the `last_pong_at` lock.
 #[derive(Debug, Clone)]
 pub struct SessionHandle {
     /// Identity of the device owning this session. Also the registry key.
@@ -85,13 +88,6 @@ pub struct SessionHandle {
     /// local RPC dispatch, e.g. `request_pairing_token` accepts only
     /// [`DeviceRole::AgentHost`].
     pub role: DeviceRole,
-    /// The peer this session is currently paired with, if any.
-    ///
-    /// Wrapped in `Arc<RwLock<_>>` so the registry holder and the WS
-    /// reader/writer tasks can all observe / update pairing transitions
-    /// (e.g. `Event::Paired`, `Event::Unpaired`) without re-issuing a
-    /// whole new handle.
-    pub paired_with: Arc<RwLock<Option<DeviceId>>>,
     /// Bounded outbox to the per-socket writer task.
     ///
     /// Sender end only; the receiver lives inside the writer. `Clone` on
@@ -112,14 +108,14 @@ pub struct SessionHandle {
     /// an account (e.g. fresh `IosClient` first-connect or a pre-bearer
     /// `AgentHost`). Wrapped in [`Mutex`] (sync `std::sync`) so the
     /// upgrade handler can `set_account_id` synchronously without
-    /// promising async borrow semantics — mirrors the seed style used for
-    /// `paired_with` but stays sync because no caller `.await`s while
-    /// holding the guard.
+    /// promising async borrow semantics — stays sync because no caller
+    /// `.await`s while holding the guard.
     pub account_id: Arc<Mutex<Option<String>>>,
-    /// For multi-iOS pairing, Mac replies cannot be routed through a single
-    /// `paired_with` slot. When an iOS request is forwarded to this Mac, the
-    /// backend records JSON-RPC id -> requester here so the response with the
-    /// same id is routed back to the originating device.
+    /// For multi-iOS pairing, Mac replies cannot be routed by deriving
+    /// the original requester from a single per-session slot. When an
+    /// iOS request is forwarded to this Mac, the backend records
+    /// JSON-RPC id -> requester here so the response with the same id is
+    /// routed back to the originating device.
     rpc_reply_targets: Arc<DashMap<u64, DeviceId>>,
 }
 
@@ -138,7 +134,6 @@ impl SessionHandle {
         let handle = Self {
             device_id,
             role,
-            paired_with: Arc::new(RwLock::new(None)),
             outbox: tx,
             revoked,
             last_pong_at: Arc::new(RwLock::new(Instant::now())),
@@ -519,7 +514,6 @@ mod tests {
             SessionHandle {
                 device_id: id,
                 role: DeviceRole::AgentHost,
-                paired_with: Arc::new(RwLock::new(None)),
                 outbox: tx,
                 revoked,
                 last_pong_at: Arc::new(RwLock::new(Instant::now())),
@@ -1104,17 +1098,17 @@ mod tests {
         let id = DeviceId::new();
         let (h, _rx) = make_handle(id);
 
-        // Before insert: we hold the only reference to `paired_with`.
-        assert_eq!(Arc::strong_count(&h.paired_with), 1);
+        // Before insert: we hold the only reference to `account_id`.
+        assert_eq!(Arc::strong_count(&h.account_id), 1);
 
         reg.insert(h.clone());
         // After insert: we hold one, the registry's stored clone holds one.
-        assert_eq!(Arc::strong_count(&h.paired_with), 2);
+        assert_eq!(Arc::strong_count(&h.account_id), 2);
 
         // Drop our view of the inserted clone by never holding it past
         // `insert`; the registry still has its own copy.
         reg.remove(id);
         // After remove: the registry's clone is dropped, leaving only us.
-        assert_eq!(Arc::strong_count(&h.paired_with), 1);
+        assert_eq!(Arc::strong_count(&h.account_id), 1);
     }
 }
