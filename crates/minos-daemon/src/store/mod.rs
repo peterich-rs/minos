@@ -1,3 +1,4 @@
+pub mod event_writer;
 pub mod migrations_loader;
 
 use sqlx::SqlitePool;

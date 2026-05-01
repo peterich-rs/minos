@@ -36,6 +36,7 @@ pub mod state;
 pub mod test_support;
 
 pub use ingest::{Ingestor, IngestorHandle};
+pub use minos_domain::AgentName as AgentKind;
 pub use runtime::{
     AgentLaunchMode, AgentRuntime, AgentRuntimeConfig, RawIngest, StartAgentOutcome,
 };
