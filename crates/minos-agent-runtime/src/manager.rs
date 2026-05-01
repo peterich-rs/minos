@@ -1,12 +1,23 @@
+use crate::codex_client::{CodexClient, Inbound};
 use crate::instance::AppServerInstance;
 use crate::manager_event::ManagerEvent;
-use crate::state_machine::ThreadState;
+use crate::process::CodexProcess;
+use crate::state_machine::{PauseReason, ThreadState};
 use crate::thread_handle::ThreadHandle;
 use crate::{AgentKind, AgentRuntimeConfig, RawIngest};
+use minos_codex_protocol::{
+    ClientInfo, InitializeCapabilities, InitializeParams, InitializeResponse,
+    InitializedNotification, ThreadStartParams, ThreadStartResponse,
+};
+use minos_domain::AgentName;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, broadcast, watch};
+use tracing::{info, warn};
+use url::Url;
 
 #[derive(Clone, Debug)]
 pub struct InstanceCaps {
@@ -26,7 +37,6 @@ impl Default for InstanceCaps {
 pub struct AgentManager {
     pub config: Arc<AgentRuntimeConfig>,
     pub caps: InstanceCaps,
-    #[allow(dead_code)]
     pub(crate) instances: Arc<Mutex<HashMap<PathBuf, Arc<AppServerInstance>>>>,
     pub(crate) threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
     pub(crate) events_tx: broadcast::Sender<RawIngest>,
@@ -73,7 +83,12 @@ impl AgentManager {
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let instance = self.ensure_instance(&canon).await?;
-        let thread_id = instance.start_thread().await?;
+
+        // Allocate a fresh thread on the codex app-server. The
+        // `thread/started` notification arrives later via the event pump and
+        // populates `codex_session_id` + flips state Starting -> Idle.
+        let resp = instance.start_thread(&canon).await?;
+        let thread_id = resp.thread_id.clone();
         instance.add_thread(thread_id.clone()).await;
         instance.touch().await;
 
@@ -87,12 +102,31 @@ impl AgentManager {
         self.threads
             .lock()
             .await
-            .insert(thread_id.clone(), handle.clone());
+            .insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
             workspace: canon.clone(),
             agent,
         });
+
+        // The event pump will surface the `thread/started` notification; in
+        // the absence of an explicit notification we still flip to Idle so
+        // callers can dispatch turns. Real codex emits the notification before
+        // returning the response, so by the time we get here the pump has
+        // already advanced the state if it was going to. To match the codex
+        // app-server contract documented in spec §6.1, mark the thread Idle
+        // synchronously once the response carries `thread.id`.
+        if let Some(handle) = self.threads.lock().await.get_mut(&thread_id) {
+            handle.codex_session_id = Some(resp.codex_session_id.clone());
+            let _ = handle.transition(ThreadState::Idle);
+        }
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.clone(),
+            old: ThreadState::Starting,
+            new: ThreadState::Idle,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+
         Ok(StartAgentOutcome {
             thread_id,
             cwd: canon,
@@ -112,8 +146,134 @@ impl AgentManager {
         Ok(inst)
     }
 
-    async fn spawn_instance(&self, _workspace: &Path) -> anyhow::Result<Arc<AppServerInstance>> {
-        anyhow::bail!("spawn_instance unimplemented (C12)")
+    async fn spawn_instance(&self, workspace: &Path) -> anyhow::Result<Arc<AppServerInstance>> {
+        let workspace_buf = workspace.to_path_buf();
+        let workspace_display = workspace_buf.display().to_string();
+
+        // Pick a free port + spawn `codex app-server --listen ws://...`.
+        let port = pick_free_port(self.config.ws_port_range.clone())?;
+        let url =
+            Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL is well-formed");
+
+        let bin = self
+            .config
+            .codex_bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(AgentName::Codex.bin_name()));
+
+        let sandbox_arg = format!(
+            "sandbox_permissions=['disk-full-read-access','disk-write-folder={workspace_display}']"
+        );
+        let listen_arg = format!("ws://127.0.0.1:{port}");
+        let args: Vec<&str> = vec![
+            "app-server",
+            "--listen",
+            &listen_arg,
+            "-c",
+            "approval_policy=never",
+            "-c",
+            &sandbox_arg,
+            "-c",
+            "shell_environment_policy.inherit=all",
+        ];
+        let env = self.config.subprocess_env.clone();
+        let mut process = CodexProcess::spawn(&bin, &args, &env)
+            .map_err(|e| anyhow::anyhow!("codex spawn failed: {e}"))?;
+        process.stderr_drain();
+        info!(
+            target: "minos_agent_runtime::manager",
+            bin = %bin.display(),
+            port,
+            workspace = %workspace_display,
+            "spawned codex app-server",
+        );
+
+        // Connect WS + handshake.
+        let client = CodexClient::connect(&url)
+            .await
+            .map_err(|e| anyhow::anyhow!("codex WS connect failed: {e}"))?;
+        let client = Arc::new(client);
+
+        let init_params = InitializeParams {
+            client_info: ClientInfo {
+                name: env!("CARGO_PKG_NAME").into(),
+                title: Some("Minos".into()),
+                version: env!("CARGO_PKG_VERSION").into(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                opt_out_notification_methods: None,
+            }),
+        };
+        let _initialize_response: InitializeResponse = tokio::time::timeout(
+            self.config.handshake_call_timeout,
+            client.call_typed(init_params),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("initialize timeout"))?
+        .map_err(|e| anyhow::anyhow!("initialize failed: {e}"))?;
+        tokio::time::timeout(
+            self.config.handshake_call_timeout,
+            client.notify_typed(InitializedNotification),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("initialized timeout"))?
+        .map_err(|e| anyhow::anyhow!("initialized failed: {e}"))?;
+
+        // Take the child out of CodexProcess so it can be supervised in the
+        // crash-watcher task below.
+        let child = process
+            .take_child()
+            .ok_or_else(|| anyhow::anyhow!("codex process had no child"))?;
+        let (crash_tx, mut crash_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let inst = Arc::new(AppServerInstance::new(
+            workspace_buf.clone(),
+            child,
+            client.clone(),
+            crash_tx.clone(),
+        ));
+
+        // Spawn the event pump. It owns the client handle for inbound reads
+        // and forwards every notification verbatim into the manager's
+        // `events_tx` broadcast.
+        let pump_client = client.clone();
+        let pump_events = self.events_tx.clone();
+        let pump_threads = self.threads.clone();
+        let pump_workspace = workspace_buf.clone();
+        let pump_crash = crash_tx.clone();
+        tokio::spawn(event_pump_loop(
+            pump_client,
+            pump_events,
+            pump_threads,
+            pump_workspace,
+            pump_crash,
+        ));
+
+        // Spawn the crash watcher. When the codex child exits or the WS pump
+        // signals end-of-stream, we mark all threads on this instance as
+        // Suspended { CodexCrashed } and broadcast InstanceCrashed.
+        let watcher_inst = inst.clone();
+        let watcher_threads = self.threads.clone();
+        let watcher_mgr_tx = self.manager_tx.clone();
+        tokio::spawn(async move {
+            let _ = crash_rx.recv().await;
+            let affected = watcher_inst.thread_ids().await;
+            let tg = watcher_threads.lock().await;
+            for tid in &affected {
+                if let Some(h) = tg.get(tid) {
+                    let _ = h.transition(ThreadState::Suspended {
+                        reason: PauseReason::CodexCrashed,
+                    });
+                }
+            }
+            drop(tg);
+            let _ = watcher_mgr_tx.send(ManagerEvent::InstanceCrashed {
+                workspace: watcher_inst.workspace.clone(),
+                affected_threads: affected,
+            });
+        });
+
+        Ok(inst)
     }
 
     async fn lru_evict(
@@ -187,12 +347,161 @@ pub struct StartAgentOutcome {
     pub cwd: PathBuf,
 }
 
+/// Pick the first free port in `range` by bind-probing.
+fn pick_free_port(range: std::ops::RangeInclusive<u16>) -> anyhow::Result<u16> {
+    let (first, last) = (*range.start(), *range.end());
+    for port in range {
+        let addr = format!("127.0.0.1:{port}");
+        if std::net::TcpListener::bind(&addr).is_ok() {
+            return Ok(port);
+        }
+    }
+    Err(anyhow::anyhow!(
+        "all ports in range {first}..={last} occupied"
+    ))
+}
+
+fn current_unix_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// Long-running event-pump task per instance: drains every inbound frame from
+/// the codex WS and forwards `Notification` payloads as `RawIngest` records
+/// keyed by the notification's `params.threadId`.
+async fn event_pump_loop(
+    client: Arc<CodexClient>,
+    events_tx: broadcast::Sender<RawIngest>,
+    threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    _workspace: PathBuf,
+    crash_tx: tokio::sync::mpsc::Sender<()>,
+) {
+    while let Some(inbound) = client.next_inbound().await {
+        match inbound {
+            Inbound::Notification { method, params } => {
+                let thread_id =
+                    params.get("threadId").and_then(Value::as_str).map(str::to_string);
+                let Some(thread_id) = thread_id else {
+                    continue;
+                };
+                // Look up agent kind for the thread; default to Codex if absent
+                // (notifications can race the manager's bookkeeping).
+                let agent = threads
+                    .lock()
+                    .await
+                    .get(&thread_id)
+                    .map(|h| h.agent)
+                    .unwrap_or(AgentName::Codex);
+                let payload = serde_json::json!({ "method": method, "params": params });
+                let ingest = RawIngest {
+                    agent,
+                    thread_id,
+                    payload,
+                    ts_ms: current_unix_ms(),
+                };
+                if let Err(e) = events_tx.send(ingest) {
+                    tracing::debug!(
+                        target: "minos_agent_runtime::manager",
+                        error = %e,
+                        "events_tx broadcast send failed (no subscribers)",
+                    );
+                }
+            }
+            Inbound::ServerRequest { id, method, params } => {
+                // Best-effort approval auto-reject: re-use the existing approval
+                // surface; unknown server requests are warn-logged and forwarded
+                // as a synthetic notification so ingest subscribers see them.
+                let envelope = serde_json::json!({ "method": method, "params": params });
+                match serde_json::from_value::<minos_codex_protocol::ServerRequest>(envelope) {
+                    Ok(req) => {
+                        if let Some(reply) = crate::approvals::auto_reject(&req) {
+                            if let Err(e) = client.reply(id.clone(), reply).await {
+                                warn!(
+                                    target: "minos_agent_runtime::manager",
+                                    error = %e,
+                                    method = %method,
+                                    "auto-reject reply failed",
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            target: "minos_agent_runtime::manager",
+                            method = %method,
+                            error = %e,
+                            "unknown server request method; not replying",
+                        );
+                    }
+                }
+                let thread_id =
+                    params.get("threadId").and_then(Value::as_str).map(str::to_string);
+                if let Some(thread_id) = thread_id {
+                    let agent = threads
+                        .lock()
+                        .await
+                        .get(&thread_id)
+                        .map(|h| h.agent)
+                        .unwrap_or(AgentName::Codex);
+                    let synthetic_method = format!("server_request/{method}");
+                    let payload =
+                        serde_json::json!({ "method": synthetic_method, "params": params });
+                    let _ = events_tx.send(RawIngest {
+                        agent,
+                        thread_id,
+                        payload,
+                        ts_ms: current_unix_ms(),
+                    });
+                }
+            }
+            Inbound::Closed => break,
+        }
+    }
+    info!(
+        target: "minos_agent_runtime::manager",
+        "event pump exiting (WS closed)",
+    );
+    let _ = crash_tx.send(()).await;
+}
+
+/// Internal helper for `AppServerInstance::start_thread`. Issues the
+/// `thread/start` JSON-RPC and returns the thread id (which doubles as the
+/// codex session id for resume purposes per spec §6.1).
+pub(crate) async fn rpc_start_thread(
+    client: &CodexClient,
+    cwd: &Path,
+    timeout: Duration,
+) -> anyhow::Result<StartThreadResult> {
+    let cwd_str = cwd.display().to_string();
+    let start_params = ThreadStartParams {
+        cwd: Some(cwd_str),
+        ..Default::default()
+    };
+    let resp: ThreadStartResponse = tokio::time::timeout(timeout, client.call_typed(start_params))
+        .await
+        .map_err(|_| anyhow::anyhow!("thread/start timeout"))?
+        .map_err(|e| anyhow::anyhow!("thread/start failed: {e}"))?;
+    let thread_id = resp.thread.id;
+    Ok(StartThreadResult {
+        codex_session_id: thread_id.clone(),
+        thread_id,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StartThreadResult {
+    pub thread_id: String,
+    pub codex_session_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore = "spawn_instance is stubbed until C12"]
+    #[ignore = "spawn_instance now spawns a real codex child; covered via FakeCodexBackend in C22"]
     async fn start_agent_creates_instance_and_thread() {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
