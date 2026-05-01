@@ -9,22 +9,22 @@ abstract class MinosCoreProtocol {
   /// in its pairing store before this future resolves.
   Future<void> pairWithQrJson(String qrJson);
 
-  /// Forget a specific paired Mac (by `mac_device_id`). After ADR-0020 the
+  /// Forget a specific paired Mac (by `host_device_id`). After ADR-0020 the
   /// pairing is account-scoped on the server: this drops the
-  /// `account_mac_pairings` row and tears down the WS to that Mac.
-  Future<void> forgetMac(String macDeviceId);
+  /// `account_host_pairings` row and tears down the WS to that Mac.
+  Future<void> forgetHost(String hostDeviceId);
 
   /// Paired Mac partners for the current account. Returns an empty list
   /// when no Macs are paired or the WS hasn't synced yet.
-  Future<List<MacSummaryDto>> listPairedMacs();
+  Future<List<HostSummaryDto>> listPairedHosts();
 
-  /// `mac_device_id` of the Mac currently selected as the routing target,
+  /// `host_device_id` of the Mac currently selected as the routing target,
   /// or `null` when no active Mac is set.
-  Future<String?> activeMac();
+  Future<String?> activeHost();
 
   /// Set the routing target. Subsequent `Forward` envelopes will be
   /// `target_device_id`-stamped to this Mac.
-  Future<void> setActiveMac(String macDeviceId);
+  Future<void> setActiveHost(String hostDeviceId);
 
   /// Whether the durable store contains enough state to represent an
   /// authenticated device, even if the current WebSocket is offline.

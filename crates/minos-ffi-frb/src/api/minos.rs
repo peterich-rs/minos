@@ -141,19 +141,19 @@ impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
 }
 
 /// Dart-visible mirror of `minos_protocol::HostSummary`. One row in
-/// `/v1/me/macs`.
-pub struct MacSummaryDto {
-    pub mac_device_id: String,
-    pub mac_display_name: String,
+/// `/v1/me/hosts`.
+pub struct HostSummaryDto {
+    pub host_device_id: String,
+    pub host_display_name: String,
     pub paired_at_ms: i64,
     pub paired_via_device_id: String,
 }
 
-impl From<HostSummary> for MacSummaryDto {
+impl From<HostSummary> for HostSummaryDto {
     fn from(s: HostSummary) -> Self {
         Self {
-            mac_device_id: s.host_device_id.to_string(),
-            mac_display_name: s.host_display_name,
+            host_device_id: s.host_device_id.to_string(),
+            host_display_name: s.host_display_name,
             paired_at_ms: s.paired_at_ms,
             paired_via_device_id: s.paired_via_device_id.to_string(),
         }
@@ -235,29 +235,29 @@ impl MobileClient {
         self.0.resume_persisted_session().await
     }
 
-    /// Forget a specific paired Mac. The path-bound `mac_device_id` is
+    /// Forget a specific paired Mac. The path-bound `host_device_id` is
     /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
     /// `forget_peer` (single-peer) call.
-    pub async fn forget_mac(&self, mac_device_id: String) -> Result<(), MinosError> {
-        let mac = parse_device_id(&mac_device_id)?;
-        self.0.forget_host(mac).await
+    pub async fn forget_host(&self, host_device_id: String) -> Result<(), MinosError> {
+        let host = parse_device_id(&host_device_id)?;
+        self.0.forget_host(host).await
     }
 
     /// List every Mac paired to the caller's account.
-    pub async fn list_paired_macs(&self) -> Result<Vec<MacSummaryDto>, MinosError> {
-        let macs = self.0.list_paired_hosts().await?;
-        Ok(macs.into_iter().map(MacSummaryDto::from).collect())
+    pub async fn list_paired_hosts(&self) -> Result<Vec<HostSummaryDto>, MinosError> {
+        let hosts = self.0.list_paired_hosts().await?;
+        Ok(hosts.into_iter().map(HostSummaryDto::from).collect())
     }
 
     /// Override the active Mac the next forward-RPC routes to.
-    pub async fn set_active_mac(&self, mac_device_id: String) -> Result<(), MinosError> {
-        let mac = parse_device_id(&mac_device_id)?;
-        self.0.set_active_host(mac).await
+    pub async fn set_active_host(&self, host_device_id: String) -> Result<(), MinosError> {
+        let host = parse_device_id(&host_device_id)?;
+        self.0.set_active_host(host).await
     }
 
     /// Read the current active Mac id, or `None` if no pair has been
     /// completed yet.
-    pub async fn active_mac(&self) -> Result<Option<String>, MinosError> {
+    pub async fn active_host(&self) -> Result<Option<String>, MinosError> {
         Ok(self.0.active_host().await?.map(|id| id.to_string()))
     }
 
@@ -433,7 +433,7 @@ impl MobileClient {
 /// Parse a UUID-shaped device id string emitted from Dart back into a
 /// `minos_domain::DeviceId`. Surfaces `MinosError::StoreCorrupt` on
 /// malformed input — the Dart side is expected to round-trip the same
-/// strings it received from `MacSummaryDto.mac_device_id`, so this is a
+/// strings it received from `HostSummaryDto.host_device_id`, so this is a
 /// best-effort guard rather than a user-facing error path.
 fn parse_device_id(s: &str) -> Result<minos_domain::DeviceId, MinosError> {
     uuid::Uuid::parse_str(s)

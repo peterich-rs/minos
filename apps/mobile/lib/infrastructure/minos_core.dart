@@ -119,19 +119,19 @@ class MinosCore implements MinosCoreProtocol {
   }
 
   @override
-  Future<void> forgetMac(String macDeviceId) async {
-    await _client.forgetMac(macDeviceId: macDeviceId);
+  Future<void> forgetHost(String hostDeviceId) async {
+    await _client.forgetHost(hostDeviceId: hostDeviceId);
   }
 
   @override
-  Future<List<MacSummaryDto>> listPairedMacs() => _client.listPairedMacs();
+  Future<List<HostSummaryDto>> listPairedHosts() => _client.listPairedHosts();
 
   @override
-  Future<String?> activeMac() => _client.activeMac();
+  Future<String?> activeHost() => _client.activeHost();
 
   @override
-  Future<void> setActiveMac(String macDeviceId) =>
-      _client.setActiveMac(macDeviceId: macDeviceId);
+  Future<void> setActiveHost(String hostDeviceId) =>
+      _client.setActiveHost(hostDeviceId: hostDeviceId);
 
   @override
   Future<bool> hasPersistedPairing() async {
@@ -276,9 +276,9 @@ class MinosCore implements MinosCoreProtocol {
   }
 
   Future<void> _rollbackFailedPersistedPairSave() async {
-    // ADR-0020: with bearer-only auth the server's `account_mac_pairings`
+    // ADR-0020: with bearer-only auth the server's `account_host_pairings`
     // row is the source of truth for the pairing — we can't atomically
-    // un-pair without the just-minted mac_device_id, which the failed
+    // un-pair without the just-minted host_device_id, which the failed
     // persistedPairingState() may not have surfaced. Best-effort: drop
     // any partial keychain snapshot so the next launch starts clean. The
     // user can forget the Mac explicitly from the Partners tab if the

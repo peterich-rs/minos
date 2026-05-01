@@ -130,6 +130,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ErrorKind dco_decode_error_kind(dynamic raw);
 
   @protected
+  HostSummaryDto dco_decode_host_summary_dto(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -142,10 +145,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<AgentDescriptor> dco_decode_list_agent_descriptor(dynamic raw);
 
   @protected
-  List<LogRecord> dco_decode_list_log_record(dynamic raw);
+  List<HostSummaryDto> dco_decode_list_host_summary_dto(dynamic raw);
 
   @protected
-  List<MacSummaryDto> dco_decode_list_mac_summary_dto(dynamic raw);
+  List<LogRecord> dco_decode_list_log_record(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -170,9 +173,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LogRecord dco_decode_log_record(dynamic raw);
-
-  @protected
-  MacSummaryDto dco_decode_mac_summary_dto(dynamic raw);
 
   @protected
   MessageRole dco_decode_message_role(dynamic raw);
@@ -369,6 +369,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ErrorKind sse_decode_error_kind(SseDeserializer deserializer);
 
   @protected
+  HostSummaryDto sse_decode_host_summary_dto(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -383,12 +386,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  List<LogRecord> sse_decode_list_log_record(SseDeserializer deserializer);
-
-  @protected
-  List<MacSummaryDto> sse_decode_list_mac_summary_dto(
+  List<HostSummaryDto> sse_decode_list_host_summary_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<LogRecord> sse_decode_list_log_record(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -423,9 +426,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LogRecord sse_decode_log_record(SseDeserializer deserializer);
-
-  @protected
-  MacSummaryDto sse_decode_mac_summary_dto(SseDeserializer deserializer);
 
   @protected
   MessageRole sse_decode_message_role(SseDeserializer deserializer);
@@ -675,6 +675,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_error_kind(ErrorKind self, SseSerializer serializer);
 
   @protected
+  void sse_encode_host_summary_dto(
+    HostSummaryDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -690,14 +696,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_list_log_record(
-    List<LogRecord> self,
+  void sse_encode_list_host_summary_dto(
+    List<HostSummaryDto> self,
     SseSerializer serializer,
   );
 
   @protected
-  void sse_encode_list_mac_summary_dto(
-    List<MacSummaryDto> self,
+  void sse_encode_list_log_record(
+    List<LogRecord> self,
     SseSerializer serializer,
   );
 
@@ -742,9 +748,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_log_record(LogRecord self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_mac_summary_dto(MacSummaryDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_message_role(MessageRole self, SseSerializer serializer);

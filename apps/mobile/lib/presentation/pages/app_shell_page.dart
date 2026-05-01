@@ -209,12 +209,12 @@ class _AgentsTab extends ConsumerWidget {
                               mac: macs[i],
                               isActive:
                                   activeMacId != null &&
-                                  activeMacId == macs[i].macDeviceId,
+                                  activeMacId == macs[i].hostDeviceId,
                               connection: connection,
                               onTap: () async {
                                 final wasActive =
                                     activeMacId != null &&
-                                    activeMacId == macs[i].macDeviceId;
+                                    activeMacId == macs[i].hostDeviceId;
                                 if (wasActive) {
                                   // Already active: open the runtime
                                   // detail page so the user can browse
@@ -229,7 +229,7 @@ class _AgentsTab extends ConsumerWidget {
                                 } else {
                                   await ref
                                       .read(activeMacProvider.notifier)
-                                      .setActive(macs[i].macDeviceId);
+                                      .setActive(macs[i].hostDeviceId);
                                 }
                               },
                               onForget: () =>
@@ -455,7 +455,7 @@ class _MacRow extends StatelessWidget {
     required this.onForget,
   });
 
-  final MacSummaryDto mac;
+  final HostSummaryDto mac;
   final bool isActive;
   final ConnectionState? connection;
   final VoidCallback onTap;
@@ -464,9 +464,9 @@ class _MacRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final name = mac.macDisplayName.trim().isEmpty
+    final name = mac.hostDisplayName.trim().isEmpty
         ? 'Agent Runtime'
-        : mac.macDisplayName.trim();
+        : mac.hostDisplayName.trim();
     return InkWell(
       onTap: onTap,
       onLongPress: onForget,
@@ -637,9 +637,9 @@ String _resolvePeerDisplayName(WidgetRef ref) {
   final activeId = ref.watch(activeMacProvider).asData?.value;
   final macs = ref.watch(pairedMacsProvider).asData?.value;
   if (activeId != null && macs != null) {
-    final match = macs.where((m) => m.macDeviceId == activeId).toList();
+    final match = macs.where((m) => m.hostDeviceId == activeId).toList();
     if (match.isNotEmpty) {
-      final trimmed = match.first.macDisplayName.trim();
+      final trimmed = match.first.hostDisplayName.trim();
       if (trimmed.isNotEmpty) return trimmed;
     }
   }
@@ -1245,7 +1245,7 @@ class _RowDivider extends StatelessWidget {
 
 /// Forget the Mac currently set as the routing target. Surfaces an error
 /// dialog when no Mac is active (post-ADR-0020 forget needs an explicit
-/// `mac_device_id`). Used from `_RuntimeProfilePage`'s "delete partner"
+/// `host_device_id`). Used from `_RuntimeProfilePage`'s "delete partner"
 /// button.
 Future<void> _confirmForgetActiveMac(
   BuildContext context,
@@ -1255,7 +1255,7 @@ Future<void> _confirmForgetActiveMac(
   final macs = ref.read(pairedMacsProvider).asData?.value ?? const [];
   final mac = activeId == null
       ? null
-      : macs.where((m) => m.macDeviceId == activeId).toList();
+      : macs.where((m) => m.hostDeviceId == activeId).toList();
   if (mac == null || mac.isEmpty) {
     await showCupertinoDialog<void>(
       context: context,
@@ -1280,11 +1280,11 @@ Future<void> _confirmForgetActiveMac(
 Future<void> _confirmForgetMac(
   BuildContext context,
   WidgetRef ref,
-  MacSummaryDto mac,
+  HostSummaryDto mac,
 ) async {
-  final name = mac.macDisplayName.trim().isEmpty
+  final name = mac.hostDisplayName.trim().isEmpty
       ? 'Agent Runtime'
-      : mac.macDisplayName.trim();
+      : mac.hostDisplayName.trim();
   final confirmed = await showCupertinoDialog<bool>(
     context: context,
     builder: (ctx) => CupertinoAlertDialog(
@@ -1304,7 +1304,7 @@ Future<void> _confirmForgetMac(
     ),
   );
   if (confirmed != true) return;
-  await ref.read(minosCoreProvider).forgetMac(mac.macDeviceId);
+  await ref.read(minosCoreProvider).forgetHost(mac.hostDeviceId);
   ref.invalidate(pairedMacsProvider);
   ref.invalidate(runtimeAgentDescriptorsProvider);
   await ref.read(activeMacProvider.notifier).refresh();

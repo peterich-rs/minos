@@ -48,22 +48,22 @@ Stream<RequestTraceRecord> subscribeRequestTraces() =>
 abstract class MobileClient implements RustOpaqueInterface {
   /// Read the current active Mac id, or `None` if no pair has been
   /// completed yet.
-  Future<String?> activeMac();
+  Future<String?> activeHost();
 
   /// Current connection state, read from the watch-channel cache. Cheap and
   /// synchronous.
   ConnectionState currentState();
 
-  /// Forget a specific paired Mac. The path-bound `mac_device_id` is
+  /// Forget a specific paired Mac. The path-bound `host_device_id` is
   /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
   /// `forget_peer` (single-peer) call.
-  Future<void> forgetMac({required String macDeviceId});
+  Future<void> forgetHost({required String hostDeviceId});
 
   /// Detect the CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
 
   /// List every Mac paired to the caller's account.
-  Future<List<MacSummaryDto>> listPairedMacs();
+  Future<List<HostSummaryDto>> listPairedHosts();
 
   /// Request a page of thread summaries.
   Future<ListThreadsResponse> listThreads({required ListThreadsParams req});
@@ -134,7 +134,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   });
 
   /// Override the active Mac the next forward-RPC routes to.
-  Future<void> setActiveMac({required String macDeviceId});
+  Future<void> setActiveHost({required String hostDeviceId});
 
   /// Start a new agent session and return the daemon-issued `session_id`
   /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
@@ -288,6 +288,39 @@ enum ErrorKind {
   pairingTokenExpired,
 }
 
+/// Dart-visible mirror of `minos_protocol::HostSummary`. One row in
+/// `/v1/me/hosts`.
+class HostSummaryDto {
+  final String hostDeviceId;
+  final String hostDisplayName;
+  final PlatformInt64 pairedAtMs;
+  final String pairedViaDeviceId;
+
+  const HostSummaryDto({
+    required this.hostDeviceId,
+    required this.hostDisplayName,
+    required this.pairedAtMs,
+    required this.pairedViaDeviceId,
+  });
+
+  @override
+  int get hashCode =>
+      hostDeviceId.hashCode ^
+      hostDisplayName.hashCode ^
+      pairedAtMs.hashCode ^
+      pairedViaDeviceId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSummaryDto &&
+          runtimeType == other.runtimeType &&
+          hostDeviceId == other.hostDeviceId &&
+          hostDisplayName == other.hostDisplayName &&
+          pairedAtMs == other.pairedAtMs &&
+          pairedViaDeviceId == other.pairedViaDeviceId;
+}
+
 enum Lang { zh, en }
 
 class ListThreadsParams {
@@ -358,39 +391,6 @@ class LogRecord {
           target == other.target &&
           message == other.message &&
           tsMs == other.tsMs;
-}
-
-/// Dart-visible mirror of `minos_protocol::MacSummary`. One row in
-/// `/v1/me/macs`.
-class MacSummaryDto {
-  final String macDeviceId;
-  final String macDisplayName;
-  final PlatformInt64 pairedAtMs;
-  final String pairedViaDeviceId;
-
-  const MacSummaryDto({
-    required this.macDeviceId,
-    required this.macDisplayName,
-    required this.pairedAtMs,
-    required this.pairedViaDeviceId,
-  });
-
-  @override
-  int get hashCode =>
-      macDeviceId.hashCode ^
-      macDisplayName.hashCode ^
-      pairedAtMs.hashCode ^
-      pairedViaDeviceId.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is MacSummaryDto &&
-          runtimeType == other.runtimeType &&
-          macDeviceId == other.macDeviceId &&
-          macDisplayName == other.macDisplayName &&
-          pairedAtMs == other.pairedAtMs &&
-          pairedViaDeviceId == other.pairedViaDeviceId;
 }
 
 enum MessageRole { user, assistant, system }

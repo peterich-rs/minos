@@ -45,8 +45,8 @@ final runtimeAgentDescriptorsProvider = FutureProvider<List<AgentDescriptor>>((
 /// happens via `ref.invalidate(pairedMacsProvider)` after a forget /
 /// successful pair — there is no polling stream yet, the user can pull
 /// the partners tab to refresh.
-final pairedMacsProvider = FutureProvider<List<MacSummaryDto>>((ref) {
-  return ref.watch(minosCoreProvider).listPairedMacs();
+final pairedMacsProvider = FutureProvider<List<HostSummaryDto>>((ref) {
+  return ref.watch(minosCoreProvider).listPairedHosts();
 });
 
 /// Routing target for `Forward` envelopes. `null` means no Mac is selected
@@ -55,7 +55,7 @@ final pairedMacsProvider = FutureProvider<List<MacSummaryDto>>((ref) {
 class ActiveMac extends _$ActiveMac {
   @override
   Future<String?> build() {
-    return ref.watch(minosCoreProvider).activeMac();
+    return ref.watch(minosCoreProvider).activeHost();
   }
 
   /// Set [macId] as the routing target. Updates state optimistically; if
@@ -65,11 +65,11 @@ class ActiveMac extends _$ActiveMac {
     final previous = state;
     state = AsyncValue.data(macId);
     try {
-      await ref.read(minosCoreProvider).setActiveMac(macId);
+      await ref.read(minosCoreProvider).setActiveHost(macId);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
       try {
-        state = AsyncValue.data(await ref.read(minosCoreProvider).activeMac());
+        state = AsyncValue.data(await ref.read(minosCoreProvider).activeHost());
       } catch (_) {
         state = previous;
       }
@@ -81,7 +81,7 @@ class ActiveMac extends _$ActiveMac {
   Future<void> refresh() async {
     state = const AsyncValue.loading();
     try {
-      state = AsyncValue.data(await ref.read(minosCoreProvider).activeMac());
+      state = AsyncValue.data(await ref.read(minosCoreProvider).activeHost());
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }

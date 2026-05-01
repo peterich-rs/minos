@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -338265478;
+  int get rustContentHash => -166574718;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -76,7 +76,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<String?> crateApiMinosMobileClientActiveMac({
+  Future<String?> crateApiMinosMobileClientActiveHost({
     required MobileClient that,
   });
 
@@ -84,16 +84,16 @@ abstract class RustLibApi extends BaseApi {
     required MobileClient that,
   });
 
-  Future<void> crateApiMinosMobileClientForgetMac({
+  Future<void> crateApiMinosMobileClientForgetHost({
     required MobileClient that,
-    required String macDeviceId,
+    required String hostDeviceId,
   });
 
   Future<List<AgentDescriptor>> crateApiMinosMobileClientListClis({
     required MobileClient that,
   });
 
-  Future<List<MacSummaryDto>> crateApiMinosMobileClientListPairedMacs({
+  Future<List<HostSummaryDto>> crateApiMinosMobileClientListPairedHosts({
     required MobileClient that,
   });
 
@@ -159,9 +159,9 @@ abstract class RustLibApi extends BaseApi {
     required String text,
   });
 
-  Future<void> crateApiMinosMobileClientSetActiveMac({
+  Future<void> crateApiMinosMobileClientSetActiveHost({
     required MobileClient that,
-    required String macDeviceId,
+    required String hostDeviceId,
   });
 
   Future<StartAgentResponse> crateApiMinosMobileClientStartAgent({
@@ -219,7 +219,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<String?> crateApiMinosMobileClientActiveMac({
+  Future<String?> crateApiMinosMobileClientActiveHost({
     required MobileClient that,
   }) {
     return handler.executeNormal(
@@ -241,16 +241,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_opt_String,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientActiveMacConstMeta,
+        constMeta: kCrateApiMinosMobileClientActiveHostConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientActiveMacConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientActiveHostConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_active_mac",
+        debugName: "MobileClient_active_host",
         argNames: ["that"],
       );
 
@@ -286,9 +286,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateApiMinosMobileClientForgetMac({
+  Future<void> crateApiMinosMobileClientForgetHost({
     required MobileClient that,
-    required String macDeviceId,
+    required String hostDeviceId,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -298,7 +298,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_String(macDeviceId, serializer);
+          sse_encode_String(hostDeviceId, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -310,17 +310,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientForgetMacConstMeta,
-        argValues: [that, macDeviceId],
+        constMeta: kCrateApiMinosMobileClientForgetHostConstMeta,
+        argValues: [that, hostDeviceId],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientForgetMacConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientForgetHostConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_forget_mac",
-        argNames: ["that", "macDeviceId"],
+        debugName: "MobileClient_forget_host",
+        argNames: ["that", "hostDeviceId"],
       );
 
   @override
@@ -360,7 +360,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<List<MacSummaryDto>> crateApiMinosMobileClientListPairedMacs({
+  Future<List<HostSummaryDto>> crateApiMinosMobileClientListPairedHosts({
     required MobileClient that,
   }) {
     return handler.executeNormal(
@@ -379,19 +379,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_list_mac_summary_dto,
+          decodeSuccessData: sse_decode_list_host_summary_dto,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientListPairedMacsConstMeta,
+        constMeta: kCrateApiMinosMobileClientListPairedHostsConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientListPairedMacsConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientListPairedHostsConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_list_paired_macs",
+        debugName: "MobileClient_list_paired_hosts",
         argNames: ["that"],
       );
 
@@ -889,9 +889,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateApiMinosMobileClientSetActiveMac({
+  Future<void> crateApiMinosMobileClientSetActiveHost({
     required MobileClient that,
-    required String macDeviceId,
+    required String hostDeviceId,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -901,7 +901,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_String(macDeviceId, serializer);
+          sse_encode_String(hostDeviceId, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -913,17 +913,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientSetActiveMacConstMeta,
-        argValues: [that, macDeviceId],
+        constMeta: kCrateApiMinosMobileClientSetActiveHostConstMeta,
+        argValues: [that, hostDeviceId],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientSetActiveMacConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientSetActiveHostConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_set_active_mac",
-        argNames: ["that", "macDeviceId"],
+        debugName: "MobileClient_set_active_host",
+        argNames: ["that", "hostDeviceId"],
       );
 
   @override
@@ -1568,6 +1568,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  HostSummaryDto dco_decode_host_summary_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return HostSummaryDto(
+      hostDeviceId: dco_decode_String(arr[0]),
+      hostDisplayName: dco_decode_String(arr[1]),
+      pairedAtMs: dco_decode_i_64(arr[2]),
+      pairedViaDeviceId: dco_decode_String(arr[3]),
+    );
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -1592,15 +1606,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<LogRecord> dco_decode_list_log_record(dynamic raw) {
+  List<HostSummaryDto> dco_decode_list_host_summary_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_log_record).toList();
+    return (raw as List<dynamic>).map(dco_decode_host_summary_dto).toList();
   }
 
   @protected
-  List<MacSummaryDto> dco_decode_list_mac_summary_dto(dynamic raw) {
+  List<LogRecord> dco_decode_list_log_record(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_mac_summary_dto).toList();
+    return (raw as List<dynamic>).map(dco_decode_log_record).toList();
   }
 
   @protected
@@ -1669,20 +1683,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       target: dco_decode_String(arr[1]),
       message: dco_decode_String(arr[2]),
       tsMs: dco_decode_i_64(arr[3]),
-    );
-  }
-
-  @protected
-  MacSummaryDto dco_decode_mac_summary_dto(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
-    return MacSummaryDto(
-      macDeviceId: dco_decode_String(arr[0]),
-      macDisplayName: dco_decode_String(arr[1]),
-      pairedAtMs: dco_decode_i_64(arr[2]),
-      pairedViaDeviceId: dco_decode_String(arr[3]),
     );
   }
 
@@ -2393,6 +2393,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  HostSummaryDto sse_decode_host_summary_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_hostDeviceId = sse_decode_String(deserializer);
+    var var_hostDisplayName = sse_decode_String(deserializer);
+    var var_pairedAtMs = sse_decode_i_64(deserializer);
+    var var_pairedViaDeviceId = sse_decode_String(deserializer);
+    return HostSummaryDto(
+      hostDeviceId: var_hostDeviceId,
+      hostDisplayName: var_hostDisplayName,
+      pairedAtMs: var_pairedAtMs,
+      pairedViaDeviceId: var_pairedViaDeviceId,
+    );
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -2426,6 +2441,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<HostSummaryDto> sse_decode_list_host_summary_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HostSummaryDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_host_summary_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<LogRecord> sse_decode_list_log_record(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2433,20 +2462,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <LogRecord>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_log_record(deserializer));
-    }
-    return ans_;
-  }
-
-  @protected
-  List<MacSummaryDto> sse_decode_list_mac_summary_dto(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <MacSummaryDto>[];
-    for (var idx_ = 0; idx_ < len_; ++idx_) {
-      ans_.add(sse_decode_mac_summary_dto(deserializer));
     }
     return ans_;
   }
@@ -2547,21 +2562,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       target: var_target,
       message: var_message,
       tsMs: var_tsMs,
-    );
-  }
-
-  @protected
-  MacSummaryDto sse_decode_mac_summary_dto(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_macDeviceId = sse_decode_String(deserializer);
-    var var_macDisplayName = sse_decode_String(deserializer);
-    var var_pairedAtMs = sse_decode_i_64(deserializer);
-    var var_pairedViaDeviceId = sse_decode_String(deserializer);
-    return MacSummaryDto(
-      macDeviceId: var_macDeviceId,
-      macDisplayName: var_macDisplayName,
-      pairedAtMs: var_pairedAtMs,
-      pairedViaDeviceId: var_pairedViaDeviceId,
     );
   }
 
@@ -3445,6 +3445,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_host_summary_dto(
+    HostSummaryDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.hostDeviceId, serializer);
+    sse_encode_String(self.hostDisplayName, serializer);
+    sse_encode_i_64(self.pairedAtMs, serializer);
+    sse_encode_String(self.pairedViaDeviceId, serializer);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -3475,6 +3487,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_host_summary_dto(
+    List<HostSummaryDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_host_summary_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_log_record(
     List<LogRecord> self,
     SseSerializer serializer,
@@ -3483,18 +3507,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_log_record(item, serializer);
-    }
-  }
-
-  @protected
-  void sse_encode_list_mac_summary_dto(
-    List<MacSummaryDto> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    for (final item in self) {
-      sse_encode_mac_summary_dto(item, serializer);
     }
   }
 
@@ -3578,18 +3590,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.target, serializer);
     sse_encode_String(self.message, serializer);
     sse_encode_i_64(self.tsMs, serializer);
-  }
-
-  @protected
-  void sse_encode_mac_summary_dto(
-    MacSummaryDto self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_String(self.macDeviceId, serializer);
-    sse_encode_String(self.macDisplayName, serializer);
-    sse_encode_i_64(self.pairedAtMs, serializer);
-    sse_encode_String(self.pairedViaDeviceId, serializer);
   }
 
   @protected
@@ -4120,27 +4120,30 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
 
   /// Read the current active Mac id, or `None` if no pair has been
   /// completed yet.
-  Future<String?> activeMac() =>
-      RustLib.instance.api.crateApiMinosMobileClientActiveMac(that: this);
+  Future<String?> activeHost() =>
+      RustLib.instance.api.crateApiMinosMobileClientActiveHost(that: this);
 
   /// Current connection state, read from the watch-channel cache. Cheap and
   /// synchronous.
   ConnectionState currentState() =>
       RustLib.instance.api.crateApiMinosMobileClientCurrentState(that: this);
 
-  /// Forget a specific paired Mac. The path-bound `mac_device_id` is
+  /// Forget a specific paired Mac. The path-bound `host_device_id` is
   /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
   /// `forget_peer` (single-peer) call.
-  Future<void> forgetMac({required String macDeviceId}) => RustLib.instance.api
-      .crateApiMinosMobileClientForgetMac(that: this, macDeviceId: macDeviceId);
+  Future<void> forgetHost({required String hostDeviceId}) =>
+      RustLib.instance.api.crateApiMinosMobileClientForgetHost(
+        that: this,
+        hostDeviceId: hostDeviceId,
+      );
 
   /// Detect the CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis() =>
       RustLib.instance.api.crateApiMinosMobileClientListClis(that: this);
 
   /// List every Mac paired to the caller's account.
-  Future<List<MacSummaryDto>> listPairedMacs() =>
-      RustLib.instance.api.crateApiMinosMobileClientListPairedMacs(that: this);
+  Future<List<HostSummaryDto>> listPairedHosts() =>
+      RustLib.instance.api.crateApiMinosMobileClientListPairedHosts(that: this);
 
   /// Request a page of thread summaries.
   Future<ListThreadsResponse> listThreads({required ListThreadsParams req}) =>
@@ -4226,10 +4229,10 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   );
 
   /// Override the active Mac the next forward-RPC routes to.
-  Future<void> setActiveMac({required String macDeviceId}) =>
-      RustLib.instance.api.crateApiMinosMobileClientSetActiveMac(
+  Future<void> setActiveHost({required String hostDeviceId}) =>
+      RustLib.instance.api.crateApiMinosMobileClientSetActiveHost(
         that: this,
-        macDeviceId: macDeviceId,
+        hostDeviceId: hostDeviceId,
       );
 
   /// Start a new agent session and return the daemon-issued `session_id`

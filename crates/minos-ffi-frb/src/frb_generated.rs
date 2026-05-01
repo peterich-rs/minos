@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -338265478;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -166574718;
 
 // Section: executor
 
@@ -47,7 +47,7 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
-fn wire__crate__api__minos__MobileClient_active_mac_impl(
+fn wire__crate__api__minos__MobileClient_active_host_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -55,7 +55,7 @@ fn wire__crate__api__minos__MobileClient_active_mac_impl(
 ) {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "MobileClient_active_mac",
+            debug_name: "MobileClient_active_host",
             port: Some(port_),
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
@@ -94,7 +94,7 @@ fn wire__crate__api__minos__MobileClient_active_mac_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok =
-                            crate::api::minos::MobileClient::active_mac(&*api_that_guard).await?;
+                            crate::api::minos::MobileClient::active_host(&*api_that_guard).await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -151,7 +151,7 @@ fn wire__crate__api__minos__MobileClient_current_state_impl(
         },
     )
 }
-fn wire__crate__api__minos__MobileClient_forget_mac_impl(
+fn wire__crate__api__minos__MobileClient_forget_host_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -159,7 +159,7 @@ fn wire__crate__api__minos__MobileClient_forget_mac_impl(
 ) {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "MobileClient_forget_mac",
+            debug_name: "MobileClient_forget_host",
             port: Some(port_),
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
@@ -176,7 +176,7 @@ fn wire__crate__api__minos__MobileClient_forget_mac_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
             >>::sse_decode(&mut deserializer);
-            let api_mac_device_id = <String>::sse_decode(&mut deserializer);
+            let api_host_device_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -198,9 +198,9 @@ fn wire__crate__api__minos__MobileClient_forget_mac_impl(
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::api::minos::MobileClient::forget_mac(
+                        let output_ok = crate::api::minos::MobileClient::forget_host(
                             &*api_that_guard,
-                            api_mac_device_id,
+                            api_host_device_id,
                         )
                         .await?;
                         Ok(output_ok)
@@ -267,7 +267,7 @@ fn wire__crate__api__minos__MobileClient_list_clis_impl(
         },
     )
 }
-fn wire__crate__api__minos__MobileClient_list_paired_macs_impl(
+fn wire__crate__api__minos__MobileClient_list_paired_hosts_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -275,7 +275,7 @@ fn wire__crate__api__minos__MobileClient_list_paired_macs_impl(
 ) {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "MobileClient_list_paired_macs",
+            debug_name: "MobileClient_list_paired_hosts",
             port: Some(port_),
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
@@ -314,7 +314,7 @@ fn wire__crate__api__minos__MobileClient_list_paired_macs_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok =
-                            crate::api::minos::MobileClient::list_paired_macs(&*api_that_guard)
+                            crate::api::minos::MobileClient::list_paired_hosts(&*api_that_guard)
                                 .await?;
                         Ok(output_ok)
                     })()
@@ -1081,7 +1081,7 @@ fn wire__crate__api__minos__MobileClient_send_user_message_impl(
         },
     )
 }
-fn wire__crate__api__minos__MobileClient_set_active_mac_impl(
+fn wire__crate__api__minos__MobileClient_set_active_host_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1089,7 +1089,7 @@ fn wire__crate__api__minos__MobileClient_set_active_mac_impl(
 ) {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "MobileClient_set_active_mac",
+            debug_name: "MobileClient_set_active_host",
             port: Some(port_),
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
@@ -1106,7 +1106,7 @@ fn wire__crate__api__minos__MobileClient_set_active_mac_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
             >>::sse_decode(&mut deserializer);
-            let api_mac_device_id = <String>::sse_decode(&mut deserializer);
+            let api_host_device_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -1128,9 +1128,9 @@ fn wire__crate__api__minos__MobileClient_set_active_mac_impl(
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::api::minos::MobileClient::set_active_mac(
+                        let output_ok = crate::api::minos::MobileClient::set_active_host(
                             &*api_that_guard,
-                            api_mac_device_id,
+                            api_host_device_id,
                         )
                         .await?;
                         Ok(output_ok)
@@ -2212,6 +2212,22 @@ impl SseDecode for crate::api::minos::ErrorKind {
     }
 }
 
+impl SseDecode for crate::api::minos::HostSummaryDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_hostDeviceId = <String>::sse_decode(deserializer);
+        let mut var_hostDisplayName = <String>::sse_decode(deserializer);
+        let mut var_pairedAtMs = <i64>::sse_decode(deserializer);
+        let mut var_pairedViaDeviceId = <String>::sse_decode(deserializer);
+        return crate::api::minos::HostSummaryDto {
+            host_device_id: var_hostDeviceId,
+            host_display_name: var_hostDisplayName,
+            paired_at_ms: var_pairedAtMs,
+            paired_via_device_id: var_pairedViaDeviceId,
+        };
+    }
+}
+
 impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2252,6 +2268,20 @@ impl SseDecode for Vec<crate::api::minos::AgentDescriptor> {
     }
 }
 
+impl SseDecode for Vec<crate::api::minos::HostSummaryDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::minos::HostSummaryDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::minos::LogRecord> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2259,18 +2289,6 @@ impl SseDecode for Vec<crate::api::minos::LogRecord> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<crate::api::minos::LogRecord>::sse_decode(deserializer));
-        }
-        return ans_;
-    }
-}
-
-impl SseDecode for Vec<crate::api::minos::MacSummaryDto> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut len_ = <i32>::sse_decode(deserializer);
-        let mut ans_ = Vec::with_capacity(len_ as usize);
-        for idx_ in 0..len_ {
-            ans_.push(<crate::api::minos::MacSummaryDto>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -2381,22 +2399,6 @@ impl SseDecode for crate::api::minos::LogRecord {
             target: var_target,
             message: var_message,
             ts_ms: var_tsMs,
-        };
-    }
-}
-
-impl SseDecode for crate::api::minos::MacSummaryDto {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_macDeviceId = <String>::sse_decode(deserializer);
-        let mut var_macDisplayName = <String>::sse_decode(deserializer);
-        let mut var_pairedAtMs = <i64>::sse_decode(deserializer);
-        let mut var_pairedViaDeviceId = <String>::sse_decode(deserializer);
-        return crate::api::minos::MacSummaryDto {
-            mac_device_id: var_macDeviceId,
-            mac_display_name: var_macDisplayName,
-            paired_at_ms: var_pairedAtMs,
-            paired_via_device_id: var_pairedViaDeviceId,
         };
     }
 }
@@ -3094,16 +3096,22 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => {
-            wire__crate__api__minos__MobileClient_active_mac_impl(port, ptr, rust_vec_len, data_len)
-        }
-        3 => {
-            wire__crate__api__minos__MobileClient_forget_mac_impl(port, ptr, rust_vec_len, data_len)
-        }
+        1 => wire__crate__api__minos__MobileClient_active_host_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        3 => wire__crate__api__minos__MobileClient_forget_host_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
         4 => {
             wire__crate__api__minos__MobileClient_list_clis_impl(port, ptr, rust_vec_len, data_len)
         }
-        5 => wire__crate__api__minos__MobileClient_list_paired_macs_impl(
+        5 => wire__crate__api__minos__MobileClient_list_paired_hosts_impl(
             port,
             ptr,
             rust_vec_len,
@@ -3156,7 +3164,7 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        20 => wire__crate__api__minos__MobileClient_set_active_mac_impl(
+        20 => wire__crate__api__minos__MobileClient_set_active_host_impl(
             port,
             ptr,
             rust_vec_len,
@@ -3461,6 +3469,29 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ErrorKind>>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::minos::HostSummaryDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.host_device_id.into_into_dart().into_dart(),
+            self.host_display_name.into_into_dart().into_dart(),
+            self.paired_at_ms.into_into_dart().into_dart(),
+            self.paired_via_device_id.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::minos::HostSummaryDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::HostSummaryDto>
+    for crate::api::minos::HostSummaryDto
+{
+    fn into_into_dart(self) -> crate::api::minos::HostSummaryDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::Lang> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self.0 {
@@ -3562,29 +3593,6 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::LogRecord>
     for crate::api::minos::LogRecord
 {
     fn into_into_dart(self) -> crate::api::minos::LogRecord {
-        self
-    }
-}
-// Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::minos::MacSummaryDto {
-    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [
-            self.mac_device_id.into_into_dart().into_dart(),
-            self.mac_display_name.into_into_dart().into_dart(),
-            self.paired_at_ms.into_into_dart().into_dart(),
-            self.paired_via_device_id.into_into_dart().into_dart(),
-        ]
-        .into_dart()
-    }
-}
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::minos::MacSummaryDto
-{
-}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::MacSummaryDto>
-    for crate::api::minos::MacSummaryDto
-{
-    fn into_into_dart(self) -> crate::api::minos::MacSummaryDto {
         self
     }
 }
@@ -4401,6 +4409,16 @@ impl SseEncode for crate::api::minos::ErrorKind {
     }
 }
 
+impl SseEncode for crate::api::minos::HostSummaryDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.host_device_id, serializer);
+        <String>::sse_encode(self.host_display_name, serializer);
+        <i64>::sse_encode(self.paired_at_ms, serializer);
+        <String>::sse_encode(self.paired_via_device_id, serializer);
+    }
+}
+
 impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4441,22 +4459,22 @@ impl SseEncode for Vec<crate::api::minos::AgentDescriptor> {
     }
 }
 
+impl SseEncode for Vec<crate::api::minos::HostSummaryDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::minos::HostSummaryDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::minos::LogRecord> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::minos::LogRecord>::sse_encode(item, serializer);
-        }
-    }
-}
-
-impl SseEncode for Vec<crate::api::minos::MacSummaryDto> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <i32>::sse_encode(self.len() as _, serializer);
-        for item in self {
-            <crate::api::minos::MacSummaryDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -4544,16 +4562,6 @@ impl SseEncode for crate::api::minos::LogRecord {
         <String>::sse_encode(self.target, serializer);
         <String>::sse_encode(self.message, serializer);
         <i64>::sse_encode(self.ts_ms, serializer);
-    }
-}
-
-impl SseEncode for crate::api::minos::MacSummaryDto {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <String>::sse_encode(self.mac_device_id, serializer);
-        <String>::sse_encode(self.mac_display_name, serializer);
-        <i64>::sse_encode(self.paired_at_ms, serializer);
-        <String>::sse_encode(self.paired_via_device_id, serializer);
     }
 }
 
