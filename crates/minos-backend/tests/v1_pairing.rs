@@ -98,7 +98,7 @@ async fn post_pairing_tokens_rejects_missing_device_id() {
 }
 
 #[tokio::test]
-async fn post_pairing_consume_happy_path_returns_secret_and_pairs() {
+async fn post_pairing_consume_happy_path_pairs_account_and_mac() {
     let state = backend_state().await;
 
     // Pre-seed a Mac issuer + token (mirrors what /v1/pairing/tokens does).
@@ -145,25 +145,34 @@ async fn post_pairing_consume_happy_path_returns_secret_and_pairs() {
     let resp: PairResponse = serde_json::from_value(body).unwrap();
     assert_eq!(resp.peer_device_id, mac_id);
     assert_eq!(resp.peer_name, "Mac");
-    assert_eq!(resp.your_device_secret.as_str().len(), 43);
 
-    // Pairing committed
-    let pair = minos_backend::store::pairings::get_pair(&state.store, mac_id)
-        .await
-        .unwrap();
-    assert_eq!(pair, Some(consumer_id));
+    // Pair row committed in account_mac_pairings.
+    assert!(minos_backend::store::account_mac_pairings::exists(
+        &state.store,
+        mac_id,
+        &account.account_id,
+    )
+    .await
+    .unwrap());
 
-    // Issuer received Event::Paired
+    // Issuer received Event::Paired with Some(secret).
     let frame = mac_outbox
         .recv()
         .await
         .expect("issuer receives Event::Paired");
     match frame {
         minos_protocol::Envelope::Event {
-            event: minos_protocol::EventKind::Paired { peer_device_id, .. },
+            event:
+                minos_protocol::EventKind::Paired {
+                    peer_device_id,
+                    your_device_secret,
+                    ..
+                },
             ..
         } => {
             assert_eq!(peer_device_id, consumer_id);
+            let secret = your_device_secret.expect("Mac side gets a secret");
+            assert_eq!(secret.as_str().len(), 43);
         }
         other => panic!("expected Event::Paired, got {other:?}"),
     }
@@ -295,104 +304,18 @@ async fn post_pairing_consume_rejects_agent_host_role() {
 }
 
 #[tokio::test]
-async fn delete_pairing_tears_down_and_pushes_unpaired() {
+async fn delete_pairing_legacy_route_returns_410_gone() {
+    // Phase E2: legacy `DELETE /v1/pairing` is replaced by
+    // `DELETE /v1/pairings/{mac_device_id}` (bearer-authenticated). The
+    // legacy route now returns 410 Gone with a directive message.
     let state = backend_state().await;
-    // Seed a paired Mac+iPhone with a verifying secret on the iPhone side.
-    let mac_id = DeviceId::new();
-    let ios_id = DeviceId::new();
-    insert_device(&state.store, mac_id, "Mac", DeviceRole::AgentHost, 0)
-        .await
-        .unwrap();
-    insert_device(&state.store, ios_id, "iPhone", DeviceRole::IosClient, 0)
-        .await
-        .unwrap();
-
-    let secret = minos_domain::DeviceSecret::generate();
-    let hash = minos_backend::pairing::secret::hash_secret(&secret).unwrap();
-    minos_backend::store::devices::upsert_secret_hash(&state.store, ios_id, &hash)
-        .await
-        .unwrap();
-    minos_backend::store::pairings::insert_pairing(&state.store, mac_id, ios_id, 0)
-        .await
-        .unwrap();
-
-    let mut mac_outbox = seed_live_session(&state, mac_id, DeviceRole::AgentHost);
-
-    let mut app = router(state.clone());
-    let req = Request::builder()
-        .method(Method::DELETE)
-        .uri("/v1/pairing")
-        .header("x-device-id", ios_id.to_string())
-        .header("x-device-role", "ios-client")
-        .header("x-device-secret", secret.as_str())
-        .body(Body::empty())
-        .unwrap();
-    let (status, _) = common::send(&mut app, req).await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
-
-    assert_eq!(
-        minos_backend::store::pairings::get_pair(&state.store, mac_id)
-            .await
-            .unwrap(),
-        None
-    );
-
-    // Mac receives Event::Unpaired
-    let frame = mac_outbox.recv().await.unwrap();
-    assert!(matches!(
-        frame,
-        minos_protocol::Envelope::Event {
-            event: minos_protocol::EventKind::Unpaired,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn delete_pairing_when_unpaired_returns_404() {
-    let state = backend_state().await;
-    let id = DeviceId::new();
-    insert_device(&state.store, id, "iPhone", DeviceRole::IosClient, 0)
-        .await
-        .unwrap();
-    let secret = minos_domain::DeviceSecret::generate();
-    let hash = minos_backend::pairing::secret::hash_secret(&secret).unwrap();
-    minos_backend::store::devices::upsert_secret_hash(&state.store, id, &hash)
-        .await
-        .unwrap();
-
     let mut app = router(state);
     let req = Request::builder()
         .method(Method::DELETE)
         .uri("/v1/pairing")
-        .header("x-device-id", id.to_string())
-        .header("x-device-role", "ios-client")
-        .header("x-device-secret", secret.as_str())
         .body(Body::empty())
         .unwrap();
     let (status, body) = common::send(&mut app, req).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body["error"]["code"], "pairing_state_mismatch");
-}
-
-#[tokio::test]
-async fn delete_pairing_without_secret_returns_401() {
-    let state = backend_state().await;
-    let id = DeviceId::new();
-    insert_device(&state.store, id, "iPhone", DeviceRole::IosClient, 0)
-        .await
-        .unwrap();
-    // No hash stored → authenticated_with_secret == false even without header.
-
-    let mut app = router(state);
-    let req = Request::builder()
-        .method(Method::DELETE)
-        .uri("/v1/pairing")
-        .header("x-device-id", id.to_string())
-        .header("x-device-role", "ios-client")
-        .body(Body::empty())
-        .unwrap();
-    let (status, body) = common::send(&mut app, req).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"]["code"], "unauthorized");
+    assert_eq!(status, StatusCode::GONE);
+    assert_eq!(body["error"]["code"], "replaced");
 }

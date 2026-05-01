@@ -1,4 +1,4 @@
-//! `POST /v1/pairing/*` and `DELETE /v1/pairing` handlers.
+//! `POST /v1/pairing/*` and `DELETE /v1/pairings/:mac_device_id` handlers.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -15,13 +15,12 @@ use crate::auth::bearer;
 use crate::error::BackendError;
 use crate::http::auth;
 use crate::http::BackendState;
-use crate::session::SessionHandle;
 
 pub fn router() -> Router<BackendState> {
     Router::new()
         .route("/pairing/tokens", post(post_tokens))
         .route("/pairing/consume", post(post_consume))
-        .route("/pairing", delete(delete_pairing))
+        .route("/pairing", delete(delete_pairing_legacy))
 }
 
 #[derive(Debug, Serialize)]
@@ -151,7 +150,30 @@ async fn post_consume(
     };
 
     let issuer_id = pairing_outcome.issuer_device_id;
-    let consumer_secret = pairing_outcome.consumer_secret.clone();
+
+    // Insert the (Mac, mobile_account) pair OUTSIDE the consume_token
+    // transaction — `account_mac_pairings::insert_pair` only takes a
+    // `&SqlitePool`, and the handler is the first place we have the
+    // bearer's `account_id`. Idempotent via `ON CONFLICT DO NOTHING`.
+    if let Err(e) = crate::store::account_mac_pairings::insert_pair(
+        &state.store,
+        issuer_id,
+        &account_id,
+        consumer_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    {
+        tracing::warn!(
+            target: "minos_backend::v1::pairing",
+            error = %e,
+            "insert_pair failed",
+        );
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err_body("internal", e.to_string()),
+        ));
+    }
 
     // Phase 2 Task 2.3: copy the bearer's account onto BOTH device rows.
     // - iOS: re-write in case the prior account changed (login swap).
@@ -193,7 +215,7 @@ async fn post_consume(
     };
 
     // Push Event::Paired to the issuer's live WS, if any. If issuer is offline
-    // OR the queue rejects, compensate (clear the pairing) — guarantees the
+    // OR the queue rejects, compensate (delete the pair row) — guarantees the
     // §7.1 invariant that a Paired DB row implies the Mac saw Event::Paired.
     if let Some(issuer_handle) = state.registry.get(issuer_id) {
         let frame = Envelope::Event {
@@ -201,9 +223,11 @@ async fn post_consume(
             event: EventKind::Paired {
                 peer_device_id: consumer_id,
                 peer_name: params.device_name.clone(),
-                your_device_secret: pairing_outcome.issuer_secret.clone(),
+                your_device_secret: Some(pairing_outcome.issuer_secret.clone()),
             },
         };
+        // `paired_with` is retained until Phase G removes the field; left
+        // as a best-effort hint for any in-flight code that still reads it.
         *issuer_handle.paired_with.write().await = Some(consumer_id);
         // Phase 2 Task 2.3: also seed the live Mac handle's `account_id`
         // so Mac→iOS routing (Task 2.4) does not have to wait for the Mac
@@ -216,8 +240,12 @@ async fn post_consume(
                 issuer = %issuer_id,
                 "Event::Paired delivery failed; compensating",
             );
-            let _ = state.pairing.forget_pair(consumer_id).await;
-            refresh_live_pair_slot(&state, &issuer_handle).await;
+            let _ = crate::store::account_mac_pairings::delete_pair(
+                &state.store,
+                issuer_id,
+                &account_id,
+            )
+            .await;
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 err_body(
@@ -233,7 +261,9 @@ async fn post_consume(
             consumer = %consumer_id,
             "issuer offline at pair time; compensating",
         );
-        let _ = state.pairing.forget_pair(consumer_id).await;
+        let _ =
+            crate::store::account_mac_pairings::delete_pair(&state.store, issuer_id, &account_id)
+                .await;
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             err_body("internal", "issuer is offline; pairing rolled back"),
@@ -243,86 +273,17 @@ async fn post_consume(
     Ok(Json(PairResponse {
         peer_device_id: issuer_id,
         peer_name: mac_name,
-        your_device_secret: consumer_secret,
     }))
 }
 
-async fn delete_pairing(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
-    let outcome = auth::authenticate(&state.store, &headers)
-        .await
-        .map_err(|e| match e {
-            auth::AuthError::Unauthorized(m) => {
-                (StatusCode::UNAUTHORIZED, err_body("unauthorized", m))
-            }
-            auth::AuthError::Internal(m) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, err_body("internal", m))
-            }
-        })?;
-    if !outcome.authenticated_with_secret {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            err_body("unauthorized", "X-Device-Secret required for forget"),
-        ));
-    }
-
-    let peer = match state.pairing.forget_pair(outcome.device_id).await {
-        Ok(Some(peer)) => peer,
-        Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                err_body(
-                    "pairing_state_mismatch",
-                    "session is not paired; nothing to forget",
-                ),
-            ));
-        }
-        Err(e) => {
-            tracing::warn!(target: "minos_backend::v1::pairing", error = %e, "forget_pair failed");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                err_body("internal", e.to_string()),
-            ));
-        }
-    };
-
-    let unpaired = Envelope::Event {
-        version: 1,
-        event: EventKind::Unpaired,
-    };
-
-    // Caller's own live session (if any).
-    if let Some(self_handle) = state.registry.get(outcome.device_id) {
-        refresh_live_pair_slot(&state, &self_handle).await;
-        let _ = state
-            .registry
-            .try_send_current(&self_handle, unpaired.clone());
-    }
-    // Peer's live session (if any). ORDER MATTERS: clear paired_with BEFORE
-    // pushing Event::Unpaired so the peer dispatcher cannot route one last
-    // Forward off stale state.
-    if let Some(peer_handle) = state.registry.get(peer) {
-        refresh_live_pair_slot(&state, &peer_handle).await;
-        let _ = state.registry.try_send_current(&peer_handle, unpaired);
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn refresh_live_pair_slot(state: &BackendState, handle: &SessionHandle) {
-    let next_peer = match crate::store::pairings::get_peers(&state.store, handle.device_id).await {
-        Ok(peers) => peers.into_iter().next(),
-        Err(e) => {
-            tracing::warn!(
-                target: "minos_backend::v1::pairing",
-                error = %e,
-                device = %handle.device_id,
-                "failed to refresh live paired_with slot"
-            );
-            None
-        }
-    };
-    *handle.paired_with.write().await = next_peer;
+/// `DELETE /v1/pairing` legacy route. The Phase 2 / pre-ADR-0020 path
+/// is gone; Phase E2 introduces `DELETE /v1/pairings/{mac_device_id}`
+/// with bearer auth. Until that route lands, the legacy endpoint
+/// returns 410 Gone so any old client surfaces a clear error rather
+/// than silently dropping the call.
+async fn delete_pairing_legacy() -> (StatusCode, Json<ErrorEnvelope>) {
+    (
+        StatusCode::GONE,
+        err_body("replaced", "Use DELETE /v1/pairings/{mac_device_id}"),
+    )
 }
