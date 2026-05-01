@@ -370,6 +370,64 @@ impl AgentManager {
         Ok(())
     }
 
+    pub async fn interrupt_thread(&self, thread_id: &str) -> anyhow::Result<()> {
+        let handle = self
+            .threads
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("thread not found"))?;
+        if !matches!(
+            handle.current_state(),
+            ThreadState::Running { .. } | ThreadState::Idle
+        ) {
+            anyhow::bail!("interrupt rejected: state={:?}", handle.current_state());
+        }
+        let workspace = handle.workspace.clone();
+        if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
+            let _ = inst.interrupt_turn(thread_id).await;
+        }
+        let from_state = handle.current_state();
+        handle.transition(ThreadState::Suspended {
+            reason: PauseReason::UserInterrupt,
+        })?;
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old: from_state,
+            new: ThreadState::Suspended {
+                reason: PauseReason::UserInterrupt,
+            },
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        Ok(())
+    }
+
+    pub async fn close_thread(&self, thread_id: &str) -> anyhow::Result<()> {
+        let handle = self
+            .threads
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("thread not found"))?;
+        if matches!(handle.current_state(), ThreadState::Closed { .. }) {
+            return Ok(());
+        }
+        handle.transition(ThreadState::Closed {
+            reason: crate::state_machine::CloseReason::UserClose,
+        })?;
+        let workspace = handle.workspace.clone();
+        if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
+            inst.remove_thread(thread_id).await;
+        }
+        let _ = self.manager_tx.send(ManagerEvent::ThreadClosed {
+            thread_id: thread_id.to_string(),
+            reason: crate::state_machine::CloseReason::UserClose,
+        });
+        Ok(())
+    }
+
     pub async fn list_threads(&self) -> Vec<crate::store_facing::ThreadSnapshot> {
         let g = self.threads.lock().await;
         g.values()
