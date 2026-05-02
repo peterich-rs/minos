@@ -25,7 +25,7 @@ final class AppState: @unchecked Sendable {
         let relayLink: RelayLinkState
         let peer: PeerState
         let trustedDevice: PeerRecord?
-        let agentState: AgentState
+        let agentState: ThreadState
     }
 
     // ── Daemon + subscriptions ──
@@ -48,7 +48,7 @@ final class AppState: @unchecked Sendable {
     var isShowingQr: Bool = false
 
     // ── Agent runtime ──
-    var agentState: AgentState = .idle
+    var agentState: ThreadState = .idle
     var currentSession: StartAgentResponse?
     var agentError: MinosError?
 
@@ -175,7 +175,7 @@ final class AppState: @unchecked Sendable {
         peer: PeerState,
         trustedDevice: PeerRecord?,
         agentSubscription: (any SubscriptionHandle)? = nil,
-        agentState: AgentState = .idle
+        agentState: ThreadState = .idle
     ) {
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()

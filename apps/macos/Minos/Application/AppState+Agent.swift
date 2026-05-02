@@ -7,14 +7,21 @@ private let agentLogger = Logger(subsystem: "ai.minos.macos", category: "appStat
 /// AppState type body stays under the swiftlint type-body-length cap.
 extension AppState {
     @MainActor
-    func applyAgentState(_ state: AgentState) {
+    func applyAgentState(_ state: ThreadState) {
         agentState = state
 
-        switch state {
-        case .idle, .crashed:
+        // Post-Phase-C the daemon's legacy single-channel state mirror always
+        // pushes `.idle` after a successful `start_agent` / `close_thread`
+        // ("the multi-thread manager keeps per-thread state internally; the
+        // single-channel mirror just signals 'something is alive'", agent.rs).
+        // So `.idle` no longer means "no session" — it means "thread alive,
+        // not in a turn". The session lifecycle is now driven explicitly by
+        // `startAgent` / `stopAgent` below, which set / clear `currentSession`
+        // around the round-trip. Only `.closed` warrants clearing here, and
+        // even that is mostly defensive — the legacy mirror does not emit
+        // `.closed` today.
+        if case .closed = state {
             currentSession = nil
-        case .starting, .running, .stopping:
-            break
         }
     }
 
@@ -29,7 +36,9 @@ extension AppState {
         agentLogger.info("startAgent requested · mode=\(modeLabel, privacy: .public)")
 
         do {
-            let session = try await daemon.startAgent(.init(agent: .codex, mode: mode))
+            let session = try await daemon.startAgent(
+                .init(agent: .codex, workspace: "", mode: mode)
+            )
             currentSession = session
             agentLogger.info(
                 "startAgent ok · mode=\(modeLabel, privacy: .public) · sessionId=\(session.sessionId, privacy: .public)"
@@ -70,15 +79,20 @@ extension AppState {
         }
     }
 
+    /// Per-thread "stop" — translates the legacy single-session "Stop"
+    /// affordance to the new `close_thread` RPC keyed by the live
+    /// `currentSession.sessionId`. With no live session there is no thread
+    /// to close, so the call is a no-op.
     @MainActor
     func stopAgent() async {
-        guard phase == .running, let daemon else { return }
+        guard phase == .running, let daemon, let session = currentSession else { return }
 
         clearAgentError()
-        agentLogger.info("stopAgent requested")
+        let threadId = session.sessionId
+        agentLogger.info("stopAgent requested · threadId=\(threadId, privacy: .public)")
 
         do {
-            try await daemon.stopAgent()
+            try await daemon.closeThread(.init(threadId: threadId))
             currentSession = nil
             agentLogger.info("stopAgent ok")
         } catch let error as MinosError {

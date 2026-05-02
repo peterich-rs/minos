@@ -15,19 +15,22 @@ final class MockSubscription: SubscriptionHandle, @unchecked Sendable {
 /// now exposed independently and observers can be fired from either
 /// channel without affecting the other.
 ///
-/// Plan 05 Phase K.1.
+/// Plan 05 Phase K.1; updated for the post-Phase-C multi-thread agent
+/// surface (`stop_agent` retired; per-thread `interrupt_thread` /
+/// `close_thread` instead).
 final class MockDaemon: DaemonDriving, @unchecked Sendable {
     // ── Public mutable state ──
     var currentRelayLinkValue: RelayLinkState
     var currentPeerValue: PeerState
-    var currentAgentStateValue: AgentState
+    var currentAgentStateValue: ThreadState
     var currentTrustedDeviceValue: PeerRecord?
     var currentTrustedDeviceError: MinosError?
     var pairingQrResult: Result<RelayQrPayload, MinosError>
     var forgetPeerError: MinosError?
     var startAgentResult: Result<StartAgentResponse, MinosError>
     var sendUserMessageError: MinosError?
-    var stopAgentError: MinosError?
+    var interruptThreadError: MinosError?
+    var closeThreadError: MinosError?
     var stopError: MinosError?
 
     let relayLinkSubscription: MockSubscription
@@ -38,7 +41,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     private(set) var pairingQrCallCount = 0
     private(set) var startAgentCalls: [StartAgentRequest] = []
     private(set) var sendUserMessageCalls: [SendUserMessageRequest] = []
-    private(set) var stopAgentCallCount = 0
+    private(set) var interruptThreadCalls: [InterruptThreadRequest] = []
+    private(set) var closeThreadCalls: [CloseThreadRequest] = []
     private(set) var stopCallCount = 0
     private(set) var subscribeRelayLinkCallCount = 0
     private(set) var subscribePeerCallCount = 0
@@ -50,7 +54,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     init(
         currentRelayLink: RelayLinkState = .disconnected,
         currentPeer: PeerState = .unpaired,
-        currentAgentState: AgentState = .idle,
+        currentAgentState: ThreadState = .idle,
         currentTrustedDevice: PeerRecord? = nil,
         pairingQrResult: Result<RelayQrPayload, MinosError> = .success(MockDaemon.makeQrPayload()),
         startAgentResult: Result<StartAgentResponse, MinosError> = .success(
@@ -75,7 +79,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
 
     func currentRelayLink() -> RelayLinkState { currentRelayLinkValue }
     func currentPeer() -> PeerState { currentPeerValue }
-    func currentAgentState() -> AgentState { currentAgentStateValue }
+    func currentAgentState() -> ThreadState { currentAgentStateValue }
 
     func currentTrustedDevice() async throws -> PeerRecord? {
         if let currentTrustedDeviceError {
@@ -118,10 +122,17 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         }
     }
 
-    func stopAgent() async throws {
-        stopAgentCallCount += 1
-        if let stopAgentError {
-            throw stopAgentError
+    func interruptThread(_ req: InterruptThreadRequest) async throws {
+        interruptThreadCalls.append(req)
+        if let interruptThreadError {
+            throw interruptThreadError
+        }
+    }
+
+    func closeThread(_ req: CloseThreadRequest) async throws {
+        closeThreadCalls.append(req)
+        if let closeThreadError {
+            throw closeThreadError
         }
     }
 
@@ -163,7 +174,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         }
     }
 
-    func emitAgentState(_ state: AgentState) {
+    func emitAgentState(_ state: ThreadState) {
         currentAgentStateValue = state
         for observer in agentObservers {
             observer.onState(state: state)

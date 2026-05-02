@@ -893,6 +893,7 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
         "minos_domain.swift",
         "minos_protocol.swift",
         "minos_pairing.swift",
+        "minos_ui_protocol.swift",
     ] {
         let path = out_dir.join(file_name);
         if !path.exists() {
@@ -921,6 +922,10 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
             )
             .replace(
                 "#if canImport(minos_protocolFFI)\nimport minos_protocolFFI\n#endif",
+                MODULE_IMPORT,
+            )
+            .replace(
+                "#if canImport(minos_ui_protocolFFI)\nimport minos_ui_protocolFFI\n#endif",
                 MODULE_IMPORT,
             );
 

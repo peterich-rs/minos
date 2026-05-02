@@ -10,8 +10,11 @@ protocol SubscriptionHandle: AnyObject, Sendable {
 
 /// The daemon surface AppState binds against. Mirrors the post-Phase-F
 /// `DaemonHandle` UniFFI shape: dual-axis state (relay link + peer),
-/// async pairing/forget round-trips, plus the unchanged agent-runtime
-/// methods. Tests use `MockDaemon` (Phase K.1) to satisfy this protocol.
+/// async pairing/forget round-trips, plus the multi-thread agent-runtime
+/// methods that replaced the pre-Phase-C single-session surface
+/// (`stop_agent` retired in favour of per-thread `interrupt_thread` /
+/// `close_thread`). Tests use `MockDaemon` (Phase K.1) to satisfy this
+/// protocol.
 protocol DaemonDriving: AnyObject, Sendable {
     // ── Dual-axis state ──
     func currentRelayLink() -> RelayLinkState
@@ -25,11 +28,12 @@ protocol DaemonDriving: AnyObject, Sendable {
     // ── Lifecycle ──
     func stop() async throws
 
-    // ── Agent runtime (unchanged from pre-relay surface) ──
-    func currentAgentState() -> AgentState
+    // ── Agent runtime (post-Phase-C multi-thread surface) ──
+    func currentAgentState() -> ThreadState
     func startAgent(_ req: StartAgentRequest) async throws -> StartAgentResponse
     func sendUserMessage(_ req: SendUserMessageRequest) async throws
-    func stopAgent() async throws
+    func interruptThread(_ req: InterruptThreadRequest) async throws
+    func closeThread(_ req: CloseThreadRequest) async throws
 
     // ── Push-model observers ──
     func subscribeRelayLink(_ observer: RelayLinkStateObserver) -> any SubscriptionHandle

@@ -338,6 +338,30 @@ impl DaemonHandle {
         self.inner.agent.close_thread(req).await
     }
 
+    #[must_use]
+    pub fn subscribe_agent_state(
+        &self,
+        observer: Arc<dyn crate::subscription::AgentStateObserver>,
+    ) -> Arc<crate::subscription::Subscription> {
+        let _guard = self.inner.rt_handle.enter();
+        self.inner.agent.subscribe_state(observer)
+    }
+
+    #[must_use]
+    pub fn current_agent_state(&self) -> crate::ThreadState {
+        self.inner.agent.current_state()
+    }
+}
+
+// ── Agent-runtime methods served only over JSON-RPC, not UniFFI. ──
+//
+// `list_threads` and `get_thread` traffic in `minos_protocol::ThreadSummary`
+// / `ThreadState` mirrors that intentionally do not derive `uniffi::*` (the
+// canonical FFI-side `ThreadState` is the runtime crate's enum; duplicating
+// it via UniFFI would collide in the shared Swift module). Mobile (frb)
+// reaches these methods via the JSON-RPC server in `rpc_server.rs`, which
+// is unaffected. Macos Swift does not call them today.
+impl DaemonHandle {
     #[allow(clippy::missing_errors_doc)]
     pub async fn list_threads(
         &self,
@@ -352,19 +376,5 @@ impl DaemonHandle {
         req: minos_protocol::GetThreadParams,
     ) -> Result<minos_protocol::GetThreadResponse, MinosError> {
         self.inner.agent.get_thread(req).await
-    }
-
-    #[must_use]
-    pub fn subscribe_agent_state(
-        &self,
-        observer: Arc<dyn crate::subscription::AgentStateObserver>,
-    ) -> Arc<crate::subscription::Subscription> {
-        let _guard = self.inner.rt_handle.enter();
-        self.inner.agent.subscribe_state(observer)
-    }
-
-    #[must_use]
-    pub fn current_agent_state(&self) -> crate::ThreadState {
-        self.inner.agent.current_state()
     }
 }

@@ -23,45 +23,90 @@ struct AgentSegmentView: View {
 
     @ViewBuilder
     private var stateRow: some View {
+        // When a session is active, prefer rendering its identity + the
+        // current state. The legacy single-channel state mirror only emits
+        // `.idle` post-Phase-C, so gating session info on the `.running`
+        // case (as the pre-Phase-C UI did) leaves the menubar looking
+        // identical before and after `start_agent`. See
+        // `AppState+Agent.applyAgentState` for why `.idle` no longer means
+        // "no session".
+        if let session = appState.currentSession {
+            sessionRow(session)
+        } else {
+            bareStateRow
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRow(_ session: StartAgentResponse) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Agent · \(stateLabel(appState.agentState))")
+                .font(.subheadline.weight(.medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 6) {
+                Text("Thread")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(session.sessionId)
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 6) {
+                Text("Workspace")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(session.cwd)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var bareStateRow: some View {
         switch appState.agentState {
         case .idle:
             stateText("Agent: Idle")
         case .starting:
             stateText("Agent: Starting...")
-        case let .running(_, threadId, startedAt):
-            TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                stateText(
-                    "Agent: Running · thread \(threadId) · \(uptimeLabel(now: context.date, startedAt: startedAt))"
-                )
-            }
-        case .stopping:
-            stateText("Agent: Stopping...")
-        case let .crashed(reason):
-            stateText("Agent: Crashed · \(reason)")
+        case .running:
+            stateText("Agent: Running...")
+        case let .suspended(reason):
+            stateText("Agent: Suspended · \(label(for: reason))")
+        case .resuming:
+            stateText("Agent: Resuming...")
+        case let .closed(reason):
+            stateText("Agent: Closed · \(label(for: reason))")
+        }
+    }
+
+    private func stateLabel(_ state: ThreadState) -> String {
+        switch state {
+        case .idle: return "Idle"
+        case .starting: return "Starting"
+        case .running: return "Running"
+        case let .suspended(reason): return "Suspended (\(label(for: reason)))"
+        case .resuming: return "Resuming"
+        case let .closed(reason): return "Closed (\(label(for: reason)))"
         }
     }
 
     #if DEBUG
     @ViewBuilder
     private var debugControls: some View {
-        switch appState.agentState {
-        case .idle:
-            HStack(spacing: 8) {
-                Button("启动 Codex (jsonl)") {
-                    Task {
-                        await appState.startAgent(mode: .jsonl)
-                    }
-                }
-                Button("启动 Codex (server)") {
-                    Task {
-                        await appState.startAgent(mode: .server)
-                    }
-                }
-            }
-            .buttonStyle(.bordered)
-        case .starting, .stopping:
-            EmptyView()
-        case .running:
+        // Gate the controls on `currentSession` rather than the legacy state
+        // value: the daemon's single-channel state mirror only emits `.idle`
+        // post-Phase-C, so a `switch appState.agentState` would always show
+        // the start buttons even with a live thread.
+        if appState.currentSession != nil {
             HStack(spacing: 8) {
                 Button("发送 ping（测试）") {
                     Task {
@@ -76,14 +121,44 @@ struct AgentSegmentView: View {
                 }
             }
             .buttonStyle(.bordered)
-        case .crashed:
-            Button("关闭提示") {
-                appState.dismissAgentCrash()
+        } else {
+            switch appState.agentState {
+            case .starting, .resuming:
+                EmptyView()
+            case .idle, .running, .suspended, .closed:
+                HStack(spacing: 8) {
+                    Button("启动 Codex (jsonl)") {
+                        Task {
+                            await appState.startAgent(mode: .jsonl)
+                        }
+                    }
+                    Button("启动 Codex (server)") {
+                        Task {
+                            await appState.startAgent(mode: .server)
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
         }
     }
     #endif
+
+    private func label(for reason: PauseReason) -> String {
+        switch reason {
+        case .userInterrupt: return "user interrupt"
+        case .codexCrashed: return "codex crashed"
+        case .daemonRestart: return "daemon restart"
+        case .instanceReaped: return "instance reaped"
+        }
+    }
+
+    private func label(for reason: CloseReason) -> String {
+        switch reason {
+        case .userClose: return "user close"
+        case .terminalError: return "terminal error"
+        }
+    }
 
     private func stateText(_ text: String) -> some View {
         Text(text)
@@ -108,18 +183,4 @@ struct AgentSegmentView: View {
         )
     }
 
-    private func uptimeLabel(now: Date, startedAt: Date) -> String {
-        let elapsed = max(Int(now.timeIntervalSince(startedAt)), 0)
-        if elapsed < 60 {
-            return "\(elapsed)s"
-        }
-
-        let minutes = elapsed / 60
-        if elapsed < 3_600 {
-            return "\(minutes)m"
-        }
-
-        let hours = minutes / 60
-        return "\(hours)h \(minutes % 60)m"
-    }
 }

@@ -41,9 +41,13 @@ pub use minos_daemon::{
 pub use minos_domain::{
     AgentDescriptor, AgentName, AgentStatus, DeviceId, DeviceSecret, PeerState, RelayLinkState,
 };
+// `ThreadState` / `PauseReason` / `CloseReason` are exposed to Swift as the
+// `minos_agent_runtime` enums. `minos_protocol` carries serde-only mirrors for
+// JSON-RPC (mobile) traffic — see `crates/minos-protocol/src/messages.rs` for
+// rationale on why those mirrors do not derive `uniffi::*`.
+pub use minos_agent_runtime::{CloseReason, PauseReason, ThreadState};
 pub use minos_protocol::{
-    AgentLaunchMode, CloseReason, CloseThreadRequest, GetThreadParams, GetThreadResponse,
-    InterruptThreadRequest, ListThreadsParams, ListThreadsResponse, PauseReason,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState, ThreadSummary,
+    AgentLaunchMode, CloseThreadRequest, InterruptThreadRequest, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse,
 };
 pub use minos_ui_protocol::ThreadEndReason;

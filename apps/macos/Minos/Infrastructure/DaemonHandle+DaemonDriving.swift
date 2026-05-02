@@ -16,6 +16,14 @@ extension DaemonHandle: DaemonDriving {
         try await sendUserMessage(req: req)
     }
 
+    func interruptThread(_ req: InterruptThreadRequest) async throws {
+        try await interruptThread(req: req)
+    }
+
+    func closeThread(_ req: CloseThreadRequest) async throws {
+        try await closeThread(req: req)
+    }
+
     func subscribeRelayLink(_ observer: RelayLinkStateObserver) -> any SubscriptionHandle {
         subscribeRelayLink(observer: observer)
     }

@@ -142,16 +142,17 @@ pub struct CloseThreadRequest {
 }
 
 /// Parameters for the `get_thread` RPC. See spec §5.2.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetThreadParams {
     pub thread_id: String,
 }
 
-/// Mirror of `minos_agent_runtime::ThreadState` published over the wire.
-/// The runtime crate does not depend on this crate (and vice versa), so the
-/// enum is duplicated here with the same `tag = "kind"` / `snake_case` shape.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+/// Mirror of `minos_agent_runtime::ThreadState` published over the wire for
+/// the host's JSON-RPC surface. Kept structurally identical to the runtime
+/// enum (same `tag = "kind"` / `snake_case` shape) so the two serialise
+/// interchangeably across the relay. Not exposed to UniFFI — the FFI surface
+/// uses `minos_agent_runtime::ThreadState` directly so Swift sees one
+/// canonical `ThreadState` type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ThreadState {
@@ -163,7 +164,6 @@ pub enum ThreadState {
     Closed { reason: CloseReason },
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PauseReason {
@@ -173,7 +173,6 @@ pub enum PauseReason {
     InstanceReaped,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CloseReason {
@@ -185,7 +184,6 @@ pub enum CloseReason {
 /// metadata with the live `ThreadState` snapshot so the mobile UI can both
 /// render the history list entry and decide whether to draw the running
 /// indicator without a second round-trip.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetThreadResponse {
     pub thread: ThreadSummary,
@@ -230,7 +228,6 @@ pub struct RequestPairingQrResponse {
 
 /// Compact summary of one persisted thread, returned by `list_threads`
 /// for the mobile history list.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ThreadSummary {
     pub thread_id: String,
@@ -245,7 +242,6 @@ pub struct ThreadSummary {
 
 /// Parameters for `list_threads`. `before_ts_ms` paginates older entries;
 /// `agent` filters by CLI kind.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListThreadsParams {
     pub limit: u32,
@@ -257,7 +253,6 @@ pub struct ListThreadsParams {
 
 /// Response from `list_threads`; `next_before_ts_ms` is set iff there is
 /// a strictly older page the caller can request.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListThreadsResponse {
     pub threads: Vec<ThreadSummary>,
