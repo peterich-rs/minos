@@ -106,6 +106,86 @@ impl LocalStore {
         .await?;
         Ok(r.rows_affected())
     }
+
+    /// Idempotent workspace upsert. The `threads.workspace_root` FK requires
+    /// the parent row to exist before any `INSERT INTO threads` succeeds.
+    /// `INSERT OR IGNORE` keeps `first_seen_at` from the original create and
+    /// doesn't bump `last_seen_at` — `update_workspace_seen` does that.
+    pub async fn upsert_workspace(&self, root: &str, ts_ms: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO workspaces(root, first_seen_at, last_seen_at) \
+             VALUES (?, ?, ?)",
+        )
+        .bind(root)
+        .bind(ts_ms)
+        .bind(ts_ms)
+        .execute(&self.pool)
+        .await?;
+        sqlx::query("UPDATE workspaces SET last_seen_at = ? WHERE root = ?")
+            .bind(ts_ms)
+            .bind(root)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Persist a freshly-spawned thread. Idempotent on `thread_id` so callers
+    /// don't have to round-trip a SELECT before calling — `INSERT OR IGNORE`
+    /// makes a duplicate `start_agent` (e.g. after a UI retry) a benign
+    /// no-op rather than a constraint violation. The `events.thread_id` FK
+    /// is the load-bearing reason this exists: without a parent threads row
+    /// every `EventWriter::write_live` for the thread fails with SQLite
+    /// error 787.
+    pub async fn insert_thread(
+        &self,
+        thread_id: &str,
+        workspace_root: &str,
+        agent: &str,
+        codex_session_id: Option<&str>,
+        status: &str,
+        ts_ms: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO threads( \
+                thread_id, workspace_root, agent, codex_session_id, status, \
+                last_seq, started_at, last_activity_at \
+             ) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+        )
+        .bind(thread_id)
+        .bind(workspace_root)
+        .bind(agent)
+        .bind(codex_session_id)
+        .bind(status)
+        .bind(ts_ms)
+        .bind(ts_ms)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Stamp a thread closed: `status='closed'`, `ended_at=ts_ms`,
+    /// `last_close_reason=reason`. No-op (zero rows updated) if the row is
+    /// missing — callers treat that as success because there's nothing left
+    /// to persist about a thread we never recorded.
+    pub async fn close_thread_row(
+        &self,
+        thread_id: &str,
+        reason: &str,
+        ts_ms: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE threads SET status = 'closed', last_close_reason = ?, \
+                                ended_at = ?, last_activity_at = ? \
+             WHERE thread_id = ?",
+        )
+        .bind(reason)
+        .bind(ts_ms)
+        .bind(ts_ms)
+        .bind(thread_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]

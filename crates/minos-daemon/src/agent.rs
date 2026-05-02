@@ -30,6 +30,11 @@ use crate::subscription::{AgentStateObserver, Subscription};
 pub struct AgentGlue {
     pub manager: Arc<AgentManager>,
     pub writer: Arc<EventWriter>,
+    /// Local SQLite store. Owned so `start_agent` / `close_thread` can keep
+    /// the parent `threads` / `workspaces` rows in sync with the in-memory
+    /// `AgentManager`. Without these the events FK in §8.2 fails the
+    /// moment codex emits its first ingest frame.
+    store: Arc<LocalStore>,
     /// Watch channel mirroring the most recently observed thread state. The
     /// legacy FFI surface exposes a single `state_stream()` shaped like the
     /// pre-Phase-C `AgentRuntime`. Multi-thread fan-out lands in C17.
@@ -56,7 +61,7 @@ impl AgentGlue {
         cfg.subprocess_env = subprocess_env;
         let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
         let writer = Arc::new(EventWriter::spawn(store.clone(), relay_out_tx));
-        Self::wire_with(manager, writer, workspace_root)
+        Self::wire_with(manager, writer, store, workspace_root)
     }
 
     /// Test-time / advanced constructor that accepts a pre-built manager and
@@ -64,21 +69,38 @@ impl AgentGlue {
     pub fn wire_with(
         manager: Arc<AgentManager>,
         writer: Arc<EventWriter>,
+        store: Arc<LocalStore>,
         default_workspace: PathBuf,
     ) -> Self {
         // Spawn the bridge: every RawIngest from the manager is forwarded to
         // the EventWriter (which persists + broadcasts the corresponding
         // `Envelope::Ingest` outbound).
+        //
+        // Each ingest gets one info-level log line so the daemon log shows
+        // the codex → host event stream at a glance. Pre-fix this slot was
+        // the FK-error spam; post-fix the success path was silent and the
+        // user couldn't tell whether codex was active. Volume is bounded
+        // by codex's own emit rate (~tens/s/thread per spec §8.7).
         let mut rx = manager.ingest_stream();
         let writer_clone = writer.clone();
         tokio::spawn(async move {
             while let Ok(ingest) = rx.recv().await {
-                if let Err(e) = writer_clone.write_live(ingest).await {
-                    tracing::error!(
+                let thread_id = ingest.thread_id.clone();
+                let payload_bytes = serde_json::to_vec(&ingest.payload).map_or(0, |v| v.len());
+                match writer_clone.write_live(ingest).await {
+                    Ok(seq) => tracing::info!(
+                        target: "minos_daemon::agent",
+                        thread_id = %thread_id,
+                        seq,
+                        bytes = payload_bytes,
+                        "ingest event committed",
+                    ),
+                    Err(e) => tracing::error!(
                         target: "minos_daemon::agent",
                         error = %e,
+                        thread_id = %thread_id,
                         "EventWriter.write_live failed; event dropped",
-                    );
+                    ),
                 }
             }
         });
@@ -88,6 +110,7 @@ impl AgentGlue {
         Self {
             manager,
             writer,
+            store,
             state_tx,
             state_rx,
             default_workspace,
@@ -116,6 +139,50 @@ impl AgentGlue {
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
+
+        // Persist the parent rows the events FK depends on. The codex
+        // session id doubles as the thread id (manager.rs `rpc_start_thread`),
+        // so the same value lands in both columns. `INSERT OR IGNORE` makes
+        // both calls safe to repeat for the same workspace / thread (e.g.
+        // a UI retry after a transient error). Failure here is logged but
+        // not fatal — start_agent has already spawned codex and the manager
+        // has the thread in memory; surfacing a hard error to the caller
+        // would leave us with a live codex thread the user can never
+        // interact with again.
+        let now_ms = current_unix_ms();
+        let agent_label = match req.agent {
+            minos_domain::AgentName::Codex => "codex",
+            minos_domain::AgentName::Claude => "claude",
+            minos_domain::AgentName::Gemini => "gemini",
+        };
+        if let Err(e) = self.store.upsert_workspace(&cwd, now_ms).await {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                workspace = %cwd,
+                "store.upsert_workspace failed; events FK may reject ingest",
+            );
+        }
+        if let Err(e) = self
+            .store
+            .insert_thread(
+                &outcome.thread_id,
+                &cwd,
+                agent_label,
+                Some(&outcome.thread_id),
+                "idle",
+                now_ms,
+            )
+            .await
+        {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                thread_id = %outcome.thread_id,
+                "store.insert_thread failed; events FK may reject ingest",
+            );
+        }
+
         // Legacy single-state mirror: emit Idle (not Running) because the
         // multi-thread manager keeps per-thread state internally; the
         // single-channel mirror just signals "something is alive". The mobile
@@ -146,6 +213,25 @@ impl AgentGlue {
             .close_thread(&req.thread_id)
             .await
             .map_err(map_anyhow)?;
+
+        // Mirror the in-memory transition into the local DB so the next
+        // daemon start sees the thread as `closed` instead of flipping it
+        // to `suspended { daemon_restart }` via §8.6 startup recovery.
+        // Logged on failure but non-fatal — the manager has already
+        // released the thread.
+        if let Err(e) = self
+            .store
+            .close_thread_row(&req.thread_id, "user_close", current_unix_ms())
+            .await
+        {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                thread_id = %req.thread_id,
+                "store.close_thread_row failed; row will look orphan on next restart",
+            );
+        }
+
         let _ = self.state_tx.send(ThreadState::Idle);
         Ok(())
     }
@@ -241,6 +327,13 @@ fn map_anyhow(e: anyhow::Error) -> MinosError {
         method: "agent_manager".into(),
         message: e.to_string(),
     }
+}
+
+fn current_unix_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState {
