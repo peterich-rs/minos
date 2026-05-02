@@ -20,6 +20,7 @@ class _FakeCore implements MinosCoreProtocol {
   int stopCount = 0;
   String? lastSendThreadId;
   String? lastSendText;
+  String? lastCloseThreadId;
 
   void emit(UiEventFrame frame) => _uiCtl.add(frame);
 
@@ -49,8 +50,9 @@ class _FakeCore implements MinosCoreProtocol {
   }
 
   @override
-  Future<void> stopAgent() async {
+  Future<void> closeThread({required String threadId}) async {
     stopCount += 1;
+    lastCloseThreadId = threadId;
   }
 
   @override
@@ -461,6 +463,7 @@ void main() {
 
     await notifier.stop();
     expect(core.stopCount, 1);
+    expect(core.lastCloseThreadId, 'thr-F');
     final st = c.read(activeSessionControllerProvider);
     expect(st, isA<SessionStopped>());
     expect((st as SessionStopped).threadId, 'thr-F');

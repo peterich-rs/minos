@@ -256,7 +256,8 @@ class MinosCore implements MinosCoreProtocol {
   }) => _client.sendUserMessage(sessionId: sessionId, text: text);
 
   @override
-  Future<void> stopAgent() => _client.stopAgent();
+  Future<void> closeThread({required String threadId}) =>
+      _client.closeThread(threadId: threadId);
 
   // ---- Lifecycle forwarders ----
 

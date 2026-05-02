@@ -112,7 +112,7 @@ class _FakeCore implements MinosCoreProtocol {
   }) async {}
 
   @override
-  Future<void> stopAgent() async {}
+  Future<void> closeThread({required String threadId}) async {}
 
   @override
   Future<List<AgentDescriptor>> listClis() async => const [];

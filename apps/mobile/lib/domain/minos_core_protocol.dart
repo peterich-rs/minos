@@ -96,9 +96,12 @@ abstract class MinosCoreProtocol {
     required String text,
   });
 
-  /// Stop the currently-running agent (if any). Idempotent on the
-  /// no-active-session path.
-  Future<void> stopAgent();
+  /// Close an agent thread by its `thread_id`. Replaces the pre-Phase-C
+  /// `stop_agent()` surface — the multi-thread `AgentManager` keys lifecycle
+  /// operations on `thread_id` rather than implicitly on the single active
+  /// session. Idempotent on the daemon side; calling for an already-closed
+  /// thread is a benign no-op.
+  Future<void> closeThread({required String threadId});
 
   /// Detect CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();

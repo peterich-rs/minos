@@ -164,7 +164,7 @@ class ActiveSessionController extends _$ActiveSessionController {
     if (threadId == null) return;
 
     try {
-      await ref.read(minosCoreProvider).stopAgent();
+      await ref.read(minosCoreProvider).closeThread(threadId: threadId);
     } on MinosError {
       // best-effort
     }
