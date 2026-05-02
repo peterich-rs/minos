@@ -32,6 +32,12 @@ futures-util = { workspace = true }
 dashmap = { workspace = true }
 uniffi = { workspace = true, optional = true }
 
+[target.'cfg(unix)'.dependencies]
+# Used by `process.rs` and `manager::shutdown_instances` for `setpgid` (place
+# every codex child in its own process group) and `kill(-pgid, sig)` (signal
+# the entire group on shutdown so codex's subprocesses don't survive Minos).
+libc = "0.2"
+
 [dev-dependencies]
 # Self-reference enables the `test-support` feature for this crate's own
 # integration / doc / bench tests. Cargo allows a crate to appear in its own

@@ -25,6 +25,10 @@
 //! `sleep` / `bash`). The module deliberately has no dependency on
 //! `codex_client` or `runtime` so its tests run in isolation.
 
+// Module-local allow for the single async-signal-safe `setpgid(2)` call in
+// `pre_exec`. The crate-level `deny(unsafe_code)` keeps everything else honest.
+#![allow(unsafe_code)]
+
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -50,6 +54,14 @@ impl CodexProcess {
     /// user's login shell). Sets up piped stdout/stderr, null stdin, and
     /// `kill_on_drop(true)` so the child dies with us. Retained for the
     /// app-server test seam even though exec/jsonl is now the default route.
+    ///
+    /// On Unix the child is put in a fresh process group via `setpgid(0, 0)`
+    /// in `pre_exec`. That lets `manager::shutdown_instances` deliver
+    /// SIGTERM / SIGKILL to the entire group with `kill(-pgid, sig)`,
+    /// catching whatever subprocesses codex itself spawns (sandboxed
+    /// shell helpers, model invocations, etc.). Without it, a SIGKILL on
+    /// the codex pid only reaped codex; everything codex forked off was
+    /// reparented to launchd and survived `daemon.stop()`.
     #[allow(dead_code)]
     pub(crate) fn spawn(
         bin: &Path,
@@ -64,6 +76,24 @@ impl CodexProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(unix)]
+        {
+            // SAFETY: `pre_exec` runs the closure in the child after fork()
+            // but before exec(); only async-signal-safe syscalls are
+            // permitted there, and `setpgid(2)` is on the POSIX ASS list.
+            // The closure does not capture or share state with the parent.
+            unsafe {
+                cmd.pre_exec(|| {
+                    // Make the child its own process group leader. Returns 0
+                    // on success; on the impossible failure path we surface
+                    // errno so the spawn side reports the real reason.
+                    if libc::setpgid(0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         let child = cmd.spawn().map_err(|e| MinosError::CodexSpawnFailed {
             message: format!("spawn {}: {e}", bin.display()),
         })?;

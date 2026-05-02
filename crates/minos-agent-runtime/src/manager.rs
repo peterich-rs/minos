@@ -1,3 +1,8 @@
+// Module-local allow for the two `kill(2)` group-signalling calls in
+// `shutdown_instances`. The crate-level `deny(unsafe_code)` keeps everything
+// else honest.
+#![allow(unsafe_code)]
+
 use crate::codex_client::{CodexClient, Inbound};
 use crate::instance::AppServerInstance;
 use crate::manager_event::ManagerEvent;
@@ -600,32 +605,69 @@ impl AgentManager {
         Ok(())
     }
 
-    /// Shut every codex instance down with a polite SIGTERM, wait `grace`
-    /// for them to exit, and then escalate to SIGKILL on stragglers. Drops
-    /// every instance from the map. Used by [`crate::manager::AgentManager`]
-    /// callers (the daemon shutdown path in C20).
+    /// Shut every codex instance down with a polite SIGTERM to its process
+    /// group, wait `grace` for them to exit, and then escalate to a
+    /// group-wide SIGKILL. Drops every instance from the map. Used by
+    /// [`crate::manager::AgentManager`] callers (the daemon shutdown path
+    /// in C20).
+    ///
+    /// `process.rs` puts each codex child in its own process group via
+    /// `setpgid(0, 0)` in `pre_exec`, which is what makes the
+    /// `kill(-pgid, sig)` call below propagate to whatever shell helpers /
+    /// model-invocation subprocesses codex itself forked. Without that
+    /// signalling-by-group, only codex's main pid was reaped and its
+    /// subprocesses were reparented to launchd on macOS, surviving
+    /// `daemon.stop()`.
     pub async fn shutdown_instances(&self, grace: std::time::Duration) {
         let mut g = self.instances.lock().await;
-        // Polite SIGTERM via the Child handle each instance owns. We do not
-        // bother round-tripping a typed protocol farewell — codex respects
-        // SIGTERM and the JSONL `thread/archive` polite goodbye fired
-        // pre-Phase-C is gone with the legacy AgentRuntime.
+
+        // Snapshot every group leader pid up front so the signalling phase
+        // can release the instances lock before sleeping, and so we still
+        // know which groups to kill if `inst.child` was somehow drained
+        // between phases (defence-in-depth).
+        let mut pgids: Vec<i32> = Vec::with_capacity(g.len());
         for inst in g.values() {
-            if let Some(mut child) = inst.child.lock().await.take() {
-                // start_kill issues SIGKILL on Unix, but we want a polite
-                // SIGTERM first; tokio's API doesn't expose SIGTERM directly,
-                // so we fall back to start_kill (SIGKILL) for now and rely on
-                // the grace window for ungraceful exits.
-                let _ = child.start_kill();
-                // Park the child so the wait happens after the grace window.
-                let _ = inst.child.lock().await.replace(child);
+            if let Some(child) = inst.child.lock().await.as_ref() {
+                if let Some(pid) = child.id() {
+                    if let Ok(pid_i32) = i32::try_from(pid) {
+                        pgids.push(pid_i32);
+                    }
+                }
             }
         }
+
+        // Phase 1: polite SIGTERM to each codex process group. The negative
+        // pid argument is the POSIX convention for "signal the group whose
+        // leader has this pid" — we set the leader = the codex pid in
+        // `process.rs::spawn`.
+        #[cfg(unix)]
+        for &pgid in &pgids {
+            // SAFETY: kill(2) is async-signal-safe and re-entrant; passing a
+            // negative pid is the documented "signal the group" form. The
+            // worst case is errno = ESRCH when the group is already gone,
+            // which we intentionally ignore via `let _`.
+            let _ = unsafe { libc::kill(-pgid, libc::SIGTERM) };
+        }
+
         tokio::time::sleep(grace).await;
+
+        // Phase 2: SIGKILL the same groups as a backstop for any straggler
+        // subprocess that ignored SIGTERM. The wait below then reaps the
+        // codex leader itself.
+        #[cfg(unix)]
+        for &pgid in &pgids {
+            // SAFETY: same as the SIGTERM call above — negative-pid kill(2)
+            // is the documented group-signal form.
+            let _ = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        }
+
         for (_, inst) in std::mem::take(&mut *g) {
             let child_opt = inst.child.lock().await.take();
             drop(inst);
             if let Some(mut child) = child_opt {
+                // `kill().await` sends SIGKILL to the leader and awaits its
+                // exit (reaping any zombie). Kept as belt-and-braces for the
+                // non-Unix path where we did not signal by group above.
                 let _ = child.kill().await;
             }
         }

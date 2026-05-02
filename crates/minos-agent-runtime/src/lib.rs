@@ -19,7 +19,12 @@
 //! does NOT depend on `minos-ui-protocol` — the `UiEventMessage` translator
 //! lives in the backend so the host daemon stays a thin ingest pipe.
 
-#![forbid(unsafe_code)]
+// `deny` (not `forbid`) so the per-module allows in `process.rs` and
+// `manager.rs` can carve narrow holes for the Unix-only `setpgid(2)` /
+// `kill(2)` calls that put each codex child in its own process group and
+// signal that group on shutdown. Every `unsafe` block in this crate is
+// gated `#[cfg(unix)]` and limited to async-signal-safe libc entry points.
+#![deny(unsafe_code)]
 
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();

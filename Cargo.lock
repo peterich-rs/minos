@@ -2201,6 +2201,7 @@ dependencies = [
  "chrono",
  "dashmap 6.1.0",
  "futures-util",
+ "libc",
  "minos-agent-runtime",
  "minos-codex-protocol",
  "minos-domain",
