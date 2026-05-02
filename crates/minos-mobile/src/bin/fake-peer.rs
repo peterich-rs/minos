@@ -215,7 +215,7 @@ async fn register_account(backend: &str, email: &str, password: &str) -> Result<
     let http = MobileHttpClient::new(backend, device_id, None).context("build MobileHttpClient")?;
     eprintln!("→ POST /v1/auth/register email={email}");
     let resp = http
-        .register(email, password, None)
+        .register(email, password)
         .await
         .context("POST /v1/auth/register")?;
     eprintln!(
@@ -237,7 +237,7 @@ async fn login_or_register(backend: &str, email: &str, password: &str) -> Result
     let device_id = DeviceId::new();
     let http = MobileHttpClient::new(backend, device_id, None).context("build MobileHttpClient")?;
     eprintln!("→ POST /v1/auth/login email={email}");
-    match http.login(email, password, None).await {
+    match http.login(email, password).await {
         Ok(resp) => {
             eprintln!(
                 "← login OK account_id={} email={}",
