@@ -118,7 +118,15 @@ class _PairingPageState extends ConsumerState<PairingPage> {
         .submit(candidate.rawJson, displayName: candidate.hostDisplayName);
     final state = ref.read(pairingControllerProvider);
     if (!mounted || state is! AsyncData<bool> || state.value != true) return;
+    ref.invalidate(activeMacProvider);
     ref.invalidate(runtimeAgentDescriptorsProvider);
+    try {
+      await ref.read(pairedMacsProvider.notifier).refresh();
+    } catch (_) {
+      // Best effort: the pair already succeeded, so don't trap the user on
+      // the confirmation screen if the follow-up list sync fails.
+    }
+    if (!mounted) return;
     Navigator.of(context).pop();
   }
 }

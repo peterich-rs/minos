@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -2035564697;
+  int get rustContentHash => -1104894507;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -76,6 +76,11 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<FriendRequestSummary> crateApiMinosMobileClientAcceptFriendRequest({
+    required MobileClient that,
+    required String requestId,
+  });
+
   Future<String?> crateApiMinosMobileClientActiveHost({
     required MobileClient that,
   });
@@ -85,8 +90,30 @@ abstract class RustLibApi extends BaseApi {
     required String threadId,
   });
 
+  Future<ConversationsResponse> crateApiMinosMobileClientConversations({
+    required MobileClient that,
+  });
+
+  Future<FriendRequestSummary> crateApiMinosMobileClientCreateFriendRequest({
+    required MobileClient that,
+    required String targetMinosId,
+  });
+
+  Future<ConversationResponse>
+  crateApiMinosMobileClientCreateGroupConversation({
+    required MobileClient that,
+    required String title,
+    required List<String> memberAccountIds,
+  });
+
   ConnectionState crateApiMinosMobileClientCurrentState({
     required MobileClient that,
+  });
+
+  Future<ConversationResponse>
+  crateApiMinosMobileClientEnsureDirectConversation({
+    required MobileClient that,
+    required String friendAccountId,
   });
 
   Future<void> crateApiMinosMobileClientForgetHost({
@@ -94,13 +121,34 @@ abstract class RustLibApi extends BaseApi {
     required String hostDeviceId,
   });
 
+  Future<FriendRequestsResponse> crateApiMinosMobileClientFriendRequests({
+    required MobileClient that,
+  });
+
+  Future<FriendsResponse> crateApiMinosMobileClientFriends({
+    required MobileClient that,
+  });
+
   Future<void> crateApiMinosMobileClientInterruptThread({
     required MobileClient that,
     required String threadId,
   });
 
+  Future<ListChatMessagesResponse> crateApiMinosMobileClientListChatMessages({
+    required MobileClient that,
+    required String conversationId,
+    PlatformInt64? beforeTsMs,
+    required int limit,
+  });
+
   Future<List<AgentDescriptor>> crateApiMinosMobileClientListClis({
     required MobileClient that,
+  });
+
+  Future<ListHostSkillsResponse> crateApiMinosMobileClientListHostSkills({
+    required MobileClient that,
+    String? hostDeviceId,
+    required bool forceReload,
   });
 
   Future<List<HostSummaryDto>> crateApiMinosMobileClientListPairedHosts({
@@ -119,6 +167,10 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Future<void> crateApiMinosMobileClientLogout({required MobileClient that});
+
+  Future<MyProfileResponse> crateApiMinosMobileClientMyProfile({
+    required MobileClient that,
+  });
 
   MobileClient crateApiMinosMobileClientNew({required String selfName});
 
@@ -159,8 +211,24 @@ abstract class RustLibApi extends BaseApi {
     required String password,
   });
 
+  Future<FriendRequestSummary> crateApiMinosMobileClientRejectFriendRequest({
+    required MobileClient that,
+    required String requestId,
+  });
+
   Future<void> crateApiMinosMobileClientResumePersistedSession({
     required MobileClient that,
+  });
+
+  Future<List<UserSummary>> crateApiMinosMobileClientSearchUsers({
+    required MobileClient that,
+    required String minosId,
+  });
+
+  Future<ChatMessageSummary> crateApiMinosMobileClientSendChatMessage({
+    required MobileClient that,
+    required String conversationId,
+    required String text,
   });
 
   Future<void> crateApiMinosMobileClientSendUserMessage({
@@ -172,6 +240,11 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiMinosMobileClientSetActiveHost({
     required MobileClient that,
     required String hostDeviceId,
+  });
+
+  Future<MyProfileResponse> crateApiMinosMobileClientSetMinosId({
+    required MobileClient that,
+    required String minosId,
   });
 
   Future<StartAgentResponse> crateApiMinosMobileClientStartAgent({
@@ -190,6 +263,14 @@ abstract class RustLibApi extends BaseApi {
 
   Stream<UiEventFrame> crateApiMinosMobileClientSubscribeUiEvents({
     required MobileClient that,
+  });
+
+  Future<WriteHostSkillConfigResponse>
+  crateApiMinosMobileClientWriteHostSkillConfig({
+    required MobileClient that,
+    String? hostDeviceId,
+    required String path,
+    required bool enabled,
   });
 
   void crateApiMinosClearRequestTraces();
@@ -227,6 +308,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
+  Future<FriendRequestSummary> crateApiMinosMobileClientAcceptFriendRequest({
+    required MobileClient that,
+    required String requestId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(requestId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 1,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_friend_request_summary,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientAcceptFriendRequestConstMeta,
+        argValues: [that, requestId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientAcceptFriendRequestConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_accept_friend_request",
+        argNames: ["that", "requestId"],
+      );
+
+  @override
   Future<String?> crateApiMinosMobileClientActiveHost({
     required MobileClient that,
   }) {
@@ -241,7 +360,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 1,
+            funcId: 2,
             port: port_,
           );
         },
@@ -279,7 +398,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 3,
             port: port_,
           );
         },
@@ -301,6 +420,122 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<ConversationsResponse> crateApiMinosMobileClientConversations({
+    required MobileClient that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_conversations_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientConversationsConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientConversationsConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_conversations",
+        argNames: ["that"],
+      );
+
+  @override
+  Future<FriendRequestSummary> crateApiMinosMobileClientCreateFriendRequest({
+    required MobileClient that,
+    required String targetMinosId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(targetMinosId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_friend_request_summary,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientCreateFriendRequestConstMeta,
+        argValues: [that, targetMinosId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientCreateFriendRequestConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_create_friend_request",
+        argNames: ["that", "targetMinosId"],
+      );
+
+  @override
+  Future<ConversationResponse>
+  crateApiMinosMobileClientCreateGroupConversation({
+    required MobileClient that,
+    required String title,
+    required List<String> memberAccountIds,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(title, serializer);
+          sse_encode_list_String(memberAccountIds, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_conversation_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientCreateGroupConversationConstMeta,
+        argValues: [that, title, memberAccountIds],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta
+  get kCrateApiMinosMobileClientCreateGroupConversationConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_create_group_conversation",
+        argNames: ["that", "title", "memberAccountIds"],
+      );
+
+  @override
   ConnectionState crateApiMinosMobileClientCurrentState({
     required MobileClient that,
   }) {
@@ -312,7 +547,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_connection_state,
@@ -332,6 +567,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<ConversationResponse>
+  crateApiMinosMobileClientEnsureDirectConversation({
+    required MobileClient that,
+    required String friendAccountId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(friendAccountId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_conversation_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientEnsureDirectConversationConstMeta,
+        argValues: [that, friendAccountId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta
+  get kCrateApiMinosMobileClientEnsureDirectConversationConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_ensure_direct_conversation",
+        argNames: ["that", "friendAccountId"],
+      );
+
+  @override
   Future<void> crateApiMinosMobileClientForgetHost({
     required MobileClient that,
     required String hostDeviceId,
@@ -348,7 +623,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 9,
             port: port_,
           );
         },
@@ -370,6 +645,78 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<FriendRequestsResponse> crateApiMinosMobileClientFriendRequests({
+    required MobileClient that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_friend_requests_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientFriendRequestsConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientFriendRequestsConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_friend_requests",
+        argNames: ["that"],
+      );
+
+  @override
+  Future<FriendsResponse> crateApiMinosMobileClientFriends({
+    required MobileClient that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_friends_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientFriendsConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientFriendsConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_friends",
+        argNames: ["that"],
+      );
+
+  @override
   Future<void> crateApiMinosMobileClientInterruptThread({
     required MobileClient that,
     required String threadId,
@@ -386,7 +733,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 12,
             port: port_,
           );
         },
@@ -408,6 +755,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<ListChatMessagesResponse> crateApiMinosMobileClientListChatMessages({
+    required MobileClient that,
+    required String conversationId,
+    PlatformInt64? beforeTsMs,
+    required int limit,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(conversationId, serializer);
+          sse_encode_opt_box_autoadd_i_64(beforeTsMs, serializer);
+          sse_encode_u_32(limit, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_chat_messages_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientListChatMessagesConstMeta,
+        argValues: [that, conversationId, beforeTsMs, limit],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientListChatMessagesConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_list_chat_messages",
+        argNames: ["that", "conversationId", "beforeTsMs", "limit"],
+      );
+
+  @override
   Future<List<AgentDescriptor>> crateApiMinosMobileClientListClis({
     required MobileClient that,
   }) {
@@ -422,7 +811,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 14,
             port: port_,
           );
         },
@@ -444,6 +833,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<ListHostSkillsResponse> crateApiMinosMobileClientListHostSkills({
+    required MobileClient that,
+    String? hostDeviceId,
+    required bool forceReload,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_opt_String(hostDeviceId, serializer);
+          sse_encode_bool(forceReload, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_host_skills_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientListHostSkillsConstMeta,
+        argValues: [that, hostDeviceId, forceReload],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientListHostSkillsConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_list_host_skills",
+        argNames: ["that", "hostDeviceId", "forceReload"],
+      );
+
+  @override
   Future<List<HostSummaryDto>> crateApiMinosMobileClientListPairedHosts({
     required MobileClient that,
   }) {
@@ -458,7 +887,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 16,
             port: port_,
           );
         },
@@ -496,7 +925,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 17,
             port: port_,
           );
         },
@@ -536,7 +965,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 18,
             port: port_,
           );
         },
@@ -570,7 +999,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 19,
             port: port_,
           );
         },
@@ -589,13 +1018,49 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "MobileClient_logout", argNames: ["that"]);
 
   @override
+  Future<MyProfileResponse> crateApiMinosMobileClientMyProfile({
+    required MobileClient that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_my_profile_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientMyProfileConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientMyProfileConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_my_profile",
+        argNames: ["that"],
+      );
+
+  @override
   MobileClient crateApiMinosMobileClientNew({required String selfName}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(selfName, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -626,7 +1091,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(selfName, serializer);
           sse_encode_box_autoadd_persisted_pairing_state(state, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -658,7 +1123,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -689,7 +1154,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -725,7 +1190,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 25,
             port: port_,
           );
         },
@@ -761,7 +1226,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 26,
             port: port_,
           );
         },
@@ -799,7 +1264,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 27,
             port: port_,
           );
         },
@@ -835,7 +1300,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 28,
             port: port_,
           );
         },
@@ -875,7 +1340,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 29,
             port: port_,
           );
         },
@@ -897,6 +1362,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<FriendRequestSummary> crateApiMinosMobileClientRejectFriendRequest({
+    required MobileClient that,
+    required String requestId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(requestId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 30,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_friend_request_summary,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientRejectFriendRequestConstMeta,
+        argValues: [that, requestId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientRejectFriendRequestConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_reject_friend_request",
+        argNames: ["that", "requestId"],
+      );
+
+  @override
   Future<void> crateApiMinosMobileClientResumePersistedSession({
     required MobileClient that,
   }) {
@@ -911,7 +1414,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 31,
             port: port_,
           );
         },
@@ -933,6 +1436,84 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<UserSummary>> crateApiMinosMobileClientSearchUsers({
+    required MobileClient that,
+    required String minosId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(minosId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 32,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_user_summary,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientSearchUsersConstMeta,
+        argValues: [that, minosId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientSearchUsersConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_search_users",
+        argNames: ["that", "minosId"],
+      );
+
+  @override
+  Future<ChatMessageSummary> crateApiMinosMobileClientSendChatMessage({
+    required MobileClient that,
+    required String conversationId,
+    required String text,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(conversationId, serializer);
+          sse_encode_String(text, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 33,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_chat_message_summary,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientSendChatMessageConstMeta,
+        argValues: [that, conversationId, text],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientSendChatMessageConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_send_chat_message",
+        argNames: ["that", "conversationId", "text"],
+      );
+
+  @override
   Future<void> crateApiMinosMobileClientSendUserMessage({
     required MobileClient that,
     required String sessionId,
@@ -951,7 +1532,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 34,
             port: port_,
           );
         },
@@ -989,7 +1570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1011,6 +1592,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<MyProfileResponse> crateApiMinosMobileClientSetMinosId({
+    required MobileClient that,
+    required String minosId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(minosId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 36,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_my_profile_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientSetMinosIdConstMeta,
+        argValues: [that, minosId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientSetMinosIdConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_set_minos_id",
+        argNames: ["that", "minosId"],
+      );
+
+  @override
   Future<StartAgentResponse> crateApiMinosMobileClientStartAgent({
     required MobileClient that,
     required AgentName agent,
@@ -1029,7 +1648,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1068,7 +1687,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 24,
+              funcId: 38,
               port: port_,
             );
           },
@@ -1109,7 +1728,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 25,
+              funcId: 39,
               port: port_,
             );
           },
@@ -1150,7 +1769,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 26,
+              funcId: 40,
               port: port_,
             );
           },
@@ -1174,12 +1793,55 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<WriteHostSkillConfigResponse>
+  crateApiMinosMobileClientWriteHostSkillConfig({
+    required MobileClient that,
+    String? hostDeviceId,
+    required String path,
+    required bool enabled,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_opt_String(hostDeviceId, serializer);
+          sse_encode_String(path, serializer);
+          sse_encode_bool(enabled, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 41,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_write_host_skill_config_response,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientWriteHostSkillConfigConstMeta,
+        argValues: [that, hostDeviceId, path, enabled],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientWriteHostSkillConfigConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_write_host_skill_config",
+        argNames: ["that", "hostDeviceId", "path", "enabled"],
+      );
+
+  @override
   void crateApiMinosClearRequestTraces() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 42)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1205,7 +1867,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1234,7 +1896,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_error_kind(kind, serializer);
           sse_encode_lang(lang, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1258,7 +1920,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_log_record,
@@ -1280,7 +1942,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 46)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_request_trace_record,
@@ -1308,7 +1970,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 32,
+              funcId: 47,
               port: port_,
             );
           },
@@ -1343,7 +2005,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 33,
+              funcId: 48,
               port: port_,
             );
           },
@@ -1593,6 +2255,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  UserSummary dco_decode_box_autoadd_user_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_user_summary(raw);
+  }
+
+  @protected
+  ChatMessageSummary dco_decode_chat_message_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return ChatMessageSummary(
+      messageId: dco_decode_String(arr[0]),
+      conversationId: dco_decode_String(arr[1]),
+      sender: dco_decode_user_summary(arr[2]),
+      text: dco_decode_String(arr[3]),
+      createdAtMs: dco_decode_i_64(arr[4]),
+    );
+  }
+
+  @protected
   ConnectionState dco_decode_connection_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
@@ -1610,9 +2293,151 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ConversationKind dco_decode_conversation_kind(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return ConversationKind.values[raw as int];
+  }
+
+  @protected
+  ConversationResponse dco_decode_conversation_response(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return ConversationResponse(conversationId: dco_decode_String(arr[0]));
+  }
+
+  @protected
+  ConversationSummary dco_decode_conversation_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    return ConversationSummary(
+      conversationId: dco_decode_String(arr[0]),
+      kind: dco_decode_conversation_kind(arr[1]),
+      title: dco_decode_String(arr[2]),
+      counterpart: dco_decode_opt_box_autoadd_user_summary(arr[3]),
+      memberCount: dco_decode_u_32(arr[4]),
+      lastMessagePreview: dco_decode_opt_String(arr[5]),
+      lastMessageAtMs: dco_decode_i_64(arr[6]),
+    );
+  }
+
+  @protected
+  ConversationsResponse dco_decode_conversations_response(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return ConversationsResponse(
+      conversations: dco_decode_list_conversation_summary(arr[0]),
+    );
+  }
+
+  @protected
   ErrorKind dco_decode_error_kind(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return ErrorKind.values[raw as int];
+  }
+
+  @protected
+  FriendRequestStatus dco_decode_friend_request_status(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return FriendRequestStatus.values[raw as int];
+  }
+
+  @protected
+  FriendRequestSummary dco_decode_friend_request_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    return FriendRequestSummary(
+      requestId: dco_decode_String(arr[0]),
+      from: dco_decode_user_summary(arr[1]),
+      to: dco_decode_user_summary(arr[2]),
+      status: dco_decode_friend_request_status(arr[3]),
+      createdAtMs: dco_decode_i_64(arr[4]),
+      resolvedAtMs: dco_decode_opt_box_autoadd_i_64(arr[5]),
+    );
+  }
+
+  @protected
+  FriendRequestsResponse dco_decode_friend_requests_response(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return FriendRequestsResponse(
+      incoming: dco_decode_list_friend_request_summary(arr[0]),
+      outgoing: dco_decode_list_friend_request_summary(arr[1]),
+    );
+  }
+
+  @protected
+  FriendSummary dco_decode_friend_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return FriendSummary(
+      accountId: dco_decode_String(arr[0]),
+      minosId: dco_decode_String(arr[1]),
+      displayName: dco_decode_String(arr[2]),
+      createdAtMs: dco_decode_i_64(arr[3]),
+    );
+  }
+
+  @protected
+  FriendsResponse dco_decode_friends_response(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return FriendsResponse(friends: dco_decode_list_friend_summary(arr[0]));
+  }
+
+  @protected
+  HostSkillError dco_decode_host_skill_error(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return HostSkillError(
+      path: dco_decode_String(arr[0]),
+      message: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  HostSkillSummary dco_decode_host_skill_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    return HostSkillSummary(
+      name: dco_decode_String(arr[0]),
+      path: dco_decode_String(arr[1]),
+      description: dco_decode_String(arr[2]),
+      enabled: dco_decode_bool(arr[3]),
+      scope: dco_decode_String(arr[4]),
+      displayName: dco_decode_opt_String(arr[5]),
+      shortDescription: dco_decode_opt_String(arr[6]),
+    );
+  }
+
+  @protected
+  HostSkillsEntry dco_decode_host_skills_entry(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return HostSkillsEntry(
+      cwd: dco_decode_String(arr[0]),
+      errors: dco_decode_list_host_skill_error(arr[1]),
+      skills: dco_decode_list_host_skill_summary(arr[2]),
+    );
   }
 
   @protected
@@ -1648,9 +2473,84 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<String> dco_decode_list_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_String).toList();
+  }
+
+  @protected
   List<AgentDescriptor> dco_decode_list_agent_descriptor(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_agent_descriptor).toList();
+  }
+
+  @protected
+  List<ChatMessageSummary> dco_decode_list_chat_message_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_chat_message_summary).toList();
+  }
+
+  @protected
+  ListChatMessagesResponse dco_decode_list_chat_messages_response(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return ListChatMessagesResponse(
+      messages: dco_decode_list_chat_message_summary(arr[0]),
+      nextBeforeTsMs: dco_decode_opt_box_autoadd_i_64(arr[1]),
+    );
+  }
+
+  @protected
+  List<ConversationSummary> dco_decode_list_conversation_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_conversation_summary).toList();
+  }
+
+  @protected
+  List<FriendRequestSummary> dco_decode_list_friend_request_summary(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_friend_request_summary)
+        .toList();
+  }
+
+  @protected
+  List<FriendSummary> dco_decode_list_friend_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_friend_summary).toList();
+  }
+
+  @protected
+  List<HostSkillError> dco_decode_list_host_skill_error(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_host_skill_error).toList();
+  }
+
+  @protected
+  List<HostSkillSummary> dco_decode_list_host_skill_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_host_skill_summary).toList();
+  }
+
+  @protected
+  List<HostSkillsEntry> dco_decode_list_host_skills_entry(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_host_skills_entry).toList();
+  }
+
+  @protected
+  ListHostSkillsResponse dco_decode_list_host_skills_response(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return ListHostSkillsResponse(
+      data: dco_decode_list_host_skills_entry(arr[0]),
+    );
   }
 
   @protected
@@ -1712,6 +2612,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<UiEventMessage> dco_decode_list_ui_event_message(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_ui_event_message).toList();
+  }
+
+  @protected
+  List<UserSummary> dco_decode_list_user_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_user_summary).toList();
   }
 
   @protected
@@ -1878,6 +2784,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MyProfileResponse dco_decode_my_profile_response(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return MyProfileResponse(
+      accountId: dco_decode_String(arr[0]),
+      email: dco_decode_String(arr[1]),
+      minosId: dco_decode_String(arr[2]),
+      displayName: dco_decode_opt_String(arr[3]),
+    );
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -1917,6 +2837,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_u_64(raw);
+  }
+
+  @protected
+  UserSummary? dco_decode_opt_box_autoadd_user_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_user_summary(raw);
   }
 
   @protected
@@ -2168,9 +3094,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  UserSummary dco_decode_user_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return UserSummary(
+      accountId: dco_decode_String(arr[0]),
+      minosId: dco_decode_String(arr[1]),
+      displayName: dco_decode_String(arr[2]),
+    );
+  }
+
+  @protected
   BigInt dco_decode_usize(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dcoDecodeU64(raw);
+  }
+
+  @protected
+  WriteHostSkillConfigResponse dco_decode_write_host_skill_config_response(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return WriteHostSkillConfigResponse(
+      effectiveEnabled: dco_decode_bool(arr[0]),
+    );
   }
 
   @protected
@@ -2414,6 +3366,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  UserSummary sse_decode_box_autoadd_user_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_user_summary(deserializer));
+  }
+
+  @protected
+  ChatMessageSummary sse_decode_chat_message_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_messageId = sse_decode_String(deserializer);
+    var var_conversationId = sse_decode_String(deserializer);
+    var var_sender = sse_decode_user_summary(deserializer);
+    var var_text = sse_decode_String(deserializer);
+    var var_createdAtMs = sse_decode_i_64(deserializer);
+    return ChatMessageSummary(
+      messageId: var_messageId,
+      conversationId: var_conversationId,
+      sender: var_sender,
+      text: var_text,
+      createdAtMs: var_createdAtMs,
+    );
+  }
+
+  @protected
   ConnectionState sse_decode_connection_state(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2434,10 +3413,165 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ConversationKind sse_decode_conversation_kind(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return ConversationKind.values[inner];
+  }
+
+  @protected
+  ConversationResponse sse_decode_conversation_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_conversationId = sse_decode_String(deserializer);
+    return ConversationResponse(conversationId: var_conversationId);
+  }
+
+  @protected
+  ConversationSummary sse_decode_conversation_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_conversationId = sse_decode_String(deserializer);
+    var var_kind = sse_decode_conversation_kind(deserializer);
+    var var_title = sse_decode_String(deserializer);
+    var var_counterpart = sse_decode_opt_box_autoadd_user_summary(deserializer);
+    var var_memberCount = sse_decode_u_32(deserializer);
+    var var_lastMessagePreview = sse_decode_opt_String(deserializer);
+    var var_lastMessageAtMs = sse_decode_i_64(deserializer);
+    return ConversationSummary(
+      conversationId: var_conversationId,
+      kind: var_kind,
+      title: var_title,
+      counterpart: var_counterpart,
+      memberCount: var_memberCount,
+      lastMessagePreview: var_lastMessagePreview,
+      lastMessageAtMs: var_lastMessageAtMs,
+    );
+  }
+
+  @protected
+  ConversationsResponse sse_decode_conversations_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_conversations = sse_decode_list_conversation_summary(deserializer);
+    return ConversationsResponse(conversations: var_conversations);
+  }
+
+  @protected
   ErrorKind sse_decode_error_kind(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return ErrorKind.values[inner];
+  }
+
+  @protected
+  FriendRequestStatus sse_decode_friend_request_status(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return FriendRequestStatus.values[inner];
+  }
+
+  @protected
+  FriendRequestSummary sse_decode_friend_request_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_requestId = sse_decode_String(deserializer);
+    var var_from = sse_decode_user_summary(deserializer);
+    var var_to = sse_decode_user_summary(deserializer);
+    var var_status = sse_decode_friend_request_status(deserializer);
+    var var_createdAtMs = sse_decode_i_64(deserializer);
+    var var_resolvedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    return FriendRequestSummary(
+      requestId: var_requestId,
+      from: var_from,
+      to: var_to,
+      status: var_status,
+      createdAtMs: var_createdAtMs,
+      resolvedAtMs: var_resolvedAtMs,
+    );
+  }
+
+  @protected
+  FriendRequestsResponse sse_decode_friend_requests_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_incoming = sse_decode_list_friend_request_summary(deserializer);
+    var var_outgoing = sse_decode_list_friend_request_summary(deserializer);
+    return FriendRequestsResponse(
+      incoming: var_incoming,
+      outgoing: var_outgoing,
+    );
+  }
+
+  @protected
+  FriendSummary sse_decode_friend_summary(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_accountId = sse_decode_String(deserializer);
+    var var_minosId = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
+    var var_createdAtMs = sse_decode_i_64(deserializer);
+    return FriendSummary(
+      accountId: var_accountId,
+      minosId: var_minosId,
+      displayName: var_displayName,
+      createdAtMs: var_createdAtMs,
+    );
+  }
+
+  @protected
+  FriendsResponse sse_decode_friends_response(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_friends = sse_decode_list_friend_summary(deserializer);
+    return FriendsResponse(friends: var_friends);
+  }
+
+  @protected
+  HostSkillError sse_decode_host_skill_error(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_path = sse_decode_String(deserializer);
+    var var_message = sse_decode_String(deserializer);
+    return HostSkillError(path: var_path, message: var_message);
+  }
+
+  @protected
+  HostSkillSummary sse_decode_host_skill_summary(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_path = sse_decode_String(deserializer);
+    var var_description = sse_decode_String(deserializer);
+    var var_enabled = sse_decode_bool(deserializer);
+    var var_scope = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_opt_String(deserializer);
+    var var_shortDescription = sse_decode_opt_String(deserializer);
+    return HostSkillSummary(
+      name: var_name,
+      path: var_path,
+      description: var_description,
+      enabled: var_enabled,
+      scope: var_scope,
+      displayName: var_displayName,
+      shortDescription: var_shortDescription,
+    );
+  }
+
+  @protected
+  HostSkillsEntry sse_decode_host_skills_entry(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_cwd = sse_decode_String(deserializer);
+    var var_errors = sse_decode_list_host_skill_error(deserializer);
+    var var_skills = sse_decode_list_host_skill_summary(deserializer);
+    return HostSkillsEntry(
+      cwd: var_cwd,
+      errors: var_errors,
+      skills: var_skills,
+    );
   }
 
   @protected
@@ -2475,6 +3609,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <String>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_String(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<AgentDescriptor> sse_decode_list_agent_descriptor(
     SseDeserializer deserializer,
   ) {
@@ -2486,6 +3632,126 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ans_.add(sse_decode_agent_descriptor(deserializer));
     }
     return ans_;
+  }
+
+  @protected
+  List<ChatMessageSummary> sse_decode_list_chat_message_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ChatMessageSummary>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_chat_message_summary(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  ListChatMessagesResponse sse_decode_list_chat_messages_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_messages = sse_decode_list_chat_message_summary(deserializer);
+    var var_nextBeforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    return ListChatMessagesResponse(
+      messages: var_messages,
+      nextBeforeTsMs: var_nextBeforeTsMs,
+    );
+  }
+
+  @protected
+  List<ConversationSummary> sse_decode_list_conversation_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ConversationSummary>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_conversation_summary(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<FriendRequestSummary> sse_decode_list_friend_request_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <FriendRequestSummary>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_friend_request_summary(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<FriendSummary> sse_decode_list_friend_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <FriendSummary>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_friend_summary(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<HostSkillError> sse_decode_list_host_skill_error(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HostSkillError>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_host_skill_error(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<HostSkillSummary> sse_decode_list_host_skill_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HostSkillSummary>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_host_skill_summary(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<HostSkillsEntry> sse_decode_list_host_skills_entry(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HostSkillsEntry>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_host_skills_entry(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  ListHostSkillsResponse sse_decode_list_host_skills_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_data = sse_decode_list_host_skills_entry(deserializer);
+    return ListHostSkillsResponse(data: var_data);
   }
 
   @protected
@@ -2587,6 +3853,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <UiEventMessage>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_ui_event_message(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<UserSummary> sse_decode_list_user_summary(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <UserSummary>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_user_summary(deserializer));
     }
     return ans_;
   }
@@ -2774,6 +4052,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MyProfileResponse sse_decode_my_profile_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_accountId = sse_decode_String(deserializer);
+    var var_email = sse_decode_String(deserializer);
+    var var_minosId = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_opt_String(deserializer);
+    return MyProfileResponse(
+      accountId: var_accountId,
+      email: var_email,
+      minosId: var_minosId,
+      displayName: var_displayName,
+    );
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2849,6 +4144,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_u_64(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  UserSummary? sse_decode_opt_box_autoadd_user_summary(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_user_summary(deserializer));
     } else {
       return null;
     }
@@ -3168,9 +4476,31 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  UserSummary sse_decode_user_summary(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_accountId = sse_decode_String(deserializer);
+    var var_minosId = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
+    return UserSummary(
+      accountId: var_accountId,
+      minosId: var_minosId,
+      displayName: var_displayName,
+    );
+  }
+
+  @protected
   BigInt sse_decode_usize(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
+  WriteHostSkillConfigResponse sse_decode_write_host_skill_config_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_effectiveEnabled = sse_decode_bool(deserializer);
+    return WriteHostSkillConfigResponse(effectiveEnabled: var_effectiveEnabled);
   }
 
   @protected
@@ -3468,6 +4798,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_user_summary(
+    UserSummary self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_user_summary(self, serializer);
+  }
+
+  @protected
+  void sse_encode_chat_message_summary(
+    ChatMessageSummary self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.messageId, serializer);
+    sse_encode_String(self.conversationId, serializer);
+    sse_encode_user_summary(self.sender, serializer);
+    sse_encode_String(self.text, serializer);
+    sse_encode_i_64(self.createdAtMs, serializer);
+  }
+
+  @protected
   void sse_encode_connection_state(
     ConnectionState self,
     SseSerializer serializer,
@@ -3487,9 +4839,138 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_conversation_kind(
+    ConversationKind self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_conversation_response(
+    ConversationResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.conversationId, serializer);
+  }
+
+  @protected
+  void sse_encode_conversation_summary(
+    ConversationSummary self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.conversationId, serializer);
+    sse_encode_conversation_kind(self.kind, serializer);
+    sse_encode_String(self.title, serializer);
+    sse_encode_opt_box_autoadd_user_summary(self.counterpart, serializer);
+    sse_encode_u_32(self.memberCount, serializer);
+    sse_encode_opt_String(self.lastMessagePreview, serializer);
+    sse_encode_i_64(self.lastMessageAtMs, serializer);
+  }
+
+  @protected
+  void sse_encode_conversations_response(
+    ConversationsResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_conversation_summary(self.conversations, serializer);
+  }
+
+  @protected
   void sse_encode_error_kind(ErrorKind self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_friend_request_status(
+    FriendRequestStatus self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_friend_request_summary(
+    FriendRequestSummary self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.requestId, serializer);
+    sse_encode_user_summary(self.from, serializer);
+    sse_encode_user_summary(self.to, serializer);
+    sse_encode_friend_request_status(self.status, serializer);
+    sse_encode_i_64(self.createdAtMs, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.resolvedAtMs, serializer);
+  }
+
+  @protected
+  void sse_encode_friend_requests_response(
+    FriendRequestsResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_friend_request_summary(self.incoming, serializer);
+    sse_encode_list_friend_request_summary(self.outgoing, serializer);
+  }
+
+  @protected
+  void sse_encode_friend_summary(FriendSummary self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.accountId, serializer);
+    sse_encode_String(self.minosId, serializer);
+    sse_encode_String(self.displayName, serializer);
+    sse_encode_i_64(self.createdAtMs, serializer);
+  }
+
+  @protected
+  void sse_encode_friends_response(
+    FriendsResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_friend_summary(self.friends, serializer);
+  }
+
+  @protected
+  void sse_encode_host_skill_error(
+    HostSkillError self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.path, serializer);
+    sse_encode_String(self.message, serializer);
+  }
+
+  @protected
+  void sse_encode_host_skill_summary(
+    HostSkillSummary self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.path, serializer);
+    sse_encode_String(self.description, serializer);
+    sse_encode_bool(self.enabled, serializer);
+    sse_encode_String(self.scope, serializer);
+    sse_encode_opt_String(self.displayName, serializer);
+    sse_encode_opt_String(self.shortDescription, serializer);
+  }
+
+  @protected
+  void sse_encode_host_skills_entry(
+    HostSkillsEntry self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.cwd, serializer);
+    sse_encode_list_host_skill_error(self.errors, serializer);
+    sse_encode_list_host_skill_summary(self.skills, serializer);
   }
 
   @protected
@@ -3523,6 +5004,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_String(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_agent_descriptor(
     List<AgentDescriptor> self,
     SseSerializer serializer,
@@ -3532,6 +5022,109 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     for (final item in self) {
       sse_encode_agent_descriptor(item, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_list_chat_message_summary(
+    List<ChatMessageSummary> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_chat_message_summary(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_chat_messages_response(
+    ListChatMessagesResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_chat_message_summary(self.messages, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.nextBeforeTsMs, serializer);
+  }
+
+  @protected
+  void sse_encode_list_conversation_summary(
+    List<ConversationSummary> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_conversation_summary(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_friend_request_summary(
+    List<FriendRequestSummary> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_friend_request_summary(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_friend_summary(
+    List<FriendSummary> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_friend_summary(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_host_skill_error(
+    List<HostSkillError> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_host_skill_error(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_host_skill_summary(
+    List<HostSkillSummary> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_host_skill_summary(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_host_skills_entry(
+    List<HostSkillsEntry> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_host_skills_entry(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_host_skills_response(
+    ListHostSkillsResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_host_skills_entry(self.data, serializer);
   }
 
   @protected
@@ -3622,6 +5215,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_ui_event_message(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_user_summary(
+    List<UserSummary> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_user_summary(item, serializer);
     }
   }
 
@@ -3796,6 +5401,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_my_profile_response(
+    MyProfileResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.accountId, serializer);
+    sse_encode_String(self.email, serializer);
+    sse_encode_String(self.minosId, serializer);
+    sse_encode_opt_String(self.displayName, serializer);
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -3871,6 +5488,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_u_64(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_user_summary(
+    UserSummary? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_user_summary(self, serializer);
     }
   }
 
@@ -4141,9 +5771,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_user_summary(UserSummary self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.accountId, serializer);
+    sse_encode_String(self.minosId, serializer);
+    sse_encode_String(self.displayName, serializer);
+  }
+
+  @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putBigUint64(self);
+  }
+
+  @protected
+  void sse_encode_write_host_skill_config_response(
+    WriteHostSkillConfigResponse self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.effectiveEnabled, serializer);
   }
 }
 
@@ -4166,6 +5813,13 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
         RustLib.instance.api.rust_arc_decrement_strong_count_MobileClientPtr,
   );
 
+  Future<FriendRequestSummary> acceptFriendRequest({
+    required String requestId,
+  }) => RustLib.instance.api.crateApiMinosMobileClientAcceptFriendRequest(
+    that: this,
+    requestId: requestId,
+  );
+
   /// Read the current active Mac id, or `None` if no pair has been
   /// completed yet.
   Future<String?> activeHost() =>
@@ -4175,10 +5829,36 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   Future<void> closeThread({required String threadId}) => RustLib.instance.api
       .crateApiMinosMobileClientCloseThread(that: this, threadId: threadId);
 
+  Future<ConversationsResponse> conversations() =>
+      RustLib.instance.api.crateApiMinosMobileClientConversations(that: this);
+
+  Future<FriendRequestSummary> createFriendRequest({
+    required String targetMinosId,
+  }) => RustLib.instance.api.crateApiMinosMobileClientCreateFriendRequest(
+    that: this,
+    targetMinosId: targetMinosId,
+  );
+
+  Future<ConversationResponse> createGroupConversation({
+    required String title,
+    required List<String> memberAccountIds,
+  }) => RustLib.instance.api.crateApiMinosMobileClientCreateGroupConversation(
+    that: this,
+    title: title,
+    memberAccountIds: memberAccountIds,
+  );
+
   /// Current connection state, read from the watch-channel cache. Cheap and
   /// synchronous.
   ConnectionState currentState() =>
       RustLib.instance.api.crateApiMinosMobileClientCurrentState(that: this);
+
+  Future<ConversationResponse> ensureDirectConversation({
+    required String friendAccountId,
+  }) => RustLib.instance.api.crateApiMinosMobileClientEnsureDirectConversation(
+    that: this,
+    friendAccountId: friendAccountId,
+  );
 
   /// Forget a specific paired Mac. The path-bound `host_device_id` is
   /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
@@ -4189,6 +5869,12 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
         hostDeviceId: hostDeviceId,
       );
 
+  Future<FriendRequestsResponse> friendRequests() =>
+      RustLib.instance.api.crateApiMinosMobileClientFriendRequests(that: this);
+
+  Future<FriendsResponse> friends() =>
+      RustLib.instance.api.crateApiMinosMobileClientFriends(that: this);
+
   /// Pause an in-flight turn on the given thread. Best-effort. The thread
   /// transitions to `Suspended { UserInterrupt }` regardless of whether the
   /// codex side acknowledges in time.
@@ -4197,9 +5883,30 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
       .api
       .crateApiMinosMobileClientInterruptThread(that: this, threadId: threadId);
 
+  Future<ListChatMessagesResponse> listChatMessages({
+    required String conversationId,
+    PlatformInt64? beforeTsMs,
+    required int limit,
+  }) => RustLib.instance.api.crateApiMinosMobileClientListChatMessages(
+    that: this,
+    conversationId: conversationId,
+    beforeTsMs: beforeTsMs,
+    limit: limit,
+  );
+
   /// Detect the CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis() =>
       RustLib.instance.api.crateApiMinosMobileClientListClis(that: this);
+
+  /// Scan host-side skills for the selected runtime host.
+  Future<ListHostSkillsResponse> listHostSkills({
+    String? hostDeviceId,
+    required bool forceReload,
+  }) => RustLib.instance.api.crateApiMinosMobileClientListHostSkills(
+    that: this,
+    hostDeviceId: hostDeviceId,
+    forceReload: forceReload,
+  );
 
   /// List every Mac paired to the caller's account.
   Future<List<HostSummaryDto>> listPairedHosts() =>
@@ -4227,6 +5934,9 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   /// revoke the refresh token server-side, then wipe local state.
   Future<void> logout() =>
       RustLib.instance.api.crateApiMinosMobileClientLogout(that: this);
+
+  Future<MyProfileResponse> myProfile() =>
+      RustLib.instance.api.crateApiMinosMobileClientMyProfile(that: this);
 
   /// Mark the app as backgrounded. Pauses the reconnect loop so we
   /// don't poke the backend while the OS is freezing the process.
@@ -4273,10 +5983,31 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     password: password,
   );
 
+  Future<FriendRequestSummary> rejectFriendRequest({
+    required String requestId,
+  }) => RustLib.instance.api.crateApiMinosMobileClientRejectFriendRequest(
+    that: this,
+    requestId: requestId,
+  );
+
   /// Reconnect using the durable pairing snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession() => RustLib.instance.api
       .crateApiMinosMobileClientResumePersistedSession(that: this);
+
+  Future<List<UserSummary>> searchUsers({required String minosId}) => RustLib
+      .instance
+      .api
+      .crateApiMinosMobileClientSearchUsers(that: this, minosId: minosId);
+
+  Future<ChatMessageSummary> sendChatMessage({
+    required String conversationId,
+    required String text,
+  }) => RustLib.instance.api.crateApiMinosMobileClientSendChatMessage(
+    that: this,
+    conversationId: conversationId,
+    text: text,
+  );
 
   /// Send a follow-up user message to an existing agent session.
   Future<void> sendUserMessage({
@@ -4294,6 +6025,11 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
         that: this,
         hostDeviceId: hostDeviceId,
       );
+
+  Future<MyProfileResponse> setMinosId({required String minosId}) => RustLib
+      .instance
+      .api
+      .crateApiMinosMobileClientSetMinosId(that: this, minosId: minosId);
 
   /// Start a new agent session and return the daemon-issued `session_id`
   /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
@@ -4324,4 +6060,16 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   /// subscribers lose old frames rather than blocking the producer.
   Stream<UiEventFrame> subscribeUiEvents() => RustLib.instance.api
       .crateApiMinosMobileClientSubscribeUiEvents(that: this);
+
+  /// Enable or disable one host-side skill.
+  Future<WriteHostSkillConfigResponse> writeHostSkillConfig({
+    String? hostDeviceId,
+    required String path,
+    required bool enabled,
+  }) => RustLib.instance.api.crateApiMinosMobileClientWriteHostSkillConfig(
+    that: this,
+    hostDeviceId: hostDeviceId,
+    path: path,
+    enabled: enabled,
+  );
 }

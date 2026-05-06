@@ -51,6 +51,7 @@ android {
 
 apply from: "../cargokit/gradle/plugin.gradle"
 cargokit {
-    manifestDir = "../../rust"
-    libname = "rust_lib_minos"
+    // The Rust crate lives in the workspace root, not under apps/mobile.
+    manifestDir = "../../../../crates/minos-ffi-frb"
+    libname = "minos_ffi_frb"
 }

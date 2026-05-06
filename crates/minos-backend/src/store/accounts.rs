@@ -20,6 +20,8 @@ use crate::error::BackendError;
 pub struct AccountRow {
     pub account_id: String,
     pub email: String,
+    pub minos_id: String,
+    pub display_name: Option<String>,
     pub password_hash: String,
     pub created_at: i64,
     pub last_login_at: Option<i64>,
@@ -33,29 +35,51 @@ pub async fn create(
     let account_id = Uuid::new_v4().to_string();
     let email_norm = email.to_lowercase();
     let now = Utc::now().timestamp_millis();
-    sqlx::query(
-        "INSERT INTO accounts (account_id, email, password_hash, created_at)
-           VALUES (?, ?, ?, ?)",
-    )
-    .bind(&account_id)
-    .bind(&email_norm)
-    .bind(password_hash)
-    .bind(now)
-    .execute(pool)
-    .await
-    .map_err(|e| match &e {
-        sqlx::Error::Database(db) if db.is_unique_violation() => BackendError::EmailTaken,
-        _ => BackendError::StoreQuery {
-            operation: "accounts::create".into(),
-            message: e.to_string(),
-        },
-    })?;
-    Ok(AccountRow {
-        account_id,
-        email: email_norm,
-        password_hash: password_hash.into(),
-        created_at: now,
-        last_login_at: None,
+    for _ in 0..4 {
+        let minos_id = Uuid::new_v4().simple().to_string()[..12].to_string();
+        let result = sqlx::query(
+            "INSERT INTO accounts (account_id, email, minos_id, display_name, password_hash, created_at)
+               VALUES (?, ?, ?, NULL, ?, ?)",
+        )
+        .bind(&account_id)
+        .bind(&email_norm)
+        .bind(&minos_id)
+        .bind(password_hash)
+        .bind(now)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => {
+                return Ok(AccountRow {
+                    account_id,
+                    email: email_norm,
+                    minos_id,
+                    display_name: None,
+                    password_hash: password_hash.into(),
+                    created_at: now,
+                    last_login_at: None,
+                });
+            }
+            Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+                if db.message().contains("accounts.email")
+                    || db.message().contains("idx_accounts_email")
+                {
+                    return Err(BackendError::EmailTaken);
+                }
+            }
+            Err(e) => {
+                return Err(BackendError::StoreQuery {
+                    operation: "accounts::create".into(),
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+
+    Err(BackendError::StoreQuery {
+        operation: "accounts::create".into(),
+        message: "failed to allocate unique minos_id".into(),
     })
 }
 
@@ -65,7 +89,7 @@ pub async fn find_by_email(
 ) -> Result<Option<AccountRow>, BackendError> {
     let email_norm = email.to_lowercase();
     let row = sqlx::query_as::<_, AccountRow>(
-        "SELECT account_id, email, password_hash, created_at, last_login_at
+        "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
            FROM accounts WHERE email = ?",
     )
     .bind(&email_norm)
@@ -73,6 +97,24 @@ pub async fn find_by_email(
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "accounts::find_by_email".into(),
+        message: e.to_string(),
+    })?;
+    Ok(row)
+}
+
+pub async fn find_by_id(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<Option<AccountRow>, BackendError> {
+    let row = sqlx::query_as::<_, AccountRow>(
+        "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
+           FROM accounts WHERE account_id = ?",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "accounts::find_by_id".into(),
         message: e.to_string(),
     })?;
     Ok(row)
@@ -90,6 +132,24 @@ pub async fn touch_last_login(pool: &SqlitePool, account_id: &str) -> Result<(),
             message: e.to_string(),
         })?;
     Ok(())
+}
+
+pub async fn find_by_minos_id(
+    pool: &SqlitePool,
+    minos_id: &str,
+) -> Result<Option<AccountRow>, BackendError> {
+    let row = sqlx::query_as::<_, AccountRow>(
+        "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
+           FROM accounts WHERE minos_id = ? COLLATE BINARY",
+    )
+    .bind(minos_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "accounts::find_by_minos_id".into(),
+        message: e.to_string(),
+    })?;
+    Ok(row)
 }
 
 #[cfg(test)]

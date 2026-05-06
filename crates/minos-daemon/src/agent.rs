@@ -4,12 +4,15 @@ use std::sync::Arc;
 use minos_agent_runtime::{
     AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest, ThreadState,
 };
+use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::MinosError;
 use minos_protocol::{
     AgentLaunchMode as ProtoAgentLaunchMode, CloseReason as ProtoCloseReason, CloseThreadRequest,
-    GetThreadParams, GetThreadResponse, InterruptThreadRequest, ListThreadsParams,
+    GetThreadParams, GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
+    InterruptThreadRequest, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
     ListThreadsResponse, PauseReason as ProtoPauseReason, SendUserMessageRequest,
     StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -201,6 +204,34 @@ impl AgentGlue {
             .map_err(map_anyhow)
     }
 
+    pub async fn list_host_skills(
+        &self,
+        req: ListHostSkillsRequest,
+    ) -> Result<ListHostSkillsResponse, MinosError> {
+        let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
+        let response = self
+            .manager
+            .list_host_skills(workspace, req.force_reload)
+            .await
+            .map_err(map_anyhow)?;
+        Ok(map_host_skills_response(response))
+    }
+
+    pub async fn write_host_skill_config(
+        &self,
+        req: WriteHostSkillConfigRequest,
+    ) -> Result<WriteHostSkillConfigResponse, MinosError> {
+        let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
+        let response = self
+            .manager
+            .write_host_skill_config(workspace, PathBuf::from(req.path), req.enabled)
+            .await
+            .map_err(map_anyhow)?;
+        Ok(WriteHostSkillConfigResponse {
+            effective_enabled: response.effective_enabled,
+        })
+    }
+
     pub async fn interrupt_thread(&self, req: InterruptThreadRequest) -> Result<(), MinosError> {
         self.manager
             .interrupt_thread(&req.thread_id)
@@ -319,6 +350,53 @@ fn runtime_mode(mode: ProtoAgentLaunchMode) -> AgentLaunchMode {
     match mode {
         ProtoAgentLaunchMode::Jsonl => AgentLaunchMode::Jsonl,
         ProtoAgentLaunchMode::Server => AgentLaunchMode::Server,
+    }
+}
+
+fn resolve_workspace(default_workspace: &std::path::Path, workspace: &str) -> PathBuf {
+    if workspace.is_empty() {
+        default_workspace.to_path_buf()
+    } else {
+        PathBuf::from(workspace)
+    }
+}
+
+fn map_host_skills_response(response: CodexSkillsListResponse) -> ListHostSkillsResponse {
+    ListHostSkillsResponse {
+        data: response
+            .data
+            .into_iter()
+            .map(|entry| HostSkillsEntry {
+                cwd: entry.cwd,
+                errors: entry
+                    .errors
+                    .into_iter()
+                    .map(|error| HostSkillError {
+                        path: error.path,
+                        message: error.message,
+                    })
+                    .collect(),
+                skills: entry
+                    .skills
+                    .into_iter()
+                    .map(|skill| HostSkillSummary {
+                        name: skill.name,
+                        path: skill.path.0,
+                        description: skill.description,
+                        enabled: skill.enabled,
+                        scope: skill.scope.to_string(),
+                        display_name: skill
+                            .interface
+                            .as_ref()
+                            .and_then(|interface| interface.display_name.clone()),
+                        short_description: skill
+                            .interface
+                            .and_then(|interface| interface.short_description)
+                            .or(skill.short_description),
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 

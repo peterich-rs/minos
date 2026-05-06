@@ -9,11 +9,12 @@
 
 use std::sync::{Arc, Mutex as StdMutex};
 
+use chrono::{TimeZone, Utc};
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
-use minos_protocol::Envelope;
+use minos_protocol::{Envelope, HostPeerSummary};
 use tokio::sync::mpsc;
 
 use crate::agent::AgentGlue;
@@ -31,6 +32,8 @@ struct DaemonInner {
     /// `EventKind::Paired` / `Unpaired` so warm reads via
     /// `current_trusted_device` always see the newest record.
     peer: Arc<StdMutex<Option<PeerRecord>>>,
+    /// Full host-side mobile/account snapshot from `GET /v1/me/peers`.
+    peers: Arc<StdMutex<Vec<HostPeerSummary>>>,
     /// Kept on the inner — future trace logging and eventual UniFFI
     /// getters need the display name that was minted into the relay
     /// handshake.
@@ -73,6 +76,11 @@ impl DaemonHandle {
         secret: Option<DeviceSecret>,
         mac_name: String,
     ) -> Result<Arc<Self>, MinosError> {
+        let secret = match secret {
+            Some(secret) => Some(secret),
+            None => crate::device_secret_store::read()?,
+        };
+
         // Capture the user's login-shell env once. Failures fall back to
         // process env internally, so this never blocks bootstrap.
         let subprocess_env = Arc::new(minos_cli_detect::capture_user_shell_env().await);
@@ -135,6 +143,7 @@ impl DaemonHandle {
         // always see the freshest record without round-tripping the
         // watch channel.
         let peer_store: Arc<StdMutex<Option<PeerRecord>>> = Arc::new(StdMutex::new(peer.clone()));
+        let peers_store: Arc<StdMutex<Vec<HostPeerSummary>>> = Arc::new(StdMutex::new(Vec::new()));
         let last_error: Arc<StdMutex<Option<MinosError>>> = Arc::new(StdMutex::new(None));
 
         let backend_url = config.resolved_backend_url().to_owned();
@@ -160,6 +169,7 @@ impl DaemonHandle {
             Some(rpc_server),
             PersistenceCtx {
                 peer_store: peer_store.clone(),
+                peers_store: peers_store.clone(),
                 last_error: last_error.clone(),
                 reconciliator: Some(reconciliator),
             },
@@ -187,6 +197,7 @@ impl DaemonHandle {
                 link_rx,
                 peer_rx,
                 peer: peer_store,
+                peers: peers_store,
                 mac_name,
                 last_error,
                 agent,
@@ -218,6 +229,12 @@ impl DaemonHandle {
         Ok(self.inner.peer.lock().unwrap().clone())
     }
 
+    /// Return the full host-side mobile/account snapshot.
+    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
+    pub async fn current_peers(&self) -> Result<Vec<HostPeerSummary>, MinosError> {
+        Ok(self.inner.peers.lock().unwrap().clone())
+    }
+
     /// Mint a pairing QR by round-tripping `request_pairing_token` to
     /// the relay and packaging the token with the baked-in mac name and
     /// backend URL.
@@ -231,8 +248,30 @@ impl DaemonHandle {
     /// `Event::Unpaired`, which is now just a benign in-memory re-apply.
     #[allow(clippy::missing_errors_doc)]
     pub async fn forget_peer(&self) -> Result<(), MinosError> {
-        self.inner.relay.forget_peer().await?;
-        *self.inner.peer.lock().unwrap() = None;
+        let mobile_device_id = self
+            .inner
+            .peers
+            .lock()
+            .unwrap()
+            .first()
+            .map(|peer| peer.mobile_device_id);
+        let Some(mobile_device_id) = mobile_device_id else {
+            return Ok(());
+        };
+        self.forget_peer_device(mobile_device_id).await
+    }
+
+    /// Forget one specific mobile/account row by its mobile device id.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn forget_peer_device(&self, mobile_device_id: DeviceId) -> Result<(), MinosError> {
+        self.inner.relay.forget_peer_device(mobile_device_id).await?;
+
+        let next_peers = {
+            let mut guard = self.inner.peers.lock().unwrap();
+            guard.retain(|peer| peer.mobile_device_id != mobile_device_id);
+            guard.clone()
+        };
+        *self.inner.peer.lock().unwrap() = next_peers.first().map(peer_record_from_summary);
         Ok(())
     }
 
@@ -300,6 +339,18 @@ impl DaemonHandle {
     ) -> Arc<crate::subscription::Subscription> {
         let _guard = self.inner.rt_handle.enter();
         crate::subscription::spawn_peer_observer(self.inner.peer_rx.clone(), observer)
+    }
+}
+
+fn peer_record_from_summary(summary: &HostPeerSummary) -> PeerRecord {
+    let paired_at = Utc
+        .timestamp_millis_opt(summary.paired_at_ms)
+        .single()
+        .unwrap_or_else(Utc::now);
+    PeerRecord {
+        device_id: summary.mobile_device_id,
+        name: summary.mobile_device_name.clone(),
+        paired_at,
     }
 }
 

@@ -46,7 +46,7 @@ struct MenuBarView: View {
             Divider()
 
             actionButton("退出 Minos") {
-                Task { await appState.shutdown() }
+                appState.requestTermination()
             }
         }
     }
@@ -73,7 +73,7 @@ struct MenuBarView: View {
             HStack(spacing: 8) {
                 StatusIcon(
                     link: appState.relayLink,
-                    peer: appState.peer,
+                    peer: .unpaired,
                     hasBootError: false
                 )
                 .imageScale(.large)
@@ -81,10 +81,18 @@ struct MenuBarView: View {
                     .font(.headline)
             }
 
+            Text("Host 与 Server")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
             Text(appState.relayLink.displayLabel())
                 .font(.subheadline.weight(.medium))
 
-            Text(appState.peer.displayLabel())
+            Text(
+                appState.resolvedPeers.isEmpty
+                    ? "暂无接入设备"
+                    : "\(appState.resolvedPeers.count) 台设备已接入"
+            )
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -92,6 +100,8 @@ struct MenuBarView: View {
 
     private var runningActions: some View {
         VStack(alignment: .leading, spacing: 12) {
+            pairedDevicesSection
+
             if appState.canShowQr {
                 actionButton("显示配对二维码…") {
                     Task { await appState.showQr() }
@@ -104,19 +114,6 @@ struct MenuBarView: View {
                 }
             }
 
-            if appState.canForgetPeer {
-                actionButton("忘记已配对设备", role: .destructive) {
-                    Task { await appState.forgetPeer() }
-                }
-            } else if case .paired = appState.peer {
-                // Paired but the link is not connected — surface a
-                // disabled affordance so users know the action exists
-                // and what they need to do (wait for reconnect) before
-                // it becomes available.
-                actionButton("忘记已配对设备 (需要后端在线)", action: {})
-                    .disabled(true)
-            }
-
             AgentSegmentView(appState: appState)
 
             actionButton("在 Finder 中显示今日日志…") {
@@ -126,9 +123,95 @@ struct MenuBarView: View {
             Divider()
 
             actionButton("退出 Minos") {
-                Task { await appState.shutdown() }
+                appState.requestTermination()
             }
         }
+    }
+
+    private var pairedDevicesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("接入设备")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if appState.resolvedPeers.isEmpty {
+                Text("当前还没有 mobile 设备接入这个 host。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                    )
+            } else {
+                ForEach(appState.resolvedPeers, id: \.mobileDeviceId) { peer in
+                    pairedDeviceRow(peer)
+                }
+            }
+        }
+    }
+
+    private func pairedDeviceRow(_ peer: HostPeerSummary) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(peer.online ? Color.green : Color.secondary.opacity(0.45))
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(peerTitle(peer))
+                    .font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(peerSubtitle(peer))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(role: .destructive) {
+                Task { await appState.forgetPeerDevice(peer) }
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(appState.canForgetPeerDevice(peer) ? Color.red : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(!appState.canForgetPeerDevice(peer))
+            .help(appState.canForgetPeerDevice(peer) ? "移除此设备" : "需要后端在线")
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+    }
+
+    private func peerTitle(_ peer: HostPeerSummary) -> String {
+        if peer.accountEmail.isEmpty {
+            return peer.mobileDeviceName
+        }
+        if peer.mobileDeviceName.isEmpty {
+            return peer.accountEmail
+        }
+        return "\(peer.accountEmail) · \(peer.mobileDeviceName)"
+    }
+
+    private func peerSubtitle(_ peer: HostPeerSummary) -> String {
+        let status = peer.online ? "在线" : "离线"
+        return "\(status) · \(lastActiveText(peer))"
+    }
+
+    private func lastActiveText(_ peer: HostPeerSummary) -> String {
+        guard peer.lastActiveAtMs > 0 else {
+            return "最后活跃未知"
+        }
+        let date = Date(timeIntervalSince1970: TimeInterval(peer.lastActiveAtMs) / 1000)
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        return "最后活跃 \(formatter.localizedString(for: date, relativeTo: Date()))"
     }
 
     // ── Phase: boot failed ──────────────────────────────────────────
@@ -174,7 +257,7 @@ struct MenuBarView: View {
                 Task { await appState.revealTodayLog() }
             }
             actionButton("退出 Minos") {
-                Task { await appState.shutdown() }
+                appState.requestTermination()
             }
         }
     }

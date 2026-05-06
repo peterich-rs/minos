@@ -2,12 +2,14 @@
 
 pub mod agent;
 pub mod config;
+pub mod device_secret_store;
 pub mod handle;
 pub mod jsonl_recover;
 #[cfg(target_os = "macos")]
 pub mod keychain_store;
 pub mod local_state;
 pub mod logging;
+mod openwire_trace;
 pub mod paths;
 pub mod reconciliator;
 pub mod relay_client;

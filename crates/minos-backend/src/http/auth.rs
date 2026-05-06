@@ -67,12 +67,21 @@ pub async fn authenticate(
     let device_id = extract_device_id(headers)?;
     let requested_role = extract_device_role(headers)?;
     let device_secret = extract_device_secret(headers);
-    let display_name = extract_device_name(headers).unwrap_or_else(|| DEFAULT_DISPLAY_NAME.into());
+    let provided_display_name = extract_device_name(headers)
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty());
+    let display_name = provided_display_name
+        .clone()
+        .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.into());
     log_cf_access_presence(headers);
 
     let existing = store::devices::get_device(pool, device_id)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+    let should_backfill_display_name = existing.as_ref().is_some_and(|row| {
+        let trimmed = row.display_name.trim();
+        matches!(provided_display_name.as_deref(), Some(new_name) if (trimmed.is_empty() || trimmed == DEFAULT_DISPLAY_NAME) && trimmed != new_name)
+    });
     let role = resolve_device_role(existing.as_ref(), requested_role)?;
 
     let classification = classify(existing, device_secret.as_deref(), role)?;
@@ -87,6 +96,17 @@ pub async fn authenticate(
                 device_id = %device_id,
                 "first-connect insert_device failed (race?)",
             );
+        }
+    } else if should_backfill_display_name {
+        if let Some(new_display_name) = provided_display_name.as_deref() {
+            if let Err(e) = store::devices::set_display_name(pool, &device_id, new_display_name).await {
+                tracing::warn!(
+                    target: "minos_backend::http::auth",
+                    error = %e,
+                    device_id = %device_id,
+                    "backfill device display_name failed",
+                );
+            }
         }
     }
 
@@ -406,6 +426,28 @@ mod tests {
             .unwrap();
         let out = classify(Some(row), None, DeviceRole::AgentHost).unwrap();
         assert!(matches!(out, Classification::UnpairedExisting));
+    }
+
+    #[tokio::test]
+    async fn authenticate_backfills_existing_unnamed_device_name() {
+        let pool = memory_pool().await;
+        let device_id = DeviceId::new();
+        insert_device(&pool, device_id, DEFAULT_DISPLAY_NAME, DeviceRole::MobileClient, 0)
+            .await
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(HDR_DEVICE_ID, device_id.to_string().parse().unwrap());
+        headers.insert(HDR_DEVICE_ROLE, "mobile-client".parse().unwrap());
+        headers.insert(HDR_DEVICE_NAME, "Fan's iPhone".parse().unwrap());
+
+        authenticate(&pool, &headers).await.unwrap();
+
+        let row = store::devices::get_device(&pool, device_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.display_name, "Fan's iPhone");
     }
 
     #[test]

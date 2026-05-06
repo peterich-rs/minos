@@ -135,6 +135,7 @@ async fn authenticated_client(backend: &RealBackend, email: &str) -> MobileClien
     let http = minos_mobile::http::MobileHttpClient::new(
         &format!("ws://{}/devices", backend.addr),
         device_id,
+        "iPhone",
         None,
     )
     .unwrap();
@@ -242,7 +243,8 @@ async fn list_threads_round_trips_over_envelope() {
         .clone()
         .expect("authenticated_client seeded the access token");
 
-    let http = minos_mobile::http::MobileHttpClient::new(&backend_url, device_id, None).unwrap();
+    let http =
+        minos_mobile::http::MobileHttpClient::new(&backend_url, device_id, "iPhone", None).unwrap();
     let resp = http
         .list_threads(
             &access,

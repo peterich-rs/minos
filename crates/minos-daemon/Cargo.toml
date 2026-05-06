@@ -18,6 +18,7 @@ uniffi = [
 
 [dependencies]
 minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0" }
+minos-codex-protocol = { path = "../minos-codex-protocol", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
@@ -27,7 +28,10 @@ tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 sqlx = { workspace = true }
 anyhow = { workspace = true }
-reqwest = { workspace = true }
+http = { workspace = true }
+openwire = { workspace = true, features = ["json", "websocket"] }
+openwire-core = { workspace = true, features = ["websocket"] }
+rustls = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 jsonrpsee = { workspace = true }

@@ -46,6 +46,8 @@ Stream<RequestTraceRecord> subscribeRequestTraces() =>
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>>
 abstract class MobileClient implements RustOpaqueInterface {
+  Future<FriendRequestSummary> acceptFriendRequest({required String requestId});
+
   /// Read the current active Mac id, or `None` if no pair has been
   /// completed yet.
   Future<String?> activeHost();
@@ -53,22 +55,53 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Permanently close the given thread. Idempotent.
   Future<void> closeThread({required String threadId});
 
+  Future<ConversationsResponse> conversations();
+
+  Future<FriendRequestSummary> createFriendRequest({
+    required String targetMinosId,
+  });
+
+  Future<ConversationResponse> createGroupConversation({
+    required String title,
+    required List<String> memberAccountIds,
+  });
+
   /// Current connection state, read from the watch-channel cache. Cheap and
   /// synchronous.
   ConnectionState currentState();
+
+  Future<ConversationResponse> ensureDirectConversation({
+    required String friendAccountId,
+  });
 
   /// Forget a specific paired Mac. The path-bound `host_device_id` is
   /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
   /// `forget_peer` (single-peer) call.
   Future<void> forgetHost({required String hostDeviceId});
 
+  Future<FriendRequestsResponse> friendRequests();
+
+  Future<FriendsResponse> friends();
+
   /// Pause an in-flight turn on the given thread. Best-effort. The thread
   /// transitions to `Suspended { UserInterrupt }` regardless of whether the
   /// codex side acknowledges in time.
   Future<void> interruptThread({required String threadId});
 
+  Future<ListChatMessagesResponse> listChatMessages({
+    required String conversationId,
+    PlatformInt64? beforeTsMs,
+    required int limit,
+  });
+
   /// Detect the CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
+
+  /// Scan host-side skills for the selected runtime host.
+  Future<ListHostSkillsResponse> listHostSkills({
+    String? hostDeviceId,
+    required bool forceReload,
+  });
 
   /// List every Mac paired to the caller's account.
   Future<List<HostSummaryDto>> listPairedHosts();
@@ -83,6 +116,8 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Log out of the current session. Best-effort `stop_agent`, then
   /// revoke the refresh token server-side, then wipe local state.
   Future<void> logout();
+
+  Future<MyProfileResponse> myProfile();
 
   /// Construct a client backed by the built-in in-memory pairing store.
   /// Synchronous — no I/O happens until a pairing method is called.
@@ -131,9 +166,18 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String password,
   });
 
+  Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
+
   /// Reconnect using the durable pairing snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession();
+
+  Future<List<UserSummary>> searchUsers({required String minosId});
+
+  Future<ChatMessageSummary> sendChatMessage({
+    required String conversationId,
+    required String text,
+  });
 
   /// Send a follow-up user message to an existing agent session.
   Future<void> sendUserMessage({
@@ -143,6 +187,8 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   /// Override the active Mac the next forward-RPC routes to.
   Future<void> setActiveHost({required String hostDeviceId});
+
+  Future<MyProfileResponse> setMinosId({required String minosId});
 
   /// Start a new agent session and return the daemon-issued `session_id`
   /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
@@ -166,6 +212,13 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Every frb stream sink gets its own broadcast receiver; lagging
   /// subscribers lose old frames rather than blocking the producer.
   Stream<UiEventFrame> subscribeUiEvents();
+
+  /// Enable or disable one host-side skill.
+  Future<WriteHostSkillConfigResponse> writeHostSkillConfig({
+    String? hostDeviceId,
+    required String path,
+    required bool enabled,
+  });
 }
 
 class AgentDescriptor {
@@ -238,6 +291,41 @@ class AuthSummary {
           email == other.email;
 }
 
+class ChatMessageSummary {
+  final String messageId;
+  final String conversationId;
+  final UserSummary sender;
+  final String text;
+  final PlatformInt64 createdAtMs;
+
+  const ChatMessageSummary({
+    required this.messageId,
+    required this.conversationId,
+    required this.sender,
+    required this.text,
+    required this.createdAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      messageId.hashCode ^
+      conversationId.hashCode ^
+      sender.hashCode ^
+      text.hashCode ^
+      createdAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatMessageSummary &&
+          runtimeType == other.runtimeType &&
+          messageId == other.messageId &&
+          conversationId == other.conversationId &&
+          sender == other.sender &&
+          text == other.text &&
+          createdAtMs == other.createdAtMs;
+}
+
 @freezed
 sealed class ConnectionState with _$ConnectionState {
   const ConnectionState._();
@@ -247,6 +335,83 @@ sealed class ConnectionState with _$ConnectionState {
   const factory ConnectionState.connected() = ConnectionState_Connected;
   const factory ConnectionState.reconnecting({required int attempt}) =
       ConnectionState_Reconnecting;
+}
+
+enum ConversationKind { direct, group }
+
+class ConversationResponse {
+  final String conversationId;
+
+  const ConversationResponse({required this.conversationId});
+
+  @override
+  int get hashCode => conversationId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationResponse &&
+          runtimeType == other.runtimeType &&
+          conversationId == other.conversationId;
+}
+
+class ConversationSummary {
+  final String conversationId;
+  final ConversationKind kind;
+  final String title;
+  final UserSummary? counterpart;
+  final int memberCount;
+  final String? lastMessagePreview;
+  final PlatformInt64 lastMessageAtMs;
+
+  const ConversationSummary({
+    required this.conversationId,
+    required this.kind,
+    required this.title,
+    this.counterpart,
+    required this.memberCount,
+    this.lastMessagePreview,
+    required this.lastMessageAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      conversationId.hashCode ^
+      kind.hashCode ^
+      title.hashCode ^
+      counterpart.hashCode ^
+      memberCount.hashCode ^
+      lastMessagePreview.hashCode ^
+      lastMessageAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationSummary &&
+          runtimeType == other.runtimeType &&
+          conversationId == other.conversationId &&
+          kind == other.kind &&
+          title == other.title &&
+          counterpart == other.counterpart &&
+          memberCount == other.memberCount &&
+          lastMessagePreview == other.lastMessagePreview &&
+          lastMessageAtMs == other.lastMessageAtMs;
+}
+
+class ConversationsResponse {
+  final List<ConversationSummary> conversations;
+
+  const ConversationsResponse({required this.conversations});
+
+  @override
+  int get hashCode => conversations.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationsResponse &&
+          runtimeType == other.runtimeType &&
+          conversations == other.conversations;
 }
 
 enum ErrorKind {
@@ -292,6 +457,200 @@ enum ErrorKind {
   pairingTokenExpired,
 }
 
+enum FriendRequestStatus { pending, accepted, rejected, canceled }
+
+class FriendRequestSummary {
+  final String requestId;
+  final UserSummary from;
+  final UserSummary to;
+  final FriendRequestStatus status;
+  final PlatformInt64 createdAtMs;
+  final PlatformInt64? resolvedAtMs;
+
+  const FriendRequestSummary({
+    required this.requestId,
+    required this.from,
+    required this.to,
+    required this.status,
+    required this.createdAtMs,
+    this.resolvedAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      requestId.hashCode ^
+      from.hashCode ^
+      to.hashCode ^
+      status.hashCode ^
+      createdAtMs.hashCode ^
+      resolvedAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FriendRequestSummary &&
+          runtimeType == other.runtimeType &&
+          requestId == other.requestId &&
+          from == other.from &&
+          to == other.to &&
+          status == other.status &&
+          createdAtMs == other.createdAtMs &&
+          resolvedAtMs == other.resolvedAtMs;
+}
+
+class FriendRequestsResponse {
+  final List<FriendRequestSummary> incoming;
+  final List<FriendRequestSummary> outgoing;
+
+  const FriendRequestsResponse({
+    required this.incoming,
+    required this.outgoing,
+  });
+
+  @override
+  int get hashCode => incoming.hashCode ^ outgoing.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FriendRequestsResponse &&
+          runtimeType == other.runtimeType &&
+          incoming == other.incoming &&
+          outgoing == other.outgoing;
+}
+
+class FriendSummary {
+  final String accountId;
+  final String minosId;
+  final String displayName;
+  final PlatformInt64 createdAtMs;
+
+  const FriendSummary({
+    required this.accountId,
+    required this.minosId,
+    required this.displayName,
+    required this.createdAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      accountId.hashCode ^
+      minosId.hashCode ^
+      displayName.hashCode ^
+      createdAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FriendSummary &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          minosId == other.minosId &&
+          displayName == other.displayName &&
+          createdAtMs == other.createdAtMs;
+}
+
+class FriendsResponse {
+  final List<FriendSummary> friends;
+
+  const FriendsResponse({required this.friends});
+
+  @override
+  int get hashCode => friends.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FriendsResponse &&
+          runtimeType == other.runtimeType &&
+          friends == other.friends;
+}
+
+class HostSkillError {
+  final String path;
+  final String message;
+
+  const HostSkillError({required this.path, required this.message});
+
+  @override
+  int get hashCode => path.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSkillError &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          message == other.message;
+}
+
+class HostSkillSummary {
+  final String name;
+  final String path;
+  final String description;
+  final bool enabled;
+  final String scope;
+  final String? displayName;
+  final String? shortDescription;
+
+  const HostSkillSummary({
+    required this.name,
+    required this.path,
+    required this.description,
+    required this.enabled,
+    required this.scope,
+    this.displayName,
+    this.shortDescription,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^
+      path.hashCode ^
+      description.hashCode ^
+      enabled.hashCode ^
+      scope.hashCode ^
+      displayName.hashCode ^
+      shortDescription.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSkillSummary &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          path == other.path &&
+          description == other.description &&
+          enabled == other.enabled &&
+          scope == other.scope &&
+          displayName == other.displayName &&
+          shortDescription == other.shortDescription;
+}
+
+class HostSkillsEntry {
+  final String cwd;
+  final List<HostSkillError> errors;
+  final List<HostSkillSummary> skills;
+
+  const HostSkillsEntry({
+    required this.cwd,
+    required this.errors,
+    required this.skills,
+  });
+
+  @override
+  int get hashCode => cwd.hashCode ^ errors.hashCode ^ skills.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSkillsEntry &&
+          runtimeType == other.runtimeType &&
+          cwd == other.cwd &&
+          errors == other.errors &&
+          skills == other.skills;
+}
+
 /// Dart-visible mirror of `minos_protocol::HostSummary`. One row in
 /// `/v1/me/hosts`.
 class HostSummaryDto {
@@ -326,6 +685,40 @@ class HostSummaryDto {
 }
 
 enum Lang { zh, en }
+
+class ListChatMessagesResponse {
+  final List<ChatMessageSummary> messages;
+  final PlatformInt64? nextBeforeTsMs;
+
+  const ListChatMessagesResponse({required this.messages, this.nextBeforeTsMs});
+
+  @override
+  int get hashCode => messages.hashCode ^ nextBeforeTsMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListChatMessagesResponse &&
+          runtimeType == other.runtimeType &&
+          messages == other.messages &&
+          nextBeforeTsMs == other.nextBeforeTsMs;
+}
+
+class ListHostSkillsResponse {
+  final List<HostSkillsEntry> data;
+
+  const ListHostSkillsResponse({required this.data});
+
+  @override
+  int get hashCode => data.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListHostSkillsResponse &&
+          runtimeType == other.runtimeType &&
+          data == other.data;
+}
 
 class ListThreadsParams {
   final int limit;
@@ -502,6 +895,37 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_AgentStartFailed;
   const factory MinosError.pairingTokenExpired() =
       MinosError_PairingTokenExpired;
+}
+
+class MyProfileResponse {
+  final String accountId;
+  final String email;
+  final String minosId;
+  final String? displayName;
+
+  const MyProfileResponse({
+    required this.accountId,
+    required this.email,
+    required this.minosId,
+    this.displayName,
+  });
+
+  @override
+  int get hashCode =>
+      accountId.hashCode ^
+      email.hashCode ^
+      minosId.hashCode ^
+      displayName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MyProfileResponse &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          email == other.email &&
+          minosId == other.minosId &&
+          displayName == other.displayName;
 }
 
 enum PairingState { unpaired, awaitingPeer, paired }
@@ -843,4 +1267,45 @@ sealed class UiEventMessage with _$UiEventMessage {
     required String kind,
     required String payloadJson,
   }) = UiEventMessage_Raw;
+}
+
+class UserSummary {
+  final String accountId;
+  final String minosId;
+  final String displayName;
+
+  const UserSummary({
+    required this.accountId,
+    required this.minosId,
+    required this.displayName,
+  });
+
+  @override
+  int get hashCode =>
+      accountId.hashCode ^ minosId.hashCode ^ displayName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UserSummary &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          minosId == other.minosId &&
+          displayName == other.displayName;
+}
+
+class WriteHostSkillConfigResponse {
+  final bool effectiveEnabled;
+
+  const WriteHostSkillConfigResponse({required this.effectiveEnabled});
+
+  @override
+  int get hashCode => effectiveEnabled.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WriteHostSkillConfigResponse &&
+          runtimeType == other.runtimeType &&
+          effectiveEnabled == other.effectiveEnabled;
 }

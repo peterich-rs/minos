@@ -12,6 +12,7 @@ pub mod client;
 pub mod http;
 pub mod log_capture;
 pub mod logging;
+mod openwire_trace;
 mod reconnect;
 pub mod request_trace;
 pub mod rpc;

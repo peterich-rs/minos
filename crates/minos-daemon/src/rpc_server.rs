@@ -19,8 +19,10 @@ use minos_domain::{DeviceId, MinosError};
 use minos_protocol::envelope::Envelope;
 use minos_protocol::{
     CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse, InterruptThreadRequest,
-    ListClisResponse, ListThreadsParams, ListThreadsResponse, MinosRpcServer, PairRequest,
-    PairResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
+    ListThreadsResponse, MinosRpcServer, PairRequest, PairResponse, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -55,6 +57,23 @@ impl MinosRpcServer for RpcServerImpl {
 
     async fn list_clis(&self) -> jsonrpsee::core::RpcResult<ListClisResponse> {
         Ok(detect_all(self.runner.clone()).await)
+    }
+
+    async fn list_host_skills(
+        &self,
+        req: ListHostSkillsRequest,
+    ) -> jsonrpsee::core::RpcResult<ListHostSkillsResponse> {
+        self.agent.list_host_skills(req).await.map_err(rpc_err)
+    }
+
+    async fn write_host_skill_config(
+        &self,
+        req: WriteHostSkillConfigRequest,
+    ) -> jsonrpsee::core::RpcResult<WriteHostSkillConfigResponse> {
+        self.agent
+            .write_host_skill_config(req)
+            .await
+            .map_err(rpc_err)
     }
 
     async fn start_agent(
@@ -146,6 +165,20 @@ pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Va
         }
         "minos_health" => into_jsonrpc(id, server.health().await),
         "minos_list_clis" => into_jsonrpc(id, server.list_clis().await),
+        "minos_list_host_skills" => {
+            let req: ListHostSkillsRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.list_host_skills(req).await)
+        }
+        "minos_write_host_skill_config" => {
+            let req: WriteHostSkillConfigRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.write_host_skill_config(req).await)
+        }
         "minos_start_agent" => {
             let req: StartAgentRequest = match parse_params(&params) {
                 Ok(r) => r,

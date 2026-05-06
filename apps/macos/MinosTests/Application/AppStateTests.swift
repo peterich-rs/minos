@@ -6,6 +6,21 @@ import XCTest
 /// canForgetPeer) and the round-trip pairing/forget paths. Boot-side
 /// scenarios live in `AppStateBootTests`.
 final class AppStateTests: XCTestCase {
+    private actor StopGate {
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func waitUntilReleased() async {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func release() {
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
     // ── Gates ──
 
     @MainActor
@@ -36,6 +51,16 @@ final class AppStateTests: XCTestCase {
         await AppStateFixtures.drainMainActor()
 
         XCTAssertTrue(appState.canForgetPeer)
+    }
+
+    @MainActor
+    func testCanShowQrTrueWhenPairedAndConnected() async {
+        let (appState, daemon) = AppStateFixtures.runningState()
+        let did = "00000000-0000-0000-0000-000000000889"
+        daemon.emitPeer(.paired(peerId: did, peerName: "iPhone", online: true))
+        await AppStateFixtures.drainMainActor()
+
+        XCTAssertTrue(appState.canShowQr)
     }
 
     // ── QR / forget round-trips ──
@@ -97,7 +122,7 @@ final class AppStateTests: XCTestCase {
         appState.isShowingQr = true
 
         XCTAssertTrue(appState.canForgetPeer)
-        XCTAssertFalse(appState.canShowQr)
+        XCTAssertTrue(appState.canShowQr)
 
         await appState.forgetPeer()
 
@@ -107,6 +132,47 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.currentQr)
         XCTAssertNil(appState.currentQrGeneratedAt)
         XCTAssertFalse(appState.isShowingQr)
+    }
+
+    @MainActor
+    func testForgetPeerDeviceRemovesOnlyTargetedPeerRow() async {
+        let first = MockDaemon.makePeerSummary(
+            deviceId: "00000000-0000-0000-0000-000000000901",
+            deviceName: "Alice iPhone",
+            accountEmail: "alice@example.com",
+            pairedAtMs: 100,
+            lastActiveAtMs: 200,
+            online: false
+        )
+        let second = MockDaemon.makePeerSummary(
+            deviceId: "00000000-0000-0000-0000-000000000902",
+            deviceName: "Bob iPhone",
+            accountEmail: "bob@example.com",
+            pairedAtMs: 300,
+            lastActiveAtMs: 400,
+            online: true
+        )
+        let daemon = MockDaemon(
+            currentRelayLink: .connected,
+            currentPeer: .paired(peerId: second.mobileDeviceId, peerName: second.mobileDeviceName, online: true),
+            currentPeers: [second, first]
+        )
+        let appState = AppState(forgetConfirmation: { _ in true })
+        appState.finishBoot(
+            daemon: daemon,
+            relayLinkSubscription: MockSubscription(),
+            peerSubscription: MockSubscription(),
+            relayLink: .connected,
+            peer: .paired(peerId: second.mobileDeviceId, peerName: second.mobileDeviceName, online: true),
+            trustedDevice: nil,
+            peers: [second, first]
+        )
+
+        await appState.forgetPeerDevice(second)
+
+        XCTAssertEqual(daemon.forgetPeerDeviceCalls, [second.mobileDeviceId])
+        XCTAssertEqual(appState.peers, [first])
+        XCTAssertEqual(appState.peer, .paired(peerId: first.mobileDeviceId, peerName: first.mobileDeviceName, online: first.online))
     }
 
     @MainActor
@@ -170,5 +236,49 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.currentQr)
         XCTAssertNil(appState.currentQrGeneratedAt)
         XCTAssertFalse(appState.isShowingQr)
+    }
+
+    @MainActor
+    func testTerminationControllerRunsShutdownOnceForRepeatedTerminateRequests() async {
+        let daemon = MockDaemon(currentRelayLink: .connected, currentPeer: .unpaired)
+        let relayLinkSub = MockSubscription()
+        let peerSub = MockSubscription()
+        let gate = StopGate()
+        daemon.stopHook = { await gate.waitUntilReleased() }
+        let appState = AppState(terminator: {})
+
+        appState.finishBoot(
+            daemon: daemon,
+            relayLinkSubscription: relayLinkSub,
+            peerSubscription: peerSub,
+            relayLink: .connected,
+            peer: .unpaired,
+            trustedDevice: nil
+        )
+
+        let controller = AppTerminationController()
+        controller.bind(appState: appState)
+
+        var replies: [Bool] = []
+        let first = controller.applicationShouldTerminate {
+            replies.append($0)
+        }
+        await AppStateFixtures.drainMainActor()
+        let second = controller.applicationShouldTerminate {
+            replies.append($0)
+        }
+
+        XCTAssertEqual(first, .terminateLater)
+        XCTAssertEqual(second, .terminateLater)
+        XCTAssertEqual(daemon.stopCallCount, 1)
+        XCTAssertTrue(replies.isEmpty)
+
+        await gate.release()
+        await AppStateFixtures.drainMainActor()
+
+        XCTAssertEqual(replies, [true])
+        XCTAssertEqual(relayLinkSub.cancelCallCount, 1)
+        XCTAssertEqual(peerSub.cancelCallCount, 1)
+        XCTAssertNil(appState.daemon)
     }
 }

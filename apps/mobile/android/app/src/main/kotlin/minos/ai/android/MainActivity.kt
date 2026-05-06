@@ -1,4 +1,4 @@
-package ai.minos.minos
+package minos.ai.android
 
 import io.flutter.embedding.android.FlutterActivity
 

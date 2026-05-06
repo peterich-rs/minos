@@ -42,7 +42,7 @@ final class ThreadListProvider
   ThreadList create() => ThreadList();
 }
 
-String _$threadListHash() => r'38fb6f23e74dcd59a9c0e7534703ab1a0bfa630f';
+String _$threadListHash() => r'89df5f418e02da63400a9c1c3eb46b90d0614b22';
 
 /// Loads and caches the paged thread list. First build requests the
 /// freshest 50 threads; [refresh] reruns `list_threads` with the same

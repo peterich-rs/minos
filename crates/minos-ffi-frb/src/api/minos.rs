@@ -38,8 +38,12 @@ pub use minos_domain::{
     PairingState,
 };
 pub use minos_protocol::{
-    AuthSummary, HostSummary, ListThreadsParams, ListThreadsResponse, ReadThreadParams,
-    ReadThreadResponse, StartAgentResponse, ThreadSummary,
+    AuthSummary, ChatMessageSummary, ConversationKind, ConversationResponse, ConversationSummary,
+    ConversationsResponse, FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse,
+    FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, HostSummary,
+    ListChatMessagesResponse, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
+    MyProfileResponse, ReadThreadParams, ReadThreadResponse, SearchUsersResponse,
+    StartAgentResponse, ThreadSummary, UserSummary, WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
@@ -249,6 +253,87 @@ impl MobileClient {
         Ok(hosts.into_iter().map(HostSummaryDto::from).collect())
     }
 
+    pub async fn my_profile(&self) -> Result<MyProfileResponse, MinosError> {
+        self.0.my_profile().await
+    }
+
+    pub async fn set_minos_id(&self, minos_id: String) -> Result<MyProfileResponse, MinosError> {
+        self.0.set_minos_id(minos_id).await
+    }
+
+    pub async fn search_users(&self, minos_id: String) -> Result<Vec<UserSummary>, MinosError> {
+        self.0.search_users(minos_id).await
+    }
+
+    pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
+        self.0.friends().await
+    }
+
+    pub async fn create_friend_request(
+        &self,
+        target_minos_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        self.0.create_friend_request(target_minos_id).await
+    }
+
+    pub async fn friend_requests(&self) -> Result<FriendRequestsResponse, MinosError> {
+        self.0.friend_requests().await
+    }
+
+    pub async fn accept_friend_request(
+        &self,
+        request_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        self.0.accept_friend_request(request_id).await
+    }
+
+    pub async fn reject_friend_request(
+        &self,
+        request_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        self.0.reject_friend_request(request_id).await
+    }
+
+    pub async fn conversations(&self) -> Result<ConversationsResponse, MinosError> {
+        self.0.conversations().await
+    }
+
+    pub async fn ensure_direct_conversation(
+        &self,
+        friend_account_id: String,
+    ) -> Result<ConversationResponse, MinosError> {
+        self.0.ensure_direct_conversation(friend_account_id).await
+    }
+
+    pub async fn create_group_conversation(
+        &self,
+        title: String,
+        member_account_ids: Vec<String>,
+    ) -> Result<ConversationResponse, MinosError> {
+        self.0
+            .create_group_conversation(title, member_account_ids)
+            .await
+    }
+
+    pub async fn list_chat_messages(
+        &self,
+        conversation_id: String,
+        before_ts_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<ListChatMessagesResponse, MinosError> {
+        self.0
+            .list_chat_messages(conversation_id, before_ts_ms, limit)
+            .await
+    }
+
+    pub async fn send_chat_message(
+        &self,
+        conversation_id: String,
+        text: String,
+    ) -> Result<ChatMessageSummary, MinosError> {
+        self.0.send_chat_message(conversation_id, text).await
+    }
+
     /// Override the active Mac the next forward-RPC routes to.
     pub async fn set_active_host(&self, host_device_id: String) -> Result<(), MinosError> {
         let host = parse_device_id(&host_device_id)?;
@@ -362,6 +447,27 @@ impl MobileClient {
     /// Detect the CLI agents available on the paired runtime.
     pub async fn list_clis(&self) -> Result<Vec<AgentDescriptor>, MinosError> {
         self.0.list_clis().await
+    }
+
+    /// Scan host-side skills for the selected runtime host.
+    pub async fn list_host_skills(
+        &self,
+        host_device_id: Option<String>,
+        force_reload: bool,
+    ) -> Result<ListHostSkillsResponse, MinosError> {
+        self.0.list_host_skills(host_device_id, force_reload).await
+    }
+
+    /// Enable or disable one host-side skill.
+    pub async fn write_host_skill_config(
+        &self,
+        host_device_id: Option<String>,
+        path: String,
+        enabled: bool,
+    ) -> Result<WriteHostSkillConfigResponse, MinosError> {
+        self.0
+            .write_host_skill_config(host_device_id, path, enabled)
+            .await
     }
 
     /// Start a new agent session and return the daemon-issued `session_id`
@@ -922,10 +1028,156 @@ pub struct _AuthSummary {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(MyProfileResponse))]
+pub struct _MyProfileResponse {
+    pub account_id: String,
+    pub email: String,
+    pub minos_id: String,
+    pub display_name: Option<String>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(UserSummary))]
+pub struct _UserSummary {
+    pub account_id: String,
+    pub minos_id: String,
+    pub display_name: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendRequestStatus))]
+pub enum _FriendRequestStatus {
+    Pending,
+    Accepted,
+    Rejected,
+    Canceled,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendRequestSummary))]
+pub struct _FriendRequestSummary {
+    pub request_id: String,
+    pub from: UserSummary,
+    pub to: UserSummary,
+    pub status: FriendRequestStatus,
+    pub created_at_ms: i64,
+    pub resolved_at_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendRequestsResponse))]
+pub struct _FriendRequestsResponse {
+    pub incoming: Vec<FriendRequestSummary>,
+    pub outgoing: Vec<FriendRequestSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendSummary))]
+pub struct _FriendSummary {
+    pub account_id: String,
+    pub minos_id: String,
+    pub display_name: String,
+    pub created_at_ms: i64,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendsResponse))]
+pub struct _FriendsResponse {
+    pub friends: Vec<FriendSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationKind))]
+pub enum _ConversationKind {
+    Direct,
+    Group,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationSummary))]
+pub struct _ConversationSummary {
+    pub conversation_id: String,
+    pub kind: ConversationKind,
+    pub title: String,
+    pub counterpart: Option<UserSummary>,
+    pub member_count: u32,
+    pub last_message_preview: Option<String>,
+    pub last_message_at_ms: i64,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationsResponse))]
+pub struct _ConversationsResponse {
+    pub conversations: Vec<ConversationSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationResponse))]
+pub struct _ConversationResponse {
+    pub conversation_id: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ChatMessageSummary))]
+pub struct _ChatMessageSummary {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub sender: UserSummary,
+    pub text: String,
+    pub created_at_ms: i64,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListChatMessagesResponse))]
+pub struct _ListChatMessagesResponse {
+    pub messages: Vec<ChatMessageSummary>,
+    pub next_before_ts_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(StartAgentResponse))]
 pub struct _StartAgentResponse {
     pub session_id: String,
     pub cwd: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(HostSkillSummary))]
+pub struct _HostSkillSummary {
+    pub name: String,
+    pub path: String,
+    pub description: String,
+    pub enabled: bool,
+    pub scope: String,
+    pub display_name: Option<String>,
+    pub short_description: Option<String>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(HostSkillError))]
+pub struct _HostSkillError {
+    pub path: String,
+    pub message: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(HostSkillsEntry))]
+pub struct _HostSkillsEntry {
+    pub cwd: String,
+    pub errors: Vec<HostSkillError>,
+    pub skills: Vec<HostSkillSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListHostSkillsResponse))]
+pub struct _ListHostSkillsResponse {
+    pub data: Vec<HostSkillsEntry>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(WriteHostSkillConfigResponse))]
+pub struct _WriteHostSkillConfigResponse {
+    pub effective_enabled: bool,
 }
 
 #[cfg(test)]

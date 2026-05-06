@@ -18,11 +18,17 @@ class ThreadList extends _$ThreadList {
   }
 
   Future<void> refresh() async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
+    final previous = state;
+    try {
       final core = ref.read(minosCoreProvider);
       final resp = await core.listThreads(const ListThreadsParams(limit: 50));
-      return resp.threads;
-    });
+      state = AsyncValue.data(resp.threads);
+    } catch (error, stackTrace) {
+      if (previous.hasValue) {
+        state = previous;
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      state = AsyncValue.error(error, stackTrace);
+    }
   }
 }

@@ -8,7 +8,12 @@ part 'thread_events_provider.g.dart';
 /// Loads the translated history for one thread and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
-@Riverpod(keepAlive: false)
+///
+/// `keepAlive: true` so navigating away from the chat page does not drop the
+/// in-memory event list and live subscription. Re-entry then renders cached
+/// history instantly instead of flashing a center spinner and re-fetching
+/// from the daemon.
+@Riverpod(keepAlive: true)
 class ThreadEvents extends _$ThreadEvents {
   BigInt _watermark = BigInt.zero;
 

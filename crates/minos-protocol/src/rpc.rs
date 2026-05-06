@@ -4,8 +4,9 @@
 
 use crate::{
     CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse, InterruptThreadRequest,
-    ListClisResponse, ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
+    ListThreadsResponse, PairRequest, PairResponse, SendUserMessageRequest, StartAgentRequest,
+    StartAgentResponse, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use jsonrpsee::proc_macros::rpc;
 
@@ -23,6 +24,20 @@ pub trait MinosRpc {
     /// Snapshot of locally detected CLI agents.
     #[method(name = "list_clis")]
     async fn list_clis(&self) -> jsonrpsee::core::RpcResult<ListClisResponse>;
+
+    /// Snapshot of host-side skills resolved for the given workspace.
+    #[method(name = "list_host_skills")]
+    async fn list_host_skills(
+        &self,
+        req: ListHostSkillsRequest,
+    ) -> jsonrpsee::core::RpcResult<ListHostSkillsResponse>;
+
+    /// Enable or disable one host-side skill by path.
+    #[method(name = "write_host_skill_config")]
+    async fn write_host_skill_config(
+        &self,
+        req: WriteHostSkillConfigRequest,
+    ) -> jsonrpsee::core::RpcResult<WriteHostSkillConfigResponse>;
 
     /// Launch (or join) an agent session for the given `workspace`. Multi-
     /// session: subsequent calls with the same `workspace` reuse the existing

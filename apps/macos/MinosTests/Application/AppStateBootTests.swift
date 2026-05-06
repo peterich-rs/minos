@@ -75,6 +75,35 @@ final class AppStateBootTests: XCTestCase {
     }
 
     @MainActor
+    func testFinishBootAllowsQrWhenPeersAlreadyExist() {
+        let appState = AppState()
+        let summary = MockDaemon.makePeerSummary(online: true)
+        let daemon = MockDaemon(
+            currentRelayLink: .connected,
+            currentPeer: .paired(
+                peerId: summary.mobileDeviceId,
+                peerName: summary.mobileDeviceName,
+                online: summary.online
+            ),
+            currentPeers: [summary]
+        )
+
+        appState.finishBoot(
+            daemon: daemon,
+            relayLinkSubscription: MockSubscription(),
+            peerSubscription: MockSubscription(),
+            relayLink: .connected,
+            peer: .paired(peerId: summary.mobileDeviceId, peerName: summary.mobileDeviceName, online: summary.online),
+            trustedDevice: nil,
+            peers: [summary]
+        )
+
+        XCTAssertTrue(appState.canShowQr)
+        XCTAssertTrue(appState.canForgetPeer)
+        XCTAssertEqual(appState.peers, [summary])
+    }
+
+    @MainActor
     func testFailBootSetsPhaseAndPreservesError() {
         let appState = AppState()
         let relayLinkSub = MockSubscription()
@@ -279,7 +308,7 @@ enum AppStateFixtures {
             Task { @MainActor in appState.applyRelayLink(state) }
         }
         let peerObserver = PeerObserver { state in
-            Task { @MainActor in appState.applyPeer(state) }
+            Task { @MainActor in await appState.applyPeer(state) }
         }
         let relayLinkSub = daemon.subscribeRelayLink(relayObserver)
         let peerSub = daemon.subscribePeer(peerObserver)

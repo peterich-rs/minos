@@ -1,8 +1,5 @@
 import AppKit
 import Foundation
-import OSLog
-
-private let actionsLogger = Logger(subsystem: "ai.minos.macos", category: "appState.actions")
 
 /// User-driven actions on AppState (QR mint/refresh, peer forget,
 /// shutdown, log reveal). Lives in its own file so the core AppState
@@ -12,6 +9,11 @@ extension AppState {
 
     var currentQrExpiresAt: Date? {
         currentQrGeneratedAt?.addingTimeInterval(Self.qrLifetimeSeconds)
+    }
+
+    @MainActor
+    func requestTermination() {
+        terminator()
     }
 
     @MainActor
@@ -36,29 +38,38 @@ extension AppState {
         } catch let error as MinosError {
             presentTransientError(error)
         } catch {
-            actionsLogger.error("Unexpected reveal error: \(String(describing: error), privacy: .public)")
+            AppLog.error("appState.actions", "Unexpected reveal error: \(String(describing: error))")
         }
     }
 
     @MainActor
     func forgetPeer() async {
-        guard canForgetPeer, let daemon, let trustedDevice else { return }
-        guard forgetConfirmation(trustedDevice) else { return }
+        guard let firstPeer = resolvedPeers.first else { return }
+        let confirmationPeer = Self.peerRecord(firstPeer)
+        guard forgetConfirmation(confirmationPeer), let daemon else { return }
 
         do {
             try await daemon.forgetPeer()
-            // The daemon's peer observer will push Unpaired shortly; the
-            // local clear here is belt-and-suspenders so menus refresh
-            // synchronously even if the observer is briefly delayed.
-            self.peer = .unpaired
-            self.trustedDevice = nil
-            currentQr = nil
-            currentQrGeneratedAt = nil
-            isShowingQr = false
+            applyForgottenPeerLocally(firstPeer.mobileDeviceId)
         } catch let error as MinosError {
             presentTransientError(error)
         } catch {
-            actionsLogger.error("Unexpected forget error: \(String(describing: error), privacy: .public)")
+            AppLog.error("appState.actions", "Unexpected forget error: \(String(describing: error))")
+        }
+    }
+
+    @MainActor
+    func forgetPeerDevice(_ peer: HostPeerSummary) async {
+        guard canForgetPeerDevice(peer), let daemon else { return }
+        guard forgetConfirmation(Self.peerRecord(peer)) else { return }
+
+        do {
+            try await daemon.forgetPeerDevice(peer.mobileDeviceId)
+            applyForgottenPeerLocally(peer.mobileDeviceId)
+        } catch let error as MinosError {
+            presentTransientError(error)
+        } catch {
+            AppLog.error("appState.actions", "Unexpected forget-peer-device error: \(String(describing: error))")
         }
     }
 
@@ -78,9 +89,9 @@ extension AppState {
         do {
             try await currentDaemon?.stop()
         } catch let error as MinosError {
-            actionsLogger.error("Reconnect stop failed: \(error.technicalDetails, privacy: .public)")
+            AppLog.error("appState.actions", "Reconnect stop failed: \(error.technicalDetails)")
         } catch {
-            actionsLogger.error("Unexpected reconnect stop error: \(String(describing: error), privacy: .public)")
+            AppLog.error("appState.actions", "Unexpected reconnect stop error: \(String(describing: error))")
         }
 
         await DaemonBootstrap.bootstrap(self)
@@ -88,6 +99,12 @@ extension AppState {
 
     @MainActor
     func shutdown() async {
+        await shutdownForTermination()
+        terminator()
+    }
+
+    @MainActor
+    func shutdownForTermination() async {
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()
 
@@ -114,17 +131,15 @@ extension AppState {
         do {
             try await currentDaemon?.stop()
         } catch let error as MinosError {
-            actionsLogger.error("Shutdown stop failed: \(error.technicalDetails, privacy: .public)")
+            AppLog.error("appState.actions", "Shutdown stop failed: \(error.technicalDetails)")
         } catch {
-            actionsLogger.error("Unexpected shutdown error: \(String(describing: error), privacy: .public)")
+            AppLog.error("appState.actions", "Unexpected shutdown error: \(String(describing: error))")
         }
-
-        terminator()
     }
 
     @MainActor
     func presentTransientError(_ error: MinosError) {
-        actionsLogger.error("Presenting transient error: \(error.technicalDetails, privacy: .public)")
+        AppLog.error("appState.actions", "Presenting transient error: \(error.technicalDetails)")
         displayErrorTask?.cancel()
         displayError = error
         displayErrorTask = Task { [weak self] in
@@ -147,6 +162,16 @@ extension AppState {
     }
 
     @MainActor
+    private func applyForgottenPeerLocally(_ mobileDeviceId: DeviceId) {
+        let remainingPeers = resolvedPeers.filter { $0.mobileDeviceId != mobileDeviceId }
+        applyPeersSnapshot(remainingPeers)
+        peer = Self.aggregatePeerState(from: remainingPeers)
+        currentQr = nil
+        currentQrGeneratedAt = nil
+        isShowingQr = false
+    }
+
+    @MainActor
     private func loadQr(showing: Bool) async {
         guard canShowQr, let daemon else { return }
 
@@ -160,7 +185,7 @@ extension AppState {
         } catch let error as MinosError {
             presentTransientError(error)
         } catch {
-            actionsLogger.error("Unexpected QR error: \(String(describing: error), privacy: .public)")
+            AppLog.error("appState.actions", "Unexpected QR error: \(String(describing: error))")
         }
     }
 }

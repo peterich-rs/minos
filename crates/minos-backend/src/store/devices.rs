@@ -188,6 +188,25 @@ pub async fn set_account_id(
     Ok(())
 }
 
+/// Update the display name on an existing device row.
+pub async fn set_display_name(
+    pool: &SqlitePool,
+    device_id: &DeviceId,
+    display_name: &str,
+) -> Result<(), BackendError> {
+    let id_str = device_id.to_string();
+    sqlx::query("UPDATE devices SET display_name = ? WHERE device_id = ?")
+        .bind(display_name)
+        .bind(&id_str)
+        .execute(pool)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: "set_display_name".to_string(),
+            message: e.to_string(),
+        })?;
+    Ok(())
+}
+
 /// Look up a device by id.
 ///
 /// Returns `Ok(None)` if the row does not exist.
@@ -378,6 +397,20 @@ mod tests {
         let pool = memory_pool().await;
         let missing = DeviceId::new();
         assert_eq!(get_device(&pool, missing).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn set_display_name_overwrites_existing_name() {
+        let pool = memory_pool().await;
+        let id = DeviceId::new();
+        insert_device(&pool, id, "unnamed", DeviceRole::MobileClient, T0)
+            .await
+            .unwrap();
+
+        set_display_name(&pool, &id, "Fan's iPhone").await.unwrap();
+
+        let got = get_device(&pool, id).await.unwrap().unwrap();
+        assert_eq!(got.display_name, "Fan's iPhone");
     }
 
     #[tokio::test]

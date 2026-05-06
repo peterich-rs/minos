@@ -1,4 +1,4 @@
-//! mars-xlog wiring for the iOS-side core process.
+//! mars-xlog wiring for the mobile-side core process.
 //!
 //! Sink directory comes from the Dart layer (frb-callback in plan 03) so that
 //! `iOS app Documents/Minos/Logs/` is honored even though Rust doesn't know
@@ -35,6 +35,15 @@ pub fn init(log_dir: &Path) -> Result<(), MinosError> {
         message: e.to_string(),
     })?;
 
+    // mars-xlog also forwards each record to the platform console when the
+    // instance has `console_log_open == true`. Apple targets default the
+    // sink to `os_log` (subsystem ""/category=name_prefix), which surfaces
+    // in Console.app and Xcode's debug area alongside the Swift
+    // `os.Logger` lines. Gate on `debug_assertions` so dev builds get the
+    // visibility while release builds stay quiet (xlog file is the
+    // shipping channel).
+    logger.set_console_log_open(cfg!(debug_assertions));
+
     let (layer, handle) =
         XlogLayer::with_config(logger, XlogLayerConfig::new(LogLevel::Debug).enabled(true));
 
@@ -45,6 +54,7 @@ pub fn init(log_dir: &Path) -> Result<(), MinosError> {
     let subscriber = tracing_subscriber::registry()
         .with(layer)
         .with(CaptureLayer);
+
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     tracing::info!(name_prefix = NAME_PREFIX, dir = %log_dir.display(), "mobile logging initialized");

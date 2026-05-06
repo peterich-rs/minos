@@ -28,6 +28,58 @@ pub fn today_log_path() -> Result<String, MinosError> {
     minos_daemon::logging::today().map(|path| path.to_string_lossy().into_owned())
 }
 
+/// Emit a Swift-originated log record through the Rust `tracing` pipeline.
+#[uniffi::export]
+pub fn swift_log_debug(category: String, message: String) {
+    tracing::debug!(
+        target: "minos_macos_swift",
+        source = "swift",
+        subsystem = "ai.minos.macos",
+        category = %category,
+        swift_message = %message,
+        "{message}"
+    );
+}
+
+/// Emit a Swift-originated log record through the Rust `tracing` pipeline.
+#[uniffi::export]
+pub fn swift_log_info(category: String, message: String) {
+    tracing::info!(
+        target: "minos_macos_swift",
+        source = "swift",
+        subsystem = "ai.minos.macos",
+        category = %category,
+        swift_message = %message,
+        "{message}"
+    );
+}
+
+/// Emit a Swift-originated log record through the Rust `tracing` pipeline.
+#[uniffi::export]
+pub fn swift_log_warn(category: String, message: String) {
+    tracing::warn!(
+        target: "minos_macos_swift",
+        source = "swift",
+        subsystem = "ai.minos.macos",
+        category = %category,
+        swift_message = %message,
+        "{message}"
+    );
+}
+
+/// Emit a Swift-originated log record through the Rust `tracing` pipeline.
+#[uniffi::export]
+pub fn swift_log_error(category: String, message: String) {
+    tracing::error!(
+        target: "minos_macos_swift",
+        source = "swift",
+        subsystem = "ai.minos.macos",
+        category = %category,
+        swift_message = %message,
+        "{message}"
+    );
+}
+
 /// Bridge Rust's single-source-of-truth error copy to Swift.
 #[uniffi::export]
 pub fn kind_message(kind: ErrorKind, lang: Lang) -> String {
@@ -47,7 +99,7 @@ pub use minos_domain::{
 // rationale on why those mirrors do not derive `uniffi::*`.
 pub use minos_agent_runtime::{CloseReason, PauseReason, ThreadState};
 pub use minos_protocol::{
-    AgentLaunchMode, CloseThreadRequest, InterruptThreadRequest, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse,
+    AgentLaunchMode, CloseThreadRequest, HostPeerSummary, InterruptThreadRequest,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
 pub use minos_ui_protocol::ThreadEndReason;

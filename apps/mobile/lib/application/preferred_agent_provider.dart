@@ -1,16 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
-class PreferredAgent extends Notifier<AgentName> {
-  @override
-  AgentName build() => AgentName.codex;
-
-  void setAgent(AgentName agent) {
-    state = agent;
-  }
-}
-
-final preferredAgentProvider = NotifierProvider<PreferredAgent, AgentName>(
-  PreferredAgent.new,
-);
+final preferredAgentProvider = Provider<AgentName>((ref) {
+  return ref.watch(preferredRuntimeAgentProvider);
+});

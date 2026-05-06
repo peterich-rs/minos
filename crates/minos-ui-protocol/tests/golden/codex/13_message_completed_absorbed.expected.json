@@ -1,6 +1,6 @@
 [
-  {"kind":"message_started","message_id":"<uuid>","role":"assistant","started_at_ms":1714000014000},
-  {"kind":"text_delta","message_id":"<uuid>","text":"hi"},
-  {"kind":"reasoning_delta","message_id":"<uuid>","text":"thought"},
-  {"kind":"message_completed","message_id":"<uuid>","finished_at_ms":1714000015000}
+  {"kind":"message_started","message_id":"i1","role":"assistant","started_at_ms":0},
+  {"kind":"text_delta","message_id":"i1","text":"hi"},
+  {"kind":"reasoning_delta","message_id":"i1","text":"thought"},
+  {"kind":"message_completed","message_id":"i1","finished_at_ms":1714000015000}
 ]

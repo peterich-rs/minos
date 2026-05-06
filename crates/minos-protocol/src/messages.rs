@@ -5,15 +5,15 @@ use minos_ui_protocol::{ThreadEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
 
 /// Response body for `GET /v1/me/peer` — the backend's view of the
-/// caller's currently paired peer. Returned by the authenticated
-/// pairing-rail (`X-Device-Id` + `X-Device-Secret`) so a freshly
-/// reconnected daemon can refresh its in-memory peer mirror without
-/// reading anything from local disk.
+/// host caller's currently paired mobile peer. Returned by the
+/// authenticated device-secret rail (`X-Device-Id` + `X-Device-Secret`)
+/// so a freshly reconnected daemon can refresh its in-memory peer mirror
+/// without reading anything from local disk.
 ///
-/// On `200`, the body carries the peer's `device_id`, the peer-side
-/// display name, and the pairing's `created_at` timestamp (epoch ms).
-/// On `404` with `error.code == "not_paired"`, the caller has no row
-/// in the `pairings` table — the response body uses the standard
+/// On `200`, the body carries the mobile peer's `device_id`, display
+/// name, and the most-recent account-host pairing timestamp (epoch ms).
+/// On `404` with `error.code == "not_paired"`, the caller has no row in
+/// `account_host_pairings` — the response body uses the standard
 /// `{ "error": { "code": ..., "message": ... } }` envelope shared by
 /// every other `/v1/*` route.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -38,6 +38,178 @@ pub struct HostSummary {
     pub host_display_name: String,
     pub paired_at_ms: i64,
     pub paired_via_device_id: DeviceId,
+}
+
+/// Response body for `GET /v1/me/peers`. Host callers receive every
+/// mobile/account pair currently associated with their `host_device_id`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MePeersResponse {
+    pub peers: Vec<HostPeerSummary>,
+}
+
+/// One mobile/account row connected to a host.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HostPeerSummary {
+    pub mobile_device_id: DeviceId,
+    pub mobile_device_name: String,
+    pub account_email: String,
+    pub paired_at_ms: i64,
+    pub last_active_at_ms: i64,
+    pub online: bool,
+}
+
+/// Bearer-authenticated mobile account profile.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MyProfileResponse {
+    pub account_id: String,
+    pub email: String,
+    pub minos_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// Minimal user directory card exposed to the mobile app.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UserSummary {
+    pub account_id: String,
+    pub minos_id: String,
+    pub display_name: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SearchUsersResponse {
+    pub users: Vec<UserSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SetMinosIdRequest {
+    pub minos_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateFriendRequestRequest {
+    pub target_minos_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FriendRequestStatus {
+    Pending,
+    Accepted,
+    Rejected,
+    Canceled,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FriendRequestSummary {
+    pub request_id: String,
+    pub from: UserSummary,
+    pub to: UserSummary,
+    pub status: FriendRequestStatus,
+    pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FriendRequestsResponse {
+    pub incoming: Vec<FriendRequestSummary>,
+    pub outgoing: Vec<FriendRequestSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FriendSummary {
+    pub account_id: String,
+    pub minos_id: String,
+    pub display_name: String,
+    pub created_at_ms: i64,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FriendsResponse {
+    pub friends: Vec<FriendSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    Direct,
+    Group,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub kind: ConversationKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counterpart: Option<UserSummary>,
+    pub member_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
+    pub last_message_at_ms: i64,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationsResponse {
+    pub conversations: Vec<ConversationSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct EnsureDirectConversationRequest {
+    pub friend_account_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateGroupConversationRequest {
+    pub title: String,
+    pub member_account_ids: Vec<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationResponse {
+    pub conversation_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessageSummary {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub sender: UserSummary,
+    pub text: String,
+    pub created_at_ms: i64,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListChatMessagesResponse {
+    pub messages: Vec<ChatMessageSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_before_ts_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SendChatMessageRequest {
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,6 +247,67 @@ pub struct HealthResponse {
 }
 
 pub type ListClisResponse = Vec<AgentDescriptor>;
+
+/// Parameters for the `list_host_skills` RPC. `workspace` is optional for
+/// mobile clients that still rely on the daemon's default workspace.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostSkillsRequest {
+    pub workspace: String,
+    #[serde(default)]
+    pub force_reload: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSkillSummary {
+    pub name: String,
+    pub path: String,
+    pub description: String,
+    pub enabled: bool,
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSkillError {
+    pub path: String,
+    pub message: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSkillsEntry {
+    pub cwd: String,
+    pub errors: Vec<HostSkillError>,
+    pub skills: Vec<HostSkillSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostSkillsResponse {
+    pub data: Vec<HostSkillsEntry>,
+}
+
+/// Parameters for the `write_host_skill_config` RPC. The path comes from
+/// a prior `list_host_skills` result.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WriteHostSkillConfigRequest {
+    pub workspace: String,
+    pub path: String,
+    pub enabled: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WriteHostSkillConfigResponse {
+    pub effective_enabled: bool,
+}
 
 /// Which codex driver to spawn — selectable at start time so dev/test
 /// surfaces can compare the two paths side-by-side without rebuilding.

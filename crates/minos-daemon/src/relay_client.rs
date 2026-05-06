@@ -51,6 +51,7 @@ use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, PeerState, RelayLinkState};
 use minos_protocol::envelope::{Envelope, EventKind};
+use minos_protocol::HostPeerSummary;
 use minos_transport::auth::{AuthHeaders, CfAccessToken};
 use minos_transport::backoff::delay_for_attempt;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
@@ -177,6 +178,7 @@ impl RelayClient {
             http: http.clone(),
             rpc_server,
             peer_store: persistence.peer_store,
+            peers_store: persistence.peers_store,
             last_error: persistence.last_error,
             reconciliator: persistence.reconciliator,
         };
@@ -216,10 +218,9 @@ impl RelayClient {
         })
     }
 
-    /// Issue `DELETE /v1/pairing` against the backend. The backend then
-    /// emits `Event::Unpaired` to the live WS, which the dispatch loop
-    /// pushes onto the peer-state watch channel — callers do NOT need to
-    /// await that event here.
+    /// Back-compat helper for callers that still think in terms of a
+    /// single paired device. Deletes the first currently paired row, if
+    /// any, via the host-scoped `/v1/me/peers/{mobile_device_id}` route.
     pub async fn forget_peer(&self) -> Result<(), MinosError> {
         let secret = self
             .inner
@@ -230,7 +231,39 @@ impl RelayClient {
             .ok_or_else(|| MinosError::DeviceNotTrusted {
                 device_id: "(none)".into(),
             })?;
-        self.inner.http.forget_pairing(&secret).await
+        let Some(mobile_device_id) = self
+            .inner
+            .http
+            .get_me_peers(&secret)
+            .await?
+            .into_iter()
+            .next()
+            .map(|peer| peer.mobile_device_id)
+        else {
+            return Ok(());
+        };
+        self.inner
+            .http
+            .forget_peer_device(&secret, mobile_device_id)
+            .await
+    }
+
+    /// Issue `DELETE /v1/me/peers/{mobile_device_id}` for one specific
+    /// mobile/account row on the current host.
+    pub async fn forget_peer_device(&self, mobile_device_id: DeviceId) -> Result<(), MinosError> {
+        let secret = self
+            .inner
+            .secret
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .ok_or_else(|| MinosError::DeviceNotTrusted {
+                device_id: "(none)".into(),
+            })?;
+        self.inner
+            .http
+            .forget_peer_device(&secret, mobile_device_id)
+            .await
     }
 
     /// Clone the producer side of the dispatcher's outbound queue.
@@ -270,6 +303,8 @@ pub struct PersistenceCtx {
     /// one in `DaemonInner::peer`. Updated on `EventKind::Paired` /
     /// `Unpaired`; read by `DaemonHandle::current_trusted_device`.
     pub peer_store: Arc<StdMutex<Option<PeerRecord>>>,
+    /// Full host-side view of every paired mobile/account row.
+    pub peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     /// Same `Arc` as `DaemonInner::last_error`. Populated on fatal-exit
     /// paths (HTTP 401, WS close 4401/4400). Drained on `DaemonHandle::
     /// last_error`.
@@ -309,6 +344,9 @@ struct DispatchCtx {
     /// / `Unpaired` so warm reads via `current_trusted_device` see the
     /// newest record without round-tripping the watch channel.
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
+    /// Shared with `DaemonInner::peers`. Refreshed from `/v1/me/peers`
+    /// on connect and after each peer event.
+    peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     /// One-shot fatal-error signal drained by `DaemonHandle::last_error`.
     last_error: Arc<StdMutex<Option<MinosError>>>,
     /// Reconciliator invoked on every `Event::IngestCheckpoint`. `None`
@@ -380,7 +418,7 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
 /// failure, `AuthFailed` on a pre-upgrade HTTP 401, and `Shutdown` when the
 /// outer `shutdown_rx` fires mid-cycle.
 async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>) -> CycleOutcome {
-    let secret = secret_snapshot(&ctx.secret);
+    let secret = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error);
     let headers = build_headers(
         &ctx.config,
         ctx.self_device_id,
@@ -443,48 +481,58 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
 
     let _ = ctx.link_tx.send(RelayLinkState::Connected);
     tracing::info!(target: "minos_daemon::relay_client", "relay link up");
-    refresh_peer_from_backend(ctx, secret.as_ref()).await;
+    refresh_peers_from_backend(ctx, secret.as_ref()).await;
 
     dispatch_loop(ws, ctx, shutdown_rx).await
 }
 
-async fn refresh_peer_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSecret>) {
+async fn refresh_peers_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSecret>) {
     let Some(secret) = secret else {
+        apply_peers_snapshot(ctx, Vec::new());
         return;
     };
-    match ctx.http.get_me_peer(secret).await {
-        Ok(Some(peer)) => {
-            let paired_at = Utc
-                .timestamp_millis_opt(peer.paired_at_ms)
-                .single()
-                .unwrap_or_else(Utc::now);
-            let record = PeerRecord {
-                device_id: peer.peer_device_id,
-                name: peer.peer_name.clone(),
-                paired_at,
-            };
-            if let Ok(mut guard) = ctx.peer_store.lock() {
-                *guard = Some(record);
-            }
-            let _ = ctx.peer_tx.send(PeerState::Paired {
-                peer_id: peer.peer_device_id,
-                peer_name: peer.peer_name,
-                online: false,
-            });
-        }
-        Ok(None) => {
-            if let Ok(mut guard) = ctx.peer_store.lock() {
-                *guard = None;
-            }
-            let _ = ctx.peer_tx.send(PeerState::Unpaired);
-        }
+    match ctx.http.get_me_peers(secret).await {
+        Ok(peers) => apply_peers_snapshot(ctx, peers),
         Err(e) => {
             tracing::warn!(
                 target: "minos_daemon::relay_client",
                 error = %e,
-                "failed to refresh paired peer after relay connect",
+                "failed to refresh paired peers after relay connect/event",
             );
         }
+    }
+}
+
+fn apply_peers_snapshot(ctx: &DispatchCtx, peers: Vec<HostPeerSummary>) {
+    if let Ok(mut guard) = ctx.peers_store.lock() {
+        *guard = peers.clone();
+    }
+    if let Ok(mut guard) = ctx.peer_store.lock() {
+        *guard = peers.first().map(peer_record_from_summary);
+    }
+    let _ = ctx.peer_tx.send(aggregate_peer_state(&peers));
+}
+
+fn aggregate_peer_state(peers: &[HostPeerSummary]) -> PeerState {
+    let Some(primary) = peers.iter().find(|peer| peer.online).or_else(|| peers.first()) else {
+        return PeerState::Unpaired;
+    };
+    PeerState::Paired {
+        peer_id: primary.mobile_device_id,
+        peer_name: primary.mobile_device_name.clone(),
+        online: primary.online,
+    }
+}
+
+fn peer_record_from_summary(summary: &HostPeerSummary) -> PeerRecord {
+    let paired_at = Utc
+        .timestamp_millis_opt(summary.paired_at_ms)
+        .single()
+        .unwrap_or_else(Utc::now);
+    PeerRecord {
+        device_id: summary.mobile_device_id,
+        name: summary.mobile_device_name.clone(),
+        paired_at,
     }
 }
 
@@ -582,7 +630,7 @@ async fn handle_inbound_text(text: &str, ctx: &DispatchCtx) -> Result<(), serde_
 /// jsonrpsee surface (forwarded RPC), or the debug log (unexpected kinds).
 async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
     match envelope {
-        Envelope::Event { event, .. } => route_event(event, ctx),
+        Envelope::Event { event, .. } => route_event(event, ctx).await,
         Envelope::Forwarded { from, payload, .. } => {
             let Some(rpc_server) = ctx.rpc_server.clone() else {
                 tracing::warn!(
@@ -621,7 +669,9 @@ async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
     }
 }
 
-fn route_event(event: EventKind, ctx: &DispatchCtx) {
+async fn route_event(event: EventKind, ctx: &DispatchCtx) {
+    let mut should_refresh = false;
+
     match event {
         EventKind::Paired {
             peer_device_id,
@@ -634,14 +684,7 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
                 paired_at: Utc::now(),
             };
             persist_pairing(&record, &your_device_secret, ctx);
-            if let Ok(mut guard) = ctx.peer_store.lock() {
-                *guard = Some(record);
-            }
-            let _ = ctx.peer_tx.send(PeerState::Paired {
-                peer_id: peer_device_id,
-                peer_name,
-                online: true,
-            });
+            should_refresh = true;
         }
         EventKind::Paired {
             your_device_secret: None,
@@ -656,35 +699,9 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
                 "Paired event delivered without your_device_secret on the Mac rail; ignoring"
             );
         }
-        EventKind::PeerOnline { peer_device_id } => {
-            ctx.peer_tx.send_if_modified(|s| match s {
-                PeerState::Paired {
-                    peer_id, online, ..
-                } if *peer_id == peer_device_id && !*online => {
-                    *online = true;
-                    true
-                }
-                _ => false,
-            });
-        }
-        EventKind::PeerOffline { peer_device_id } => {
-            ctx.peer_tx.send_if_modified(|s| match s {
-                PeerState::Paired {
-                    peer_id, online, ..
-                } if *peer_id == peer_device_id && *online => {
-                    *online = false;
-                    true
-                }
-                _ => false,
-            });
-        }
-        EventKind::Unpaired => {
-            clear_pairing(ctx);
-            if let Ok(mut guard) = ctx.peer_store.lock() {
-                *guard = None;
-            }
-            let _ = ctx.peer_tx.send(PeerState::Unpaired);
-        }
+        EventKind::PeerOnline { .. } => should_refresh = true,
+        EventKind::PeerOffline { .. } => should_refresh = true,
+        EventKind::Unpaired => should_refresh = true,
         EventKind::ServerShutdown => {
             // The dispatch loop will observe the socket closing next and
             // fall through to the reconnect path; nothing to do here
@@ -736,6 +753,11 @@ fn route_event(event: EventKind, ctx: &DispatchCtx) {
             }
         }
     }
+
+    if should_refresh {
+        let secret = ctx.secret.lock().ok().and_then(|guard| guard.clone());
+        refresh_peers_from_backend(ctx, secret.as_ref()).await;
+    }
 }
 
 /// Persist the freshly minted host secret and update the live reconnect slot.
@@ -751,14 +773,6 @@ fn persist_pairing(record: &PeerRecord, secret: &DeviceSecret, ctx: &DispatchCtx
         peer = %record.device_id,
         "persisted paired device secret for future reconnects",
     );
-}
-
-/// Mirror of [`persist_pairing`] for `Unpaired`.
-fn clear_pairing(ctx: &DispatchCtx) {
-    if let Ok(mut guard) = ctx.secret.lock() {
-        *guard = None;
-    }
-    clear_device_secret(&ctx.last_error);
 }
 
 /// Map a WS close frame onto the outer `CycleOutcome`, populating
@@ -833,37 +847,48 @@ fn secret_snapshot(slot: &Arc<StdMutex<Option<DeviceSecret>>>) -> Option<DeviceS
     slot.lock().ok().and_then(|guard| guard.clone())
 }
 
-#[cfg(target_os = "macos")]
+fn secret_snapshot_or_reload(
+    slot: &Arc<StdMutex<Option<DeviceSecret>>>,
+    last_error: &Arc<StdMutex<Option<MinosError>>>,
+) -> Option<DeviceSecret> {
+    if let Some(secret) = secret_snapshot(slot) {
+        return Some(secret);
+    }
+
+    match crate::device_secret_store::read() {
+        Ok(Some(secret)) => {
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some(secret.clone());
+            }
+            tracing::info!(
+                target: "minos_daemon::relay_client",
+                "reloaded persisted device secret before reconnect"
+            );
+            Some(secret)
+        }
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                error = %error,
+                "failed to reload persisted device secret before reconnect"
+            );
+            store_last_error(last_error, error);
+            None
+        }
+    }
+}
+
 fn persist_device_secret(secret: &DeviceSecret, last_error: &Arc<StdMutex<Option<MinosError>>>) {
-    let store = crate::keychain_store::KeychainTrustedDeviceStore;
-    if let Err(e) = store.write(secret) {
+    if let Err(e) = crate::device_secret_store::write(secret) {
         tracing::warn!(
             target: "minos_daemon::relay_client",
             error = %e,
-            "failed to persist device secret to Keychain",
+            "failed to persist device secret",
         );
         store_last_error(last_error, e);
     }
 }
-
-#[cfg(not(target_os = "macos"))]
-fn persist_device_secret(_secret: &DeviceSecret, _last_error: &Arc<StdMutex<Option<MinosError>>>) {}
-
-#[cfg(target_os = "macos")]
-fn clear_device_secret(last_error: &Arc<StdMutex<Option<MinosError>>>) {
-    let store = crate::keychain_store::KeychainTrustedDeviceStore;
-    if let Err(e) = store.delete() {
-        tracing::warn!(
-            target: "minos_daemon::relay_client",
-            error = %e,
-            "failed to delete device secret from Keychain",
-        );
-        store_last_error(last_error, e);
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn clear_device_secret(_last_error: &Arc<StdMutex<Option<MinosError>>>) {}
 
 /// Build the outbound auth-header bundle. Role is always `AgentHost` here —
 /// this module is the Mac-side client by construction.

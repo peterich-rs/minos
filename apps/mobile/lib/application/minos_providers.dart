@@ -1,5 +1,6 @@
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart' show FutureProvider;
+import 'package:flutter_riverpod/flutter_riverpod.dart'
+    show AsyncNotifier, AsyncNotifierProvider, FutureProvider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'package:minos/domain/minos_core_protocol.dart';
@@ -41,13 +42,45 @@ final runtimeAgentDescriptorsProvider = FutureProvider<List<AgentDescriptor>>((
   return ref.watch(minosCoreProvider).listClis();
 });
 
+final hostSkillsProvider =
+    FutureProvider.family<List<HostSkillsEntry>, String?>((
+      ref,
+      hostDeviceId,
+    ) async {
+      final response = await ref
+          .watch(minosCoreProvider)
+          .listHostSkills(hostDeviceId: hostDeviceId, forceReload: true);
+      return response.data;
+    });
+
 /// Paired Macs for the current account. Drives the Partners list. Refresh
 /// happens via `ref.invalidate(pairedMacsProvider)` after a forget /
 /// successful pair — there is no polling stream yet, the user can pull
 /// the partners tab to refresh.
-final pairedMacsProvider = FutureProvider<List<HostSummaryDto>>((ref) {
-  return ref.watch(minosCoreProvider).listPairedHosts();
-});
+final pairedMacsProvider =
+    AsyncNotifierProvider<PairedMacs, List<HostSummaryDto>>(PairedMacs.new);
+
+class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
+  @override
+  Future<List<HostSummaryDto>> build() {
+    return ref.watch(minosCoreProvider).listPairedHosts();
+  }
+
+  Future<void> refresh() async {
+    final previous = state;
+    try {
+      state = AsyncValue.data(
+        await ref.read(minosCoreProvider).listPairedHosts(),
+      );
+    } catch (error, stackTrace) {
+      if (previous.hasValue) {
+        state = previous;
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      state = AsyncValue.error(error, stackTrace);
+    }
+  }
+}
 
 /// Routing target for `Forward` envelopes. `null` means no Mac is selected
 /// — the daemon falls back to broadcast-style fan-out when this is unset.

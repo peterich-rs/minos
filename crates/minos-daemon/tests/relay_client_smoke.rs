@@ -113,6 +113,7 @@ fn test_config() -> RelayConfig {
 fn test_persistence() -> PersistenceCtx {
     PersistenceCtx {
         peer_store: Arc::new(StdMutex::new(None)),
+        peers_store: Arc::new(StdMutex::new(Vec::new())),
         last_error: Arc::new(StdMutex::new(None::<MinosError>)),
         // No Reconciliator wired: these smoke tests exercise the
         // relay-client transport, not Phase D reconciliation.

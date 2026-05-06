@@ -10,7 +10,7 @@ use crate::error::TranslationError;
 use crate::message::{MessageRole, ThreadEndReason, UiEventMessage};
 use minos_domain::AgentName;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 /// Per-thread state the translator accumulates while streaming raw codex
@@ -18,11 +18,29 @@ use uuid::Uuid;
 pub struct CodexTranslatorState {
     thread_id: String,
     /// Currently-open assistant message (only one at a time for codex).
+    /// Populated when `item/started` carries `item.type == "agentMessage"`;
+    /// reset when the corresponding `turn/completed` lands.
     open_assistant_message_id: Option<String>,
-    /// Currently-open user message. The exec/jsonl route synthesizes
-    /// `item/userMessage/delta` so confirmed user messages can replace the
-    /// optimistic bubble in the mobile UI.
+    /// Currently-open user message id. Set when an `item/started` with
+    /// `item.type == "userMessage"` arrives — either echoed by codex
+    /// itself, or synthesised by the daemon ahead of `turn/start` (see
+    /// `minos-agent-runtime::manager::send_user_message`). Used so the
+    /// `error` translator can target the user bubble when the failure
+    /// races a still-open user item.
     open_user_message_id: Option<String>,
+    /// Already-emitted message ids — used to dedupe a `MessageStarted` for
+    /// the same `item.id` if the daemon's synthesised echo races with a
+    /// real codex `item/started` carrying the same id. Lookup is bounded
+    /// to the current thread's lifetime; entries never get pruned because
+    /// codex item ids are turn-scoped and one thread's `turn` count is
+    /// bounded in practice.
+    emitted_message_ids: std::collections::HashSet<String>,
+    /// Normalized user texts already seen in the current in-flight turn.
+    /// The daemon synthesizes a durable user item before `turn/start`; some
+    /// app-server versions can also echo that same user item with a distinct
+    /// id. Message ids alone cannot collapse that case, so we suppress a
+    /// second identical user text until the turn completes.
+    pending_user_message_texts: HashSet<String>,
     /// CLI tool-call-id → buffered state (args JSON fragments, stable UUID
     /// the translator assigned when `toolCall/started` was seen, plus the
     /// message id the tool call belongs to).
@@ -43,9 +61,37 @@ impl CodexTranslatorState {
             thread_id,
             open_assistant_message_id: None,
             open_user_message_id: None,
+            emitted_message_ids: std::collections::HashSet::new(),
+            pending_user_message_texts: HashSet::new(),
             tool_calls: HashMap::new(),
         }
     }
+}
+
+/// Concatenate the `text` field of every `Text` variant in a codex
+/// `userMessage.content` array. Non-text inputs (image, mention, skill,
+/// localImage) are not yet rendered as text — they fall through silently
+/// and the resulting string may be empty. Newline-joined so multi-segment
+/// pastes stay readable in the bubble.
+fn collect_user_input_text(content: Option<&Value>) -> String {
+    let Some(Value::Array(arr)) = content else {
+        return String::new();
+    };
+    arr.iter()
+        .filter_map(|el| {
+            let kind = el.get("type").and_then(Value::as_str)?;
+            if kind == "text" {
+                el.get("text").and_then(Value::as_str).map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_user_input_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Translate one raw codex WS notification (or response) into zero or more
@@ -93,44 +139,73 @@ pub fn translate(
             }])
         }
         "item/started" => {
-            let role_raw = params
-                .get("role")
+            // Real codex 2026-04 shape (`crates/minos-codex-protocol`
+            // `ItemStartedNotification`): `params: {item: ThreadItem (tagged
+            // by "type"), threadId, turnId}`. ThreadItem variants we render
+            // in the chat timeline are `userMessage` and `agentMessage`;
+            // anything else (plan, reasoning, hookPrompt, …) flows through
+            // as a `Raw` event so the system surface can still see it
+            // without producing a misleading bubble.
+            //
+            // Item id is supplied by codex (or the daemon when it
+            // synthesises a user echo ahead of `turn/start`); we do NOT
+            // mint a fresh UUID here so that re-translation is idempotent
+            // and the daemon's synth + a hypothetical codex echo of the
+            // same id collapse into a single bubble.
+            let item = params.get("item").cloned().unwrap_or(Value::Null);
+            let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+            let item_id = item
+                .get("id")
                 .and_then(Value::as_str)
-                .unwrap_or("agent");
-            let started_at_ms = params
-                .get("startedAtMs")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            let role = match role_raw {
-                "user" => MessageRole::User,
-                "agent" | "assistant" => MessageRole::Assistant,
-                _ => MessageRole::System,
-            };
-            let message_id = Uuid::new_v4().to_string();
-            if matches!(role, MessageRole::Assistant) {
-                state.open_assistant_message_id = Some(message_id.clone());
-            } else if matches!(role, MessageRole::User) {
-                state.open_user_message_id = Some(message_id.clone());
+                .map_or_else(|| Uuid::new_v4().to_string(), str::to_string);
+
+            match item_type {
+                "userMessage" => {
+                    if !state.emitted_message_ids.insert(item_id.clone()) {
+                        // Duplicate — already emitted MessageStarted for
+                        // this id (synth + codex echo race). Drop silently.
+                        return Ok(vec![]);
+                    }
+                    let text = collect_user_input_text(item.get("content"));
+                    let normalized_text = normalize_user_input_text(&text);
+                    if !normalized_text.is_empty()
+                        && !state.pending_user_message_texts.insert(normalized_text)
+                    {
+                        // Same turn, same user text, different item id:
+                        // daemon synth + app-server echo. Keep the durable
+                        // first row and suppress the transport echo.
+                        return Ok(vec![]);
+                    }
+                    state.open_user_message_id = Some(item_id.clone());
+                    let mut events = vec![UiEventMessage::MessageStarted {
+                        message_id: item_id.clone(),
+                        role: MessageRole::User,
+                        started_at_ms: 0,
+                    }];
+                    if !text.is_empty() {
+                        events.push(UiEventMessage::TextDelta {
+                            message_id: item_id,
+                            text,
+                        });
+                    }
+                    Ok(events)
+                }
+                "agentMessage" => {
+                    if !state.emitted_message_ids.insert(item_id.clone()) {
+                        return Ok(vec![]);
+                    }
+                    state.open_assistant_message_id = Some(item_id.clone());
+                    Ok(vec![UiEventMessage::MessageStarted {
+                        message_id: item_id,
+                        role: MessageRole::Assistant,
+                        started_at_ms: 0,
+                    }])
+                }
+                _ => Ok(vec![UiEventMessage::Raw {
+                    kind: format!("item/started:{item_type}"),
+                    payload_json: serde_json::to_string(&params).unwrap_or_default(),
+                }]),
             }
-            Ok(vec![UiEventMessage::MessageStarted {
-                message_id,
-                role,
-                started_at_ms,
-            }])
-        }
-        "item/userMessage/delta" => {
-            let text = params
-                .get("delta")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let Some(msg_id) = state.open_user_message_id.clone() else {
-                return Ok(vec![]);
-            };
-            Ok(vec![UiEventMessage::TextDelta {
-                message_id: msg_id,
-                text,
-            }])
         }
         "item/agentMessage/delta" => {
             let text = params
@@ -261,6 +336,7 @@ pub fn translate(
                 .get("finishedAtMs")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
+            state.pending_user_message_texts.clear();
             let Some(msg_id) = state.open_assistant_message_id.take() else {
                 return Ok(vec![]);
             };
@@ -346,17 +422,19 @@ mod state_tests {
 
         let o1 = translate(
             &mut s,
-            &val(
-                r#"{"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1}}"#,
-            ),
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"i1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
         )
         .unwrap();
         assert!(matches!(
             o1.as_slice(),
             [UiEventMessage::MessageStarted {
                 role: MessageRole::Assistant,
+                message_id,
                 ..
-            }]
+            }] if message_id == "i1"
         ));
 
         let o2 = translate(
@@ -388,32 +466,127 @@ mod state_tests {
     }
 
     #[test]
-    fn user_message_delta_sequence() {
+    fn user_message_emits_started_and_text_in_one_step() {
+        // Real codex (and the daemon's synth) put the user text inside
+        // `item.content[*].text`; there is no `item/userMessage/delta` in
+        // the 2026-04 protocol.
         let mut s = CodexTranslatorState::new("thr".into());
 
-        let o1 = translate(
+        let out = translate(
             &mut s,
-            &val(
-                r#"{"method":"item/started","params":{"itemId":"u1","role":"user","startedAtMs":1}}"#,
-            ),
+            &val(r#"{"method":"item/started","params":{
+                    "item":{
+                        "type":"userMessage",
+                        "id":"u1",
+                        "content":[{"type":"text","text":"hello"}]
+                    },
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
         )
         .unwrap();
+        assert_eq!(out.len(), 2);
         assert!(matches!(
-            o1.as_slice(),
-            [UiEventMessage::MessageStarted {
+            &out[0],
+            UiEventMessage::MessageStarted {
+                role: MessageRole::User,
+                message_id,
+                ..
+            } if message_id == "u1"
+        ));
+        assert!(matches!(
+            &out[1],
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "u1" && text == "hello"
+        ));
+    }
+
+    #[test]
+    fn duplicate_user_item_started_is_deduped() {
+        // Daemon synth + codex echo can race on the same item.id. The
+        // translator must emit MessageStarted exactly once.
+        let mut s = CodexTranslatorState::new("thr".into());
+        let raw = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"hi"}]},
+                "threadId":"thr","turnId":"t1"
+            }}"#);
+        let first = translate(&mut s, &raw).unwrap();
+        assert_eq!(first.len(), 2);
+        let second = translate(&mut s, &raw).unwrap();
+        assert!(second.is_empty(), "second emission must dedupe: {second:?}");
+    }
+
+    #[test]
+    fn duplicate_user_text_in_same_turn_is_deduped_across_item_ids() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let synth = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"synth-1","content":[{"type":"text","text":"hi there"}]},
+                "threadId":"thr","turnId":""
+            }}"#);
+        let echo = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"echo-1","content":[{"type":"text","text":"hi  there"}]},
+                "threadId":"thr","turnId":"t1"
+            }}"#);
+
+        let first = translate(&mut s, &synth).unwrap();
+        assert_eq!(first.len(), 2);
+        let second = translate(&mut s, &echo).unwrap();
+        assert!(
+            second.is_empty(),
+            "same-turn user echo with a new id must dedupe: {second:?}"
+        );
+    }
+
+    #[test]
+    fn same_user_text_is_allowed_after_turn_completed() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let first_user = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"repeat"}]},
+                "threadId":"thr","turnId":"t1"
+            }}"#);
+        let assistant = val(r#"{"method":"item/started","params":{
+                "item":{"type":"agentMessage","id":"a1","text":""},
+                "threadId":"thr","turnId":"t1"
+            }}"#);
+        let completed = val(r#"{"method":"turn/completed","params":{"finishedAtMs":2}}"#);
+        let second_user = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"u2","content":[{"type":"text","text":"repeat"}]},
+                "threadId":"thr","turnId":"t2"
+            }}"#);
+
+        assert_eq!(translate(&mut s, &first_user).unwrap().len(), 2);
+        assert_eq!(translate(&mut s, &assistant).unwrap().len(), 1);
+        assert_eq!(translate(&mut s, &completed).unwrap().len(), 1);
+        let second = translate(&mut s, &second_user).unwrap();
+        assert_eq!(second.len(), 2);
+        assert!(matches!(
+            &second[0],
+            UiEventMessage::MessageStarted {
+                role: MessageRole::User,
+                message_id,
+                ..
+            } if message_id == "u2"
+        ));
+    }
+
+    #[test]
+    fn user_message_with_empty_content_emits_started_only() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"userMessage","id":"u_empty","content":[]},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(matches!(
+            &out[0],
+            UiEventMessage::MessageStarted {
                 role: MessageRole::User,
                 ..
-            }]
+            }
         ));
-
-        let o2 = translate(
-            &mut s,
-            &val(r#"{"method":"item/userMessage/delta","params":{"itemId":"u1","delta":"hello"}}"#),
-        )
-        .unwrap();
-        assert!(
-            matches!(o2.as_slice(), [UiEventMessage::TextDelta { text, .. }] if text == "hello")
-        );
     }
 
     #[test]
@@ -441,9 +614,10 @@ mod state_tests {
         // Bracket with a MessageStarted so the tool is associated.
         let _ = translate(
             &mut s,
-            &val(
-                r#"{"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1}}"#,
-            ),
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"i1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
         )
         .unwrap();
 

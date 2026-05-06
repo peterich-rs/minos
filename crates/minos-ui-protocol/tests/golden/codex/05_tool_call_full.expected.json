@@ -1,13 +1,13 @@
 [
   {
     "kind":"message_started",
-    "message_id":"<uuid>",
+    "message_id":"i1",
     "role":"assistant",
-    "started_at_ms":1714000006000
+    "started_at_ms":0
   },
   {
     "kind":"tool_call_placed",
-    "message_id":"<uuid>",
+    "message_id":"i1",
     "tool_call_id":"<uuid>",
     "name":"apply_patch",
     "args_json":"{\"diff\":\"...\"}"

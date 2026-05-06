@@ -11,6 +11,11 @@ part of 'thread_events_provider.dart';
 /// Loads the translated history for one thread and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
+///
+/// `keepAlive: true` so navigating away from the chat page does not drop the
+/// in-memory event list and live subscription. Re-entry then renders cached
+/// history instantly instead of flashing a center spinner and re-fetching
+/// from the daemon.
 
 @ProviderFor(ThreadEvents)
 final threadEventsProvider = ThreadEventsFamily._();
@@ -18,18 +23,28 @@ final threadEventsProvider = ThreadEventsFamily._();
 /// Loads the translated history for one thread and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
+///
+/// `keepAlive: true` so navigating away from the chat page does not drop the
+/// in-memory event list and live subscription. Re-entry then renders cached
+/// history instantly instead of flashing a center spinner and re-fetching
+/// from the daemon.
 final class ThreadEventsProvider
     extends $AsyncNotifierProvider<ThreadEvents, List<UiEventMessage>> {
   /// Loads the translated history for one thread and keeps it live by
   /// listening to the backend's fan-out. Per-thread watermark dedup keeps
   /// the view consistent with the backend's raw_events seq (spec §9.1).
+  ///
+  /// `keepAlive: true` so navigating away from the chat page does not drop the
+  /// in-memory event list and live subscription. Re-entry then renders cached
+  /// history instantly instead of flashing a center spinner and re-fetching
+  /// from the daemon.
   ThreadEventsProvider._({
     required ThreadEventsFamily super.from,
     required String super.argument,
   }) : super(
          retry: null,
          name: r'threadEventsProvider',
-         isAutoDispose: true,
+         isAutoDispose: false,
          dependencies: null,
          $allTransitiveDependencies: null,
        );
@@ -59,11 +74,16 @@ final class ThreadEventsProvider
   }
 }
 
-String _$threadEventsHash() => r'594f36fc8a6bf1e1f3e815894405ff7d5dc5f77d';
+String _$threadEventsHash() => r'055a9b14f3dbcc182db87ff8ebbb30e7e221bf95';
 
 /// Loads the translated history for one thread and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
+///
+/// `keepAlive: true` so navigating away from the chat page does not drop the
+/// in-memory event list and live subscription. Re-entry then renders cached
+/// history instantly instead of flashing a center spinner and re-fetching
+/// from the daemon.
 
 final class ThreadEventsFamily extends $Family
     with
@@ -80,12 +100,17 @@ final class ThreadEventsFamily extends $Family
         name: r'threadEventsProvider',
         dependencies: null,
         $allTransitiveDependencies: null,
-        isAutoDispose: true,
+        isAutoDispose: false,
       );
 
   /// Loads the translated history for one thread and keeps it live by
   /// listening to the backend's fan-out. Per-thread watermark dedup keeps
   /// the view consistent with the backend's raw_events seq (spec §9.1).
+  ///
+  /// `keepAlive: true` so navigating away from the chat page does not drop the
+  /// in-memory event list and live subscription. Re-entry then renders cached
+  /// history instantly instead of flashing a center spinner and re-fetching
+  /// from the daemon.
 
   ThreadEventsProvider call(String threadId) =>
       ThreadEventsProvider._(argument: threadId, from: this);
@@ -97,6 +122,11 @@ final class ThreadEventsFamily extends $Family
 /// Loads the translated history for one thread and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
+///
+/// `keepAlive: true` so navigating away from the chat page does not drop the
+/// in-memory event list and live subscription. Re-entry then renders cached
+/// history instantly instead of flashing a center spinner and re-fetching
+/// from the daemon.
 
 abstract class _$ThreadEvents extends $AsyncNotifier<List<UiEventMessage>> {
   late final _$args = ref.$arg as String;

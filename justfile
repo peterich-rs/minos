@@ -179,9 +179,30 @@ dev-mobile-ios:
         --dart-define=CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
         --dart-define=CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
 
+# Hot-reload Android workflow. Mirrors `dev-mobile-ios` so Android debug runs
+# stay on the same `.env.local` / cargokit path as release builds.
+dev-mobile-android:
+    @just check-env >/dev/null
+    @if [ -z "${MINOS_BACKEND_URL:-}" ]; then \
+        echo "error: MINOS_BACKEND_URL required for dev-mobile-android"; \
+        exit 1; \
+    fi
+    cd apps/mobile && \
+    MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
+    flutter run \
+        -d android \
+        --dart-define=CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
+        --dart-define=CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
+
 # Build Android APK with just-loaded env passthrough.
 build-mobile-android:
     @just check-env >/dev/null
+    @if [ -z "${MINOS_BACKEND_URL:-}" ]; then \
+        echo "error: MINOS_BACKEND_URL required for build-mobile-android"; \
+        exit 1; \
+    fi
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
     CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \

@@ -20,7 +20,8 @@ class StreamingText extends StatelessWidget {
     super.key,
     required this.messageId,
     required this.accumulatedText,
-    required this.isComplete,
+    required this.showCursor,
+    this.statusLines = const <MessageBubbleStatusLine>[],
   });
 
   /// The `message_id` from the bridging `UiEventMessage`s. Carried for
@@ -32,17 +33,21 @@ class StreamingText extends StatelessWidget {
   /// message, in arrival order.
   final String accumulatedText;
 
-  /// True once `UiEventMessage_MessageCompleted` has fired for this
-  /// message; flips off the streaming cursor.
-  final bool isComplete;
+  /// True while this message owns the live cursor.
+  final bool showCursor;
+
+  /// Compact activity rows rendered below the message body while the turn is
+  /// still active.
+  final List<MessageBubbleStatusLine> statusLines;
 
   @override
   Widget build(BuildContext context) {
     final hasText = accumulatedText.isNotEmpty;
     return MessageBubble(
       isUser: false,
-      markdownContent: hasText ? accumulatedText : '_thinking…_',
-      isStreaming: !isComplete,
+      markdownContent: hasText ? accumulatedText : '_处理中…_',
+      isStreaming: showCursor,
+      statusLines: statusLines,
     );
   }
 }

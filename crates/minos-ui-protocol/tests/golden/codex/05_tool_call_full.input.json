@@ -1,5 +1,8 @@
 [
-  {"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1714000006000}},
+  {"method":"item/started","params":{
+    "item":{"type":"agentMessage","id":"i1","text":""},
+    "threadId":"thr_fixture","turnId":"t1"
+  }},
   {"method":"item/toolCall/started","params":{"itemId":"i1","toolCallId":"tc_1","name":"apply_patch"}},
   {"method":"item/toolCall/arguments","params":{"toolCallId":"tc_1","argumentsDelta":"{\"diff\":"}},
   {"method":"item/toolCall/arguments","params":{"toolCallId":"tc_1","argumentsDelta":"\"...\"}"}},

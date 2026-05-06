@@ -71,65 +71,115 @@ class _InputBarState extends State<InputBar> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final shadTheme = ShadTheme.of(context);
+    final materialTheme = Theme.of(context);
     final overLimit = _ctl.text.length > _maxChars;
+    final helperText = _isStreaming ? 'Agent 正在回复，可随时停止。' : '准备好后发送，可连续追问。';
     return SafeArea(
       top: false,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+      child: DecoratedBox(
         decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          border: Border(
-            top: BorderSide(color: theme.colorScheme.outlineVariant),
-          ),
+          color: shadTheme.colorScheme.background,
+          border: Border(top: BorderSide(color: shadTheme.colorScheme.border)),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: ShadInput(
-                    controller: _ctl,
-                    focusNode: _focus,
-                    placeholder: const Text('输入消息…'),
-                    minLines: 1,
-                    maxLines: 4,
-                    enabled: !_isStreaming,
-                    onChanged: (_) => setState(() {}),
-                  ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ShadInput(
+                controller: _ctl,
+                focusNode: _focus,
+                minLines: 1,
+                maxLines: 6,
+                enabled: !_isStreaming,
+                textCapitalization: TextCapitalization.sentences,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                onChanged: (_) => setState(() {}),
+                placeholder: const Text('继续追问，或让它帮你完成下一步...'),
+                style: materialTheme.textTheme.bodyMedium?.copyWith(
+                  height: 1.35,
                 ),
-                const SizedBox(width: 8),
-                if (_isStreaming)
-                  ShadButton.destructive(
-                    onPressed: widget.onStop,
-                    child: const Text('停止'),
-                  )
-                else
-                  ShadButton(
-                    enabled: _canSend,
-                    onPressed: _canSend ? _submit : null,
-                    child: const Text('发送'),
-                  ),
-              ],
-            ),
-            if (overLimit)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '${_ctl.text.length} / $_maxChars 字符',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.error,
-                    ),
-                  ),
+                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                trailing: _ComposerActionButton(
+                  icon: _isStreaming
+                      ? LucideIcons.circleStop
+                      : LucideIcons.sendHorizontal,
+                  onTap: _isStreaming
+                      ? widget.onStop
+                      : (_canSend ? _submit : null),
+                  destructive: _isStreaming,
+                  enabled: _isStreaming || _canSend,
                 ),
               ),
-          ],
+              const SizedBox(height: 7),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      overLimit
+                          ? '${_ctl.text.length} / $_maxChars 字符'
+                          : helperText,
+                      style: shadTheme.textTheme.muted.copyWith(
+                        color: overLimit
+                            ? shadTheme.colorScheme.destructive
+                            : shadTheme.colorScheme.mutedForeground,
+                      ),
+                    ),
+                  ),
+                  if (!overLimit && !_isStreaming)
+                    Icon(
+                      LucideIcons.sparkles,
+                      size: 14,
+                      color: shadTheme.colorScheme.mutedForeground,
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _ComposerActionButton extends StatelessWidget {
+  const _ComposerActionButton({
+    required this.icon,
+    required this.onTap,
+    required this.destructive,
+    required this.enabled,
+  });
+
+  final IconData icon;
+  final VoidCallback? onTap;
+  final bool destructive;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final button = destructive
+        ? ShadIconButton.destructive(
+            icon: Icon(icon),
+            iconSize: 18,
+            width: 36,
+            height: 36,
+            enabled: enabled,
+            onPressed: onTap,
+          )
+        : ShadIconButton(
+            icon: Icon(icon),
+            iconSize: 18,
+            width: 36,
+            height: 36,
+            enabled: enabled,
+            onPressed: onTap,
+          );
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 160),
+      opacity: enabled ? 1 : 0.6,
+      child: button,
     );
   }
 }

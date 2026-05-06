@@ -1,5 +1,8 @@
 use crate::codex_client::CodexClient;
-use minos_codex_protocol::{ThreadResumeParams, TurnInterruptParams, TurnStartParams, UserInput};
+use minos_codex_protocol::{
+    AbsolutePathBuf, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
+    SkillsListResponse, ThreadResumeParams, TurnInterruptParams, TurnStartParams, UserInput,
+};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,6 +15,8 @@ use tokio::sync::{mpsc, Mutex};
 const TURN_START_TIMEOUT: Duration = Duration::from_secs(10);
 const RESUME_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_FALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
+const SKILLS_LIST_TIMEOUT: Duration = Duration::from_secs(10);
+const SKILLS_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct AppServerInstance {
     pub workspace: PathBuf,
@@ -127,6 +132,38 @@ impl AppServerInstance {
             .map_err(|_| anyhow::anyhow!("turn/start timeout"))?
             .map_err(|e| anyhow::anyhow!("turn/start failed: {e}"))?;
         Ok(())
+    }
+
+    pub(crate) async fn list_host_skills(
+        &self,
+        cwd: &Path,
+        force_reload: bool,
+    ) -> anyhow::Result<SkillsListResponse> {
+        let params = SkillsListParams {
+            cwds: vec![cwd.display().to_string()],
+            force_reload: force_reload.then_some(true),
+            per_cwd_extra_user_roots: None,
+        };
+        tokio::time::timeout(SKILLS_LIST_TIMEOUT, self.client.call_typed(params))
+            .await
+            .map_err(|_| anyhow::anyhow!("skills/list timeout"))?
+            .map_err(|e| anyhow::anyhow!("skills/list failed: {e}"))
+    }
+
+    pub(crate) async fn write_host_skill_config(
+        &self,
+        path: &Path,
+        enabled: bool,
+    ) -> anyhow::Result<SkillsConfigWriteResponse> {
+        let params = SkillsConfigWriteParams {
+            enabled,
+            name: None,
+            path: Some(AbsolutePathBuf(path.display().to_string())),
+        };
+        tokio::time::timeout(SKILLS_WRITE_TIMEOUT, self.client.call_typed(params))
+            .await
+            .map_err(|_| anyhow::anyhow!("skills/config/write timeout"))?
+            .map_err(|e| anyhow::anyhow!("skills/config/write failed: {e}"))
     }
 
     /// Best-effort interrupt of an in-flight turn. Sends `turn/interrupt`; the

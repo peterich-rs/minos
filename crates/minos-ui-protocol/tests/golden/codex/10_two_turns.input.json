@@ -1,8 +1,14 @@
 [
-  {"method":"item/started","params":{"itemId":"a1","role":"agent","startedAtMs":1}},
+  {"method":"item/started","params":{
+    "item":{"type":"agentMessage","id":"a1","text":""},
+    "threadId":"thr_fixture","turnId":"t1"
+  }},
   {"method":"item/agentMessage/delta","params":{"itemId":"a1","delta":"one"}},
   {"method":"turn/completed","params":{"finishedAtMs":2}},
-  {"method":"item/started","params":{"itemId":"a2","role":"agent","startedAtMs":3}},
+  {"method":"item/started","params":{
+    "item":{"type":"agentMessage","id":"a2","text":""},
+    "threadId":"thr_fixture","turnId":"t2"
+  }},
   {"method":"item/agentMessage/delta","params":{"itemId":"a2","delta":"two"}},
   {"method":"turn/completed","params":{"finishedAtMs":4}}
 ]

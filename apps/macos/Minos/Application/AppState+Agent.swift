@@ -1,7 +1,4 @@
 import Foundation
-import OSLog
-
-private let agentLogger = Logger(subsystem: "ai.minos.macos", category: "appState.agent")
 
 /// Agent-axis methods on AppState. Lives in its own file so the core
 /// AppState type body stays under the swiftlint type-body-length cap.
@@ -33,28 +30,22 @@ extension AppState {
         currentSession = nil
 
         let modeLabel = mode.logLabel
-        agentLogger.info("startAgent requested · mode=\(modeLabel, privacy: .public)")
+        AppLog.info("appState.agent", "startAgent requested · mode=\(modeLabel)")
 
         do {
             let session = try await daemon.startAgent(
                 .init(agent: .codex, workspace: "", mode: mode)
             )
             currentSession = session
-            agentLogger.info(
-                "startAgent ok · mode=\(modeLabel, privacy: .public) · sessionId=\(session.sessionId, privacy: .public)"
-            )
+            AppLog.info("appState.agent", "startAgent ok · mode=\(modeLabel) · sessionId=\(session.sessionId)")
         } catch let error as MinosError {
             currentSession = nil
             agentState = .idle
-            agentLogger.error(
-                "startAgent failed · mode=\(modeLabel, privacy: .public) · \(error.technicalDetails, privacy: .public)"
-            )
+            AppLog.error("appState.agent", "startAgent failed · mode=\(modeLabel) · \(error.technicalDetails)")
             presentAgentError(error)
         } catch {
             let detail = String(describing: error)
-            agentLogger.error(
-                "Unexpected start-agent error · mode=\(modeLabel, privacy: .public) · \(detail, privacy: .public)"
-            )
+            AppLog.error("appState.agent", "Unexpected start-agent error · mode=\(modeLabel) · \(detail)")
         }
     }
 
@@ -63,19 +54,17 @@ extension AppState {
         guard phase == .running, let daemon, let currentSession else { return }
 
         clearAgentError()
-        agentLogger.info(
-            "sendUserMessage(ping) · sessionId=\(currentSession.sessionId, privacy: .public)"
-        )
+        AppLog.info("appState.agent", "sendUserMessage(ping) · sessionId=\(currentSession.sessionId)")
 
         do {
             try await daemon.sendUserMessage(.init(sessionId: currentSession.sessionId, text: "ping"))
         } catch let error as MinosError {
             self.currentSession = nil
             agentState = .idle
-            agentLogger.error("sendUserMessage(ping) failed · \(error.technicalDetails, privacy: .public)")
+            AppLog.error("appState.agent", "sendUserMessage(ping) failed · \(error.technicalDetails)")
             presentAgentError(error)
         } catch {
-            agentLogger.error("Unexpected agent ping error: \(String(describing: error), privacy: .public)")
+            AppLog.error("appState.agent", "Unexpected agent ping error: \(String(describing: error))")
         }
     }
 
@@ -89,19 +78,19 @@ extension AppState {
 
         clearAgentError()
         let threadId = session.sessionId
-        agentLogger.info("stopAgent requested · threadId=\(threadId, privacy: .public)")
+        AppLog.info("appState.agent", "stopAgent requested · threadId=\(threadId)")
 
         do {
             try await daemon.closeThread(.init(threadId: threadId))
             currentSession = nil
-            agentLogger.info("stopAgent ok")
+            AppLog.info("appState.agent", "stopAgent ok")
         } catch let error as MinosError {
             currentSession = nil
             agentState = .idle
-            agentLogger.error("stopAgent failed · \(error.technicalDetails, privacy: .public)")
+            AppLog.error("appState.agent", "stopAgent failed · \(error.technicalDetails)")
             presentAgentError(error)
         } catch {
-            agentLogger.error("Unexpected stop-agent error: \(String(describing: error), privacy: .public)")
+            AppLog.error("appState.agent", "Unexpected stop-agent error: \(String(describing: error))")
         }
     }
 
@@ -118,7 +107,7 @@ extension AppState {
 
     @MainActor
     func presentAgentError(_ error: MinosError) {
-        agentLogger.error("Presenting agent error: \(error.technicalDetails, privacy: .public)")
+        AppLog.error("appState.agent", "Presenting agent error: \(error.technicalDetails)")
         agentErrorTask?.cancel()
         agentError = error
         agentErrorTask = Task { [weak self] in

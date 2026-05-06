@@ -25,19 +25,24 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     var currentAgentStateValue: ThreadState
     var currentTrustedDeviceValue: PeerRecord?
     var currentTrustedDeviceError: MinosError?
+    var currentPeersValue: [HostPeerSummary]
+    var currentPeersError: MinosError?
     var pairingQrResult: Result<RelayQrPayload, MinosError>
     var forgetPeerError: MinosError?
+    var forgetPeerDeviceError: MinosError?
     var startAgentResult: Result<StartAgentResponse, MinosError>
     var sendUserMessageError: MinosError?
     var interruptThreadError: MinosError?
     var closeThreadError: MinosError?
     var stopError: MinosError?
+    var stopHook: (@Sendable () async -> Void)?
 
     let relayLinkSubscription: MockSubscription
     let peerSubscription: MockSubscription
     let agentSubscription: MockSubscription
 
     private(set) var forgetPeerCallCount = 0
+    private(set) var forgetPeerDeviceCalls: [DeviceId] = []
     private(set) var pairingQrCallCount = 0
     private(set) var startAgentCalls: [StartAgentRequest] = []
     private(set) var sendUserMessageCalls: [SendUserMessageRequest] = []
@@ -56,6 +61,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         currentPeer: PeerState = .unpaired,
         currentAgentState: ThreadState = .idle,
         currentTrustedDevice: PeerRecord? = nil,
+        currentPeers: [HostPeerSummary]? = nil,
         pairingQrResult: Result<RelayQrPayload, MinosError> = .success(MockDaemon.makeQrPayload()),
         startAgentResult: Result<StartAgentResponse, MinosError> = .success(
             MockDaemon.makeStartAgentResponse()
@@ -68,6 +74,10 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         currentPeerValue = currentPeer
         currentAgentStateValue = currentAgentState
         currentTrustedDeviceValue = currentTrustedDevice
+        currentPeersValue = currentPeers ?? MockDaemon.defaultPeers(
+            trustedDevice: currentTrustedDevice,
+            peer: currentPeer
+        )
         self.pairingQrResult = pairingQrResult
         self.startAgentResult = startAgentResult
         self.relayLinkSubscription = relayLinkSubscription
@@ -88,6 +98,13 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         return currentTrustedDeviceValue
     }
 
+    func currentPeers() async throws -> [HostPeerSummary] {
+        if let currentPeersError {
+            throw currentPeersError
+        }
+        return currentPeersValue
+    }
+
     func pairingQr() async throws -> RelayQrPayload {
         pairingQrCallCount += 1
         return try pairingQrResult.get()
@@ -98,13 +115,24 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         if let forgetPeerError {
             throw forgetPeerError
         }
-        // Mirror the relay's behaviour: a successful ForgetPeer pushes an
-        // Unpaired event to the peer observer shortly after. Tests can
-        // pre-empt this by setting `currentPeerValue = .unpaired` directly.
+        if let firstPeer = currentPeersValue.first {
+            applyForgottenPeer(firstPeer.mobileDeviceId)
+        }
+    }
+
+    func forgetPeerDevice(_ mobileDeviceId: DeviceId) async throws {
+        forgetPeerDeviceCalls.append(mobileDeviceId)
+        if let forgetPeerDeviceError {
+            throw forgetPeerDeviceError
+        }
+        applyForgottenPeer(mobileDeviceId)
     }
 
     func stop() async throws {
         stopCallCount += 1
+        if let stopHook {
+            await stopHook()
+        }
         if let stopError {
             throw stopError
         }
@@ -169,6 +197,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     /// snapshot value.
     func emitPeer(_ state: PeerState) {
         currentPeerValue = state
+        syncPeersFromState(state)
         for observer in peerObservers {
             observer.onState(state: state)
         }
@@ -209,5 +238,111 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         pairedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
     ) -> PeerRecord {
         PeerRecord(deviceId: deviceId, name: name, pairedAt: pairedAt)
+    }
+
+    static func makePeerSummary(
+        deviceId: DeviceId = UUID().uuidString.lowercased(),
+        deviceName: String = "Alice's iPhone",
+        accountEmail: String = "alice@example.com",
+        pairedAtMs: Int64 = 1_700_000_000_000,
+        lastActiveAtMs: Int64 = 1_700_000_000_000,
+        online: Bool = true
+    ) -> HostPeerSummary {
+        HostPeerSummary(
+            mobileDeviceId: deviceId,
+            mobileDeviceName: deviceName,
+            accountEmail: accountEmail,
+            pairedAtMs: pairedAtMs,
+            lastActiveAtMs: lastActiveAtMs,
+            online: online
+        )
+    }
+
+    private static func defaultPeers(trustedDevice: PeerRecord?, peer: PeerState) -> [HostPeerSummary] {
+        if let trustedDevice {
+            let online: Bool
+            switch peer {
+            case let .paired(peerId, _, isOnline) where peerId == trustedDevice.deviceId:
+                online = isOnline
+            default:
+                online = false
+            }
+            return [
+                makePeerSummary(
+                    deviceId: trustedDevice.deviceId,
+                    deviceName: trustedDevice.name,
+                    accountEmail: "",
+                    pairedAtMs: Int64(trustedDevice.pairedAt.timeIntervalSince1970 * 1000),
+                    lastActiveAtMs: Int64(trustedDevice.pairedAt.timeIntervalSince1970 * 1000),
+                    online: online
+                )
+            ]
+        }
+
+        if case let .paired(peerId, peerName, online) = peer {
+            return [makePeerSummary(deviceId: peerId, deviceName: peerName, accountEmail: "", online: online)]
+        }
+
+        return []
+    }
+
+    private func applyForgottenPeer(_ mobileDeviceId: DeviceId) {
+        currentPeersValue.removeAll { $0.mobileDeviceId == mobileDeviceId }
+        if currentPeersValue.isEmpty {
+            currentPeerValue = .unpaired
+            currentTrustedDeviceValue = nil
+        } else {
+            let primary = currentPeersValue.first(where: { $0.online }) ?? currentPeersValue[0]
+            currentPeerValue = .paired(
+                peerId: primary.mobileDeviceId,
+                peerName: primary.mobileDeviceName,
+                online: primary.online
+            )
+            currentTrustedDeviceValue = AppState.peerRecord(primary)
+        }
+    }
+
+    private func syncPeersFromState(_ state: PeerState) {
+        switch state {
+        case let .paired(peerId, peerName, online):
+            if currentPeersValue.isEmpty {
+                let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                currentPeersValue = [
+                    MockDaemon.makePeerSummary(
+                        deviceId: peerId,
+                        deviceName: peerName,
+                        accountEmail: "",
+                        pairedAtMs: nowMs,
+                        lastActiveAtMs: nowMs,
+                        online: online
+                    )
+                ]
+            } else if currentPeersValue.count == 1 {
+                if currentPeersValue[0].mobileDeviceId == peerId {
+                    currentPeersValue[0].mobileDeviceName = peerName
+                    currentPeersValue[0].online = online
+                } else {
+                    let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                    currentPeersValue = [
+                        MockDaemon.makePeerSummary(
+                            deviceId: peerId,
+                            deviceName: peerName,
+                            accountEmail: "",
+                            pairedAtMs: nowMs,
+                            lastActiveAtMs: nowMs,
+                            online: online
+                        )
+                    ]
+                }
+            }
+            if currentTrustedDeviceValue?.deviceId != peerId {
+                currentTrustedDeviceValue = PeerRecord(deviceId: peerId, name: peerName, pairedAt: Date())
+            }
+        case .unpaired:
+            currentPeersValue = []
+            currentTrustedDeviceValue = nil
+        case .pairing:
+            break
+        }
     }
 }

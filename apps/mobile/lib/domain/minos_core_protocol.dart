@@ -39,6 +39,46 @@ abstract class MinosCoreProtocol {
   /// clear the stored value.
   Future<void> setPeerDisplayName(String? name);
 
+  Future<MyProfileResponse> myProfile();
+
+  Future<MyProfileResponse> setMinosId({required String minosId});
+
+  Future<List<UserSummary>> searchUsers({required String minosId});
+
+  Future<FriendRequestSummary> createFriendRequest({
+    required String targetMinosId,
+  });
+
+  Future<FriendRequestsResponse> friendRequests();
+
+  Future<FriendRequestSummary> acceptFriendRequest({required String requestId});
+
+  Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
+
+  Future<FriendsResponse> friends();
+
+  Future<ConversationsResponse> conversations();
+
+  Future<ConversationResponse> ensureDirectConversation({
+    required String friendAccountId,
+  });
+
+  Future<ConversationResponse> createGroupConversation({
+    required String title,
+    required List<String> memberAccountIds,
+  });
+
+  Future<ListChatMessagesResponse> listChatMessages({
+    required String conversationId,
+    int? beforeTsMs,
+    int limit = 50,
+  });
+
+  Future<ChatMessageSummary> sendChatMessage({
+    required String conversationId,
+    required String text,
+  });
+
   /// Paged thread summaries for the paired agent-host.
   Future<ListThreadsResponse> listThreads(ListThreadsParams params);
 
@@ -105,6 +145,19 @@ abstract class MinosCoreProtocol {
 
   /// Detect CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
+
+  /// Scan host-side skills for the selected runtime host.
+  Future<ListHostSkillsResponse> listHostSkills({
+    String? hostDeviceId,
+    bool forceReload = true,
+  });
+
+  /// Enable or disable one host-side skill by path.
+  Future<WriteHostSkillConfigResponse> writeHostSkillConfig({
+    String? hostDeviceId,
+    required String path,
+    required bool enabled,
+  });
 
   // ---- Lifecycle (Phase 8) ----
 

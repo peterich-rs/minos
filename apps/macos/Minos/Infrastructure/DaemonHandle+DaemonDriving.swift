@@ -8,6 +8,10 @@ extension DaemonHandle: DaemonDriving {
     // uses positional names for ergonomics. These thin shims bridge the
     // two without losing the trailing-closure-style call sites in
     // SwiftUI views.
+    func forgetPeerDevice(_ mobileDeviceId: DeviceId) async throws {
+        try await forgetPeerDevice(mobileDeviceId: mobileDeviceId)
+    }
+
     func startAgent(_ req: StartAgentRequest) async throws -> StartAgentResponse {
         try await startAgent(req: req)
     }

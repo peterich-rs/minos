@@ -27,10 +27,14 @@ use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{AgentName, ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
-    AuthSummary, Envelope, EventKind, GetThreadLastSeqParams, GetThreadLastSeqResponse,
-    HostSummary, ListClisResponse, ListThreadsParams, ListThreadsResponse, PairingQrPayload,
-    ReadThreadParams, ReadThreadResponse, RefreshResponse, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse,
+    AuthSummary, ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
+    CreateGroupConversationRequest, EnsureDirectConversationRequest, Envelope, EventKind,
+    FriendRequestSummary, FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams,
+    GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse, ListClisResponse,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
+    MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
+    SendChatMessageRequest, SendUserMessageRequest, SetMinosIdRequest, StartAgentRequest,
+    StartAgentResponse, UserSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, RwLock};
@@ -425,7 +429,12 @@ impl MobileClient {
         // both device-secret hashes and pushes Event::Paired to the Mac
         // before returning, so by the time we get the response the Mac is
         // already updated.
-        let http = crate::http::MobileHttpClient::new(backend_url, self.device_id, cf.clone())?;
+        let http = crate::http::MobileHttpClient::new(
+            backend_url,
+            self.device_id,
+            self.self_name.clone(),
+            cf.clone(),
+        )?;
         let pair_resp = http
             .pair_consume(
                 minos_protocol::PairConsumeRequest {
@@ -463,7 +472,12 @@ impl MobileClient {
 
         // Best-effort delete on the backend. Failure here must not block
         // local cleanup — the user re-pairs to recover.
-        if let Ok(http) = crate::http::MobileHttpClient::new(backend_url, self.device_id, cf) {
+        if let Ok(http) = crate::http::MobileHttpClient::new(
+            backend_url,
+            self.device_id,
+            self.self_name.clone(),
+            cf,
+        ) {
             let _ = http.delete_pair(&access, host).await;
         }
 
@@ -515,6 +529,125 @@ impl MobileClient {
         let http = self.http_client_no_secret()?;
         let resp = http.list_paired_hosts(&access).await?;
         Ok(resp.hosts)
+    }
+
+    pub async fn my_profile(&self) -> Result<MyProfileResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?.my_profile(&access).await
+    }
+
+    pub async fn set_minos_id(&self, minos_id: String) -> Result<MyProfileResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .set_minos_id(&access, SetMinosIdRequest { minos_id })
+            .await
+    }
+
+    pub async fn search_users(&self, minos_id: String) -> Result<Vec<UserSummary>, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        let resp = self
+            .http_client_no_secret()?
+            .search_users(&access, &minos_id)
+            .await?;
+        Ok(resp.users)
+    }
+
+    pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?.friends(&access).await
+    }
+
+    pub async fn create_friend_request(
+        &self,
+        target_minos_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .create_friend_request(&access, CreateFriendRequestRequest { target_minos_id })
+            .await
+    }
+
+    pub async fn friend_requests(&self) -> Result<FriendRequestsResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?.friend_requests(&access).await
+    }
+
+    pub async fn accept_friend_request(
+        &self,
+        request_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .accept_friend_request(&access, &request_id)
+            .await
+    }
+
+    pub async fn reject_friend_request(
+        &self,
+        request_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .reject_friend_request(&access, &request_id)
+            .await
+    }
+
+    pub async fn conversations(&self) -> Result<ConversationsResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?.conversations(&access).await
+    }
+
+    pub async fn ensure_direct_conversation(
+        &self,
+        friend_account_id: String,
+    ) -> Result<ConversationResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .ensure_direct_conversation(
+                &access,
+                EnsureDirectConversationRequest { friend_account_id },
+            )
+            .await
+    }
+
+    pub async fn create_group_conversation(
+        &self,
+        title: String,
+        member_account_ids: Vec<String>,
+    ) -> Result<ConversationResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .create_group_conversation(
+                &access,
+                CreateGroupConversationRequest {
+                    title,
+                    member_account_ids,
+                },
+            )
+            .await
+    }
+
+    pub async fn list_chat_messages(
+        &self,
+        conversation_id: String,
+        before_ts_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<ListChatMessagesResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .list_chat_messages(&access, &conversation_id, before_ts_ms, limit)
+            .await
+    }
+
+    pub async fn send_chat_message(
+        &self,
+        conversation_id: String,
+        text: String,
+    ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .send_chat_message(&access, &conversation_id, SendChatMessageRequest { text })
+            .await
     }
 
     /// Override the active forward target. Subsequent `Envelope::Forward`
@@ -578,6 +711,94 @@ impl MobileClient {
             Some(RpcTraceContext {
                 thread_id: None,
                 request_summary: Some("detect runtime CLI agents".into()),
+            }),
+        )
+        .await?;
+        Ok(resp)
+    }
+
+    /// Scan the host-side skills exposed by the selected runtime.
+    pub async fn list_host_skills(
+        &self,
+        host_device_id: Option<String>,
+        force_reload: bool,
+    ) -> Result<ListHostSkillsResponse, MinosError> {
+        let outbox = self
+            .outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or(MinosError::NotConnected)?;
+        let target = if let Some(host_device_id) = host_device_id {
+            Uuid::parse_str(&host_device_id)
+                .map(DeviceId)
+                .map_err(|_| MinosError::RpcCallFailed {
+                    method: "minos_list_host_skills".into(),
+                    message: format!("invalid host_device_id: {host_device_id}"),
+                })?
+        } else {
+            self.require_active_host().await?
+        };
+        let req = ListHostSkillsRequest {
+            workspace: String::new(),
+            force_reload,
+        };
+        let resp: ListHostSkillsResponse = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            target,
+            "minos_list_host_skills",
+            req,
+            Duration::from_secs(15),
+            Some(RpcTraceContext {
+                thread_id: None,
+                request_summary: Some(format!("force_reload={force_reload}")),
+            }),
+        )
+        .await?;
+        Ok(resp)
+    }
+
+    /// Enable or disable one host-side skill by path.
+    pub async fn write_host_skill_config(
+        &self,
+        host_device_id: Option<String>,
+        path: String,
+        enabled: bool,
+    ) -> Result<WriteHostSkillConfigResponse, MinosError> {
+        let outbox = self
+            .outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or(MinosError::NotConnected)?;
+        let target = if let Some(host_device_id) = host_device_id {
+            Uuid::parse_str(&host_device_id)
+                .map(DeviceId)
+                .map_err(|_| MinosError::RpcCallFailed {
+                    method: "minos_write_host_skill_config".into(),
+                    message: format!("invalid host_device_id: {host_device_id}"),
+                })?
+        } else {
+            self.require_active_host().await?
+        };
+        let req = WriteHostSkillConfigRequest {
+            workspace: String::new(),
+            path,
+            enabled,
+        };
+        let resp: WriteHostSkillConfigResponse = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            target,
+            "minos_write_host_skill_config",
+            req,
+            Duration::from_secs(15),
+            Some(RpcTraceContext {
+                thread_id: None,
+                request_summary: Some(format!("enabled={enabled}")),
             }),
         )
         .await?;
@@ -825,6 +1046,7 @@ impl MobileClient {
         crate::http::MobileHttpClient::new(
             crate::build_config::BACKEND_URL,
             self.device_id,
+            self.self_name.clone(),
             crate::build_config::cf_access(),
         )
     }
@@ -874,6 +1096,7 @@ impl MobileClient {
             outbox: self.outbox.clone(),
             tasks: self.tasks.clone(),
             device_id: self.device_id,
+            self_name: self.self_name.clone(),
         }
     }
 
@@ -1023,6 +1246,15 @@ impl MobileClient {
             "mobile-client"
                 .parse()
                 .expect("static header value is valid"),
+        );
+        headers.insert(
+            "X-Device-Name",
+            self.self_name
+                .parse()
+                .map_err(|_| MinosError::ConnectFailed {
+                    url: url.to_string(),
+                    message: "self_name is not a valid header value".into(),
+                })?,
         );
         if let Some(tok) = access_token {
             headers.insert(
@@ -1393,6 +1625,7 @@ struct ReconnectContext {
     outbox: Arc<Mutex<Option<mpsc::Sender<Envelope>>>>,
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     device_id: DeviceId,
+    self_name: String,
 }
 
 /// Reconnect loop owned by [`MobileClient::ensure_reconnect_loop`].
@@ -1503,7 +1736,12 @@ async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
     // hard refresh failure (clear auth, return false) is strictly
     // better than looping with an expired token.
     let cf_access = crate::build_config::cf_access();
-    let http = match crate::http::MobileHttpClient::new(backend_url, ctx.device_id, cf_access) {
+    let http = match crate::http::MobileHttpClient::new(
+        backend_url,
+        ctx.device_id,
+        ctx.self_name.clone(),
+        cf_access,
+    ) {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(?e, "mobile: refresh aborted; could not build HTTP client");
@@ -1594,6 +1832,15 @@ async fn connect_with_handles(
         "mobile-client"
             .parse()
             .expect("static header value is valid"),
+    );
+    headers.insert(
+        "X-Device-Name",
+        ctx.self_name
+            .parse()
+            .map_err(|_| MinosError::ConnectFailed {
+                url: url.to_string(),
+                message: "self_name is not a valid header value".into(),
+            })?,
     );
     if let Some(tok) = access_token {
         headers.insert(

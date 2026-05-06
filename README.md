@@ -105,7 +105,9 @@ force-quit it, the public recipes are:
 
 ```bash
 just dev-mobile-ios            # debug + flutter run hot-reload
+just dev-mobile-android        # debug + flutter run on an Android device/emulator
 just build-mobile-ios Release  # production-flavoured build
+just build-mobile-android      # Android release APK
 ```
 
 Direct `flutter run`, `flutter build`, and Xcode IDE Build/Run now

@@ -1,23 +1,23 @@
 [
   {
     "kind":"message_started",
-    "message_id":"<uuid>",
+    "message_id":"i1",
     "role":"assistant",
-    "started_at_ms":1714000002000
+    "started_at_ms":0
   },
   {
     "kind":"text_delta",
-    "message_id":"<uuid>",
+    "message_id":"i1",
     "text":"Hel"
   },
   {
     "kind":"text_delta",
-    "message_id":"<uuid>",
+    "message_id":"i1",
     "text":"lo"
   },
   {
     "kind":"message_completed",
-    "message_id":"<uuid>",
+    "message_id":"i1",
     "finished_at_ms":1714000003000
   }
 ]

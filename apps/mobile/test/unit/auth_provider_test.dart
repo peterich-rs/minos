@@ -81,6 +81,79 @@ class _FakeCore implements MinosCoreProtocol {
   Future<void> setPeerDisplayName(String? name) async {}
 
   @override
+  Future<FriendRequestSummary> acceptFriendRequest({
+    required String requestId,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<ConversationsResponse> conversations() async =>
+      const ConversationsResponse(conversations: <ConversationSummary>[]);
+
+  @override
+  Future<FriendRequestSummary> createFriendRequest({
+    required String targetMinosId,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<ConversationResponse> createGroupConversation({
+    required String title,
+    required List<String> memberAccountIds,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<ConversationResponse> ensureDirectConversation({
+    required String friendAccountId,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<FriendRequestsResponse> friendRequests() async =>
+      const FriendRequestsResponse(
+        incoming: <FriendRequestSummary>[],
+        outgoing: <FriendRequestSummary>[],
+      );
+
+  @override
+  Future<FriendsResponse> friends() async =>
+      const FriendsResponse(friends: <FriendSummary>[]);
+
+  @override
+  Future<ListChatMessagesResponse> listChatMessages({
+    required String conversationId,
+    int? beforeTsMs,
+    int limit = 50,
+  }) async => const ListChatMessagesResponse(messages: <ChatMessageSummary>[]);
+
+  @override
+  Future<MyProfileResponse> myProfile() async => const MyProfileResponse(
+    accountId: 'acc',
+    email: 'test@example.com',
+    minosId: 'Test001',
+  );
+
+  @override
+  Future<FriendRequestSummary> rejectFriendRequest({
+    required String requestId,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<List<UserSummary>> searchUsers({required String minosId}) async =>
+      const <UserSummary>[];
+
+  @override
+  Future<ChatMessageSummary> sendChatMessage({
+    required String conversationId,
+    required String text,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<MyProfileResponse> setMinosId({required String minosId}) async =>
+      MyProfileResponse(
+        accountId: 'acc',
+        email: 'test@example.com',
+        minosId: minosId,
+      );
+
+  @override
   Future<ListThreadsResponse> listThreads(ListThreadsParams params) async =>
       const ListThreadsResponse(threads: []);
 
@@ -116,6 +189,19 @@ class _FakeCore implements MinosCoreProtocol {
 
   @override
   Future<List<AgentDescriptor>> listClis() async => const [];
+
+  @override
+  Future<ListHostSkillsResponse> listHostSkills({
+    String? hostDeviceId,
+    bool forceReload = true,
+  }) async => const ListHostSkillsResponse(data: <HostSkillsEntry>[]);
+
+  @override
+  Future<WriteHostSkillConfigResponse> writeHostSkillConfig({
+    String? hostDeviceId,
+    required String path,
+    required bool enabled,
+  }) async => WriteHostSkillConfigResponse(effectiveEnabled: enabled);
 
   @override
   void notifyForegrounded() {}

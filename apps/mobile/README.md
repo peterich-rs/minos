@@ -14,7 +14,10 @@ just build-mobile-ios Release
 # Hot-reload dev workflow on a simulator or attached device.
 just dev-mobile-ios
 
-# Android stub (placeholder; not currently part of the supported surface).
+# Hot-reload dev workflow on an attached Android device or emulator.
+just dev-mobile-android
+
+# Android release APK.
 just build-mobile-android
 ```
 
@@ -22,7 +25,9 @@ Direct `flutter run` and Xcode IDE Build/Run are still wired through the same
 env path: Cargokit's Rust build script re-enters `just` before invoking cargo,
 so `.env.local` is loaded before `option_env!` is evaluated. Prefer the public
 recipes above for normal work because they include the project-level checks and
-documented flags.
+documented flags. For Android runtime work, prefer `just dev-mobile-android`
+over ad-hoc IDE runs so the debug app uses the same validated env path as the
+release APK.
 
 ## Configuration
 

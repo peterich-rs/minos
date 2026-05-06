@@ -122,10 +122,52 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
 
   @protected
+  UserSummary dco_decode_box_autoadd_user_summary(dynamic raw);
+
+  @protected
+  ChatMessageSummary dco_decode_chat_message_summary(dynamic raw);
+
+  @protected
   ConnectionState dco_decode_connection_state(dynamic raw);
 
   @protected
+  ConversationKind dco_decode_conversation_kind(dynamic raw);
+
+  @protected
+  ConversationResponse dco_decode_conversation_response(dynamic raw);
+
+  @protected
+  ConversationSummary dco_decode_conversation_summary(dynamic raw);
+
+  @protected
+  ConversationsResponse dco_decode_conversations_response(dynamic raw);
+
+  @protected
   ErrorKind dco_decode_error_kind(dynamic raw);
+
+  @protected
+  FriendRequestStatus dco_decode_friend_request_status(dynamic raw);
+
+  @protected
+  FriendRequestSummary dco_decode_friend_request_summary(dynamic raw);
+
+  @protected
+  FriendRequestsResponse dco_decode_friend_requests_response(dynamic raw);
+
+  @protected
+  FriendSummary dco_decode_friend_summary(dynamic raw);
+
+  @protected
+  FriendsResponse dco_decode_friends_response(dynamic raw);
+
+  @protected
+  HostSkillError dco_decode_host_skill_error(dynamic raw);
+
+  @protected
+  HostSkillSummary dco_decode_host_skill_summary(dynamic raw);
+
+  @protected
+  HostSkillsEntry dco_decode_host_skills_entry(dynamic raw);
 
   @protected
   HostSummaryDto dco_decode_host_summary_dto(dynamic raw);
@@ -140,7 +182,39 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang dco_decode_lang(dynamic raw);
 
   @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
   List<AgentDescriptor> dco_decode_list_agent_descriptor(dynamic raw);
+
+  @protected
+  List<ChatMessageSummary> dco_decode_list_chat_message_summary(dynamic raw);
+
+  @protected
+  ListChatMessagesResponse dco_decode_list_chat_messages_response(dynamic raw);
+
+  @protected
+  List<ConversationSummary> dco_decode_list_conversation_summary(dynamic raw);
+
+  @protected
+  List<FriendRequestSummary> dco_decode_list_friend_request_summary(
+    dynamic raw,
+  );
+
+  @protected
+  List<FriendSummary> dco_decode_list_friend_summary(dynamic raw);
+
+  @protected
+  List<HostSkillError> dco_decode_list_host_skill_error(dynamic raw);
+
+  @protected
+  List<HostSkillSummary> dco_decode_list_host_skill_summary(dynamic raw);
+
+  @protected
+  List<HostSkillsEntry> dco_decode_list_host_skills_entry(dynamic raw);
+
+  @protected
+  ListHostSkillsResponse dco_decode_list_host_skills_response(dynamic raw);
 
   @protected
   List<HostSummaryDto> dco_decode_list_host_summary_dto(dynamic raw);
@@ -167,6 +241,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<UiEventMessage> dco_decode_list_ui_event_message(dynamic raw);
 
   @protected
+  List<UserSummary> dco_decode_list_user_summary(dynamic raw);
+
+  @protected
   LogLevel dco_decode_log_level(dynamic raw);
 
   @protected
@@ -177,6 +254,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MinosError dco_decode_minos_error(dynamic raw);
+
+  @protected
+  MyProfileResponse dco_decode_my_profile_response(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -198,6 +278,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  UserSummary? dco_decode_opt_box_autoadd_user_summary(dynamic raw);
 
   @protected
   PairingState dco_decode_pairing_state(dynamic raw);
@@ -251,7 +334,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void dco_decode_unit(dynamic raw);
 
   @protected
+  UserSummary dco_decode_user_summary(dynamic raw);
+
+  @protected
   BigInt dco_decode_usize(dynamic raw);
+
+  @protected
+  WriteHostSkillConfigResponse dco_decode_write_host_skill_config_response(
+    dynamic raw,
+  );
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
@@ -361,10 +452,66 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
+  UserSummary sse_decode_box_autoadd_user_summary(SseDeserializer deserializer);
+
+  @protected
+  ChatMessageSummary sse_decode_chat_message_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ConnectionState sse_decode_connection_state(SseDeserializer deserializer);
 
   @protected
+  ConversationKind sse_decode_conversation_kind(SseDeserializer deserializer);
+
+  @protected
+  ConversationResponse sse_decode_conversation_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ConversationSummary sse_decode_conversation_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ConversationsResponse sse_decode_conversations_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ErrorKind sse_decode_error_kind(SseDeserializer deserializer);
+
+  @protected
+  FriendRequestStatus sse_decode_friend_request_status(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FriendRequestSummary sse_decode_friend_request_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FriendRequestsResponse sse_decode_friend_requests_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FriendSummary sse_decode_friend_summary(SseDeserializer deserializer);
+
+  @protected
+  FriendsResponse sse_decode_friends_response(SseDeserializer deserializer);
+
+  @protected
+  HostSkillError sse_decode_host_skill_error(SseDeserializer deserializer);
+
+  @protected
+  HostSkillSummary sse_decode_host_skill_summary(SseDeserializer deserializer);
+
+  @protected
+  HostSkillsEntry sse_decode_host_skills_entry(SseDeserializer deserializer);
 
   @protected
   HostSummaryDto sse_decode_host_summary_dto(SseDeserializer deserializer);
@@ -379,7 +526,55 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang sse_decode_lang(SseDeserializer deserializer);
 
   @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
   List<AgentDescriptor> sse_decode_list_agent_descriptor(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ChatMessageSummary> sse_decode_list_chat_message_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListChatMessagesResponse sse_decode_list_chat_messages_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ConversationSummary> sse_decode_list_conversation_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<FriendRequestSummary> sse_decode_list_friend_request_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<FriendSummary> sse_decode_list_friend_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostSkillError> sse_decode_list_host_skill_error(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostSkillSummary> sse_decode_list_host_skill_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostSkillsEntry> sse_decode_list_host_skills_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListHostSkillsResponse sse_decode_list_host_skills_response(
     SseDeserializer deserializer,
   );
 
@@ -420,6 +615,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<UserSummary> sse_decode_list_user_summary(SseDeserializer deserializer);
+
+  @protected
   LogLevel sse_decode_log_level(SseDeserializer deserializer);
 
   @protected
@@ -430,6 +628,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MinosError sse_decode_minos_error(SseDeserializer deserializer);
+
+  @protected
+  MyProfileResponse sse_decode_my_profile_response(
+    SseDeserializer deserializer,
+  );
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -455,6 +658,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  UserSummary? sse_decode_opt_box_autoadd_user_summary(
+    SseDeserializer deserializer,
+  );
 
   @protected
   PairingState sse_decode_pairing_state(SseDeserializer deserializer);
@@ -520,7 +728,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
+  UserSummary sse_decode_user_summary(SseDeserializer deserializer);
+
+  @protected
   BigInt sse_decode_usize(SseDeserializer deserializer);
+
+  @protected
+  WriteHostSkillConfigResponse sse_decode_write_host_skill_config_response(
+    SseDeserializer deserializer,
+  );
 
   @protected
   void sse_encode_AnyhowException(
@@ -664,13 +880,94 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_user_summary(
+    UserSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_chat_message_summary(
+    ChatMessageSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_connection_state(
     ConnectionState self,
     SseSerializer serializer,
   );
 
   @protected
+  void sse_encode_conversation_kind(
+    ConversationKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_response(
+    ConversationResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_summary(
+    ConversationSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversations_response(
+    ConversationsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_error_kind(ErrorKind self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_friend_request_status(
+    FriendRequestStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_friend_request_summary(
+    FriendRequestSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_friend_requests_response(
+    FriendRequestsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_friend_summary(FriendSummary self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_friends_response(
+    FriendsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_skill_error(
+    HostSkillError self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_skill_summary(
+    HostSkillSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_skills_entry(
+    HostSkillsEntry self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_host_summary_dto(
@@ -688,8 +985,65 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_lang(Lang self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_agent_descriptor(
     List<AgentDescriptor> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_chat_message_summary(
+    List<ChatMessageSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_chat_messages_response(
+    ListChatMessagesResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_conversation_summary(
+    List<ConversationSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_friend_request_summary(
+    List<FriendRequestSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_friend_summary(
+    List<FriendSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_skill_error(
+    List<HostSkillError> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_skill_summary(
+    List<HostSkillSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_skills_entry(
+    List<HostSkillsEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_skills_response(
+    ListHostSkillsResponse self,
     SseSerializer serializer,
   );
 
@@ -742,6 +1096,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_user_summary(
+    List<UserSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_log_level(LogLevel self, SseSerializer serializer);
 
   @protected
@@ -752,6 +1112,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_minos_error(MinosError self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_my_profile_response(
+    MyProfileResponse self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
@@ -782,6 +1148,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_user_summary(
+    UserSummary? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_pairing_state(PairingState self, SseSerializer serializer);
@@ -862,7 +1234,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_unit(void self, SseSerializer serializer);
 
   @protected
+  void sse_encode_user_summary(UserSummary self, SseSerializer serializer);
+
+  @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_write_host_skill_config_response(
+    WriteHostSkillConfigResponse self,
+    SseSerializer serializer,
+  );
 }
 
 // Section: wire_class

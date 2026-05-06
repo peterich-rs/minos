@@ -16,6 +16,7 @@ pub mod accounts;
 pub mod devices;
 pub mod raw_events;
 pub mod refresh_tokens;
+pub mod social;
 pub mod threads;
 pub mod tokens;
 

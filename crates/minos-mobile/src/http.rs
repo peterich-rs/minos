@@ -17,13 +17,17 @@ use http::header::CONTENT_TYPE;
 use http::{Method, Request, Response, StatusCode};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::{
-    AuthRequest, AuthResponse, GetThreadLastSeqResponse, ListThreadsParams, ListThreadsResponse,
-    LogoutRequest, MeHostsResponse, PairConsumeRequest, PairResponse, ReadThreadParams,
-    ReadThreadResponse, RefreshRequest, RefreshResponse,
+    AuthRequest, AuthResponse, ConversationResponse, ConversationsResponse,
+    CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
+    FriendRequestsResponse, FriendsResponse, GetThreadLastSeqResponse, ListChatMessagesResponse,
+    ListThreadsParams, ListThreadsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse,
+    PairConsumeRequest, PairResponse, ReadThreadParams, ReadThreadResponse, RefreshRequest,
+    RefreshResponse, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+use crate::openwire_trace::{logger_interceptor, OpenwireTraceFactory};
 use crate::request_trace::{self, RequestTransport};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -44,6 +48,7 @@ pub struct MobileHttpClient {
     client: Client,
     base: String,
     device_id: DeviceId,
+    device_name: String,
     device_role: &'static str,
     cf_access: Option<(String, String)>,
 }
@@ -52,6 +57,7 @@ impl MobileHttpClient {
     pub fn new(
         backend_ws_url: &str,
         device_id: DeviceId,
+        device_name: impl Into<String>,
         cf_access: Option<(String, String)>,
     ) -> Result<Self, MinosError> {
         INSTALL_RUSTLS_PROVIDER.call_once(|| {
@@ -64,6 +70,8 @@ impl MobileHttpClient {
         })?;
         let client = Client::builder()
             .call_timeout(HTTP_TIMEOUT)
+            .application_interceptor(logger_interceptor("mobile_http"))
+            .event_listener_factory(OpenwireTraceFactory::new("mobile_http"))
             .build()
             .map_err(|e| MinosError::BackendInternal {
                 message: format!("openwire build: {e}"),
@@ -72,6 +80,7 @@ impl MobileHttpClient {
             client,
             base,
             device_id,
+            device_name: device_name.into(),
             device_role: "mobile-client",
             cf_access,
         })
@@ -292,6 +301,392 @@ impl MobileHttpClient {
         }
     }
 
+    pub async fn my_profile(&self, access_token: &str) -> Result<MyProfileResponse, MinosError> {
+        let path = "/v1/me/profile";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "MyProfileResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("profile".into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn set_minos_id(
+        &self,
+        access_token: &str,
+        req: SetMinosIdRequest,
+    ) -> Result<MyProfileResponse, MinosError> {
+        let path = "/v1/me/profile/minos-id";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(req.minos_id.clone()),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "MyProfileResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("minos_id updated".into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn search_users(
+        &self,
+        access_token: &str,
+        minos_id: &str,
+    ) -> Result<SearchUsersResponse, MinosError> {
+        let encoded: String = url::form_urlencoded::byte_serialize(minos_id.as_bytes()).collect();
+        let path = format!("/v1/users/search?minos_id={encoded}");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::GET.as_str(),
+            "/v1/users/search",
+            None,
+            Some(minos_id.into()),
+        );
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: SearchUsersResponse =
+                decode_success_json(resp, "SearchUsersResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("users={}", body.users.len())),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn friends(&self, access_token: &str) -> Result<FriendsResponse, MinosError> {
+        let path = "/v1/friends";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: FriendsResponse = decode_success_json(resp, "FriendsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("friends={}", body.friends.len())),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn create_friend_request(
+        &self,
+        access_token: &str,
+        req: CreateFriendRequestRequest,
+    ) -> Result<minos_protocol::FriendRequestSummary, MinosError> {
+        let path = "/v1/friend-requests";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(req.target_minos_id.clone()),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "FriendRequestSummary").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("request sent".into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn friend_requests(
+        &self,
+        access_token: &str,
+    ) -> Result<FriendRequestsResponse, MinosError> {
+        let path = "/v1/friend-requests";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: FriendRequestsResponse =
+                decode_success_json(resp, "FriendRequestsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!(
+                    "incoming={} outgoing={}",
+                    body.incoming.len(),
+                    body.outgoing.len()
+                )),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn accept_friend_request(
+        &self,
+        access_token: &str,
+        request_id: &str,
+    ) -> Result<minos_protocol::FriendRequestSummary, MinosError> {
+        self.resolve_friend_request(access_token, request_id, true)
+            .await
+    }
+
+    pub async fn reject_friend_request(
+        &self,
+        access_token: &str,
+        request_id: &str,
+    ) -> Result<minos_protocol::FriendRequestSummary, MinosError> {
+        self.resolve_friend_request(access_token, request_id, false)
+            .await
+    }
+
+    async fn resolve_friend_request(
+        &self,
+        access_token: &str,
+        request_id: &str,
+        accept: bool,
+    ) -> Result<minos_protocol::FriendRequestSummary, MinosError> {
+        let action = if accept { "accept" } else { "reject" };
+        let path = format!("/v1/friend-requests/{request_id}/{action}");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(Method::POST.as_str(), &path, None, None);
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            Some(access_token),
+            &serde_json::json!({}),
+        )?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "FriendRequestSummary").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(action.into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn conversations(
+        &self,
+        access_token: &str,
+    ) -> Result<ConversationsResponse, MinosError> {
+        let path = "/v1/conversations";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ConversationsResponse =
+                decode_success_json(resp, "ConversationsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("conversations={}", body.conversations.len())),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn ensure_direct_conversation(
+        &self,
+        access_token: &str,
+        req: EnsureDirectConversationRequest,
+    ) -> Result<ConversationResponse, MinosError> {
+        let path = "/v1/conversations/direct";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(req.friend_account_id.clone()),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ConversationResponse =
+                decode_success_json(resp, "ConversationResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(body.conversation_id.clone()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn create_group_conversation(
+        &self,
+        access_token: &str,
+        req: CreateGroupConversationRequest,
+    ) -> Result<ConversationResponse, MinosError> {
+        let path = "/v1/conversations/group";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, Some(req.title.clone()));
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ConversationResponse =
+                decode_success_json(resp, "ConversationResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(body.conversation_id.clone()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn list_chat_messages(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+        before_ts_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<ListChatMessagesResponse, MinosError> {
+        let mut path = format!("/v1/conversations/{conversation_id}/messages?limit={limit}");
+        if let Some(before_ts_ms) = before_ts_ms {
+            let _ = write!(path, "&before_ts_ms={before_ts_ms}");
+        }
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::GET.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            None,
+        );
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ListChatMessagesResponse =
+                decode_success_json(resp, "ListChatMessagesResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("messages={}", body.messages.len())),
+                Some(conversation_id.into()),
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn send_chat_message(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+        req: SendChatMessageRequest,
+    ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/messages");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some(format!("len={}", req.text.len())),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "ChatMessageSummary").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("message sent".into()),
+                Some(conversation_id.into()),
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
     // ─────────────────────────── auth endpoints ───────────────────────────
 
     /// `POST /v1/auth/register` — create an account on the backend.
@@ -439,6 +834,7 @@ impl MobileHttpClient {
             .method(method)
             .uri(url)
             .header("x-device-id", self.device_id.to_string())
+            .header("x-device-name", &self.device_name)
             .header("x-device-role", self.device_role);
         if let Some(access_token) = access_token {
             req = req.header("authorization", format!("Bearer {access_token}"));

@@ -13,7 +13,7 @@ default-members = []
 edition = "2021"
 version = "0.1.0"
 license = "MIT"
-authors = ["Peterich <wangqingyn2@gmail.com>"]
+authors = ["Peter Rich <fannnzhang@gmail.com>"]
 homepage = "https://github.com/peterich-rs/minos"
 repository = "https://github.com/peterich-rs/minos"
 rust-version = "1.80"
@@ -45,8 +45,9 @@ http = "1"
 axum = { version = "0.7", features = ["ws", "macros"] }
 jsonrpsee = { version = "0.24", features = ["server", "client", "ws-client", "macros"] }
 jsonwebtoken = "9"
-tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+openwire = { git = "https://github.com/peterich-rs/openwire.git", rev = "08b542394a5a376aa89f562a4581f349db7679d0" }
+openwire-core = { git = "https://github.com/peterich-rs/openwire.git", rev = "08b542394a5a376aa89f562a4581f349db7679d0" }
 rustls = { version = "0.23.35", features = ["aws-lc-rs"] }
 futures-util = "0.3"
 async-trait = "0.1"

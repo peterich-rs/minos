@@ -12,7 +12,8 @@ use crate::thread_handle::ThreadHandle;
 use crate::{AgentKind, AgentRuntimeConfig, RawIngest};
 use minos_codex_protocol::{
     ClientInfo, InitializeCapabilities, InitializeParams, InitializeResponse,
-    InitializedNotification, ThreadStartParams, ThreadStartResponse,
+    InitializedNotification, SkillsConfigWriteResponse, SkillsListResponse, ThreadStartParams,
+    ThreadStartResponse,
 };
 use minos_domain::AgentName;
 use serde_json::Value;
@@ -493,11 +494,60 @@ impl AgentManager {
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
                 inst.touch().await;
+                // Synthesize the user-message ingest BEFORE forwarding to
+                // codex so the row is durable even if the codex transport
+                // hangs or rejects. Mirrors Remodex's persist-on-insert
+                // semantics — the user always sees their bubble after a
+                // crash, never an empty timeline.
+                self.synth_user_message_ingest(thread_id, &text, handle.agent);
                 inst.send_user_message(thread_id, &text).await?;
                 Ok(())
             }
             ThreadState::Suspended { .. } => self.implicit_resume(thread_id, text).await,
             other => anyhow::bail!("send_user_message rejected: state={other:?}"),
+        }
+    }
+
+    /// Build and broadcast a synthetic codex `item/started{userMessage}`
+    /// notification matching the real codex 2026-04 wire shape (see
+    /// `minos-codex-protocol::ItemStartedNotification` + `ThreadItem`).
+    /// The `EventWriter` bridge persists it to the local SQLite store and
+    /// `RelayClient` forwards it to the backend, which translates via
+    /// `minos-ui-protocol::translate_codex` into a
+    /// `MessageStarted{role:User} + TextDelta` pair and fans out to
+    /// paired mobile peers.
+    ///
+    /// Codex 2026-04 does NOT echo user inputs as separate notifications
+    /// (the user content lives inside the synchronous `turn/start`
+    /// request body). Without this synthesis the user message would never
+    /// reach either persistence layer, so killing the app would lose it.
+    fn synth_user_message_ingest(&self, thread_id: &str, text: &str, agent: AgentName) {
+        let item_id = uuid::Uuid::new_v4().to_string();
+        let payload = serde_json::json!({
+            "method": "item/started",
+            "params": {
+                "item": {
+                    "type": "userMessage",
+                    "id": item_id,
+                    "content": [{"type": "text", "text": text}],
+                },
+                "threadId": thread_id,
+                "turnId": "",
+            }
+        });
+        let ingest = RawIngest {
+            agent,
+            thread_id: thread_id.to_string(),
+            payload,
+            ts_ms: current_unix_ms(),
+        };
+        if let Err(e) = self.events_tx.send(ingest) {
+            tracing::debug!(
+                target: "minos_agent_runtime::manager",
+                error = %e,
+                thread_id,
+                "synth_user_message_ingest broadcast failed (no subscribers)",
+            );
         }
     }
 
@@ -542,6 +592,9 @@ impl AgentManager {
             at_ms: now_ms,
         });
         inst.touch().await;
+        // Same synth-then-forward pattern as the Idle path; resume races
+        // shouldn't change persistence semantics.
+        self.synth_user_message_ingest(thread_id, &text, handle.agent);
         inst.send_user_message(thread_id, &text).await?;
         Ok(())
     }
@@ -578,6 +631,29 @@ impl AgentManager {
             at_ms: chrono::Utc::now().timestamp_millis(),
         });
         Ok(())
+    }
+
+    pub async fn list_host_skills(
+        &self,
+        workspace: PathBuf,
+        force_reload: bool,
+    ) -> anyhow::Result<SkillsListResponse> {
+        let canon = std::fs::canonicalize(&workspace).unwrap_or(workspace);
+        let inst = self.ensure_instance(&canon).await?;
+        inst.touch().await;
+        inst.list_host_skills(&canon, force_reload).await
+    }
+
+    pub async fn write_host_skill_config(
+        &self,
+        workspace: PathBuf,
+        path: PathBuf,
+        enabled: bool,
+    ) -> anyhow::Result<SkillsConfigWriteResponse> {
+        let canon = std::fs::canonicalize(&workspace).unwrap_or(workspace);
+        let inst = self.ensure_instance(&canon).await?;
+        inst.touch().await;
+        inst.write_host_skill_config(&path, enabled).await
     }
 
     pub async fn close_thread(&self, thread_id: &str) -> anyhow::Result<()> {

@@ -20,10 +20,12 @@ protocol DaemonDriving: AnyObject, Sendable {
     func currentRelayLink() -> RelayLinkState
     func currentPeer() -> PeerState
     func currentTrustedDevice() async throws -> PeerRecord?
+    func currentPeers() async throws -> [HostPeerSummary]
 
     // ── Pairing round-trips ──
     func pairingQr() async throws -> RelayQrPayload
     func forgetPeer() async throws
+    func forgetPeerDevice(_ mobileDeviceId: DeviceId) async throws
 
     // ── Lifecycle ──
     func stop() async throws

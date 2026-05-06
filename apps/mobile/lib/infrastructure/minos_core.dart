@@ -147,6 +147,72 @@ class MinosCore implements MinosCoreProtocol {
       _secure.savePeerDisplayName(name);
 
   @override
+  Future<MyProfileResponse> myProfile() => _client.myProfile();
+
+  @override
+  Future<MyProfileResponse> setMinosId({required String minosId}) =>
+      _client.setMinosId(minosId: minosId);
+
+  @override
+  Future<List<UserSummary>> searchUsers({required String minosId}) =>
+      _client.searchUsers(minosId: minosId);
+
+  @override
+  Future<FriendRequestSummary> createFriendRequest({
+    required String targetMinosId,
+  }) => _client.createFriendRequest(targetMinosId: targetMinosId);
+
+  @override
+  Future<FriendRequestsResponse> friendRequests() => _client.friendRequests();
+
+  @override
+  Future<FriendRequestSummary> acceptFriendRequest({
+    required String requestId,
+  }) => _client.acceptFriendRequest(requestId: requestId);
+
+  @override
+  Future<FriendRequestSummary> rejectFriendRequest({
+    required String requestId,
+  }) => _client.rejectFriendRequest(requestId: requestId);
+
+  @override
+  Future<FriendsResponse> friends() => _client.friends();
+
+  @override
+  Future<ConversationsResponse> conversations() => _client.conversations();
+
+  @override
+  Future<ConversationResponse> ensureDirectConversation({
+    required String friendAccountId,
+  }) => _client.ensureDirectConversation(friendAccountId: friendAccountId);
+
+  @override
+  Future<ConversationResponse> createGroupConversation({
+    required String title,
+    required List<String> memberAccountIds,
+  }) => _client.createGroupConversation(
+    title: title,
+    memberAccountIds: memberAccountIds,
+  );
+
+  @override
+  Future<ListChatMessagesResponse> listChatMessages({
+    required String conversationId,
+    int? beforeTsMs,
+    int limit = 50,
+  }) => _client.listChatMessages(
+    conversationId: conversationId,
+    beforeTsMs: beforeTsMs,
+    limit: limit,
+  );
+
+  @override
+  Future<ChatMessageSummary> sendChatMessage({
+    required String conversationId,
+    required String text,
+  }) => _client.sendChatMessage(conversationId: conversationId, text: text);
+
+  @override
   Future<ListThreadsResponse> listThreads(ListThreadsParams params) =>
       _client.listThreads(req: params);
 
@@ -248,6 +314,26 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   Future<List<AgentDescriptor>> listClis() => _client.listClis();
+
+  @override
+  Future<ListHostSkillsResponse> listHostSkills({
+    String? hostDeviceId,
+    bool forceReload = true,
+  }) => _client.listHostSkills(
+    hostDeviceId: hostDeviceId,
+    forceReload: forceReload,
+  );
+
+  @override
+  Future<WriteHostSkillConfigResponse> writeHostSkillConfig({
+    String? hostDeviceId,
+    required String path,
+    required bool enabled,
+  }) => _client.writeHostSkillConfig(
+    hostDeviceId: hostDeviceId,
+    path: path,
+    enabled: enabled,
+  );
 
   @override
   Future<void> sendUserMessage({

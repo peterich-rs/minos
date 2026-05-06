@@ -1,6 +1,5 @@
 import AppKit
 import Observation
-import OSLog
 
 /// Top-level lifecycle phase the menubar UI ladders against. Distinct
 /// from the per-axis state (`relayLink`, `peer`) — `phase` answers "are
@@ -25,6 +24,7 @@ final class AppState: @unchecked Sendable {
         let relayLink: RelayLinkState
         let peer: PeerState
         let trustedDevice: PeerRecord?
+        let peers: [HostPeerSummary]
         let agentState: ThreadState
     }
 
@@ -41,6 +41,7 @@ final class AppState: @unchecked Sendable {
     var relayLink: RelayLinkState = .disconnected
     var peer: PeerState = .unpaired
     var trustedDevice: PeerRecord?
+    var peers: [HostPeerSummary] = []
 
     // ── Pairing UX ──
     var currentQr: RelayQrPayload?
@@ -55,9 +56,6 @@ final class AppState: @unchecked Sendable {
     // ── Errors ──
     var bootError: MinosError?
     var displayError: MinosError?
-
-    @ObservationIgnored
-    let logger = Logger(subsystem: "ai.minos.macos", category: "appState")
 
     // Internal access (not private) so AppState+Agent.swift can reach
     // them — the agent error is parented on the same task lifecycle.
@@ -87,24 +85,26 @@ final class AppState: @unchecked Sendable {
 
     /// Show the "显示配对二维码…" item only when:
     /// - the daemon is running (so we have someone to ask),
-    /// - the relay link is up (so the QR token can actually be minted),
-    /// - and there is no peer already paired (a second peer would be a
-    ///   second pairing, not currently supported).
+    /// - and the relay link is up (so the QR token can actually be minted).
     var canShowQr: Bool {
         guard phase == .running, daemon != nil else { return false }
-        if case .connected = relayLink, case .unpaired = peer { return true }
+        if case .connected = relayLink { return true }
         return false
     }
 
     /// Show the "忘记已配对设备" item only when:
     /// - the daemon is running,
     /// - the relay link is up (so the host can issue ForgetPeer),
-    /// - and a peer is currently paired.
+    /// - and at least one peer row is currently known.
     var canForgetPeer: Bool {
         guard phase == .running, daemon != nil else { return false }
         guard case .connected = relayLink else { return false }
-        if case .paired = peer { return true }
-        return false
+        return !resolvedPeers.isEmpty
+    }
+
+    func canForgetPeerDevice(_ peer: HostPeerSummary) -> Bool {
+        guard canForgetPeer else { return false }
+        return resolvedPeers.contains(peer)
     }
 
     /// Show a manual reconnect affordance when the relay task has stopped
@@ -130,6 +130,7 @@ final class AppState: @unchecked Sendable {
         currentQrGeneratedAt = nil
         isShowingQr = false
         trustedDevice = nil
+        peers = []
         relayLink = .disconnected
         peer = .unpaired
         phase = .booting
@@ -160,6 +161,7 @@ final class AppState: @unchecked Sendable {
             relayLink: snapshot.relayLink,
             peer: snapshot.peer,
             trustedDevice: snapshot.trustedDevice,
+            peers: snapshot.peers,
             agentSubscription: agentSubscription,
             agentState: snapshot.agentState
         )
@@ -174,6 +176,7 @@ final class AppState: @unchecked Sendable {
         relayLink: RelayLinkState,
         peer: PeerState,
         trustedDevice: PeerRecord?,
+        peers: [HostPeerSummary] = [],
         agentSubscription: (any SubscriptionHandle)? = nil,
         agentState: ThreadState = .idle
     ) {
@@ -187,16 +190,18 @@ final class AppState: @unchecked Sendable {
         self.peerSubscription = peerSubscription
         self.agentSubscription = agentSubscription
         self.relayLink = relayLink
-        self.peer = peer
+        let resolvedPeers = peers.isEmpty ? Self.synthesizedPeers(from: trustedDevice, peer: peer) : peers
+        self.peers = resolvedPeers
+        self.peer = resolvedPeers.isEmpty ? peer : Self.aggregatePeerState(from: resolvedPeers)
         self.agentState = agentState
         self.currentSession = nil
-        self.trustedDevice = trustedDevice
+        self.trustedDevice = resolvedPeers.first.map(Self.peerRecord) ?? trustedDevice
         self.phase = .running
     }
 
     @MainActor
     func failBoot(with error: MinosError) {
-        logger.error("Boot failed: \(error.technicalDetails, privacy: .public)")
+        AppLog.error("appState", "Boot failed: \(error.technicalDetails)")
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()
         relayLinkSubscription?.cancel()
@@ -211,6 +216,7 @@ final class AppState: @unchecked Sendable {
         agentState = .idle
         currentSession = nil
         trustedDevice = nil
+        peers = []
         currentQr = nil
         currentQrGeneratedAt = nil
         isShowingQr = false
@@ -226,22 +232,63 @@ final class AppState: @unchecked Sendable {
         relayLink = state
     }
 
-    /// Push from the peer observer. Mirror the trustedDevice cache so
-    /// pairing-aware UI doesn't have to wait for `current_trusted_device`
-    /// to round-trip the daemon.
-    ///
-    /// `PeerState::Paired` is ephemeral — it carries `(id, name, online)`
-    /// but no `pairedAt`, because the relay re-emits Paired/PeerOnline on
-    /// every reconnect. `PeerRecord` is the persisted shape and owns the
-    /// real `pairedAt` that was captured at first-pair time. So we only
-    /// synthesize a new `PeerRecord` when the deviceId has genuinely
-    /// changed (first pair, or pair-after-forget). For the steady-state
-    /// reconnect case where we already hold a record for this peer, we
-    /// leave `trustedDevice` untouched rather than stamp a fresh `Date()`
-    /// over the original timestamp.
+    /// Push from the peer observer. `PeerState` is now an invalidation
+    /// signal; the authoritative device rows come from `currentPeers()`.
     @MainActor
-    func applyPeer(_ state: PeerState) {
+    func applyPeer(_ state: PeerState) async {
         peer = state
+
+        guard case .pairing = state else {
+            applyLegacyPeerState(state)
+            await refreshPeersSnapshot(fallbackState: state)
+            return
+        }
+    }
+
+    var resolvedPeers: [HostPeerSummary] {
+        if !peers.isEmpty {
+            return peers
+        }
+        return Self.synthesizedPeers(from: trustedDevice, peer: peer)
+    }
+
+    @MainActor
+    func applyPeersSnapshot(_ peers: [HostPeerSummary]) {
+        self.peers = peers
+        trustedDevice = peers.first.map(Self.peerRecord)
+
+        if peers.isEmpty {
+            currentQr = nil
+            currentQrGeneratedAt = nil
+            isShowingQr = false
+        }
+    }
+
+    @MainActor
+    private func refreshPeersSnapshot(fallbackState: PeerState) async {
+        guard let daemon else {
+            applyLegacyPeerState(fallbackState)
+            return
+        }
+
+        do {
+            let peers = try await daemon.currentPeers()
+            if !peers.isEmpty || Self.shouldTreatEmptyPeersAsAuthoritative(for: fallbackState) {
+                applyPeersSnapshot(peers)
+                peer = Self.aggregatePeerState(from: peers)
+                return
+            }
+        } catch let error as MinosError {
+            AppLog.error("appState", "currentPeers failed: \(error.technicalDetails)")
+        } catch {
+            AppLog.error("appState", "Unexpected currentPeers failure: \(String(describing: error))")
+        }
+
+        applyLegacyPeerState(fallbackState)
+    }
+
+    @MainActor
+    private func applyLegacyPeerState(_ state: PeerState) {
         switch state {
         case let .paired(id, name, _):
             if trustedDevice?.deviceId != id {
@@ -254,6 +301,72 @@ final class AppState: @unchecked Sendable {
             isShowingQr = false
         case .pairing:
             break
+        }
+    }
+
+    static func aggregatePeerState(from peers: [HostPeerSummary]) -> PeerState {
+        guard let primary = peers.first(where: { $0.online }) ?? peers.first else {
+            return .unpaired
+        }
+        return .paired(
+            peerId: primary.mobileDeviceId,
+            peerName: primary.mobileDeviceName,
+            online: primary.online
+        )
+    }
+
+    static func peerRecord(_ peer: HostPeerSummary) -> PeerRecord {
+        PeerRecord(
+            deviceId: peer.mobileDeviceId,
+            name: peer.mobileDeviceName,
+            pairedAt: Date(timeIntervalSince1970: TimeInterval(peer.pairedAtMs) / 1000)
+        )
+    }
+
+    private static func synthesizedPeers(from trustedDevice: PeerRecord?, peer: PeerState) -> [HostPeerSummary] {
+        if let trustedDevice {
+            let isOnline: Bool
+            switch peer {
+            case let .paired(peerId, _, online) where peerId == trustedDevice.deviceId:
+                isOnline = online
+            default:
+                isOnline = false
+            }
+            return [
+                HostPeerSummary(
+                    mobileDeviceId: trustedDevice.deviceId,
+                    mobileDeviceName: trustedDevice.name,
+                    accountEmail: "",
+                    pairedAtMs: Int64(trustedDevice.pairedAt.timeIntervalSince1970 * 1000),
+                    lastActiveAtMs: Int64(trustedDevice.pairedAt.timeIntervalSince1970 * 1000),
+                    online: isOnline
+                )
+            ]
+        }
+
+        if case let .paired(peerId, peerName, online) = peer {
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            return [
+                HostPeerSummary(
+                    mobileDeviceId: peerId,
+                    mobileDeviceName: peerName,
+                    accountEmail: "",
+                    pairedAtMs: nowMs,
+                    lastActiveAtMs: nowMs,
+                    online: online
+                )
+            ]
+        }
+
+        return []
+    }
+
+    private static func shouldTreatEmptyPeersAsAuthoritative(for state: PeerState) -> Bool {
+        switch state {
+        case .unpaired:
+            return true
+        case .paired, .pairing:
+            return false
         }
     }
 

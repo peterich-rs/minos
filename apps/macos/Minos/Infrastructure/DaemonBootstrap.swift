@@ -1,38 +1,36 @@
 import Foundation
-import OSLog
-import Security
 
 /// Production daemon bootstrap. Resolves CF Service Token credentials from the
 /// bundled Info.plist, spawns the daemon, and wires the dual-axis observers
 /// into AppState. The Mac's own `selfDeviceId` is persisted in
-/// `local-state.json` and `deviceSecret` in the macOS Keychain — both are
-/// device credentials, not pairing facts, so they survive relaunch. The
-/// peer relationship itself lives only on the backend; the daemon
-/// repopulates its in-memory peer mirror via `GET /v1/me/peer` after each
-/// successful WebSocket connect.
+/// `local-state.json`. The daemon's long-lived `deviceSecret` now lives in
+/// the Rust-managed secrets store (with Keychain as a best-effort macOS
+/// mirror), so Swift no longer needs to load or migrate it at bootstrap.
+/// The peer relationship itself lives only on the backend; the daemon
+/// repopulates its in-memory peer mirror after each successful WebSocket
+/// connect.
 ///
 /// Plan 05 Phase I.6.
 enum DaemonBootstrap {
-    private static let logger = Logger(subsystem: "ai.minos.macos", category: "bootstrap")
-    fileprivate static let keychainService = "ai.minos.macos"
     private static let backendURLKey = "MINOS_BACKEND_URL"
     private static let cfClientIdKey = "CF_ACCESS_CLIENT_ID"
     private static let cfClientSecretKey = "CF_ACCESS_CLIENT_SECRET"
 
     /// Default startDaemon factory used in production. Reads `selfDeviceId`
-    /// off `local-state.json` (minted on first launch) and `deviceSecret`
-    /// out of the Keychain. The peer record is no longer persisted — the
-    /// daemon queries the backend for it after the WS link comes up.
+    /// off `local-state.json` (minted on first launch). The daemon loads
+    /// any persisted `deviceSecret` internally via its own durable store,
+    /// so app bootstrap only needs the stable host device id here. The
+    /// peer record is no longer persisted — the daemon queries the backend
+    /// for it after the WS link comes up.
     static let defaultStartDaemon: @Sendable (RelayConfig, String) async throws
         -> any DaemonDriving = { config, macName in
         let localStatePath = AppDirectories.localStatePath()
         let selfDeviceId = try LocalStateLoader.loadOrInit(at: localStatePath)
-        let secret = KeychainDeviceSecret.read()
         return try await DaemonHandle.start(
             config: config,
             selfDeviceId: selfDeviceId,
             peer: nil,
-            secret: secret,
+            secret: nil,
             macName: macName
         )
     }
@@ -50,7 +48,7 @@ enum DaemonBootstrap {
         await appState.beginBoot()
         try? initLogging()
         let macName = hostName()
-        logger.info("Bootstrapping daemon for \(macName, privacy: .public)")
+        AppLog.info("bootstrap", "Bootstrapping daemon for \(macName)")
 
         let config: RelayConfig
         do {
@@ -94,7 +92,7 @@ enum DaemonBootstrap {
                 peerSubscription: subs.peer,
                 agentSubscription: subs.agent
             )
-            logger.info("Boot complete; phase=running")
+            AppLog.info("bootstrap", "Boot complete; phase=running")
         } catch let error as MinosError {
             await failBoot(appState: appState, error: error, inFlight: inFlight)
         } catch {
@@ -120,7 +118,7 @@ enum DaemonBootstrap {
             Task { @MainActor in appState.applyRelayLink(state) }
         }
         let peerObserver = PeerObserver { state in
-            Task { @MainActor in appState.applyPeer(state) }
+            Task { @MainActor in await appState.applyPeer(state) }
         }
         let agentObserver = AgentStateObserverAdapter { state in
             Task { @MainActor in appState.applyAgentState(state) }
@@ -137,10 +135,12 @@ enum DaemonBootstrap {
         let peer = daemon.currentPeer()
         let agentState = daemon.currentAgentState()
         let trustedDevice = try await daemon.currentTrustedDevice()
+        let peers = try await daemon.currentPeers()
         return AppState.BootSnapshot(
             relayLink: relayLink,
             peer: peer,
             trustedDevice: trustedDevice,
+            peers: peers,
             agentState: agentState
         )
     }
@@ -316,40 +316,3 @@ enum LocalStateLoader {
     }
 }
 
-// ── Keychain device-secret reader ──
-//
-// Only `read` is needed at bootstrap; the daemon owns writes (after a
-// successful Pair the relay's response carries the secret and the Rust
-// side stores it via `KeychainTrustedDeviceStore::write`). The query skips
-// authentication UI so a background menu-bar launch never prompts.
-
-enum KeychainDeviceSecret {
-    static func read() -> DeviceSecret? {
-        if let secret = readNoUI(useProtectedKeychain: true) {
-            return secret
-        }
-        return readNoUI(useProtectedKeychain: false)
-    }
-
-    private static func readNoUI(useProtectedKeychain: Bool) -> DeviceSecret? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: DaemonBootstrap.keychainService,
-            kSecAttrAccount as String: "device-secret",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUISkip,
-            kSecUseDataProtectionKeychain as String: useProtectedKeychain
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard
-            status == errSecSuccess,
-            let data = item as? Data,
-            let utf8 = String(data: data, encoding: .utf8)
-        else {
-            return nil
-        }
-        return DeviceSecret(utf8)
-    }
-}
