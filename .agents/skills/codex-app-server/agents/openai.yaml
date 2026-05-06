@@ -1,0 +1,5 @@
+interface:
+  display_name: Codex App Server
+  short_description: Build JSON v2 Codex app-server clients.
+  icon: code
+  color: blue
