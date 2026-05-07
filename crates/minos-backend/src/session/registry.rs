@@ -380,6 +380,33 @@ impl SessionRegistry {
         }
     }
 
+    /// Best-effort broadcast of `frame` to every live mobile session bound to
+    /// `account_id`.
+    pub fn broadcast_mobile_account(&self, account_id: &str, frame: ServerFrame) -> usize {
+        let mut delivered = 0;
+        for handle in self.0.iter() {
+            if handle.role != DeviceRole::MobileClient {
+                continue;
+            }
+            if handle.account_id().as_deref() != Some(account_id) {
+                continue;
+            }
+            match handle.outbox.try_send(frame.clone()) {
+                Ok(()) => delivered += 1,
+                Err(err) => {
+                    tracing::debug!(
+                        target: "minos_backend::session",
+                        device_id = %handle.device_id,
+                        account_id,
+                        error = ?err,
+                        "account-scoped broadcast try_send failed; dropping frame for this peer"
+                    );
+                }
+            }
+        }
+        delivered
+    }
+
     /// Route `payload` from `from` to `to` as an [`Envelope::Forwarded`].
     ///
     /// Mechanical forward — does NOT verify `from` is paired with `to`.
@@ -1088,6 +1115,37 @@ mod tests {
             event: minos_protocol::EventKind::ServerShutdown,
         };
         reg.broadcast(frame);
+    }
+
+    #[tokio::test]
+    async fn broadcast_mobile_account_targets_matching_mobile_sessions_only() {
+        let reg = SessionRegistry::new();
+
+        let (h1, mut rx1) = SessionHandle::new(DeviceId::new(), DeviceRole::MobileClient);
+        h1.set_account_id("acct-1".into());
+        reg.insert(h1);
+
+        let (h2, mut rx2) = SessionHandle::new(DeviceId::new(), DeviceRole::MobileClient);
+        h2.set_account_id("acct-2".into());
+        reg.insert(h2);
+
+        let (h3, mut rx3) = SessionHandle::new(DeviceId::new(), DeviceRole::AgentHost);
+        h3.set_account_id("acct-1".into());
+        reg.insert(h3);
+
+        let (h4, mut rx4) = SessionHandle::new(DeviceId::new(), DeviceRole::MobileClient);
+        reg.insert(h4);
+
+        let frame = Envelope::Event {
+            version: 1,
+            event: minos_protocol::EventKind::ServerShutdown,
+        };
+
+        assert_eq!(reg.broadcast_mobile_account("acct-1", frame.clone()), 1);
+        assert_eq!(rx1.recv().await.unwrap(), frame);
+        assert!(rx2.try_recv().is_err(), "different account must not receive");
+        assert!(rx3.try_recv().is_err(), "agent-host must not receive");
+        assert!(rx4.try_recv().is_err(), "unbound mobile must not receive");
     }
 
     // ── Arc strong-count on session end (no leaks acceptance) ─────────

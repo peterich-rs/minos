@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `parse_device_id`, `spawn_state_forwarder`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -202,6 +202,9 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// immediately, then every subsequent change. The spawned task exits
   /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
   Stream<AuthStateFrame> subscribeAuthState();
+
+  /// Subscribe to live `SocialEventFrame`s fanned out from the backend.
+  Stream<SocialEventFrame> subscribeSocialEvents();
 
   /// Subscribe to connection-state transitions. Emits the current value
   /// immediately, then every subsequent change. The spawned task exits once
@@ -1101,6 +1104,25 @@ class RequestTraceRecord {
 enum RequestTraceStatus { pending, success, failure }
 
 enum RequestTraceTransport { http, rpc }
+
+/// Dart-visible shape of `minos_mobile::SocialEventFrame`.
+class SocialEventFrame {
+  final String conversationId;
+  final ChatMessageSummary message;
+
+  const SocialEventFrame({required this.conversationId, required this.message});
+
+  @override
+  int get hashCode => conversationId.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SocialEventFrame &&
+          runtimeType == other.runtimeType &&
+          conversationId == other.conversationId &&
+          message == other.message;
+}
 
 class StartAgentResponse {
   final String sessionId;

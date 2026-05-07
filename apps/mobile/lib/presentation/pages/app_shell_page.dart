@@ -1109,18 +1109,21 @@ class _ConnectionLine extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final (label, color) = switch (state) {
       ConnectionState_Connected() => (
-        '在线',
+        '实时连接在线',
         isDark ? const Color(0xFF22C55E) : const Color(0xFF16A34A),
       ),
       ConnectionState_Reconnecting(:final attempt) => (
-        '重连中 #$attempt',
+        '实时连接重连中 #$attempt',
         isDark ? const Color(0xFFEAB308) : const Color(0xFFCA8A04),
       ),
       ConnectionState_Pairing() => (
-        '配对中',
+        '实时连接初始化中',
         isDark ? const Color(0xFFEAB308) : const Color(0xFFCA8A04),
       ),
-      _ => ('离线', isDark ? const Color(0xFFEF4444) : const Color(0xFFDC2626)),
+      _ => (
+        '实时连接离线',
+        isDark ? const Color(0xFFEF4444) : const Color(0xFFDC2626),
+      ),
     };
     return Row(
       children: <Widget>[
@@ -1323,10 +1326,11 @@ class _OfflineBanner extends StatelessWidget {
 
   String _label() {
     return switch (state) {
-      ConnectionState_Reconnecting(:final attempt) => '正在重连 #$attempt',
-      ConnectionState_Pairing() => '配对中',
-      ConnectionState_Disconnected() => '已离线',
-      _ => '已离线',
+      ConnectionState_Reconnecting(:final attempt) =>
+        '当前设备与服务器的实时连接正在重连 #$attempt',
+      ConnectionState_Pairing() => '当前设备正在建立实时连接',
+      ConnectionState_Disconnected() => '当前设备与服务器的实时连接已断开',
+      _ => '当前设备与服务器的实时连接已断开',
     };
   }
 

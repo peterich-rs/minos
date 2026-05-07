@@ -20,6 +20,7 @@ use minos_mobile::request_trace::{
     RequestTraceRecord as CoreRequestTraceRecord, RequestTraceStatus as CoreRequestTraceStatus,
     RequestTransport as CoreRequestTransport,
 };
+use minos_mobile::SocialEventFrame as MobileSocialEventFrame;
 use minos_mobile::UiEventFrame as MobileUiEventFrame;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::watch;
@@ -94,6 +95,12 @@ pub struct UiEventFrame {
     pub seq: u64,
     pub ui: UiEventMessage,
     pub ts_ms: i64,
+}
+
+/// Dart-visible shape of `minos_mobile::SocialEventFrame`.
+pub struct SocialEventFrame {
+    pub conversation_id: String,
+    pub message: ChatMessageSummary,
 }
 
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
@@ -171,6 +178,15 @@ impl From<MobileUiEventFrame> for UiEventFrame {
             seq: f.seq,
             ui: f.ui,
             ts_ms: f.ts_ms,
+        }
+    }
+}
+
+impl From<MobileSocialEventFrame> for SocialEventFrame {
+    fn from(f: MobileSocialEventFrame) -> Self {
+        Self {
+            conversation_id: f.conversation_id,
+            message: f.message,
         }
     }
 }
@@ -403,6 +419,26 @@ impl MobileClient {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(skipped = n, "ui_events_stream lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
+    /// Subscribe to live `SocialEventFrame`s fanned out from the backend.
+    pub fn subscribe_social_events(&self, sink: StreamSink<SocialEventFrame>) {
+        let mut rx = self.0.social_events_stream();
+        frb_runtime().spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(frame) => {
+                        if sink.add(SocialEventFrame::from(frame)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "social_events_stream lagged");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }

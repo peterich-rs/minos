@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:minos/application/minos_providers.dart';
@@ -52,8 +54,14 @@ final conversationsProvider =
     );
 
 class ConversationsController extends AsyncNotifier<ConversationsResponse> {
+  StreamSubscription<SocialEventFrame>? _eventsSub;
+
   @override
   Future<ConversationsResponse> build() {
+    _eventsSub ??= ref.read(minosCoreProvider).socialEvents.listen((_) {
+      ref.invalidateSelf();
+    });
+    ref.onDispose(() => _eventsSub?.cancel());
     return ref.watch(minosCoreProvider).conversations();
   }
 

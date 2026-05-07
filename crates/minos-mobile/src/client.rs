@@ -24,30 +24,34 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
+use http::{Method, Request};
 use minos_domain::{AgentName, ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
-    AuthSummary, ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
-    CreateGroupConversationRequest, EnsureDirectConversationRequest, Envelope, EventKind,
-    FriendRequestSummary, FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams,
-    GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse, ListClisResponse,
-    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
-    MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
-    SendChatMessageRequest, SendUserMessageRequest, SetMinosIdRequest, StartAgentRequest,
-    StartAgentResponse, UserSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    AuthSummary, ChatMessageSummary, ConversationResponse, ConversationsResponse,
+    CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
+    Envelope, EventKind, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
+    GetThreadLastSeqParams, GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse,
+    ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
+    ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams,
+    ReadThreadResponse, RefreshResponse, SendChatMessageRequest, SendUserMessageRequest,
+    SetMinosIdRequest, StartAgentRequest, StartAgentResponse, UserSummary,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
+use openwire::websocket::WebSocket;
+use openwire::{Client as OpenwireClient, RequestBody, WireError, WireErrorKind};
+use openwire_core::websocket::{HandshakeFailure, Message, WebSocketEngineError, WebSocketError};
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, RwLock};
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::Error as WsError;
-use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 use crate::auth::{AuthSession, AuthStateFrame};
+use crate::openwire_trace::OpenwireTraceFactory;
 use crate::rpc::{drain_pending, forward_rpc, RpcReply, RpcTraceContext};
 use crate::store::{InMemoryPairingStore, MobilePairingStore, PersistedPairingState};
 use crate::ReconnectController;
+
+const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// One live UI event pushed from backend fan-out. Mobile layers consume
 /// these via [`MobileClient::ui_events_stream`] (broadcast receiver).
@@ -57,6 +61,13 @@ pub struct UiEventFrame {
     pub seq: u64,
     pub ui: UiEventMessage,
     pub ts_ms: i64,
+}
+
+/// One live social-chat message pushed from backend fan-out.
+#[derive(Debug, Clone)]
+pub struct SocialEventFrame {
+    pub conversation_id: String,
+    pub message: ChatMessageSummary,
 }
 
 /// Envelope-speaking mobile client. One instance per iPhone process.
@@ -71,6 +82,7 @@ pub struct MobileClient {
     state_tx: watch::Sender<ConnectionState>,
     state_rx: watch::Receiver<ConnectionState>,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
+    social_events_tx: broadcast::Sender<SocialEventFrame>,
     outbox: Arc<Mutex<Option<mpsc::Sender<Envelope>>>>,
     device_id: DeviceId,
     self_name: String,
@@ -116,12 +128,14 @@ impl MobileClient {
     ) -> Self {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
         let (ui_events_tx, _) = broadcast::channel(256);
+        let (social_events_tx, _) = broadcast::channel(256);
         let (auth_state_tx, auth_state_rx) = watch::channel(AuthStateFrame::Unauthenticated);
         Self {
             store,
             state_tx,
             state_rx,
             ui_events_tx,
+            social_events_tx,
             outbox: Arc::new(Mutex::new(None)),
             device_id,
             self_name,
@@ -185,6 +199,7 @@ impl MobileClient {
 
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
         let (ui_events_tx, _) = broadcast::channel(256);
+        let (social_events_tx, _) = broadcast::channel(256);
         let initial_auth_frame = match &live_auth {
             Some(s) => AuthStateFrame::Authenticated {
                 account: s.account.clone(),
@@ -197,6 +212,7 @@ impl MobileClient {
             state_tx,
             state_rx,
             ui_events_tx,
+            social_events_tx,
             outbox: Arc::new(Mutex::new(None)),
             device_id,
             self_name,
@@ -229,6 +245,12 @@ impl MobileClient {
     #[must_use]
     pub fn ui_events_stream(&self) -> broadcast::Receiver<UiEventFrame> {
         self.ui_events_tx.subscribe()
+    }
+
+    /// Subscribe to live social-chat events from backend fan-out.
+    #[must_use]
+    pub fn social_events_stream(&self) -> broadcast::Receiver<SocialEventFrame> {
+        self.social_events_tx.subscribe()
     }
 
     /// Return the device id the client registered with. Stable for the
@@ -1092,6 +1114,7 @@ impl MobileClient {
             auth_state_tx: self.auth_state_tx.clone(),
             state_tx: self.state_tx.clone(),
             ui_events_tx: self.ui_events_tx.clone(),
+            social_events_tx: self.social_events_tx.clone(),
             pending: self.pending.clone(),
             outbox: self.outbox.clone(),
             tasks: self.tasks.clone(),
@@ -1186,8 +1209,10 @@ impl MobileClient {
     }
 
     /// Notify the reconnect controller that the iOS app moved to the
-    /// background. Sets paused so the loop's next wakeup exits. Spec
-    /// §6.3 / §8.3. Same runtime-handling shape as `notify_foregrounded`.
+    /// background. Starts a short grace window before pausing reconnects
+    /// so brief app switches do not force an immediate reconnect on
+    /// return. Spec §6.3 / §8.3. Same runtime-handling shape as
+    /// `notify_foregrounded`.
     pub fn notify_backgrounded(&self) {
         let r = self.reconnect.clone();
         match tokio::runtime::Handle::try_current() {
@@ -1203,6 +1228,115 @@ impl MobileClient {
     }
 
     // ─────────────────────────── internals ────────────────────────────
+
+    fn build_websocket_client() -> Result<OpenwireClient, MinosError> {
+        let tls_connector =
+            crate::tls::build_mobile_tls_connector().map_err(|e| MinosError::BackendInternal {
+                message: format!("build mobile websocket TLS connector: {e}"),
+            })?;
+
+        OpenwireClient::builder()
+            .tls_connector(tls_connector)
+            .event_listener_factory(OpenwireTraceFactory::new("mobile_ws"))
+            .build()
+            .map_err(|e| MinosError::BackendInternal {
+                message: format!("build websocket client: {e}"),
+            })
+    }
+
+    fn build_websocket_request(
+        url: &str,
+        device_id: &DeviceId,
+        self_name: &str,
+        cf_access: Option<&(String, String)>,
+        access_token: Option<&str>,
+    ) -> Result<Request<RequestBody>, MinosError> {
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(url)
+            .body(RequestBody::empty())
+            .map_err(|e| MinosError::ConnectFailed {
+                url: url.to_string(),
+                message: format!("invalid backend URL: {e}"),
+            })?;
+
+        let headers = request.headers_mut();
+        headers.insert(
+            "X-Device-Id",
+            device_id
+                .to_string()
+                .parse()
+                .map_err(|_| MinosError::ConnectFailed {
+                    url: url.to_string(),
+                    message: "device_id is not a valid header value".into(),
+                })?,
+        );
+        headers.insert(
+            "X-Device-Role",
+            "mobile-client"
+                .parse()
+                .expect("static header value is valid"),
+        );
+        headers.insert(
+            "X-Device-Name",
+            self_name.parse().map_err(|_| MinosError::ConnectFailed {
+                url: url.to_string(),
+                message: "self_name is not a valid header value".into(),
+            })?,
+        );
+        if let Some(tok) = access_token {
+            headers.insert(
+                "Authorization",
+                format!("Bearer {tok}")
+                    .parse()
+                    .map_err(|_| MinosError::ConnectFailed {
+                        url: url.to_string(),
+                        message: "access_token is not a valid header value".into(),
+                    })?,
+            );
+        }
+        if let Some((id, secret)) = cf_access {
+            headers.insert(
+                "CF-Access-Client-Id",
+                id.parse().map_err(|_| MinosError::ConnectFailed {
+                    url: url.to_string(),
+                    message: "cf_access_client_id is not a valid header value".into(),
+                })?,
+            );
+            headers.insert(
+                "CF-Access-Client-Secret",
+                secret.parse().map_err(|_| MinosError::ConnectFailed {
+                    url: url.to_string(),
+                    message: "cf_access_client_secret is not a valid header value".into(),
+                })?,
+            );
+        }
+
+        Ok(request)
+    }
+
+    async fn open_backend_websocket(
+        url: &str,
+        device_id: &DeviceId,
+        self_name: &str,
+        cf_access: Option<&(String, String)>,
+        access_token: Option<&str>,
+    ) -> Result<WebSocket, WebSocketError> {
+        let request =
+            Self::build_websocket_request(url, device_id, self_name, cf_access, access_token)
+                .map_err(|error| {
+                    WebSocketError::Io(WireError::invalid_request(error.to_string()))
+                })?;
+        let client = Self::build_websocket_client().map_err(|error| {
+            WebSocketError::Io(WireError::new(WireErrorKind::Internal, error.to_string()))
+        })?;
+
+        client
+            .new_websocket(request)
+            .handshake_timeout(WS_HANDSHAKE_TIMEOUT)
+            .execute()
+            .await
+    }
 
     // The body is mostly header-stamping boilerplate that mirrors
     // `connect_with_handles`; deduplicating across them is deferred to
@@ -1224,70 +1358,24 @@ impl MobileClient {
             bearer_present,
             "mobile: opening backend WebSocket"
         );
-        let mut req = url
-            .into_client_request()
-            .map_err(|e| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: format!("invalid backend URL: {e}"),
-            })?;
-        let headers = req.headers_mut();
-        headers.insert(
-            "X-Device-Id",
-            self.device_id
-                .to_string()
-                .parse()
-                .map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "device_id is not a valid header value".into(),
-                })?,
-        );
-        headers.insert(
-            "X-Device-Role",
-            "mobile-client"
-                .parse()
-                .expect("static header value is valid"),
-        );
-        headers.insert(
-            "X-Device-Name",
-            self.self_name
-                .parse()
-                .map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "self_name is not a valid header value".into(),
-                })?,
-        );
-        if let Some(tok) = access_token {
-            headers.insert(
-                "Authorization",
-                format!("Bearer {tok}")
-                    .parse()
-                    .map_err(|_| MinosError::ConnectFailed {
-                        url: url.to_string(),
-                        message: "access_token is not a valid header value".into(),
-                    })?,
-            );
-        }
-        if let Some((id, sec)) = cf_access {
-            headers.insert(
-                "CF-Access-Client-Id",
-                id.parse().map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "cf_access_client_id is not a valid header value".into(),
-                })?,
-            );
-            headers.insert(
-                "CF-Access-Client-Secret",
-                sec.parse().map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "cf_access_client_secret is not a valid header value".into(),
-                })?,
-            );
-        }
-
-        let (ws, _resp) = connect_async(req).await.map_err(|e| {
-            connect_error_to_minos(url, e, &self.device_id, bearer_present, cf_access_present)
+        let websocket = Self::open_backend_websocket(
+            url,
+            &self.device_id,
+            &self.self_name,
+            cf_access.as_ref(),
+            access_token,
+        )
+        .await
+        .map_err(|error| {
+            connect_error_to_minos(
+                url,
+                error,
+                &self.device_id,
+                bearer_present,
+                cf_access_present,
+            )
         })?;
-        let (mut write, read) = ws.split();
+        let (write, read) = websocket.split();
 
         let (tx, mut rx) = mpsc::channel::<Envelope>(256);
 
@@ -1300,7 +1388,7 @@ impl MobileClient {
                         continue;
                     }
                 };
-                if let Err(e) = write.send(Message::Text(text.into())).await {
+                if let Err(e) = write.send_text(text).await {
                     tracing::warn!(?e, "mobile: WS write failed; send loop exiting");
                     break;
                 }
@@ -1310,6 +1398,7 @@ impl MobileClient {
         let recv_handle = tokio::spawn(recv_loop(
             read,
             self.ui_events_tx.clone(),
+            self.social_events_tx.clone(),
             self.state_tx.clone(),
             self.pending.clone(),
         ));
@@ -1348,18 +1437,25 @@ impl MobileClient {
 async fn recv_loop<S>(
     mut read: S,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
+    social_events_tx: broadcast::Sender<SocialEventFrame>,
     state_tx: watch::Sender<ConnectionState>,
     pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>>,
 ) where
-    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+    S: StreamExt<Item = Result<Message, WebSocketError>> + Unpin,
 {
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(t)) => {
                 let text: &str = t.as_ref();
-                handle_text_frame(text, &ui_events_tx, &state_tx, &pending);
+                handle_text_frame(
+                    text,
+                    &ui_events_tx,
+                    &social_events_tx,
+                    &state_tx,
+                    &pending,
+                );
             }
-            Ok(Message::Close(_)) => {
+            Ok(Message::Close { .. }) => {
                 break;
             }
             Ok(_) => {}
@@ -1376,6 +1472,7 @@ async fn recv_loop<S>(
 fn handle_text_frame(
     text: &str,
     ui_events_tx: &broadcast::Sender<UiEventFrame>,
+    social_events_tx: &broadcast::Sender<SocialEventFrame>,
     state_tx: &watch::Sender<ConnectionState>,
     pending: &DashMap<u64, oneshot::Sender<RpcReply>>,
 ) {
@@ -1399,6 +1496,15 @@ fn handle_text_frame(
                     seq,
                     ui,
                     ts_ms,
+                });
+            }
+            EventKind::SocialMessage {
+                conversation_id,
+                message,
+            } => {
+                let _ = social_events_tx.send(SocialEventFrame {
+                    conversation_id,
+                    message,
                 });
             }
             EventKind::ServerShutdown => {
@@ -1455,22 +1561,22 @@ fn handle_text_frame(
     }
 }
 
-/// Map a tungstenite handshake error into a typed `MinosError`, picking
+/// Map an OpenWire websocket failure into a typed `MinosError`, picking
 /// the variant the localized UI hint should reflect and stuffing the raw
 /// classification into the `message` field so the iOS log panel surfaces
 /// the actual cause instead of just `e.to_string()`.
 fn connect_error_to_minos(
     url: &str,
-    err: WsError,
+    err: WebSocketError,
     device_id: &DeviceId,
     bearer_present: bool,
     cf_access_present: bool,
 ) -> MinosError {
     let detail = describe_ws_error(&err);
-    // `error_variant` is the tungstenite `WsError` variant that fired
-    // (e.g. `http` when the WS upgrade got a non-101 HTTP response, `io`
-    // for network errors). NOT the request scheme — the URL is always
-    // `ws(s)://` here, regardless of variant.
+    // `error_variant` is the OpenWire websocket failure class that fired
+    // (e.g. `handshake` when the upgrade got a non-101 HTTP response,
+    // `connect`/`tls` for transport failures). NOT the request scheme —
+    // the URL is always `ws(s)://` here, regardless of variant.
     tracing::warn!(
         target: "minos_mobile::client",
         url,
@@ -1495,75 +1601,88 @@ fn connect_error_to_minos(
     }
 }
 
-/// Structured view of a `tungstenite::Error`, kept private so the mapping
+/// Structured view of an OpenWire websocket error, kept private so the mapping
 /// in `connect_error_to_minos` doesn't have to keep a parallel `match`.
 struct WsErrorDetail {
     kind: &'static str,
     message: String,
-    /// Set only when `err` is `WsError::Http(_)`; lets the caller treat
-    /// CF-Access redirects specially without re-pattern-matching.
+    /// Set when the handshake or underlying wire error surfaced an HTTP
+    /// status, letting the caller treat CF-Access redirects specially.
     http_status: Option<u16>,
 }
 
-fn describe_ws_error(err: &WsError) -> WsErrorDetail {
+fn describe_ws_error(err: &WebSocketError) -> WsErrorDetail {
     match err {
-        WsError::Io(io_err) => WsErrorDetail {
-            kind: "io",
-            message: format!("io {kind:?}: {io_err}", kind = io_err.kind()),
-            http_status: None,
-        },
-        WsError::Tls(tls_err) => WsErrorDetail {
-            kind: "tls",
-            message: format!("tls: {tls_err}"),
-            http_status: None,
-        },
-        WsError::Url(url_err) => WsErrorDetail {
-            kind: "url",
-            message: format!("url: {url_err}"),
-            http_status: None,
-        },
-        WsError::Http(resp) => {
-            let status = resp.status();
-            let body = resp
-                .body()
-                .as_deref()
-                .and_then(|b| std::str::from_utf8(b).ok())
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
-            let body_snippet = body
-                .map(|s| format!(": {}", s.chars().take(160).collect::<String>()))
-                .unwrap_or_default();
+        WebSocketError::Handshake { status, reason } => {
+            let reason_detail = match reason {
+                HandshakeFailure::SubprotocolMismatch { offered, returned } => {
+                    format!("subprotocol mismatch returned={returned} offered={offered:?}")
+                }
+                HandshakeFailure::UnsupportedExtension(extension) => {
+                    format!("unsupported extension: {extension}")
+                }
+                HandshakeFailure::Other(message) => message.clone(),
+                other => format!("{other:?}"),
+            };
+            let status_detail = status.map(|value| format!(" {value}")).unwrap_or_default();
             WsErrorDetail {
-                kind: "http",
-                message: format!("http {status}{body_snippet}"),
-                http_status: Some(status.as_u16()),
+                kind: "handshake",
+                message: format!("handshake{status_detail}: {reason_detail}"),
+                http_status: status.map(|value| value.as_u16()),
             }
         }
-        WsError::HttpFormat(e) => WsErrorDetail {
-            kind: "http_format",
-            message: format!("http format: {e}"),
+        WebSocketError::Engine(engine_err) => describe_engine_error(engine_err),
+        WebSocketError::Io(wire_err) => describe_wire_error(wire_err),
+        WebSocketError::ClosedByPeer { code, reason } => WsErrorDetail {
+            kind: "closed_by_peer",
+            message: format!("closed by peer: {code} {reason}"),
             http_status: None,
         },
-        WsError::Protocol(e) => WsErrorDetail {
-            kind: "protocol",
-            message: format!("protocol: {e}"),
+        WebSocketError::Timeout(kind) => WsErrorDetail {
+            kind: "timeout",
+            message: format!("websocket timeout: {kind:?}"),
             http_status: None,
         },
-        WsError::AttackAttempt => WsErrorDetail {
-            kind: "attack_attempt",
-            message: "tungstenite flagged the response as a potential attack".into(),
+        WebSocketError::LocalCancelled => WsErrorDetail {
+            kind: "canceled",
+            message: "local cancellation".into(),
             http_status: None,
         },
-        WsError::ConnectionClosed | WsError::AlreadyClosed => WsErrorDetail {
-            kind: "closed",
-            message: format!("{err}"),
-            http_status: None,
-        },
+    }
+}
+
+fn describe_engine_error(err: &WebSocketEngineError) -> WsErrorDetail {
+    match err {
+        WebSocketEngineError::Io(wire_err) => describe_wire_error(wire_err),
         other => WsErrorDetail {
-            kind: "other",
-            message: format!("{other}"),
+            kind: "engine",
+            message: format!("engine: {other}"),
             http_status: None,
         },
+    }
+}
+
+fn describe_wire_error(err: &WireError) -> WsErrorDetail {
+    WsErrorDetail {
+        kind: describe_wire_error_kind(err.kind()),
+        message: err.to_string(),
+        http_status: err.response_status().map(|value| value.as_u16()),
+    }
+}
+
+fn describe_wire_error_kind(kind: WireErrorKind) -> &'static str {
+    match kind {
+        WireErrorKind::InvalidRequest => "invalid_request",
+        WireErrorKind::Timeout => "timeout",
+        WireErrorKind::Canceled => "canceled",
+        WireErrorKind::Dns => "dns",
+        WireErrorKind::Connect => "connect",
+        WireErrorKind::Tls => "tls",
+        WireErrorKind::Protocol => "protocol",
+        WireErrorKind::Redirect => "redirect",
+        WireErrorKind::Body => "body",
+        WireErrorKind::Interceptor => "interceptor",
+        WireErrorKind::Internal => "internal",
     }
 }
 
@@ -1621,6 +1740,7 @@ struct ReconnectContext {
     auth_state_tx: watch::Sender<AuthStateFrame>,
     state_tx: watch::Sender<ConnectionState>,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
+    social_events_tx: broadcast::Sender<SocialEventFrame>,
     pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>>,
     outbox: Arc<Mutex<Option<mpsc::Sender<Envelope>>>>,
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
@@ -1632,7 +1752,7 @@ struct ReconnectContext {
 ///
 /// Spec §6.3:
 /// - Sleeps `reconnect.next_delay()` between attempts.
-/// - Honours `reconnect.is_paused()` set by `notify_backgrounded`.
+/// - Honours `reconnect.is_paused()` after the background grace window.
 /// - Refreshes the access token if its expiry is within 2 minutes.
 /// - Calls into [`connect_with_handles`] (mirrors `MobileClient::connect`
 ///   but keeps the loop free of `&self`).
@@ -1810,70 +1930,24 @@ async fn connect_with_handles(
 ) -> Result<(), MinosError> {
     let cf_access_present = cf_access.is_some();
     let bearer_present = access_token.is_some();
-    let mut req = url
-        .into_client_request()
-        .map_err(|e| MinosError::ConnectFailed {
-            url: url.to_string(),
-            message: format!("invalid backend URL: {e}"),
-        })?;
-    let headers = req.headers_mut();
-    headers.insert(
-        "X-Device-Id",
-        ctx.device_id
-            .to_string()
-            .parse()
-            .map_err(|_| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: "device_id is not a valid header value".into(),
-            })?,
-    );
-    headers.insert(
-        "X-Device-Role",
-        "mobile-client"
-            .parse()
-            .expect("static header value is valid"),
-    );
-    headers.insert(
-        "X-Device-Name",
-        ctx.self_name
-            .parse()
-            .map_err(|_| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: "self_name is not a valid header value".into(),
-            })?,
-    );
-    if let Some(tok) = access_token {
-        headers.insert(
-            "Authorization",
-            format!("Bearer {tok}")
-                .parse()
-                .map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "access_token is not a valid header value".into(),
-                })?,
-        );
-    }
-    if let Some((id, sec)) = cf_access {
-        headers.insert(
-            "CF-Access-Client-Id",
-            id.parse().map_err(|_| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: "cf_access_client_id is not a valid header value".into(),
-            })?,
-        );
-        headers.insert(
-            "CF-Access-Client-Secret",
-            sec.parse().map_err(|_| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: "cf_access_client_secret is not a valid header value".into(),
-            })?,
-        );
-    }
-
-    let (ws, _resp) = connect_async(req).await.map_err(|e| {
-        connect_error_to_minos(url, e, &ctx.device_id, bearer_present, cf_access_present)
+    let websocket = MobileClient::open_backend_websocket(
+        url,
+        &ctx.device_id,
+        &ctx.self_name,
+        cf_access.as_ref(),
+        access_token,
+    )
+    .await
+    .map_err(|error| {
+        connect_error_to_minos(
+            url,
+            error,
+            &ctx.device_id,
+            bearer_present,
+            cf_access_present,
+        )
     })?;
-    let (mut write, read) = ws.split();
+    let (write, read) = websocket.split();
     let (tx, mut rx) = mpsc::channel::<Envelope>(256);
     let send_handle = tokio::spawn(async move {
         while let Some(env) = rx.recv().await {
@@ -1884,7 +1958,7 @@ async fn connect_with_handles(
                     continue;
                 }
             };
-            if let Err(e) = write.send(Message::Text(text.into())).await {
+            if let Err(e) = write.send_text(text).await {
                 tracing::warn!(?e, "mobile: WS write failed; send loop exiting");
                 break;
             }
@@ -1893,6 +1967,7 @@ async fn connect_with_handles(
     let recv_handle = tokio::spawn(recv_loop(
         read,
         ctx.ui_events_tx.clone(),
+        ctx.social_events_tx.clone(),
         ctx.state_tx.clone(),
         ctx.pending.clone(),
     ));
@@ -2038,13 +2113,12 @@ mod tests {
 
     #[test]
     fn cf_access_http_rejection_maps_to_cf_auth_failed_with_status_in_message() {
-        let response = tokio_tungstenite::tungstenite::http::Response::builder()
-            .status(403)
-            .body(None::<Vec<u8>>)
-            .unwrap();
         let err = connect_error_to_minos(
             "wss://example.com/devices",
-            WsError::Http(Box::new(response)),
+            WebSocketError::Handshake {
+                status: Some(http::StatusCode::FORBIDDEN),
+                reason: HandshakeFailure::UnexpectedStatus,
+            },
             &DeviceId::new(),
             true,
             false,
@@ -2063,13 +2137,12 @@ mod tests {
 
     #[test]
     fn non_cf_http_status_maps_to_connect_failed_with_status_detail() {
-        let response = tokio_tungstenite::tungstenite::http::Response::builder()
-            .status(502)
-            .body(Some(b"upstream timed out".to_vec()))
-            .unwrap();
         let err = connect_error_to_minos(
             "wss://example.com/devices",
-            WsError::Http(Box::new(response)),
+            WebSocketError::Handshake {
+                status: Some(http::StatusCode::BAD_GATEWAY),
+                reason: HandshakeFailure::UnexpectedStatus,
+            },
             &DeviceId::new(),
             true,
             false,
@@ -2083,8 +2156,8 @@ mod tests {
                     "expected status in message: {message}"
                 );
                 assert!(
-                    message.contains("upstream timed out"),
-                    "expected body snippet in message: {message}"
+                    message.contains("UnexpectedStatus"),
+                    "expected handshake detail in message: {message}"
                 );
             }
             other => panic!("expected ConnectFailed, got {other:?}"),
@@ -2093,10 +2166,12 @@ mod tests {
 
     #[test]
     fn io_error_maps_to_connect_failed_with_kind_in_message() {
-        let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "nope");
         let err = connect_error_to_minos(
             "wss://example.com/devices",
-            WsError::Io(io),
+            WebSocketError::Io(WireError::tcp_connect(
+                "io ConnectionRefused",
+                std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "nope"),
+            )),
             &DeviceId::new(),
             false,
             false,
@@ -2119,6 +2194,7 @@ mod tests {
         let (tx, rx) = oneshot::channel::<RpcReply>();
         pending.insert(42, tx);
         let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (social_tx, _social_rx) = broadcast::channel(8);
         let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
 
         let from = DeviceId::new();
@@ -2132,7 +2208,7 @@ mod tests {
             }),
         };
         let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
 
         let reply = rx.await.unwrap();
         match reply {
@@ -2151,6 +2227,7 @@ mod tests {
         let (tx, rx) = oneshot::channel::<RpcReply>();
         pending.insert(7, tx);
         let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (social_tx, _social_rx) = broadcast::channel(8);
         let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
 
         let env = Envelope::Forwarded {
@@ -2163,7 +2240,7 @@ mod tests {
             }),
         };
         let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
 
         let reply = rx.await.unwrap();
         match reply {
@@ -2180,6 +2257,7 @@ mod tests {
         // Pending starts empty: a Forwarded with id=99 must be a no-op.
         let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
         let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (social_tx, _social_rx) = broadcast::channel(8);
         let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
 
         let env = Envelope::Forwarded {
@@ -2188,7 +2266,7 @@ mod tests {
             payload: serde_json::json!({"jsonrpc": "2.0", "id": 99, "result": {}}),
         };
         let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
         assert!(pending.is_empty());
     }
 
@@ -2273,6 +2351,7 @@ mod tests {
         let (tx, _rx) = oneshot::channel::<RpcReply>();
         pending.insert(1, tx);
         let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (social_tx, _social_rx) = broadcast::channel(8);
         let (state_tx, _state_rx) = watch::channel(ConnectionState::Connected);
 
         let env = Envelope::Event {
@@ -2280,7 +2359,7 @@ mod tests {
             event: EventKind::Unpaired,
         };
         let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
 
         // Pending entry must survive the Unpaired event.
         assert_eq!(pending.len(), 1);
@@ -2292,6 +2371,7 @@ mod tests {
         let (tx, rx) = oneshot::channel::<RpcReply>();
         pending.insert(1, tx);
         let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (social_tx, _social_rx) = broadcast::channel(8);
         let (state_tx, _state_rx) = watch::channel(ConnectionState::Connected);
 
         let env = Envelope::Event {
@@ -2299,7 +2379,7 @@ mod tests {
             event: EventKind::ServerShutdown,
         };
         let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &state_tx, &pending);
+        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
 
         let reply = rx.await.unwrap();
         match reply {
@@ -2307,6 +2387,39 @@ mod tests {
             other => panic!("expected RequestDropped err, got {other:?}"),
         }
         assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_text_frame_social_message_event_is_broadcast() {
+        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
+        let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (social_tx, mut social_rx) = broadcast::channel(8);
+        let (state_tx, _state_rx) = watch::channel(ConnectionState::Connected);
+
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::SocialMessage {
+                conversation_id: "conv-1".into(),
+                message: ChatMessageSummary {
+                    message_id: "msg-1".into(),
+                    conversation_id: "conv-1".into(),
+                    sender: UserSummary {
+                        account_id: "acct-1".into(),
+                        minos_id: "alice01".into(),
+                        display_name: "Alice".into(),
+                    },
+                    text: "hello".into(),
+                    created_at_ms: 123,
+                },
+            },
+        };
+        let text = serde_json::to_string(&env).unwrap();
+        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
+
+        let frame = social_rx.recv().await.unwrap();
+        assert_eq!(frame.conversation_id, "conv-1");
+        assert_eq!(frame.message.message_id, "msg-1");
+        assert_eq!(frame.message.sender.display_name, "Alice");
     }
 
     /// Regression for the "TCP reset without WS Close" path: when the read
@@ -2321,14 +2434,13 @@ mod tests {
         pending.insert(1, rpc_tx);
 
         let (ui_tx, _ui_rx) = broadcast::channel(8);
+        let (social_tx, _social_rx) = broadcast::channel(8);
         let (state_tx, mut state_rx) = watch::channel(ConnectionState::Connected);
 
         // An empty stream models a transport that closed without an
         // explicit WS Close frame — `next()` returns None on the first poll.
-        let read = futures_util::stream::iter(Vec::<
-            Result<Message, tokio_tungstenite::tungstenite::Error>,
-        >::new());
-        recv_loop(read, ui_tx, state_tx, pending.clone()).await;
+        let read = futures_util::stream::iter(Vec::<Result<Message, WebSocketError>>::new());
+        recv_loop(read, ui_tx, social_tx, state_tx, pending.clone()).await;
 
         // Pending must be drained.
         assert!(pending.is_empty(), "pending must be drained on stream end");

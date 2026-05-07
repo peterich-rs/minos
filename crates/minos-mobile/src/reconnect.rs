@@ -10,8 +10,9 @@
 //! - Start at 1s, double on each consecutive failure, cap at 30s.
 //! - On a sustained success (60s+ connected), reset to 1s; quick re-fails
 //!   keep the previous backoff so we don't churn.
-//! - Foregrounding resets the backoff to 1s and clears `paused`. Background
-//!   sets `paused` so the loop can quickly check and exit.
+//! - Foregrounding resets the backoff to 1s and clears any pending pause.
+//! - Backgrounding starts a short grace window before pausing so brief app
+//!   switches do not force an immediate reconnect on return.
 
 use std::time::{Duration, Instant};
 
@@ -30,12 +31,17 @@ struct ReconnectState {
     consecutive_failures: u32,
     last_connected_at: Option<Instant>,
     foreground: bool,
+    backgrounded_at: Option<Instant>,
     paused: bool,
 }
 
 const INITIAL_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(30);
 const STABLE_THRESHOLD: Duration = Duration::from_secs(60);
+#[cfg(not(test))]
+const BACKGROUND_PAUSE_GRACE: Duration = Duration::from_secs(45);
+#[cfg(test)]
+const BACKGROUND_PAUSE_GRACE: Duration = Duration::from_millis(50);
 
 impl ReconnectController {
     #[must_use]
@@ -46,6 +52,7 @@ impl ReconnectController {
                 consecutive_failures: 0,
                 last_connected_at: None,
                 foreground: true,
+                backgrounded_at: None,
                 paused: false,
             }),
         }
@@ -87,21 +94,31 @@ impl ReconnectController {
     pub async fn notify_foregrounded(&self) {
         let mut s = self.state.write().await;
         s.foreground = true;
+        s.backgrounded_at = None;
         s.delay = INITIAL_DELAY;
         s.paused = false;
     }
 
-    /// App moved to background. Sets `paused` so the loop quickly exits
-    /// after its next wakeup. We do NOT actively close the WS here (iOS
-    /// will keep it warm for a few seconds), only flag the loop.
+    /// App moved to background. Keep reconnect alive for a short grace window
+    /// so brief background hops do not guarantee a reconnect on foreground.
     pub async fn notify_backgrounded(&self) {
         let mut s = self.state.write().await;
         s.foreground = false;
-        s.paused = true;
+        s.backgrounded_at = Some(Instant::now());
+        s.paused = false;
     }
 
     pub async fn is_paused(&self) -> bool {
-        self.state.read().await.paused
+        let mut s = self.state.write().await;
+        if !s.paused
+            && !s.foreground
+            && s
+                .backgrounded_at
+                .is_some_and(|at| at.elapsed() >= BACKGROUND_PAUSE_GRACE)
+        {
+            s.paused = true;
+        }
+        s.paused
     }
 
     /// Test/observability accessor: how many consecutive failures has the
@@ -167,6 +184,7 @@ mod tests {
         r.record_failure().await;
         r.record_failure().await;
         r.notify_backgrounded().await;
+        tokio::time::sleep(BACKGROUND_PAUSE_GRACE + Duration::from_millis(10)).await;
         assert!(r.is_paused().await);
 
         r.notify_foregrounded().await;
@@ -175,9 +193,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_sets_paused() {
+    async fn background_pauses_after_grace_window() {
         let r = ReconnectController::new();
         r.notify_backgrounded().await;
+        assert!(!r.is_paused().await);
+        tokio::time::sleep(BACKGROUND_PAUSE_GRACE + Duration::from_millis(10)).await;
         assert!(r.is_paused().await);
     }
 }

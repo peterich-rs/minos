@@ -63,6 +63,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_StreamSink_request_trace_record_Sse(dynamic raw);
 
   @protected
+  RustStreamSink<SocialEventFrame> dco_decode_StreamSink_social_event_frame_Sse(
+    dynamic raw,
+  );
+
+  @protected
   RustStreamSink<UiEventFrame> dco_decode_StreamSink_ui_event_frame_Sse(
     dynamic raw,
   );
@@ -306,6 +311,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RequestTraceTransport dco_decode_request_trace_transport(dynamic raw);
 
   @protected
+  SocialEventFrame dco_decode_social_event_frame(dynamic raw);
+
+  @protected
   StartAgentResponse dco_decode_start_agent_response(dynamic raw);
 
   @protected
@@ -385,6 +393,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   RustStreamSink<RequestTraceRecord>
   sse_decode_StreamSink_request_trace_record_Sse(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<SocialEventFrame> sse_decode_StreamSink_social_event_frame_Sse(
+    SseDeserializer deserializer,
+  );
 
   @protected
   RustStreamSink<UiEventFrame> sse_decode_StreamSink_ui_event_frame_Sse(
@@ -698,6 +711,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  SocialEventFrame sse_decode_social_event_frame(SseDeserializer deserializer);
+
+  @protected
   StartAgentResponse sse_decode_start_agent_response(
     SseDeserializer deserializer,
   );
@@ -788,6 +804,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_request_trace_record_Sse(
     RustStreamSink<RequestTraceRecord> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_social_event_frame_Sse(
+    RustStreamSink<SocialEventFrame> self,
     SseSerializer serializer,
   );
 
@@ -1193,6 +1215,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_request_trace_transport(
     RequestTraceTransport self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_social_event_frame(
+    SocialEventFrame self,
     SseSerializer serializer,
   );
 

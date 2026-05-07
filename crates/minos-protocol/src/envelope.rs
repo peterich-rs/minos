@@ -25,6 +25,8 @@
 use minos_domain::{DeviceId, DeviceSecret};
 use serde::{Deserialize, Serialize};
 
+use crate::ChatMessageSummary;
+
 /// One WebSocket frame on the relay's `/devices` endpoint.
 ///
 /// Serialised as a tagged JSON object with `kind` as the discriminator.
@@ -129,6 +131,15 @@ pub enum EventKind {
         seq: u64,
         ui: minos_ui_protocol::UiEventMessage,
         ts_ms: i64,
+    },
+    /// Backend → Mobile. One realtime social-chat message fan-out.
+    ///
+    /// Emitted to every live mobile session whose account is a member of
+    /// `conversation_id`. The payload is the hydrated HTTP message summary so
+    /// mobile can append it locally without refetching the full page.
+    SocialMessage {
+        conversation_id: String,
+        message: ChatMessageSummary,
     },
     /// Backend → Daemon. Sent as the first frame after the agent-host
     /// `/v1/devices/ws` upgrade authenticates. Carries the backend's
@@ -253,6 +264,34 @@ mod tests {
         round_trip(&env);
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["type"], "peer_online");
+    }
+
+    #[test]
+    fn social_message_event_round_trips() {
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::SocialMessage {
+                conversation_id: "conv-123".into(),
+                message: ChatMessageSummary {
+                    message_id: "msg-123".into(),
+                    conversation_id: "conv-123".into(),
+                    sender: crate::UserSummary {
+                        account_id: "acct-1".into(),
+                        minos_id: "alice01".into(),
+                        display_name: "Alice".into(),
+                    },
+                    text: "hello from websocket".into(),
+                    created_at_ms: 1_717_171_717,
+                },
+            },
+        };
+        round_trip(&env);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["kind"], "event");
+        assert_eq!(v["type"], "social_message");
+        assert_eq!(v["conversation_id"], "conv-123");
+        assert_eq!(v["message"]["message_id"], "msg-123");
+        assert_eq!(v["message"]["sender"]["display_name"], "Alice");
     }
 
     #[test]

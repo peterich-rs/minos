@@ -5,9 +5,10 @@ use axum::{Json, Router};
 use minos_protocol::{
     ChatMessageSummary, ConversationKind, ConversationResponse, ConversationSummary,
     ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
-    EnsureDirectConversationRequest, FriendRequestStatus, FriendRequestSummary,
-    FriendRequestsResponse, FriendSummary, FriendsResponse, ListChatMessagesResponse,
-    MyProfileResponse, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest, UserSummary,
+    EnsureDirectConversationRequest, Envelope, EventKind, FriendRequestStatus,
+    FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse,
+    ListChatMessagesResponse, MyProfileResponse, SearchUsersResponse,
+    SendChatMessageRequest, SetMinosIdRequest, UserSummary,
 };
 use serde::{Deserialize, Serialize};
 
@@ -503,7 +504,41 @@ async fn send_message(
     .await
     .map_err(|e| err("internal", e.to_string()))?;
     let mut hydrated = hydrate_messages(&state, vec![row]).await?;
-    Ok(Json(hydrated.remove(0)))
+    let message = hydrated.remove(0);
+    fan_out_social_message(&state, &message).await;
+    Ok(Json(message))
+}
+
+async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSummary) {
+    let members = match crate::store::social::list_conversation_members(
+        &state.store,
+        &message.conversation_id,
+    )
+    .await
+    {
+        Ok(members) => members,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::social",
+                conversation_id = %message.conversation_id,
+                error = %error,
+                "failed to list conversation members for social fan-out"
+            );
+            return;
+        }
+    };
+
+    let frame = Envelope::Event {
+        version: 1,
+        event: EventKind::SocialMessage {
+            conversation_id: message.conversation_id.clone(),
+            message: message.clone(),
+        },
+    };
+
+    for account_id in members {
+        let _ = state.registry.broadcast_mobile_account(&account_id, frame.clone());
+    }
 }
 
 async fn hydrate_friend_requests(

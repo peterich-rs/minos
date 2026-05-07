@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
@@ -25,6 +27,7 @@ class SocialChatPage extends ConsumerStatefulWidget {
 class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  StreamSubscription<SocialEventFrame>? _socialSub;
 
   List<ChatMessageSummary> _messages = const <ChatMessageSummary>[];
   String? _myAccountId;
@@ -35,14 +38,25 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   @override
   void initState() {
     super.initState();
+    _socialSub = ref.read(minosCoreProvider).socialEvents.listen(_onSocialEvent);
     _load();
   }
 
   @override
   void dispose() {
+    _socialSub?.cancel();
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onSocialEvent(SocialEventFrame frame) {
+    if (!mounted || frame.conversationId != widget.conversationId) return;
+    final changed = _appendMessage(frame.message);
+    if (changed) {
+      ref.invalidate(conversationsProvider);
+      _jumpToBottom();
+    }
   }
 
   Future<void> _load() async {
@@ -84,7 +98,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       if (!mounted) return;
       _controller.clear();
       setState(() {
-        _messages = <ChatMessageSummary>[..._messages, message];
+        _messages = _mergeMessage(_messages, message);
         _sending = false;
       });
       _jumpToBottom();
@@ -101,6 +115,23 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       if (!mounted || !_scrollController.hasClients) return;
       _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
     });
+  }
+
+  bool _appendMessage(ChatMessageSummary message) {
+    final next = _mergeMessage(_messages, message);
+    if (identical(next, _messages)) return false;
+    setState(() => _messages = next);
+    return true;
+  }
+
+  List<ChatMessageSummary> _mergeMessage(
+    List<ChatMessageSummary> existing,
+    ChatMessageSummary incoming,
+  ) {
+    if (existing.any((message) => message.messageId == incoming.messageId)) {
+      return existing;
+    }
+    return <ChatMessageSummary>[...existing, incoming];
   }
 
   @override
@@ -120,7 +151,12 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
               child: RefreshIndicator(
                 onRefresh: _load,
                 child: _loading
-                    ? const Center(child: ShadProgress())
+                  ? ListView(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: const <Widget>[],
+                    )
                     : _error != null
                     ? ListView(
                         children: <Widget>[

@@ -227,6 +227,9 @@ class MinosCore implements MinosCoreProtocol {
   Stream<UiEventFrame> get uiEvents => _client.subscribeUiEvents();
 
   @override
+  Stream<SocialEventFrame> get socialEvents => _client.subscribeSocialEvents();
+
+  @override
   ConnectionState get currentConnectionState => _client.currentState();
 
   // ---- Auth forwarders ----

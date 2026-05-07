@@ -92,6 +92,9 @@ abstract class MinosCoreProtocol {
   /// Hot stream of live [UiEventFrame]s fanned out by the backend.
   Stream<UiEventFrame> get uiEvents;
 
+  /// Hot stream of live [SocialEventFrame]s fanned out by the backend.
+  Stream<SocialEventFrame> get socialEvents;
+
   /// Synchronous snapshot of the current [ConnectionState].
   ConnectionState get currentConnectionState;
 
