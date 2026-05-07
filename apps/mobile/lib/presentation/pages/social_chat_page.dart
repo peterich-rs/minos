@@ -38,7 +38,10 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   @override
   void initState() {
     super.initState();
-    _socialSub = ref.read(minosCoreProvider).socialEvents.listen(_onSocialEvent);
+    _socialSub = ref
+        .read(minosCoreProvider)
+        .socialEvents
+        .listen(_onSocialEvent);
     _load();
   }
 
@@ -151,12 +154,12 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
               child: RefreshIndicator(
                 onRefresh: _load,
                 child: _loading
-                  ? ListView(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    children: const <Widget>[],
-                    )
+                    ? ListView(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: const <Widget>[],
+                      )
                     : _error != null
                     ? ListView(
                         children: <Widget>[
@@ -175,15 +178,32 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                         itemCount: _messages.length,
                         itemBuilder: (context, index) {
                           final message = _messages[index];
+                          final previous = index == 0
+                              ? null
+                              : _messages[index - 1];
+                          final showTimeSeparator = _shouldShowTimeSeparator(
+                            previous?.createdAtMs,
+                            message.createdAtMs,
+                          );
                           final isMine =
                               message.sender.accountId == _myAccountId;
-                          return _ChatBubble(
-                            title: widget.kind == ConversationKind.group
-                                ? message.sender.displayName
-                                : null,
-                            text: message.text,
-                            timestamp: _formatTime(message.createdAtMs),
-                            isMine: isMine,
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              if (showTimeSeparator)
+                                _ChatTimeSeparator(
+                                  label: _formatTimelineLabel(
+                                    message.createdAtMs,
+                                  ),
+                                ),
+                              _ChatBubble(
+                                title: widget.kind == ConversationKind.group
+                                    ? message.sender.displayName
+                                    : null,
+                                text: message.text,
+                                isMine: isMine,
+                              ),
+                            ],
                           );
                         },
                       ),
@@ -259,16 +279,10 @@ class _ChatInlineError extends StatelessWidget {
 }
 
 class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({
-    required this.text,
-    required this.timestamp,
-    required this.isMine,
-    this.title,
-  });
+  const _ChatBubble({required this.text, required this.isMine, this.title});
 
   final String? title;
   final String text;
-  final String timestamp;
   final bool isMine;
 
   @override
@@ -276,42 +290,47 @@ class _ChatBubble extends StatelessWidget {
     final shadTheme = ShadTheme.of(context);
     final bubbleColor = isMine
         ? shadTheme.colorScheme.primary
-        : shadTheme.colorScheme.card;
+        : shadTheme.colorScheme.secondary;
     final foreground = isMine
         ? shadTheme.colorScheme.primaryForeground
-        : shadTheme.colorScheme.foreground;
+        : shadTheme.colorScheme.secondaryForeground;
     return Padding(
       padding: EdgeInsets.fromLTRB(isMine ? 52 : 0, 0, isMine ? 0 : 52, 12),
       child: Align(
         alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: bubbleColor,
-            borderRadius: BorderRadius.circular(10),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.76,
           ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                if (title != null) ...<Widget>[
-                  Text(
-                    title!,
-                    style: shadTheme.textTheme.small.copyWith(
-                      color: foreground.withValues(alpha: 0.78),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: bubbleColor,
+              borderRadius: BorderRadius.circular(12),
+              border: isMine
+                  ? null
+                  : Border.all(
+                      color: shadTheme.colorScheme.border.withValues(
+                        alpha: 0.9,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  if (title != null) ...<Widget>[
+                    Text(
+                      title!,
+                      style: shadTheme.textTheme.small.copyWith(
+                        color: foreground.withValues(alpha: 0.8),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                  ],
+                  Text(text, style: TextStyle(color: foreground, height: 1.35)),
                 ],
-                Text(text, style: TextStyle(color: foreground, height: 1.35)),
-                const SizedBox(height: 6),
-                Text(
-                  timestamp,
-                  style: shadTheme.textTheme.muted.copyWith(
-                    color: foreground.withValues(alpha: 0.72),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -320,11 +339,60 @@ class _ChatBubble extends StatelessWidget {
   }
 }
 
-String _formatTime(int tsMs) {
+class _ChatTimeSeparator extends StatelessWidget {
+  const _ChatTimeSeparator({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 14),
+      child: Center(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: shadTheme.colorScheme.muted,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            child: Text(label, style: shadTheme.textTheme.muted),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+bool _shouldShowTimeSeparator(int? previousTsMs, int currentTsMs) {
+  if (previousTsMs == null) return true;
+  return currentTsMs - previousTsMs >=
+      const Duration(minutes: 1).inMilliseconds;
+}
+
+String _formatTimelineLabel(int tsMs) {
   final date = DateTime.fromMillisecondsSinceEpoch(tsMs, isUtc: false);
+  final now = DateTime.now();
+  if (_isSameDay(date, now)) {
+    return _formatClock(date);
+  }
+
+  if (date.year == now.year) {
+    return '${date.month}月${date.day}日 ${_formatClock(date)}';
+  }
+
+  return '${date.year}年${date.month}月${date.day}日 ${_formatClock(date)}';
+}
+
+String _formatClock(DateTime date) {
   final hh = date.hour.toString().padLeft(2, '0');
   final mm = date.minute.toString().padLeft(2, '0');
   return '$hh:$mm';
+}
+
+bool _isSameDay(DateTime lhs, DateTime rhs) {
+  return lhs.year == rhs.year && lhs.month == rhs.month && lhs.day == rhs.day;
 }
 
 void _showError(BuildContext context, String title, Object error) {

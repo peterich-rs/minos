@@ -33,10 +33,10 @@ use minos_protocol::{
     Envelope, EventKind, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
     GetThreadLastSeqParams, GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse,
     ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams,
-    ReadThreadResponse, RefreshResponse, SendChatMessageRequest, SendUserMessageRequest,
-    SetMinosIdRequest, StartAgentRequest, StartAgentResponse, UserSummary,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
+    RefreshResponse, SendChatMessageRequest, SendUserMessageRequest, SetMinosIdRequest,
+    StartAgentRequest, StartAgentResponse, UserSummary, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -1230,11 +1230,10 @@ impl MobileClient {
     // ─────────────────────────── internals ────────────────────────────
 
     fn build_websocket_client() -> Result<OpenwireClient, MinosError> {
-        let tls_connector = crate::tls::build_mobile_websocket_tls_connector().map_err(|e| {
-            MinosError::BackendInternal {
+        let tls_connector =
+            crate::tls::build_mobile_tls_connector().map_err(|e| MinosError::BackendInternal {
                 message: format!("build mobile websocket TLS connector: {e}"),
-            }
-        })?;
+            })?;
 
         OpenwireClient::builder()
             .tls_connector(tls_connector)
@@ -1448,13 +1447,7 @@ async fn recv_loop<S>(
         match msg {
             Ok(Message::Text(t)) => {
                 let text: &str = t.as_ref();
-                handle_text_frame(
-                    text,
-                    &ui_events_tx,
-                    &social_events_tx,
-                    &state_tx,
-                    &pending,
-                );
+                handle_text_frame(text, &ui_events_tx, &social_events_tx, &state_tx, &pending);
             }
             Ok(Message::Close { .. }) => {
                 break;
