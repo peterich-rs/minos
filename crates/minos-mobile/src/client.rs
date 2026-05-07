@@ -1230,10 +1230,11 @@ impl MobileClient {
     // ─────────────────────────── internals ────────────────────────────
 
     fn build_websocket_client() -> Result<OpenwireClient, MinosError> {
-        let tls_connector =
-            crate::tls::build_mobile_tls_connector().map_err(|e| MinosError::BackendInternal {
+        let tls_connector = crate::tls::build_mobile_websocket_tls_connector().map_err(|e| {
+            MinosError::BackendInternal {
                 message: format!("build mobile websocket TLS connector: {e}"),
-            })?;
+            }
+        })?;
 
         OpenwireClient::builder()
             .tls_connector(tls_connector)

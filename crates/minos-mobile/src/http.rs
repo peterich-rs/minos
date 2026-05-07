@@ -10,7 +10,6 @@
 //! request authenticates with the bearer alone.
 
 use std::fmt::Write as _;
-use std::sync::Once;
 use std::time::Duration;
 
 use http::header::CONTENT_TYPE;
@@ -31,7 +30,6 @@ use crate::openwire_trace::{logger_interceptor, OpenwireTraceFactory};
 use crate::request_trace::{self, RequestTransport};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
-static INSTALL_RUSTLS_PROVIDER: Once = Once::new();
 
 #[derive(Debug, Deserialize)]
 struct ErrorEnvelope {
@@ -60,15 +58,17 @@ impl MobileHttpClient {
         device_name: impl Into<String>,
         cf_access: Option<(String, String)>,
     ) -> Result<Self, MinosError> {
-        INSTALL_RUSTLS_PROVIDER.call_once(|| {
-            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        });
+        let tls_connector =
+            crate::tls::build_mobile_tls_connector().map_err(|e| MinosError::BackendInternal {
+                message: format!("build mobile TLS connector: {e}"),
+            })?;
 
         let base = http_base(backend_ws_url).ok_or_else(|| MinosError::ConnectFailed {
             url: backend_ws_url.into(),
             message: "cannot derive HTTP base from backend URL".into(),
         })?;
         let client = Client::builder()
+            .tls_connector(tls_connector)
             .call_timeout(HTTP_TIMEOUT)
             .application_interceptor(logger_interceptor("mobile_http"))
             .event_listener_factory(OpenwireTraceFactory::new("mobile_http"))

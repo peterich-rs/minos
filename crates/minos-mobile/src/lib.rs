@@ -17,6 +17,7 @@ mod reconnect;
 pub mod request_trace;
 pub mod rpc;
 pub mod store;
+mod tls;
 
 pub use client::*;
 pub(crate) use reconnect::ReconnectController;
