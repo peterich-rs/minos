@@ -39,9 +39,10 @@ pub use minos_domain::{
     PairingState,
 };
 pub use minos_protocol::{
-    AuthSummary, ChatMessageSummary, ConversationKind, ConversationResponse, ConversationSummary,
-    ConversationsResponse, FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse,
-    FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, HostSummary,
+    AuthSummary, ChatMessageSummary, ConversationKind, ConversationMembersResponse,
+    ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
+    FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse, FriendSummary,
+    FriendsResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, HostSummary,
     ListChatMessagesResponse, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
     MyProfileResponse, ReadThreadParams, ReadThreadResponse, SearchUsersResponse,
     StartAgentResponse, ThreadSummary, UserSummary, WriteHostSkillConfigResponse,
@@ -331,6 +332,20 @@ impl MobileClient {
             .await
     }
 
+    pub async fn conversation_members(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationMembersResponse, MinosError> {
+        self.0.conversation_members(conversation_id).await
+    }
+
+    pub async fn mark_conversation_read(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationReadResponse, MinosError> {
+        self.0.mark_conversation_read(conversation_id).await
+    }
+
     pub async fn list_chat_messages(
         &self,
         conversation_id: String,
@@ -513,8 +528,9 @@ impl MobileClient {
         &self,
         agent: AgentName,
         prompt: String,
+        workspace: String,
     ) -> Result<StartAgentResponse, MinosError> {
-        self.0.start_agent(agent, prompt).await
+        self.0.start_agent(agent, prompt, workspace).await
     }
 
     /// Send a follow-up user message to an existing agent session.
@@ -1139,6 +1155,8 @@ pub struct _ConversationSummary {
     pub member_count: u32,
     pub last_message_preview: Option<String>,
     pub last_message_at_ms: i64,
+    pub unread_count: u32,
+    pub unread_mention_count: u32,
 }
 
 #[allow(dead_code)]
@@ -1154,6 +1172,18 @@ pub struct _ConversationResponse {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(ConversationMembersResponse))]
+pub struct _ConversationMembersResponse {
+    pub members: Vec<UserSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationReadResponse))]
+pub struct _ConversationReadResponse {
+    pub last_read_at_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(ChatMessageSummary))]
 pub struct _ChatMessageSummary {
     pub message_id: String,
@@ -1161,6 +1191,7 @@ pub struct _ChatMessageSummary {
     pub sender: UserSummary,
     pub text: String,
     pub created_at_ms: i64,
+    pub mentioned_account_ids: Vec<String>,
 }
 
 #[allow(dead_code)]

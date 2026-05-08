@@ -213,6 +213,11 @@ class AgentWorkspaceState {
     required this.threadProfileBindings,
   });
 
+  const AgentWorkspaceState.empty()
+    : profiles = const <AgentProfile>[],
+      preferredProfileId = null,
+      threadProfileBindings = const <String, String>{};
+
   final List<AgentProfile> profiles;
   final String? preferredProfileId;
   final Map<String, String> threadProfileBindings;
@@ -285,35 +290,16 @@ class AgentWorkspaceState {
     ).normalized();
   }
 
-  factory AgentWorkspaceState.bootstrap() {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    const bootstrapId = 'agent-default-codex';
-    return AgentWorkspaceState(
-      profiles: <AgentProfile>[
-        AgentProfile(
-          id: bootstrapId,
-          name: 'codex',
-          description: '',
-          runtimeAgent: AgentName.codex,
-          model: 'GPT-5.5',
-          reasoningEffort: AgentReasoningEffort.medium,
-          environmentVariables: const <AgentEnvironmentVariable>[],
-          createdAtMs: now,
-          updatedAtMs: now,
-        ),
-      ],
-      preferredProfileId: bootstrapId,
-      threadProfileBindings: const <String, String>{},
-    );
-  }
-
   AgentWorkspaceState normalized() {
-    final normalizedProfiles = profiles.isEmpty
-        ? AgentWorkspaceState.bootstrap().profiles
-        : profiles;
+    final normalizedProfiles = profiles;
     final preferred =
-        normalizedProfiles.any((profile) => profile.id == preferredProfileId)
+        normalizedProfiles.isNotEmpty &&
+            normalizedProfiles.any(
+              (profile) => profile.id == preferredProfileId,
+            )
         ? preferredProfileId
+        : normalizedProfiles.isEmpty
+        ? null
         : normalizedProfiles.first.id;
     final validIds = normalizedProfiles.map((profile) => profile.id).toSet();
     final filteredBindings = <String, String>{};

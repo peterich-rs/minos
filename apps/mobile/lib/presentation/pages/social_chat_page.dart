@@ -57,9 +57,21 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     if (!mounted || frame.conversationId != widget.conversationId) return;
     final changed = _appendMessage(frame.message);
     if (changed) {
+      unawaited(_markConversationRead());
       ref.invalidate(conversationsProvider);
       _jumpToBottom();
     }
+  }
+
+  Future<void> _markConversationRead() async {
+    try {
+      await ref
+          .read(minosCoreProvider)
+          .markConversationRead(conversationId: widget.conversationId);
+      if (mounted) {
+        ref.invalidate(conversationsProvider);
+      }
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -74,12 +86,14 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
         conversationId: widget.conversationId,
         limit: 100,
       );
+      await core.markConversationRead(conversationId: widget.conversationId);
       if (!mounted) return;
       setState(() {
         _myAccountId = profile.accountId;
         _messages = response.messages;
         _loading = false;
       });
+      ref.invalidate(conversationsProvider);
       _jumpToBottom();
     } catch (error) {
       if (!mounted) return;
@@ -113,6 +127,55 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     }
   }
 
+  void _insertMention(UserSummary member) {
+    final mention = '@${member.minosId} ';
+    final value = _controller.value;
+    final selection = value.selection;
+    final start = selection.isValid ? selection.start : value.text.length;
+    final end = selection.isValid ? selection.end : value.text.length;
+    final nextText = value.text.replaceRange(start, end, mention);
+    final nextOffset = start + mention.length;
+    _controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+    );
+  }
+
+  Future<void> _showMentionPicker(List<UserSummary> members) async {
+    final mentionable = members
+        .where((member) => member.accountId != _myAccountId)
+        .toList(growable: false);
+    if (mentionable.isEmpty) return;
+
+    final selected = await showModalBottomSheet<UserSummary>(
+      context: context,
+      useSafeArea: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                '选择要艾特的成员',
+                style: ShadTheme.of(context).textTheme.h4,
+              ),
+            ),
+            for (final member in mentionable)
+              ListTile(
+                title: Text(member.displayName),
+                subtitle: Text('@${member.minosId}'),
+                onTap: () => Navigator.of(context).pop(member),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) {
+      _insertMention(selected);
+    }
+  }
+
   void _jumpToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) return;
@@ -140,6 +203,13 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   @override
   Widget build(BuildContext context) {
     final shadTheme = ShadTheme.of(context);
+    final groupMembers = widget.kind == ConversationKind.group
+      ? ref
+            .watch(conversationMembersProvider(widget.conversationId))
+            .asData
+            ?.value ??
+          const <UserSummary>[]
+        : const <UserSummary>[];
     return Scaffold(
       backgroundColor: shadTheme.colorScheme.background,
       appBar: AppBar(
@@ -187,6 +257,10 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                           );
                           final isMine =
                               message.sender.accountId == _myAccountId;
+                          final mentionsMe =
+                              !isMine &&
+                              _myAccountId != null &&
+                              message.mentionedAccountIds.contains(_myAccountId);
                           return Column(
                             mainAxisSize: MainAxisSize.min,
                             children: <Widget>[
@@ -202,6 +276,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                                     : null,
                                 text: message.text,
                                 isMine: isMine,
+                                mentionsMe: mentionsMe,
                               ),
                             ],
                           );
@@ -219,6 +294,15 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
               child: Row(
                 children: <Widget>[
+                  if (widget.kind == ConversationKind.group) ...<Widget>[
+                    ShadButton.outline(
+                      onPressed: groupMembers.isEmpty
+                          ? null
+                          : () => _showMentionPicker(groupMembers),
+                      child: const Text('@'),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   Expanded(
                     child: ShadInput(
                       controller: _controller,
@@ -279,11 +363,17 @@ class _ChatInlineError extends StatelessWidget {
 }
 
 class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({required this.text, required this.isMine, this.title});
+  const _ChatBubble({
+    required this.text,
+    required this.isMine,
+    this.title,
+    this.mentionsMe = false,
+  });
 
   final String? title;
   final String text;
   final bool isMine;
+  final bool mentionsMe;
 
   @override
   Widget build(BuildContext context) {
@@ -294,6 +384,9 @@ class _ChatBubble extends StatelessWidget {
     final foreground = isMine
         ? shadTheme.colorScheme.primaryForeground
         : shadTheme.colorScheme.secondaryForeground;
+    final mentionAccent = isMine
+      ? foreground.withValues(alpha: 0.88)
+      : shadTheme.colorScheme.primary;
     return Padding(
       padding: EdgeInsets.fromLTRB(isMine ? 52 : 0, 0, isMine ? 0 : 52, 12),
       child: Align(
@@ -306,19 +399,41 @@ class _ChatBubble extends StatelessWidget {
             decoration: BoxDecoration(
               color: bubbleColor,
               borderRadius: BorderRadius.circular(12),
-              border: isMine
-                  ? null
-                  : Border.all(
-                      color: shadTheme.colorScheme.border.withValues(
-                        alpha: 0.9,
-                      ),
-                    ),
+              border: Border.all(
+                color: mentionsMe
+                    ? const Color(0xFFF59E0B)
+                    : isMine
+                    ? bubbleColor
+                    : shadTheme.colorScheme.border.withValues(alpha: 0.9),
+              ),
             ),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
+                  if (mentionsMe) ...<Widget>[
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF59E0B).withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        child: Text(
+                          '提到了你',
+                          style: shadTheme.textTheme.small.copyWith(
+                            color: const Color(0xFFB45309),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
                   if (title != null) ...<Widget>[
                     Text(
                       title!,
@@ -328,7 +443,16 @@ class _ChatBubble extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                   ],
-                  Text(text, style: TextStyle(color: foreground, height: 1.35)),
+                  RichText(
+                    text: TextSpan(
+                      style: TextStyle(color: foreground, height: 1.35),
+                      children: _buildMentionSpans(
+                        text,
+                        foreground,
+                        mentionAccent,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -337,6 +461,37 @@ class _ChatBubble extends StatelessWidget {
       ),
     );
   }
+}
+
+List<InlineSpan> _buildMentionSpans(
+  String text,
+  Color foreground,
+  Color accent,
+) {
+  final pattern = RegExp(r'@[A-Za-z0-9]+');
+  final matches = pattern.allMatches(text);
+  if (matches.isEmpty) {
+    return <InlineSpan>[TextSpan(text: text)];
+  }
+
+  final spans = <InlineSpan>[];
+  var cursor = 0;
+  for (final match in matches) {
+    if (match.start > cursor) {
+      spans.add(TextSpan(text: text.substring(cursor, match.start)));
+    }
+    spans.add(
+      TextSpan(
+        text: match.group(0),
+        style: TextStyle(color: accent, fontWeight: FontWeight.w700),
+      ),
+    );
+    cursor = match.end;
+  }
+  if (cursor < text.length) {
+    spans.add(TextSpan(text: text.substring(cursor)));
+  }
+  return spans;
 }
 
 class _ChatTimeSeparator extends StatelessWidget {

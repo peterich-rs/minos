@@ -18,19 +18,19 @@ class JsonFileAgentProfileStore implements AgentProfileStore {
     try {
       final file = File(await agentProfilesFilePath());
       if (!await file.exists()) {
-        return AgentWorkspaceState.bootstrap();
+        return const AgentWorkspaceState.empty();
       }
       final raw = await file.readAsString();
       if (raw.trim().isEmpty) {
-        return AgentWorkspaceState.bootstrap();
+        return const AgentWorkspaceState.empty();
       }
       final decoded = jsonDecode(raw);
       if (decoded is! Map<String, Object?>) {
-        return AgentWorkspaceState.bootstrap();
+        return const AgentWorkspaceState.empty();
       }
       return AgentWorkspaceState.fromJson(decoded).normalized();
     } catch (_) {
-      return AgentWorkspaceState.bootstrap();
+      return const AgentWorkspaceState.empty();
     }
   }
 

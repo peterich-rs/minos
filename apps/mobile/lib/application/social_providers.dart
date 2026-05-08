@@ -16,6 +16,26 @@ final socialSearchProvider = FutureProvider.family
       return ref.watch(minosCoreProvider).searchUsers(minosId: trimmed);
     });
 
+final conversationMembersProvider = FutureProvider.family
+    .autoDispose<List<UserSummary>, String>((ref, conversationId) async {
+      final response = await ref
+          .watch(minosCoreProvider)
+          .conversationMembers(conversationId: conversationId);
+      return response.members;
+    });
+
+final socialUnreadCountProvider = Provider<int>((ref) {
+  return ref
+      .watch(conversationsProvider)
+      .maybeWhen(
+        data: (response) => response.conversations.fold<int>(
+          0,
+          (total, conversation) => total + conversation.unreadCount,
+        ),
+        orElse: () => 0,
+      );
+});
+
 final friendRequestsProvider =
     AsyncNotifierProvider<FriendRequestsController, FriendRequestsResponse>(
       FriendRequestsController.new,

@@ -39,6 +39,7 @@ class ThreadViewPage extends ConsumerStatefulWidget {
     this.threadId,
     this.agent,
     this.agentProfileId,
+    this.startupWorkspace,
   });
 
   /// Pre-existing thread to load. Null = new chat.
@@ -51,6 +52,7 @@ class ThreadViewPage extends ConsumerStatefulWidget {
   /// agent.
   final AgentName? agent;
   final String? agentProfileId;
+  final String? startupWorkspace;
 
   @override
   ConsumerState<ThreadViewPage> createState() => _ThreadViewPageState();
@@ -254,28 +256,35 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   }
 
   Future<void> _dispatchMessage(String text, ActiveSession viewSession) async {
-    final optimisticId = _enqueueOptimisticMessage(text);
     final controller = ref.read(activeSessionControllerProvider.notifier);
     final targetThreadId = widget.threadId ?? _sessionThreadId(viewSession);
     final selectedProfile = _dispatchProfile(targetThreadId);
+    final dispatchAgent = targetThreadId == null
+        ? selectedProfile?.runtimeAgent ?? ref.read(preferredAgentProvider)
+        : selectedProfile?.runtimeAgent ??
+              widget.agent ??
+              _sessionAgent(viewSession) ??
+              ref.read(preferredAgentProvider);
+    if (dispatchAgent == null) {
+      _showThreadInfo(context, '请先选择一个 Agent');
+      return;
+    }
+
+    final optimisticId = _enqueueOptimisticMessage(text);
     if (selectedProfile?.hostDeviceId case final hostId?) {
       await ref.read(activeMacProvider.notifier).setActive(hostId);
     }
     MinosError? error;
     if (targetThreadId == null) {
       error = await controller.startAndSend(
-        agent:
-            selectedProfile?.runtimeAgent ?? ref.read(preferredAgentProvider),
+        agent: dispatchAgent,
         prompt: text,
+        workspace: widget.startupWorkspace ?? '',
       );
     } else {
       error = await controller.sendToThread(
         threadId: targetThreadId,
-        agent:
-            selectedProfile?.runtimeAgent ??
-            widget.agent ??
-            _sessionAgent(viewSession) ??
-            ref.read(preferredAgentProvider),
+        agent: dispatchAgent,
         text: text,
       );
     }
@@ -497,6 +506,10 @@ class _NewChatEmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+void _showThreadInfo(BuildContext context, String title) {
+  ShadToaster.maybeOf(context)?.show(ShadToast(title: Text(title)));
 }
 
 class _ThreadEventStream extends ConsumerWidget {

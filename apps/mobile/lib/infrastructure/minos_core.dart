@@ -196,6 +196,16 @@ class MinosCore implements MinosCoreProtocol {
   );
 
   @override
+  Future<ConversationMembersResponse> conversationMembers({
+    required String conversationId,
+  }) => _client.conversationMembers(conversationId: conversationId);
+
+  @override
+  Future<ConversationReadResponse> markConversationRead({
+    required String conversationId,
+  }) => _client.markConversationRead(conversationId: conversationId);
+
+  @override
   Future<ListChatMessagesResponse> listChatMessages({
     required String conversationId,
     int? beforeTsMs,
@@ -313,7 +323,8 @@ class MinosCore implements MinosCoreProtocol {
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,
-  }) => _client.startAgent(agent: agent, prompt: prompt);
+    String workspace = '',
+  }) => _client.startAgent(agent: agent, prompt: prompt, workspace: workspace);
 
   @override
   Future<List<AgentDescriptor>> listClis() => _client.listClis();

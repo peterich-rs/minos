@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use minos_protocol::FriendRequestStatus;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, QueryBuilder, Sqlite, SqlitePool};
 use uuid::Uuid;
 
 use crate::error::BackendError;
@@ -55,6 +57,8 @@ pub struct ConversationDigestRow {
     pub member_count: i64,
     pub last_message_preview: Option<String>,
     pub last_message_at_ms: i64,
+    pub unread_count: i64,
+    pub unread_mention_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
@@ -64,6 +68,12 @@ pub struct ChatMessageRow {
     pub sender_account_id: String,
     pub text: String,
     pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+struct MessageMentionRow {
+    message_id: String,
+    mentioned_account_id: String,
 }
 
 pub async fn profile_by_account(
@@ -451,16 +461,56 @@ pub async fn list_conversations_for(
             c.updated_at_ms,
             (SELECT COUNT(*) FROM conversation_members cm2 WHERE cm2.conversation_id = c.conversation_id) AS member_count,
             (SELECT m.text FROM chat_messages m WHERE m.conversation_id = c.conversation_id ORDER BY m.created_at_ms DESC LIMIT 1) AS last_message_preview,
-            COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) AS last_message_at_ms
+                        COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) AS last_message_at_ms,
+                        COALESCE((
+                                SELECT COUNT(*)
+                                    FROM chat_messages m
+                                 WHERE m.conversation_id = c.conversation_id
+                                     AND m.sender_account_id <> ?
+                                     AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                        ), 0) AS unread_count,
+                        COALESCE((
+                                SELECT COUNT(*)
+                                    FROM chat_messages m
+                                    JOIN chat_message_mentions mm ON mm.message_id = m.message_id
+                                 WHERE m.conversation_id = c.conversation_id
+                                     AND m.sender_account_id <> ?
+                                     AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                                     AND mm.mentioned_account_id = ?
+                        ), 0) AS unread_mention_count
           FROM conversations c
           JOIN conversation_members cm ON cm.conversation_id = c.conversation_id
+                    LEFT JOIN conversation_reads cr
+                        ON cr.conversation_id = c.conversation_id
+                     AND cr.account_id = ?
          WHERE cm.account_id = ?
          ORDER BY last_message_at_ms DESC",
     )
+        .bind(account_id)
+        .bind(account_id)
+        .bind(account_id)
+        .bind(account_id)
     .bind(account_id)
     .fetch_all(pool)
     .await
     .map_err(store_err("social::list_conversations_for"))
+}
+
+pub async fn list_conversation_member_profiles(
+        pool: &SqlitePool,
+        conversation_id: &str,
+) -> Result<Vec<ProfileRow>, BackendError> {
+        sqlx::query_as::<_, ProfileRow>(
+                "SELECT a.account_id, a.email, a.minos_id, a.display_name
+                     FROM accounts a
+                     JOIN conversation_members cm ON cm.account_id = a.account_id
+                    WHERE cm.conversation_id = ?
+                    ORDER BY cm.joined_at_ms ASC, a.account_id ASC",
+        )
+        .bind(conversation_id)
+        .fetch_all(pool)
+        .await
+        .map_err(store_err("social::list_conversation_member_profiles"))
 }
 
 pub async fn list_conversation_members(
@@ -520,12 +570,92 @@ pub async fn list_messages(
     .map_err(store_err("social::list_messages"))
 }
 
+pub async fn list_message_mentions(
+    pool: &SqlitePool,
+    message_ids: &[String],
+) -> Result<HashMap<String, Vec<String>>, BackendError> {
+    if message_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT message_id, mentioned_account_id
+           FROM chat_message_mentions
+          WHERE message_id IN (",
+    );
+    {
+        let mut separated = builder.separated(", ");
+        for message_id in message_ids {
+            separated.push_bind(message_id);
+        }
+    }
+    builder.push(") ORDER BY message_id ASC, mentioned_account_id ASC");
+
+    let rows = builder
+        .build_query_as::<MessageMentionRow>()
+        .fetch_all(pool)
+        .await
+        .map_err(store_err("social::list_message_mentions"))?;
+
+    let mut mentions_by_message = HashMap::<String, Vec<String>>::new();
+    for row in rows {
+        mentions_by_message
+            .entry(row.message_id)
+            .or_default()
+            .push(row.mentioned_account_id);
+    }
+    Ok(mentions_by_message)
+}
+
+pub async fn mark_conversation_read_to_latest(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    account_id: &str,
+    updated_at_ms: i64,
+) -> Result<Option<i64>, BackendError> {
+    let Some(last_read_at_ms) = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT MAX(created_at_ms)
+           FROM chat_messages
+          WHERE conversation_id = ?",
+    )
+    .bind(conversation_id)
+    .fetch_one(pool)
+    .await
+    .map_err(store_err("social::mark_conversation_read_to_latest.fetch_latest"))?
+    else {
+        return Ok(None);
+    };
+
+    sqlx::query(
+        "INSERT INTO conversation_reads
+            (conversation_id, account_id, last_read_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(conversation_id, account_id) DO UPDATE SET
+            last_read_at_ms = CASE
+                WHEN excluded.last_read_at_ms > conversation_reads.last_read_at_ms
+                    THEN excluded.last_read_at_ms
+                ELSE conversation_reads.last_read_at_ms
+            END,
+            updated_at_ms = excluded.updated_at_ms",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .bind(last_read_at_ms)
+    .bind(updated_at_ms)
+    .execute(pool)
+    .await
+    .map_err(store_err("social::mark_conversation_read_to_latest.upsert"))?;
+
+    Ok(Some(last_read_at_ms))
+}
+
 pub async fn insert_message(
     pool: &SqlitePool,
     conversation_id: &str,
     sender_account_id: &str,
     text: &str,
     created_at_ms: i64,
+    mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
     let mut tx = pool
         .begin()
@@ -545,6 +675,21 @@ pub async fn insert_message(
     .execute(&mut *tx)
     .await
     .map_err(store_err("social::insert_message.insert"))?;
+    let mut unique_mentions = mentioned_account_ids.to_vec();
+    unique_mentions.sort();
+    unique_mentions.dedup();
+    for mentioned_account_id in unique_mentions {
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, mentioned_account_id)
+             VALUES (?, ?)",
+        )
+        .bind(&message_id)
+        .bind(mentioned_account_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+    }
     sqlx::query(
         "UPDATE conversations
             SET updated_at_ms = ?
@@ -598,5 +743,83 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
     move |e| BackendError::StoreQuery {
         operation: operation.into(),
         message: e.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::test_support::{insert_account, memory_pool, T0};
+
+    async fn seed_group(pool: &SqlitePool) -> (String, String, String, String) {
+        let alice = insert_account(pool, "alice@example.com").await;
+        let bob = insert_account(pool, "bob@example.com").await;
+        let carol = insert_account(pool, "carol@example.com").await;
+        let conversation = create_group_conversation(
+            pool,
+            &alice,
+            "Study Group",
+            &[bob.clone(), carol.clone()],
+            T0,
+        )
+        .await
+        .unwrap();
+        (conversation.conversation_id, alice, bob, carol)
+    }
+
+    #[tokio::test]
+    async fn list_conversations_reports_unread_counts_and_mentions() {
+        let pool = memory_pool().await;
+        let (conversation_id, alice, bob, carol) = seed_group(&pool).await;
+
+        insert_message(&pool, &conversation_id, &alice, "hello team", T0 + 1, &[])
+            .await
+            .unwrap();
+        let last_read = mark_conversation_read_to_latest(&pool, &conversation_id, &carol, T0 + 1)
+            .await
+            .unwrap();
+        assert_eq!(last_read, Some(T0 + 1));
+
+        insert_message(
+            &pool,
+            &conversation_id,
+            &bob,
+            "@carol please review",
+            T0 + 2,
+            std::slice::from_ref(&carol),
+        )
+        .await
+        .unwrap();
+
+        let carol_rows = list_conversations_for(&pool, &carol).await.unwrap();
+        assert_eq!(carol_rows.len(), 1);
+        assert_eq!(carol_rows[0].unread_count, 1);
+        assert_eq!(carol_rows[0].unread_mention_count, 1);
+
+        let alice_rows = list_conversations_for(&pool, &alice).await.unwrap();
+        assert_eq!(alice_rows.len(), 1);
+        assert_eq!(alice_rows[0].unread_count, 1);
+        assert_eq!(alice_rows[0].unread_mention_count, 0);
+    }
+
+    #[tokio::test]
+    async fn insert_message_persists_unique_mentions() {
+        let pool = memory_pool().await;
+        let (conversation_id, _alice, bob, carol) = seed_group(&pool).await;
+
+        let message = insert_message(
+            &pool,
+            &conversation_id,
+            &bob,
+            "@carol @carol hello",
+            T0 + 5,
+            &[carol.clone(), carol.clone()],
+        )
+        .await
+        .unwrap();
+
+        let mentions = list_message_mentions(&pool, &[message.message_id]).await.unwrap();
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions.values().next().unwrap(), &vec![carol]);
     }
 }

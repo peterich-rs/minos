@@ -139,6 +139,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ConversationKind dco_decode_conversation_kind(dynamic raw);
 
   @protected
+  ConversationMembersResponse dco_decode_conversation_members_response(
+    dynamic raw,
+  );
+
+  @protected
+  ConversationReadResponse dco_decode_conversation_read_response(dynamic raw);
+
+  @protected
   ConversationResponse dco_decode_conversation_response(dynamic raw);
 
   @protected
@@ -477,6 +485,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ConversationKind sse_decode_conversation_kind(SseDeserializer deserializer);
+
+  @protected
+  ConversationMembersResponse sse_decode_conversation_members_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ConversationReadResponse sse_decode_conversation_read_response(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ConversationResponse sse_decode_conversation_response(
@@ -922,6 +940,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_conversation_kind(
     ConversationKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_members_response(
+    ConversationMembersResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_read_response(
+    ConversationReadResponse self,
     SseSerializer serializer,
   );
 

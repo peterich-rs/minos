@@ -282,6 +282,7 @@ mod tests {
                     },
                     text: "hello from websocket".into(),
                     created_at_ms: 1_717_171_717,
+                    mentioned_account_ids: Vec::new(),
                 },
             },
         };

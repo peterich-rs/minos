@@ -161,6 +161,8 @@ pub struct ConversationSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message_preview: Option<String>,
     pub last_message_at_ms: i64,
+    pub unread_count: u32,
+    pub unread_mention_count: u32,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -190,12 +192,27 @@ pub struct ConversationResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMembersResponse {
+    pub members: Vec<UserSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationReadResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_read_at_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessageSummary {
     pub message_id: String,
     pub conversation_id: String,
     pub sender: UserSummary,
     pub text: String,
     pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentioned_account_ids: Vec<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

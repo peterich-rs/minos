@@ -16,12 +16,13 @@ use http::header::CONTENT_TYPE;
 use http::{Method, Request, Response, StatusCode};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::{
-    AuthRequest, AuthResponse, ConversationResponse, ConversationsResponse,
-    CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
-    FriendRequestsResponse, FriendsResponse, GetThreadLastSeqResponse, ListChatMessagesResponse,
-    ListThreadsParams, ListThreadsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse,
-    PairConsumeRequest, PairResponse, ReadThreadParams, ReadThreadResponse, RefreshRequest,
-    RefreshResponse, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
+    AuthRequest, AuthResponse, ConversationMembersResponse, ConversationReadResponse,
+    ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
+    CreateGroupConversationRequest, EnsureDirectConversationRequest, FriendRequestsResponse,
+    FriendsResponse, GetThreadLastSeqResponse, ListChatMessagesResponse, ListThreadsParams,
+    ListThreadsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse, PairConsumeRequest,
+    PairResponse, ReadThreadParams, ReadThreadResponse, RefreshRequest, RefreshResponse,
+    SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -607,6 +608,72 @@ impl MobileHttpClient {
                 Some(status.as_u16()),
                 Some(body.conversation_id.clone()),
                 None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn conversation_members(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+    ) -> Result<ConversationMembersResponse, MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/members");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::GET.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            None,
+        );
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ConversationMembersResponse =
+                decode_success_json(resp, "ConversationMembersResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("members={}", body.members.len())),
+                Some(conversation_id.into()),
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn mark_conversation_read(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+    ) -> Result<ConversationReadResponse, MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/read");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some("mark_read".into()),
+        );
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ConversationReadResponse =
+                decode_success_json(resp, "ConversationReadResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                body.last_read_at_ms.map(|ts| format!("last_read_at_ms={ts}")),
+                Some(conversation_id.into()),
             );
             Ok(body)
         } else {

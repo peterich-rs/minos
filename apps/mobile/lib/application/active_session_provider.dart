@@ -64,12 +64,13 @@ class ActiveSessionController extends _$ActiveSessionController {
   Future<MinosError?> start({
     required AgentName agent,
     required String prompt,
+    String workspace = '',
   }) async {
     state = SessionStarting(agent: agent, prompt: prompt);
     try {
       final resp = await ref
           .read(minosCoreProvider)
-          .startAgent(agent: agent, prompt: prompt);
+          .startAgent(agent: agent, prompt: prompt, workspace: workspace);
       ref.invalidate(threadListProvider);
       state = SessionStreaming(threadId: resp.sessionId, agent: agent);
       return null;
@@ -85,13 +86,14 @@ class ActiveSessionController extends _$ActiveSessionController {
   Future<MinosError?> startAndSend({
     required AgentName agent,
     required String prompt,
+    String workspace = '',
   }) async {
     state = SessionStarting(agent: agent, prompt: prompt);
     String? startedThreadId;
     try {
       final resp = await ref
           .read(minosCoreProvider)
-          .startAgent(agent: agent, prompt: prompt);
+          .startAgent(agent: agent, prompt: prompt, workspace: workspace);
       startedThreadId = resp.sessionId;
       ref.invalidate(threadListProvider);
       await ref

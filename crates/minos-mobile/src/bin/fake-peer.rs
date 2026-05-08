@@ -55,16 +55,16 @@
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
+use http::{Method, Request};
 use minos_domain::defaults::DEV_BACKEND_URL;
 use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceRole, MinosError, PairingToken};
 use minos_mobile::http::MobileHttpClient;
 use minos_mobile::{MobileClient, PersistedPairingState};
 use minos_protocol::{Envelope, PairConsumeRequest};
+use openwire::{Client as OpenwireClient, RequestBody};
+use openwire_core::websocket::Message;
 use std::time::Duration;
 use tokio::time::sleep;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::HeaderName;
-use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -284,40 +284,47 @@ async fn run_pair_then_tail(
         pair_resp.peer_device_id, pair_resp.peer_name
     );
 
-    let mut request = backend
-        .to_string()
-        .into_client_request()
+    let mut request = Request::builder()
+        .method(Method::GET)
+        .uri(backend)
+        .body(RequestBody::empty())
         .context("parse backend URL")?;
     request.headers_mut().insert(
-        HeaderName::from_static("x-device-id"),
+        "X-Device-Id",
         device_id
             .to_string()
             .parse()
             .context("encode device-id header")?,
     );
     request.headers_mut().insert(
-        HeaderName::from_static("x-device-role"),
+        "X-Device-Role",
         DeviceRole::MobileClient
             .to_string()
             .parse()
             .context("encode device-role header")?,
     );
     request.headers_mut().insert(
-        HeaderName::from_static("x-device-name"),
+        "X-Device-Name",
         device_name.parse().context("encode device-name header")?,
     );
     request.headers_mut().insert(
-        HeaderName::from_static("authorization"),
+        "Authorization",
         format!("Bearer {access_token}")
             .parse()
             .context("encode authorization header")?,
     );
 
     eprintln!("connecting as {device_id} (role=ios-client) to {backend}");
-    let (ws, _resp) = tokio_tungstenite::connect_async(request)
+    let websocket = OpenwireClient::builder()
+        .build()
+        .context("build openwire websocket client")?
+        .new_websocket(request)
+        .handshake_timeout(Duration::from_secs(10))
+        .execute()
         .await
         .context("ws handshake")?;
-    let (_sink, mut stream) = ws.split();
+    eprintln!("← websocket status={}", websocket.handshake().status());
+    let (_sender, mut stream) = websocket.split();
 
     while let Some(msg) = stream.next().await {
         match msg.context("ws read")? {
@@ -325,11 +332,11 @@ async fn run_pair_then_tail(
                 Ok(envelope) => print_envelope(&envelope, &text),
                 Err(e) => eprintln!("← (unparsed) {text} | parse err: {e}"),
             },
-            Message::Close(frame) => {
-                eprintln!("← close: {frame:?}");
+            Message::Close { code, reason } => {
+                eprintln!("← close: code={code} reason={reason}");
                 break;
             }
-            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => {}
         }
     }
 
@@ -392,7 +399,7 @@ async fn run_smoke_session(
 
     eprintln!("→ start_agent agent={agent:?} prompt={prompt:?}");
     let resp = client
-        .start_agent(agent, prompt.to_string())
+        .start_agent(agent, prompt.to_string(), String::new())
         .await
         .context("start_agent")?;
     eprintln!("← session_id={} cwd={}", resp.session_id, resp.cwd);

@@ -101,6 +101,16 @@ class _FakeCore implements MinosCoreProtocol {
   }) async => throw UnimplementedError();
 
   @override
+  Future<ConversationMembersResponse> conversationMembers({
+    required String conversationId,
+  }) async => const ConversationMembersResponse(members: <UserSummary>[]);
+
+  @override
+  Future<ConversationReadResponse> markConversationRead({
+    required String conversationId,
+  }) async => const ConversationReadResponse();
+
+  @override
   Future<ConversationResponse> ensureDirectConversation({
     required String friendAccountId,
   }) async => throw UnimplementedError();
@@ -169,6 +179,10 @@ class _FakeCore implements MinosCoreProtocol {
   Stream<UiEventFrame> get uiEvents => const Stream<UiEventFrame>.empty();
 
   @override
+  Stream<SocialEventFrame> get socialEvents =>
+      const Stream<SocialEventFrame>.empty();
+
+  @override
   ConnectionState get currentConnectionState =>
       const ConnectionState.disconnected();
 
@@ -176,6 +190,7 @@ class _FakeCore implements MinosCoreProtocol {
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,
+    String workspace = '',
   }) async => throw UnimplementedError();
 
   @override

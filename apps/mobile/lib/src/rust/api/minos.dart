@@ -55,6 +55,10 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Permanently close the given thread. Idempotent.
   Future<void> closeThread({required String threadId});
 
+  Future<ConversationMembersResponse> conversationMembers({
+    required String conversationId,
+  });
+
   Future<ConversationsResponse> conversations();
 
   Future<FriendRequestSummary> createFriendRequest({
@@ -116,6 +120,10 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Log out of the current session. Best-effort `stop_agent`, then
   /// revoke the refresh token server-side, then wipe local state.
   Future<void> logout();
+
+  Future<ConversationReadResponse> markConversationRead({
+    required String conversationId,
+  });
 
   Future<MyProfileResponse> myProfile();
 
@@ -196,6 +204,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,
+    required String workspace,
   });
 
   /// Subscribe to auth-state transitions. Emits the current cached frame
@@ -300,6 +309,7 @@ class ChatMessageSummary {
   final UserSummary sender;
   final String text;
   final PlatformInt64 createdAtMs;
+  final List<String> mentionedAccountIds;
 
   const ChatMessageSummary({
     required this.messageId,
@@ -307,6 +317,7 @@ class ChatMessageSummary {
     required this.sender,
     required this.text,
     required this.createdAtMs,
+    required this.mentionedAccountIds,
   });
 
   @override
@@ -315,7 +326,8 @@ class ChatMessageSummary {
       conversationId.hashCode ^
       sender.hashCode ^
       text.hashCode ^
-      createdAtMs.hashCode;
+      createdAtMs.hashCode ^
+      mentionedAccountIds.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -326,7 +338,8 @@ class ChatMessageSummary {
           conversationId == other.conversationId &&
           sender == other.sender &&
           text == other.text &&
-          createdAtMs == other.createdAtMs;
+          createdAtMs == other.createdAtMs &&
+          mentionedAccountIds == other.mentionedAccountIds;
 }
 
 @freezed
@@ -341,6 +354,38 @@ sealed class ConnectionState with _$ConnectionState {
 }
 
 enum ConversationKind { direct, group }
+
+class ConversationMembersResponse {
+  final List<UserSummary> members;
+
+  const ConversationMembersResponse({required this.members});
+
+  @override
+  int get hashCode => members.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationMembersResponse &&
+          runtimeType == other.runtimeType &&
+          members == other.members;
+}
+
+class ConversationReadResponse {
+  final PlatformInt64? lastReadAtMs;
+
+  const ConversationReadResponse({this.lastReadAtMs});
+
+  @override
+  int get hashCode => lastReadAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationReadResponse &&
+          runtimeType == other.runtimeType &&
+          lastReadAtMs == other.lastReadAtMs;
+}
 
 class ConversationResponse {
   final String conversationId;
@@ -366,6 +411,8 @@ class ConversationSummary {
   final int memberCount;
   final String? lastMessagePreview;
   final PlatformInt64 lastMessageAtMs;
+  final int unreadCount;
+  final int unreadMentionCount;
 
   const ConversationSummary({
     required this.conversationId,
@@ -375,6 +422,8 @@ class ConversationSummary {
     required this.memberCount,
     this.lastMessagePreview,
     required this.lastMessageAtMs,
+    required this.unreadCount,
+    required this.unreadMentionCount,
   });
 
   @override
@@ -385,7 +434,9 @@ class ConversationSummary {
       counterpart.hashCode ^
       memberCount.hashCode ^
       lastMessagePreview.hashCode ^
-      lastMessageAtMs.hashCode;
+      lastMessageAtMs.hashCode ^
+      unreadCount.hashCode ^
+      unreadMentionCount.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -398,7 +449,9 @@ class ConversationSummary {
           counterpart == other.counterpart &&
           memberCount == other.memberCount &&
           lastMessagePreview == other.lastMessagePreview &&
-          lastMessageAtMs == other.lastMessageAtMs;
+          lastMessageAtMs == other.lastMessageAtMs &&
+          unreadCount == other.unreadCount &&
+          unreadMentionCount == other.unreadMentionCount;
 }
 
 class ConversationsResponse {

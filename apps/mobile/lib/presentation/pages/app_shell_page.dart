@@ -15,6 +15,7 @@ import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/auth_state.dart';
+import 'package:minos/presentation/pages/agent_start_page.dart';
 import 'package:minos/presentation/pages/agents_hub_page.dart';
 import 'package:minos/presentation/pages/log_viewer_page.dart';
 import 'package:minos/presentation/pages/pairing_page.dart';
@@ -42,6 +43,7 @@ class _AppShellPageState extends ConsumerState<AppShellPage> {
 
   @override
   Widget build(BuildContext context) {
+    final socialUnreadCount = ref.watch(socialUnreadCountProvider);
     return Scaffold(
       backgroundColor: _scaffoldBg(context),
       body: IndexedStack(
@@ -50,6 +52,7 @@ class _AppShellPageState extends ConsumerState<AppShellPage> {
       ),
       bottomNavigationBar: _BottomNav(
         index: _tabIndex,
+        unreadCount: socialUnreadCount,
         onChanged: (i) => setState(() => _tabIndex = i),
       ),
     );
@@ -74,6 +77,7 @@ class _MessagesTabState extends ConsumerState<_MessagesTab> {
   Widget build(BuildContext context) {
     final threadsAsync = ref.watch(threadListProvider);
     final conversationsAsync = ref.watch(conversationsProvider);
+    final socialUnreadCount = ref.watch(socialUnreadCountProvider);
     final connection = ref.watch(connectionStateProvider).asData?.value;
     final isConnected = connection is ConnectionState_Connected;
     final preferredProfile = ref.watch(preferredAgentProfileProvider);
@@ -102,6 +106,7 @@ class _MessagesTabState extends ConsumerState<_MessagesTab> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: _MessagesModeSwitch(
               mode: _mode,
+              unreadCount: socialUnreadCount,
               onChanged: (mode) => setState(() => _mode = mode),
             ),
           ),
@@ -188,14 +193,19 @@ class _MessagesTabState extends ConsumerState<_MessagesTab> {
     ref.read(activeSessionControllerProvider.notifier).reset();
     Navigator.of(
       context,
-    ).push(MaterialPageRoute<void>(builder: (_) => const ThreadViewPage()));
+    ).push(MaterialPageRoute<void>(builder: (_) => const AgentStartPage()));
   }
 }
 
 class _MessagesModeSwitch extends StatelessWidget {
-  const _MessagesModeSwitch({required this.mode, required this.onChanged});
+  const _MessagesModeSwitch({
+    required this.mode,
+    required this.unreadCount,
+    required this.onChanged,
+  });
 
   final _MessagesMode mode;
+  final int unreadCount;
   final ValueChanged<_MessagesMode> onChanged;
 
   @override
@@ -224,7 +234,16 @@ class _MessagesModeSwitch extends StatelessWidget {
                   ? ShadButtonVariant.secondary
                   : ShadButtonVariant.ghost,
               onPressed: () => onChanged(_MessagesMode.social),
-              child: Text('Chat', style: shadTheme.textTheme.small),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text('Chat', style: shadTheme.textTheme.small),
+                  if (unreadCount > 0) ...<Widget>[
+                    const SizedBox(width: 6),
+                    _NavCountBadge(count: unreadCount),
+                  ],
+                ],
+              ),
             ),
           ),
         ],
@@ -287,13 +306,15 @@ class _SocialConversationsPane extends ConsumerWidget {
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate((context, index) {
                   final conversation = response.conversations[index];
+                  final preview = conversation.unreadMentionCount > 0
+                      ? '@你 ${conversation.lastMessagePreview ?? (conversation.kind == ConversationKind.group ? '群聊' : '开始聊天')}'
+                      : (conversation.lastMessagePreview ??
+                            (conversation.kind == ConversationKind.group
+                                ? '群聊'
+                                : '开始聊天'));
                   return ThreadListTile.social(
                     title: conversation.title,
-                    preview:
-                        conversation.lastMessagePreview ??
-                        (conversation.kind == ConversationKind.group
-                            ? '群聊'
-                            : '开始聊天'),
+                    preview: preview,
                     timestampMs: conversation.lastMessageAtMs,
                     avatarLabel: conversation.kind == ConversationKind.group
                         ? 'G'
@@ -301,6 +322,8 @@ class _SocialConversationsPane extends ConsumerWidget {
                     avatarTint: conversation.kind == ConversationKind.group
                         ? const Color(0xFF0F766E)
                         : const Color(0xFF2563EB),
+                    unreadCount: conversation.unreadCount,
+                    hasUnreadMention: conversation.unreadMentionCount > 0,
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => SocialChatPage(
@@ -519,7 +542,7 @@ class _RuntimeProfilePage extends ConsumerWidget {
     ref.read(activeSessionControllerProvider.notifier).reset();
     Navigator.of(
       context,
-    ).push(MaterialPageRoute<void>(builder: (_) => const ThreadViewPage()));
+    ).push(MaterialPageRoute<void>(builder: (_) => const AgentStartPage()));
   }
 }
 
@@ -1319,6 +1342,33 @@ class _ShellLabel extends StatelessWidget {
   }
 }
 
+class _NavCountBadge extends StatelessWidget {
+  const _NavCountBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: shadTheme.colorScheme.primary,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        child: Text(
+          count > 99 ? '99+' : '$count',
+          style: shadTheme.textTheme.small.copyWith(
+            color: shadTheme.colorScheme.primaryForeground,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _OfflineBanner extends StatelessWidget {
   const _OfflineBanner({required this.state});
 
@@ -1622,9 +1672,14 @@ class _AgentAvatar extends StatelessWidget {
 }
 
 class _BottomNav extends StatelessWidget {
-  const _BottomNav({required this.index, required this.onChanged});
+  const _BottomNav({
+    required this.index,
+    required this.unreadCount,
+    required this.onChanged,
+  });
 
   final int index;
+  final int unreadCount;
   final ValueChanged<int> onChanged;
 
   @override
@@ -1645,6 +1700,7 @@ class _BottomNav extends StatelessWidget {
                 icon: LucideIcons.messageCircle,
                 activeIcon: LucideIcons.messagesSquare,
                 label: '消息',
+                badgeCount: unreadCount,
                 selected: index == 0,
                 onTap: () => onChanged(0),
               ),
@@ -1675,6 +1731,7 @@ class _NavItem extends StatelessWidget {
     required this.icon,
     required this.activeIcon,
     required this.label,
+    this.badgeCount = 0,
     required this.selected,
     required this.onTap,
   });
@@ -1682,6 +1739,7 @@ class _NavItem extends StatelessWidget {
   final IconData icon;
   final IconData activeIcon;
   final String label;
+  final int badgeCount;
   final bool selected;
   final VoidCallback onTap;
 
@@ -1694,7 +1752,18 @@ class _NavItem extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            _ShellIcon(selected ? activeIcon : icon, selected: selected),
+            Stack(
+              clipBehavior: Clip.none,
+              children: <Widget>[
+                _ShellIcon(selected ? activeIcon : icon, selected: selected),
+                if (badgeCount > 0)
+                  Positioned(
+                    right: -10,
+                    top: -7,
+                    child: _NavCountBadge(count: badgeCount),
+                  ),
+              ],
+            ),
             const SizedBox(height: 3),
             _ShellLabel(label, selected: selected),
           ],

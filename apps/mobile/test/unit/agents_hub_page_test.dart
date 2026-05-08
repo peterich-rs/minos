@@ -1,8 +1,8 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/minos_providers.dart';
@@ -17,9 +17,11 @@ class _FakeCore implements MinosCoreProtocol {
     this.skillsResponse = const ListHostSkillsResponse(
       data: <HostSkillsEntry>[],
     ),
+    this.listClisError,
   });
 
   final ListHostSkillsResponse skillsResponse;
+  final MinosError? listClisError;
 
   @override
   Future<String?> activeHost() async => null;
@@ -50,7 +52,12 @@ class _FakeCore implements MinosCoreProtocol {
   }) async => throw UnimplementedError();
 
   @override
-  Future<List<AgentDescriptor>> listClis() async => const <AgentDescriptor>[];
+  Future<List<AgentDescriptor>> listClis() async {
+    if (listClisError != null) {
+      throw listClisError!;
+    }
+    return const <AgentDescriptor>[];
+  }
 
   @override
   Future<ListHostSkillsResponse> listHostSkills({
@@ -76,6 +83,16 @@ class _FakeCore implements MinosCoreProtocol {
     required String title,
     required List<String> memberAccountIds,
   }) async => throw UnimplementedError();
+
+  @override
+  Future<ConversationMembersResponse> conversationMembers({
+    required String conversationId,
+  }) async => const ConversationMembersResponse(members: <UserSummary>[]);
+
+  @override
+  Future<ConversationReadResponse> markConversationRead({
+    required String conversationId,
+  }) async => const ConversationReadResponse();
 
   @override
   Future<ConversationResponse> ensureDirectConversation({
@@ -194,7 +211,12 @@ class _FakeCore implements MinosCoreProtocol {
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,
+    String workspace = '',
   }) async => const StartAgentResponse(sessionId: 'thr-1', cwd: '/tmp');
+
+  @override
+  Stream<SocialEventFrame> get socialEvents =>
+      const Stream<SocialEventFrame>.empty();
 
   @override
   Stream<UiEventFrame> get uiEvents => const Stream<UiEventFrame>.empty();
@@ -202,13 +224,38 @@ class _FakeCore implements MinosCoreProtocol {
 
 class _MemoryStore implements AgentProfileStore {
   @override
-  Future<AgentWorkspaceState> load() async => AgentWorkspaceState.bootstrap();
+  Future<AgentWorkspaceState> load() async => const AgentWorkspaceState.empty();
 
   @override
   Future<void> save(AgentWorkspaceState state) async {}
 }
 
 void main() {
+  test(
+    'runtimeAgentDescriptorsProvider returns empty when no hosts are paired',
+    () async {
+      final container = ProviderContainer(
+        overrides: [
+          minosCoreProvider.overrideWithValue(
+            const _FakeCore(listClisError: MinosError.notConnected()),
+          ),
+        ],
+      );
+      final runtimeSub = container.listen(
+        runtimeAgentDescriptorsProvider,
+        (_, __) {},
+      );
+      addTearDown(runtimeSub.close);
+      addTearDown(container.dispose);
+
+      final descriptors = await container.read(
+        runtimeAgentDescriptorsProvider.future,
+      );
+
+      expect(descriptors, isEmpty);
+    },
+  );
+
   testWidgets('AgentsHubTab renders the agent shell', (tester) async {
     final container = ProviderContainer(
       overrides: [
@@ -243,12 +290,12 @@ void main() {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: const MaterialApp(home: AgentsHubTab()),
+        child: const ShadApp(home: AgentsHubTab()),
       ),
     );
     await tester.pump();
 
-    expect(find.text('Agent'), findsOneWidget);
-    expect(find.text('Profiles'), findsOneWidget);
+    expect(find.text('Members'), findsOneWidget);
+    expect(find.text('AGENTS 0'), findsOneWidget);
   });
 }

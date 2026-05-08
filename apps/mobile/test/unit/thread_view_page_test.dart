@@ -43,6 +43,10 @@ class _FakeThreadCore implements MinosCoreProtocol {
   Stream<UiEventFrame> get uiEvents => _uiCtl.stream;
 
   @override
+  Stream<SocialEventFrame> get socialEvents =>
+      const Stream<SocialEventFrame>.empty();
+
+  @override
   Future<ReadThreadResponse> readThread(ReadThreadParams params) async {
     return ReadThreadResponse(uiEvents: initialEvents);
   }
@@ -51,6 +55,7 @@ class _FakeThreadCore implements MinosCoreProtocol {
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,
+    String workspace = '',
   }) async {
     return const StartAgentResponse(sessionId: 'thr-1', cwd: '/tmp');
   }
@@ -109,6 +114,16 @@ class _FakeThreadCore implements MinosCoreProtocol {
     required String title,
     required List<String> memberAccountIds,
   }) async => throw UnimplementedError();
+
+  @override
+  Future<ConversationMembersResponse> conversationMembers({
+    required String conversationId,
+  }) async => const ConversationMembersResponse(members: <UserSummary>[]);
+
+  @override
+  Future<ConversationReadResponse> markConversationRead({
+    required String conversationId,
+  }) async => const ConversationReadResponse();
 
   @override
   Future<ConversationResponse> ensureDirectConversation({

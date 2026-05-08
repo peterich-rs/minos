@@ -68,6 +68,14 @@ abstract class MinosCoreProtocol {
     required List<String> memberAccountIds,
   });
 
+  Future<ConversationMembersResponse> conversationMembers({
+    required String conversationId,
+  });
+
+  Future<ConversationReadResponse> markConversationRead({
+    required String conversationId,
+  });
+
   Future<ListChatMessagesResponse> listChatMessages({
     required String conversationId,
     int? beforeTsMs,
@@ -130,6 +138,7 @@ abstract class MinosCoreProtocol {
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,
+    String workspace = '',
   });
 
   /// Send a follow-up user message to an existing agent session. The

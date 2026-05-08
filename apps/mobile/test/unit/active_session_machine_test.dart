@@ -21,6 +21,7 @@ class _FakeCore implements MinosCoreProtocol {
   String? lastSendThreadId;
   String? lastSendText;
   String? lastCloseThreadId;
+  String? lastStartWorkspace;
 
   void emit(UiEventFrame frame) => _uiCtl.add(frame);
 
@@ -28,12 +29,18 @@ class _FakeCore implements MinosCoreProtocol {
   Stream<UiEventFrame> get uiEvents => _uiCtl.stream;
 
   @override
+  Stream<SocialEventFrame> get socialEvents =>
+      const Stream<SocialEventFrame>.empty();
+
+  @override
   Future<StartAgentResponse> startAgent({
     required AgentName agent,
     required String prompt,
+    String workspace = '',
   }) async {
     if (startError != null) throw startError!;
     startCount += 1;
+    lastStartWorkspace = workspace;
     return startResponse ??
         const StartAgentResponse(sessionId: 'thr-1', cwd: '/tmp');
   }
@@ -74,6 +81,16 @@ class _FakeCore implements MinosCoreProtocol {
     required String title,
     required List<String> memberAccountIds,
   }) async => throw UnimplementedError();
+
+  @override
+  Future<ConversationMembersResponse> conversationMembers({
+    required String conversationId,
+  }) async => const ConversationMembersResponse(members: <UserSummary>[]);
+
+  @override
+  Future<ConversationReadResponse> markConversationRead({
+    required String conversationId,
+  }) async => const ConversationReadResponse();
 
   @override
   Future<ConversationResponse> ensureDirectConversation({
@@ -285,6 +302,21 @@ void main() {
       c.read(activeSessionControllerProvider),
       const SessionStreaming(threadId: 'thr-initial', agent: AgentName.codex),
     );
+  });
+
+  test('startAndSend() forwards workspace to core.startAgent', () async {
+    final core = _FakeCore();
+    final c = _container(core);
+    final notifier = c.read(activeSessionControllerProvider.notifier);
+
+    final error = await notifier.startAndSend(
+      agent: AgentName.claude,
+      prompt: 'hello',
+      workspace: '/Users/fan/dev/minos',
+    );
+
+    expect(error, isNull);
+    expect(core.lastStartWorkspace, '/Users/fan/dev/minos');
   });
 
   test(

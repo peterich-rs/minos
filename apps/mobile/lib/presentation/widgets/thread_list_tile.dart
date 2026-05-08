@@ -17,7 +17,9 @@ class ThreadListTile extends ConsumerWidget {
        _socialPreview = null,
        _socialTimestampMs = null,
        _socialAvatarLabel = null,
-       _socialAvatarTint = null;
+       _socialAvatarTint = null,
+       _socialUnreadCount = null,
+       _socialHasUnreadMention = null;
 
   const ThreadListTile.social({
     super.key,
@@ -26,13 +28,17 @@ class ThreadListTile extends ConsumerWidget {
     required int timestampMs,
     required String avatarLabel,
     required Color avatarTint,
+    int unreadCount = 0,
+    bool hasUnreadMention = false,
     this.onTap,
   }) : summary = null,
        _socialTitle = title,
        _socialPreview = preview,
        _socialTimestampMs = timestampMs,
        _socialAvatarLabel = avatarLabel,
-       _socialAvatarTint = avatarTint;
+       _socialAvatarTint = avatarTint,
+       _socialUnreadCount = unreadCount,
+       _socialHasUnreadMention = hasUnreadMention;
 
   final ThreadSummary? summary;
   final VoidCallback? onTap;
@@ -41,6 +47,8 @@ class ThreadListTile extends ConsumerWidget {
   final int? _socialTimestampMs;
   final String? _socialAvatarLabel;
   final Color? _socialAvatarTint;
+  final int? _socialUnreadCount;
+  final bool? _socialHasUnreadMention;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -53,6 +61,8 @@ class ThreadListTile extends ConsumerWidget {
         timestampMs: _socialTimestampMs!,
         avatarLabel: _socialAvatarLabel!,
         avatarTint: _socialAvatarTint!,
+        unreadCount: _socialUnreadCount!,
+        hasUnreadMention: _socialHasUnreadMention!,
         onTap: onTap,
       );
     }
@@ -156,6 +166,8 @@ class _SocialThreadTile extends StatelessWidget {
     required this.timestampMs,
     required this.avatarLabel,
     required this.avatarTint,
+    required this.unreadCount,
+    required this.hasUnreadMention,
     this.onTap,
   });
 
@@ -164,6 +176,8 @@ class _SocialThreadTile extends StatelessWidget {
   final int timestampMs;
   final String avatarLabel;
   final Color avatarTint;
+  final int unreadCount;
+  final bool hasUnreadMention;
   final VoidCallback? onTap;
 
   @override
@@ -232,9 +246,26 @@ class _SocialThreadTile extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                          color: unreadCount > 0 || hasUnreadMention
+                              ? theme.colorScheme.onSurface
+                              : theme.colorScheme.onSurfaceVariant,
+                          fontWeight: unreadCount > 0 || hasUnreadMention
+                              ? FontWeight.w600
+                              : FontWeight.w400,
                         ),
                       ),
+                      if (hasUnreadMention || unreadCount > 0) ...<Widget>[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: <Widget>[
+                            if (hasUnreadMention) const _MentionBadge(),
+                            if (hasUnreadMention && unreadCount > 0)
+                              const SizedBox(width: 6),
+                            if (unreadCount > 0)
+                              _UnreadCountBadge(count: unreadCount),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -246,6 +277,58 @@ class _SocialThreadTile extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UnreadCountBadge extends StatelessWidget {
+  const _UnreadCountBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: shadTheme.colorScheme.primary,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Text(
+          count > 99 ? '99+' : '$count',
+          style: shadTheme.textTheme.small.copyWith(
+            color: shadTheme.colorScheme.primaryForeground,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MentionBadge extends StatelessWidget {
+  const _MentionBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF59E0B).withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Text(
+          '@你',
+          style: shadTheme.textTheme.small.copyWith(
+            color: const Color(0xFFB45309),
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),

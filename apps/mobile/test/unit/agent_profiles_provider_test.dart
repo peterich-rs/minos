@@ -8,7 +8,7 @@ import 'package:minos/src/rust/api/minos.dart';
 
 class _MemoryAgentProfileStore implements AgentProfileStore {
   _MemoryAgentProfileStore([AgentWorkspaceState? initial])
-    : _state = initial ?? AgentWorkspaceState.bootstrap();
+    : _state = initial ?? const AgentWorkspaceState.empty();
 
   AgentWorkspaceState _state;
   int saveCount = 0;
@@ -32,14 +32,14 @@ ProviderContainer _container(_MemoryAgentProfileStore store) {
 }
 
 void main() {
-  test('bootstraps a preferred profile from storage', () async {
+  test('loads an empty workspace when storage has no profiles', () async {
     final store = _MemoryAgentProfileStore();
     final container = _container(store);
 
     final state = await container.read(agentProfilesControllerProvider.future);
-    expect(state.profiles, hasLength(1));
-    expect(state.preferredProfile?.name, 'codex');
-    expect(container.read(preferredRuntimeAgentProvider), AgentName.codex);
+    expect(state.profiles, isEmpty);
+    expect(state.preferredProfile, isNull);
+    expect(container.read(preferredRuntimeAgentProvider), isNull);
   });
 
   test(
@@ -72,10 +72,33 @@ void main() {
       final state = await container.read(
         agentProfilesControllerProvider.future,
       );
-      expect(state.profiles, hasLength(2));
+      expect(state.profiles, hasLength(1));
       expect(state.preferredProfileId, created.id);
       expect(state.profileForThread('thr-agent-1')?.name, 'release-bot');
       expect(store.saveCount, greaterThanOrEqualTo(3));
     },
   );
+
+  test('deleteProfile allows removing the last profile', () async {
+    final store = _MemoryAgentProfileStore();
+    final container = _container(store);
+    final controller = container.read(agentProfilesControllerProvider.notifier);
+
+    final created = await controller.createProfile(
+      const AgentProfileDraft(
+        name: 'solo-agent',
+        description: '',
+        runtimeAgent: AgentName.claude,
+        model: 'Claude Sonnet 4',
+        reasoningEffort: AgentReasoningEffort.medium,
+        environmentVariables: <AgentEnvironmentVariable>[],
+      ),
+    );
+
+    await controller.deleteProfile(created.id);
+
+    final state = await container.read(agentProfilesControllerProvider.future);
+    expect(state.profiles, isEmpty);
+    expect(state.preferredProfileId, isNull);
+  });
 }

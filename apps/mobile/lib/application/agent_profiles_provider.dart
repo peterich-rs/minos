@@ -20,9 +20,8 @@ final preferredAgentProfileProvider = Provider<AgentProfile?>((ref) {
   return state?.preferredProfile;
 });
 
-final preferredRuntimeAgentProvider = Provider<AgentName>((ref) {
-  return ref.watch(preferredAgentProfileProvider)?.runtimeAgent ??
-      AgentName.codex;
+final preferredRuntimeAgentProvider = Provider<AgentName?>((ref) {
+  return ref.watch(preferredAgentProfileProvider)?.runtimeAgent;
 });
 
 final threadBoundAgentProfileProvider = Provider.family<AgentProfile?, String>((
@@ -83,17 +82,17 @@ class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
 
   Future<void> deleteProfile(String profileId) async {
     final current = await future;
-    if (current.profiles.length == 1) {
-      return;
-    }
     final nextProfiles = current.profiles
         .where((profile) => profile.id != profileId)
         .toList(growable: false);
     final next = current
         .copyWith(
           profiles: nextProfiles,
-          preferredProfileId: current.preferredProfileId == profileId
+          preferredProfileId:
+              current.preferredProfileId == profileId && nextProfiles.isNotEmpty
               ? nextProfiles.first.id
+              : current.preferredProfileId == profileId
+              ? null
               : current.preferredProfileId,
           threadProfileBindings: Map<String, String>.from(
             current.threadProfileBindings,

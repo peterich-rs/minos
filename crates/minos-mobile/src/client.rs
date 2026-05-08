@@ -28,15 +28,15 @@ use futures_util::StreamExt;
 use http::{Method, Request};
 use minos_domain::{AgentName, ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
-    AuthSummary, ChatMessageSummary, ConversationResponse, ConversationsResponse,
-    CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
-    Envelope, EventKind, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
-    GetThreadLastSeqParams, GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse,
-    ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
-    RefreshResponse, SendChatMessageRequest, SendUserMessageRequest, SetMinosIdRequest,
-    StartAgentRequest, StartAgentResponse, UserSummary, WriteHostSkillConfigRequest,
-    WriteHostSkillConfigResponse,
+    AuthSummary, ChatMessageSummary, ConversationMembersResponse, ConversationReadResponse,
+    ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
+    CreateGroupConversationRequest, EnsureDirectConversationRequest, Envelope, EventKind,
+    FriendRequestSummary, FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams,
+    GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse, ListClisResponse,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
+    MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
+    SendChatMessageRequest, SendUserMessageRequest, SetMinosIdRequest, StartAgentRequest,
+    StartAgentResponse, UserSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -649,6 +649,26 @@ impl MobileClient {
             .await
     }
 
+    pub async fn conversation_members(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationMembersResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .conversation_members(&access, &conversation_id)
+            .await
+    }
+
+    pub async fn mark_conversation_read(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationReadResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .mark_conversation_read(&access, &conversation_id)
+            .await
+    }
+
     pub async fn list_chat_messages(
         &self,
         conversation_id: String,
@@ -840,6 +860,7 @@ impl MobileClient {
         &self,
         agent: AgentName,
         prompt: String,
+        workspace: String,
     ) -> Result<StartAgentResponse, MinosError> {
         let outbox = self
             .outbox
@@ -848,13 +869,9 @@ impl MobileClient {
             .clone()
             .ok_or(MinosError::NotConnected)?;
         let target = self.require_active_host().await?;
-        // Pre-Phase-D mobile flows do not yet pick a workspace; the daemon
-        // currently maps an empty path back to its default workspace dir
-        // (`paths::minos_home()/workspaces`). The Phase-C plan accepts that
-        // mobile is broken against the new FFI until apps catch up.
         let req = StartAgentRequest {
             agent,
-            workspace: String::new(),
+            workspace,
             mode: None,
         };
         let resp: StartAgentResponse = forward_rpc(
@@ -2267,7 +2284,9 @@ mod tests {
     #[tokio::test]
     async fn start_agent_returns_not_connected_when_disconnected() {
         let client = MobileClient::new_with_in_memory_store("iPhone".into());
-        let res = client.start_agent(AgentName::Codex, "ping".into()).await;
+        let res = client
+            .start_agent(AgentName::Codex, "ping".into(), String::new())
+            .await;
         assert!(matches!(res, Err(MinosError::NotConnected)));
     }
 
@@ -2404,6 +2423,7 @@ mod tests {
                     },
                     text: "hello".into(),
                     created_at_ms: 123,
+                    mentioned_account_ids: Vec::new(),
                 },
             },
         };

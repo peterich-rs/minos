@@ -1,14 +1,16 @@
+use std::collections::{BTreeSet, HashMap};
+
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use minos_protocol::{
-    ChatMessageSummary, ConversationKind, ConversationResponse, ConversationSummary,
-    ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
-    EnsureDirectConversationRequest, Envelope, EventKind, FriendRequestStatus,
-    FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse,
-    ListChatMessagesResponse, MyProfileResponse, SearchUsersResponse,
-    SendChatMessageRequest, SetMinosIdRequest, UserSummary,
+    ChatMessageSummary, ConversationKind, ConversationMembersResponse, ConversationReadResponse,
+    ConversationResponse, ConversationSummary, ConversationsResponse,
+    CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
+    Envelope, EventKind, FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse,
+    FriendSummary, FriendsResponse, ListChatMessagesResponse, MyProfileResponse,
+    SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest, UserSummary,
 };
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +38,14 @@ pub fn router() -> Router<BackendState> {
         .route("/conversations", get(list_conversations))
         .route("/conversations/direct", post(ensure_direct_conversation))
         .route("/conversations/group", post(create_group_conversation))
+        .route(
+            "/conversations/:conversation_id/members",
+            get(list_conversation_members),
+        )
+        .route(
+            "/conversations/:conversation_id/read",
+            post(mark_conversation_read),
+        )
         .route(
             "/conversations/:conversation_id/messages",
             get(list_messages).post(send_message),
@@ -437,6 +447,57 @@ async fn create_group_conversation(
     }))
 }
 
+async fn list_conversation_members(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+) -> Result<Json<ConversationMembersResponse>, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = require_account_id(&state, &headers).await?;
+    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+    {
+        return Err(err("not_found", "conversation not found"));
+    }
+
+    let members = crate::store::social::list_conversation_member_profiles(
+        &state.store,
+        &conversation_id,
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?
+    .into_iter()
+    .map(|profile| to_user_summary(&profile))
+    .collect();
+
+    Ok(Json(ConversationMembersResponse { members }))
+}
+
+async fn mark_conversation_read(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+) -> Result<Json<ConversationReadResponse>, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = require_account_id(&state, &headers).await?;
+    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+    {
+        return Err(err("not_found", "conversation not found"));
+    }
+
+    let last_read_at_ms = crate::store::social::mark_conversation_read_to_latest(
+        &state.store,
+        &conversation_id,
+        &account_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?;
+
+    Ok(Json(ConversationReadResponse { last_read_at_ms }))
+}
+
 #[derive(Debug, Deserialize)]
 struct ListMessagesQuery {
     before_ts_ms: Option<i64>,
@@ -494,12 +555,21 @@ async fn send_message(
     {
         return Err(err("not_found", "conversation not found"));
     }
+    let members = crate::store::social::list_conversation_member_profiles(
+        &state.store,
+        &conversation_id,
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?;
+    let mentioned_account_ids =
+        extract_mentioned_account_ids(req.text.trim(), &account_id, &members);
     let row = crate::store::social::insert_message(
         &state.store,
         &conversation_id,
         &account_id,
         req.text.trim(),
         chrono::Utc::now().timestamp_millis(),
+        &mentioned_account_ids,
     )
     .await
     .map_err(|e| err("internal", e.to_string()))?;
@@ -537,7 +607,9 @@ async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSumma
     };
 
     for account_id in members {
-        let _ = state.registry.broadcast_mobile_account(&account_id, frame.clone());
+        let _ = state
+            .registry
+            .broadcast_mobile_account(&account_id, frame.clone());
     }
 }
 
@@ -595,6 +667,8 @@ async fn hydrate_conversations(
             member_count: u32::try_from(row.member_count).unwrap_or(0),
             last_message_preview: row.last_message_preview,
             last_message_at_ms: row.last_message_at_ms,
+            unread_count: u32::try_from(row.unread_count).unwrap_or(0),
+            unread_mention_count: u32::try_from(row.unread_mention_count).unwrap_or(0),
         });
     }
     Ok(output)
@@ -604,8 +678,21 @@ async fn hydrate_messages(
     state: &BackendState,
     rows: Vec<crate::store::social::ChatMessageRow>,
 ) -> Result<Vec<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
+    let message_ids = rows
+        .iter()
+        .map(|row| row.message_id.clone())
+        .collect::<Vec<_>>();
+    let mut mentions_by_message = crate::store::social::list_message_mentions(
+        &state.store,
+        &message_ids,
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?;
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
+        let mentioned_account_ids = mentions_by_message
+            .remove(&row.message_id)
+            .unwrap_or_default();
         let sender = load_profile(state, &row.sender_account_id).await?;
         output.push(ChatMessageSummary {
             message_id: row.message_id,
@@ -613,9 +700,65 @@ async fn hydrate_messages(
             sender: to_user_summary(&sender),
             text: row.text,
             created_at_ms: row.created_at_ms,
+            mentioned_account_ids,
         });
     }
     Ok(output)
+}
+
+fn extract_mentioned_account_ids(
+    text: &str,
+    sender_account_id: &str,
+    members: &[crate::store::social::ProfileRow],
+) -> Vec<String> {
+    let by_minos_id = members
+        .iter()
+        .map(|member| (member.minos_id.as_str(), member.account_id.as_str()))
+        .collect::<HashMap<_, _>>();
+    let mut mentions = BTreeSet::<String>::new();
+
+    for token in collect_mention_tokens(text) {
+        let Some(account_id) = by_minos_id.get(token) else {
+            continue;
+        };
+        if *account_id == sender_account_id {
+            continue;
+        }
+        mentions.insert((*account_id).to_string());
+    }
+
+    mentions.into_iter().collect()
+}
+
+fn collect_mention_tokens(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] != b'@' {
+            index += 1;
+            continue;
+        }
+        if index > 0 && bytes[index - 1].is_ascii_alphanumeric() {
+            index += 1;
+            continue;
+        }
+
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && bytes[end].is_ascii_alphanumeric() {
+            end += 1;
+        }
+        if end > start {
+            tokens.push(&text[start..end]);
+            index = end;
+            continue;
+        }
+        index += 1;
+    }
+
+    tokens
 }
 
 fn parse_request_status(

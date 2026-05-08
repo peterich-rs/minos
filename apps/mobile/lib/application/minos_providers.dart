@@ -38,7 +38,11 @@ final peerDisplayNameProvider = FutureProvider<String?>((ref) {
 
 final runtimeAgentDescriptorsProvider = FutureProvider<List<AgentDescriptor>>((
   ref,
-) {
+) async {
+  final pairedHosts = await ref.watch(pairedMacsProvider.future);
+  if (pairedHosts.isEmpty) {
+    return const <AgentDescriptor>[];
+  }
   return ref.watch(minosCoreProvider).listClis();
 });
 
