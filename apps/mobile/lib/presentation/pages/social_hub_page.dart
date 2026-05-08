@@ -16,7 +16,6 @@ class SocialHubPage extends ConsumerStatefulWidget {
 
 class _SocialHubPageState extends ConsumerState<SocialHubPage> {
   final TextEditingController _searchController = TextEditingController();
-  String _query = '';
 
   @override
   void dispose() {
@@ -55,10 +54,18 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
     }
   }
 
+  Future<void> _startCreateGroup(List<FriendSummary> friends) async {
+    if (friends.length < 2) {
+      _showSocialInfo(context, '至少需要 2 位好友才能创建群聊');
+      return;
+    }
+    await _createGroup(friends);
+  }
+
   Future<void> _editMinosId(MyProfileResponse profile) async {
     final controller = TextEditingController(text: profile.minosId);
     final rootContext = context;
-    await showShadDialog(
+    await showShadDialog<void>(
       context: rootContext,
       builder: (context) => ShadDialog.alert(
         title: const Text('设置 Minos ID'),
@@ -202,7 +209,6 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
     final profileAsync = ref.watch(socialProfileProvider);
     final requestsAsync = ref.watch(friendRequestsProvider);
     final friendsAsync = ref.watch(friendsProvider);
-    final searchAsync = ref.watch(socialSearchProvider(_query));
     final shadTheme = ShadTheme.of(context);
 
     return Scaffold(
@@ -245,62 +251,32 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
               ),
             ),
             const SizedBox(height: 16),
-            _SocialSection(
-              title: '添加好友',
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: <Widget>[
-                    ShadInput(
-                      controller: _searchController,
-                      placeholder: const Text('输入 Minos ID'),
-                      onChanged: (value) =>
-                          setState(() => _query = value.trim()),
-                    ),
-                    if (_query.isNotEmpty) ...<Widget>[
-                      const SizedBox(height: 12),
-                      searchAsync.when(
-                        loading: () => const Center(child: ShadProgress()),
-                        error: (error, _) =>
-                            _SectionMessage(text: error.toString()),
-                        data: (users) => Column(
-                          children: [
-                            for (final user in users)
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(user.displayName),
-                                subtitle: Text(user.minosId),
-                                trailing: ShadButton.outline(
-                                  onPressed: () async {
-                                    try {
-                                      await ref
-                                          .read(minosCoreProvider)
-                                          .createFriendRequest(
-                                            targetMinosId: user.minosId,
-                                          );
-                                      await ref
-                                          .read(friendRequestsProvider.notifier)
-                                          .refresh();
-                                      if (context.mounted) {
-                                        _showSocialInfo(context, '请求已发送');
-                                      }
-                                    } catch (error) {
-                                      if (!context.mounted) return;
-                                      _showSocialError(
-                                        context,
-                                        '发送请求失败',
-                                        error,
-                                      );
-                                    }
-                                  },
-                                  child: const Text('添加'),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
+            _FriendSearchSection(controller: _searchController),
+            const SizedBox(height: 16),
+            friendsAsync.when(
+              loading: () => _SocialSection(
+                title: '群聊',
+                child: const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: ShadProgress()),
+                ),
+              ),
+              error: (error, _) => _SocialSection(
+                title: '群聊',
+                child: _SectionMessage(text: error.toString()),
+              ),
+              data: (friends) => _SocialSection(
+                title: '群聊',
+                child: ListTile(
+                  leading: const Icon(LucideIcons.usersRound),
+                  title: const Text('新建群聊'),
+                  subtitle: Text(
+                    friends.friends.length >= 2
+                        ? '从 ${friends.friends.length} 位好友中选择成员'
+                        : '至少需要 2 位好友才能创建群聊',
+                  ),
+                  trailing: const Icon(LucideIcons.chevronRight),
+                  onTap: () => _startCreateGroup(friends.friends),
                 ),
               ),
             ),
@@ -398,12 +374,6 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
               ),
               data: (friends) => _SocialSection(
                 title: '好友',
-                trailing: friends.friends.length >= 2
-                    ? ShadButton.ghost(
-                        onPressed: () => _createGroup(friends.friends),
-                        child: const Text('建群'),
-                      )
-                    : null,
                 child: friends.friends.isEmpty
                     ? const _SectionMessage(text: '还没有好友')
                     : Column(
@@ -419,6 +389,75 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
                       ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FriendSearchSection extends ConsumerWidget {
+  const _FriendSearchSection({required this.controller});
+
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final query = ref.watch(socialSearchQueryProvider);
+    final searchAsync = ref.watch(socialSearchProvider(query));
+    return _SocialSection(
+      title: '添加好友',
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: <Widget>[
+            ShadInput(
+              controller: controller,
+              placeholder: const Text('输入 Minos ID'),
+              onChanged: (value) {
+                ref
+                    .read(socialSearchQueryProvider.notifier)
+                    .update(value);
+              },
+            ),
+            if (query.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 12),
+              searchAsync.when(
+                loading: () => const Center(child: ShadProgress()),
+                error: (error, _) => _SectionMessage(text: error.toString()),
+                data: (users) => Column(
+                  children: <Widget>[
+                    for (final user in users)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(user.displayName),
+                        subtitle: Text(user.minosId),
+                        trailing: ShadButton.outline(
+                          onPressed: () async {
+                            try {
+                              await ref
+                                  .read(minosCoreProvider)
+                                  .createFriendRequest(
+                                    targetMinosId: user.minosId,
+                                  );
+                              await ref
+                                  .read(friendRequestsProvider.notifier)
+                                  .refresh();
+                              if (context.mounted) {
+                                _showSocialInfo(context, '请求已发送');
+                              }
+                            } catch (error) {
+                              if (!context.mounted) return;
+                              _showSocialError(context, '发送请求失败', error);
+                            }
+                          },
+                          child: const Text('添加'),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),

@@ -1,11 +1,8 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/social_providers.dart';
-import 'package:minos/application/minos_providers.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 class SocialChatPage extends ConsumerStatefulWidget {
@@ -27,102 +24,31 @@ class SocialChatPage extends ConsumerStatefulWidget {
 class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  StreamSubscription<SocialEventFrame>? _socialSub;
-
-  List<ChatMessageSummary> _messages = const <ChatMessageSummary>[];
-  String? _myAccountId;
-  bool _loading = true;
-  bool _sending = false;
-  Object? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _socialSub = ref
-        .read(minosCoreProvider)
-        .socialEvents
-        .listen(_onSocialEvent);
-    _load();
-  }
 
   @override
   void dispose() {
-    _socialSub?.cancel();
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
-  void _onSocialEvent(SocialEventFrame frame) {
-    if (!mounted || frame.conversationId != widget.conversationId) return;
-    final changed = _appendMessage(frame.message);
-    if (changed) {
-      unawaited(_markConversationRead());
-      ref.invalidate(conversationsProvider);
-      _jumpToBottom();
-    }
-  }
-
-  Future<void> _markConversationRead() async {
-    try {
-      await ref
-          .read(minosCoreProvider)
-          .markConversationRead(conversationId: widget.conversationId);
-      if (mounted) {
-        ref.invalidate(conversationsProvider);
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final core = ref.read(minosCoreProvider);
-      final profile = await core.myProfile();
-      final response = await core.listChatMessages(
-        conversationId: widget.conversationId,
-        limit: 100,
-      );
-      await core.markConversationRead(conversationId: widget.conversationId);
-      if (!mounted) return;
-      setState(() {
-        _myAccountId = profile.accountId;
-        _messages = response.messages;
-        _loading = false;
-      });
-      ref.invalidate(conversationsProvider);
-      _jumpToBottom();
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _error = error;
-        _loading = false;
-      });
-    }
-  }
-
   Future<void> _send() async {
     final text = _controller.text.trim();
-    if (text.isEmpty || _sending) return;
-    setState(() => _sending = true);
+    if (text.isEmpty) {
+      return;
+    }
     try {
-      final message = await ref
-          .read(minosCoreProvider)
-          .sendChatMessage(conversationId: widget.conversationId, text: text);
-      if (!mounted) return;
+      await ref
+          .read(socialConversationProvider(widget.conversationId).notifier)
+          .sendMessage(text);
+      if (!mounted) {
+        return;
+      }
       _controller.clear();
-      setState(() {
-        _messages = _mergeMessage(_messages, message);
-        _sending = false;
-      });
-      _jumpToBottom();
-      ref.invalidate(conversationsProvider);
     } catch (error) {
-      if (!mounted) return;
-      setState(() => _sending = false);
+      if (!mounted) {
+        return;
+      }
       _showError(context, '发送失败', error);
     }
   }
@@ -142,10 +68,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   }
 
   Future<void> _showMentionPicker(List<UserSummary> members) async {
-    final mentionable = members
-        .where((member) => member.accountId != _myAccountId)
-        .toList(growable: false);
-    if (mentionable.isEmpty) return;
+    if (members.isEmpty) return;
 
     final selected = await showModalBottomSheet<UserSummary>(
       context: context,
@@ -161,7 +84,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                 style: ShadTheme.of(context).textTheme.h4,
               ),
             ),
-            for (final member in mentionable)
+            for (final member in members)
               ListTile(
                 title: Text(member.displayName),
                 subtitle: Text('@${member.minosId}'),
@@ -183,33 +106,19 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     });
   }
 
-  bool _appendMessage(ChatMessageSummary message) {
-    final next = _mergeMessage(_messages, message);
-    if (identical(next, _messages)) return false;
-    setState(() => _messages = next);
-    return true;
-  }
-
-  List<ChatMessageSummary> _mergeMessage(
-    List<ChatMessageSummary> existing,
-    ChatMessageSummary incoming,
-  ) {
-    if (existing.any((message) => message.messageId == incoming.messageId)) {
-      return existing;
-    }
-    return <ChatMessageSummary>[...existing, incoming];
-  }
-
   @override
   Widget build(BuildContext context) {
     final shadTheme = ShadTheme.of(context);
-    final groupMembers = widget.kind == ConversationKind.group
-      ? ref
-            .watch(conversationMembersProvider(widget.conversationId))
-            .asData
-            ?.value ??
-          const <UserSummary>[]
-        : const <UserSummary>[];
+    ref.listen<SocialConversationState>(
+      socialConversationProvider(widget.conversationId),
+      (previous, next) {
+        final previousCount = previous?.messages.length ?? 0;
+        if (next.messages.length > previousCount) {
+          _jumpToBottom();
+        }
+      },
+    );
+
     return Scaffold(
       backgroundColor: shadTheme.colorScheme.background,
       appBar: AppBar(
@@ -221,112 +130,178 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
         child: Column(
           children: <Widget>[
             Expanded(
-              child: RefreshIndicator(
-                onRefresh: _load,
-                child: _loading
-                    ? ListView(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        children: const <Widget>[],
-                      )
-                    : _error != null
-                    ? ListView(
-                        children: <Widget>[
-                          Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: _ChatInlineError(
-                              title: '聊天暂时不可用',
-                              description: _error.toString(),
-                            ),
-                          ),
-                        ],
-                      )
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, index) {
-                          final message = _messages[index];
-                          final previous = index == 0
-                              ? null
-                              : _messages[index - 1];
-                          final showTimeSeparator = _shouldShowTimeSeparator(
-                            previous?.createdAtMs,
-                            message.createdAtMs,
-                          );
-                          final isMine =
-                              message.sender.accountId == _myAccountId;
-                          final mentionsMe =
-                              !isMine &&
-                              _myAccountId != null &&
-                              message.mentionedAccountIds.contains(_myAccountId);
-                          return Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              if (showTimeSeparator)
-                                _ChatTimeSeparator(
-                                  label: _formatTimelineLabel(
-                                    message.createdAtMs,
-                                  ),
-                                ),
-                              _ChatBubble(
-                                title: widget.kind == ConversationKind.group
-                                    ? message.sender.displayName
-                                    : null,
-                                text: message.text,
-                                isMine: isMine,
-                                mentionsMe: mentionsMe,
-                              ),
-                            ],
-                          );
-                        },
-                      ),
+              child: _ConversationMessagePane(
+                conversationId: widget.conversationId,
+                kind: widget.kind,
+                scrollController: _scrollController,
               ),
             ),
-            Container(
-              decoration: BoxDecoration(
-                color: shadTheme.colorScheme.background,
-                border: Border(
-                  top: BorderSide(color: shadTheme.colorScheme.border),
-                ),
-              ),
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              child: Row(
-                children: <Widget>[
-                  if (widget.kind == ConversationKind.group) ...<Widget>[
-                    ShadButton.outline(
-                      onPressed: groupMembers.isEmpty
-                          ? null
-                          : () => _showMentionPicker(groupMembers),
-                      child: const Text('@'),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  Expanded(
-                    child: ShadInput(
-                      controller: _controller,
-                      minLines: 1,
-                      maxLines: 4,
-                      placeholder: const Text('发送消息...'),
-                      onSubmitted: (_) => _send(),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  ShadButton(
-                    onPressed: _sending ? null : _send,
-                    child: _sending
-                        ? const SizedBox.square(
-                            dimension: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('发送'),
-                  ),
-                ],
-              ),
+            _ConversationComposer(
+              conversationId: widget.conversationId,
+              kind: widget.kind,
+              controller: _controller,
+              onSend: _send,
+              onShowMentionPicker: _showMentionPicker,
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ConversationMessagePane extends ConsumerWidget {
+  const _ConversationMessagePane({
+    required this.conversationId,
+    required this.kind,
+    required this.scrollController,
+  });
+
+  final String conversationId;
+  final ConversationKind kind;
+  final ScrollController scrollController;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(socialConversationProvider(conversationId));
+    return RefreshIndicator(
+      onRefresh: () => ref
+          .read(socialConversationProvider(conversationId).notifier)
+          .refresh(),
+      child: state.isLoading && state.messages.isEmpty
+          ? ListView(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const <Widget>[],
+            )
+          : state.error != null && state.messages.isEmpty
+          ? ListView(
+              controller: scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: _ChatInlineError(
+                    title: '聊天暂时不可用',
+                    description: state.error.toString(),
+                  ),
+                ),
+              ],
+            )
+          : ListView.builder(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: state.messages.length,
+              itemBuilder: (context, index) {
+                final message = state.messages[index];
+                final previous = index == 0 ? null : state.messages[index - 1];
+                final showTimeSeparator = _shouldShowTimeSeparator(
+                  previous?.createdAtMs,
+                  message.createdAtMs,
+                );
+                final isMine = message.sender.accountId == state.myAccountId;
+                final mentionsMe =
+                    !isMine &&
+                    state.myAccountId != null &&
+                    message.mentionedAccountIds.contains(state.myAccountId);
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (showTimeSeparator)
+                      _ChatTimeSeparator(
+                        label: _formatTimelineLabel(message.createdAtMs),
+                      ),
+                    _ChatBubble(
+                      title: kind == ConversationKind.group
+                          ? message.sender.displayName
+                          : null,
+                      text: message.text,
+                      isMine: isMine,
+                      mentionsMe: mentionsMe,
+                    ),
+                  ],
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _ConversationComposer extends ConsumerWidget {
+  const _ConversationComposer({
+    required this.conversationId,
+    required this.kind,
+    required this.controller,
+    required this.onSend,
+    required this.onShowMentionPicker,
+  });
+
+  final String conversationId;
+  final ConversationKind kind;
+  final TextEditingController controller;
+  final VoidCallback onSend;
+  final Future<void> Function(List<UserSummary> members) onShowMentionPicker;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final shadTheme = ShadTheme.of(context);
+    final isSending = ref.watch(
+      socialConversationProvider(conversationId).select(
+        (SocialConversationState state) => state.isSending,
+      ),
+    );
+    final myAccountId = ref.watch(
+      socialConversationProvider(conversationId).select(
+        (SocialConversationState state) => state.myAccountId,
+      ),
+    );
+    final groupMembers = kind == ConversationKind.group
+        ? ref.watch(conversationMembersProvider(conversationId)).asData?.value ??
+              const <UserSummary>[]
+        : const <UserSummary>[];
+    final mentionable = groupMembers
+        .where((member) => member.accountId != myAccountId)
+        .toList(growable: false);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: shadTheme.colorScheme.background,
+        border: Border(top: BorderSide(color: shadTheme.colorScheme.border)),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: Row(
+        children: <Widget>[
+          if (kind == ConversationKind.group) ...<Widget>[
+            ShadButton.outline(
+              onPressed: mentionable.isEmpty
+                  ? null
+                  : () => onShowMentionPicker(mentionable),
+              child: const Text('@'),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: ShadInput(
+              controller: controller,
+              minLines: 1,
+              maxLines: 4,
+              placeholder: const Text('发送消息...'),
+              onSubmitted: (_) => onSend(),
+            ),
+          ),
+          const SizedBox(width: 10),
+          ShadButton(
+            onPressed: isSending ? null : onSend,
+            child: isSending
+                ? const SizedBox.square(
+                    dimension: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('发送'),
+          ),
+        ],
       ),
     );
   }
@@ -385,8 +360,8 @@ class _ChatBubble extends StatelessWidget {
         ? shadTheme.colorScheme.primaryForeground
         : shadTheme.colorScheme.secondaryForeground;
     final mentionAccent = isMine
-      ? foreground.withValues(alpha: 0.88)
-      : shadTheme.colorScheme.primary;
+        ? foreground.withValues(alpha: 0.88)
+        : shadTheme.colorScheme.primary;
     return Padding(
       padding: EdgeInsets.fromLTRB(isMine ? 52 : 0, 0, isMine ? 0 : 52, 12),
       child: Align(
