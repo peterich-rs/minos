@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/social_providers.dart';
+import 'package:minos/domain/social_message.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 class SocialChatPage extends ConsumerStatefulWidget {
@@ -206,6 +207,12 @@ class _ConversationMessagePane extends ConsumerWidget {
                     !isMine &&
                     state.myAccountId != null &&
                     message.mentionedAccountIds.contains(state.myAccountId);
+                final retryAction =
+                  message.deliveryState == SocialMessageDeliveryState.failed
+                  ? () => ref
+                      .read(socialConversationProvider(conversationId).notifier)
+                      .retryMessage(message.localId)
+                  : null;
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
@@ -220,6 +227,8 @@ class _ConversationMessagePane extends ConsumerWidget {
                       text: message.text,
                       isMine: isMine,
                       mentionsMe: mentionsMe,
+                      deliveryState: message.deliveryState,
+                      onRetry: retryAction,
                     ),
                   ],
                 );
@@ -247,18 +256,16 @@ class _ConversationComposer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final shadTheme = ShadTheme.of(context);
-    final isSending = ref.watch(
-      socialConversationProvider(conversationId).select(
-        (SocialConversationState state) => state.isSending,
-      ),
-    );
     final myAccountId = ref.watch(
-      socialConversationProvider(conversationId).select(
-        (SocialConversationState state) => state.myAccountId,
-      ),
+      socialConversationProvider(
+        conversationId,
+      ).select((SocialConversationState state) => state.myAccountId),
     );
     final groupMembers = kind == ConversationKind.group
-        ? ref.watch(conversationMembersProvider(conversationId)).asData?.value ??
+        ? ref
+                  .watch(conversationMembersProvider(conversationId))
+                  .asData
+                  ?.value ??
               const <UserSummary>[]
         : const <UserSummary>[];
     final mentionable = groupMembers
@@ -292,15 +299,7 @@ class _ConversationComposer extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 10),
-          ShadButton(
-            onPressed: isSending ? null : onSend,
-            child: isSending
-                ? const SizedBox.square(
-                    dimension: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('发送'),
-          ),
+          ShadButton(onPressed: onSend, child: const Text('发送')),
         ],
       ),
     );
@@ -343,12 +342,16 @@ class _ChatBubble extends StatelessWidget {
     required this.isMine,
     this.title,
     this.mentionsMe = false,
+    this.deliveryState = SocialMessageDeliveryState.sent,
+    this.onRetry,
   });
 
   final String? title;
   final String text;
   final bool isMine;
   final bool mentionsMe;
+  final SocialMessageDeliveryState deliveryState;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -428,6 +431,28 @@ class _ChatBubble extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (isMine &&
+                      deliveryState != SocialMessageDeliveryState.sent) ...<Widget>[
+                    const SizedBox(height: 6),
+                    GestureDetector(
+                      onTap: onRetry,
+                      child: Text(
+                        switch (deliveryState) {
+                          SocialMessageDeliveryState.sending => '发送中...',
+                          SocialMessageDeliveryState.failed => '发送失败，点击重试',
+                          SocialMessageDeliveryState.sent => '',
+                        },
+                        style: shadTheme.textTheme.small.copyWith(
+                          color: deliveryState == SocialMessageDeliveryState.failed
+                              ? const Color(0xFFFCA5A5)
+                              : foreground.withValues(alpha: 0.82),
+                          fontWeight: deliveryState == SocialMessageDeliveryState.failed
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

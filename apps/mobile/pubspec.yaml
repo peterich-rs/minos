@@ -53,6 +53,7 @@ dependencies:
   flutter_riverpod: ^3.3.1
   riverpod_annotation: ^4.0.2
   shadcn_ui: ^0.54.0
+  sqflite: ^2.4.1
 
   # Markdown rendering for chat bubbles. flutter_markdown_plus is the
   # actively-maintained fork of the original (now-deprecated)

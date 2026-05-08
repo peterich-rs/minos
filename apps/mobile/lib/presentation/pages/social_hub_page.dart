@@ -415,9 +415,7 @@ class _FriendSearchSection extends ConsumerWidget {
               controller: controller,
               placeholder: const Text('输入 Minos ID'),
               onChanged: (value) {
-                ref
-                    .read(socialSearchQueryProvider.notifier)
-                    .update(value);
+                ref.read(socialSearchQueryProvider.notifier).update(value);
               },
             ),
             if (query.isNotEmpty) ...<Widget>[
