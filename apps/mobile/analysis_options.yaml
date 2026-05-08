@@ -7,7 +7,38 @@ include: package:flutter_lints/flutter.yaml
 plugins:
   riverpod_lint: ^3.1.0
 
+linter:
+  rules:
+    # Async / correctness
+    unawaited_futures: true
+    discarded_futures: true
+    avoid_void_async: true
+
+    # Flutter correctness
+    use_build_context_synchronously: true
+    use_key_in_widget_constructors: true
+    sort_child_properties_last: true
+
+    # Style / maintainability
+    prefer_final_locals: true
+    prefer_final_fields: true
+    prefer_const_constructors: true
+    prefer_const_literals_to_create_immutables: true
+    unnecessary_lambdas: true
+    unnecessary_parenthesis: true
+    directives_ordering: true
+
+    # Safety
+    avoid_print: true
+    avoid_dynamic_calls: true
+    avoid_empty_else: true
+    empty_catches: true  
+
 analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
   # `rust_builder/` is the vendored cargokit plugin shim (see ADR 0008 and
   # `apps/mobile/rust_builder/cargokit/MINOS-PATCHES.md`); its Dart sources
   # are upstream code we don't style-enforce. `build/` is ephemeral

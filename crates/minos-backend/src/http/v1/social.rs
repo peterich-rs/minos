@@ -6,11 +6,11 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use minos_protocol::{
     ChatMessageSummary, ConversationKind, ConversationMembersResponse, ConversationReadResponse,
-    ConversationResponse, ConversationSummary, ConversationsResponse,
-    CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
-    Envelope, EventKind, FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse,
-    FriendSummary, FriendsResponse, ListChatMessagesResponse, MyProfileResponse,
-    SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest, UserSummary,
+    ConversationResponse, ConversationSummary, ConversationsResponse, CreateFriendRequestRequest,
+    CreateGroupConversationRequest, EnsureDirectConversationRequest, Envelope, EventKind,
+    FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse, FriendSummary,
+    FriendsResponse, ListChatMessagesResponse, MyProfileResponse, SearchUsersResponse,
+    SendChatMessageRequest, SetMinosIdRequest, UserSummary,
 };
 use serde::{Deserialize, Serialize};
 
@@ -460,15 +460,13 @@ async fn list_conversation_members(
         return Err(err("not_found", "conversation not found"));
     }
 
-    let members = crate::store::social::list_conversation_member_profiles(
-        &state.store,
-        &conversation_id,
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?
-    .into_iter()
-    .map(|profile| to_user_summary(&profile))
-    .collect();
+    let members =
+        crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?
+            .into_iter()
+            .map(|profile| to_user_summary(&profile))
+            .collect();
 
     Ok(Json(ConversationMembersResponse { members }))
 }
@@ -555,12 +553,10 @@ async fn send_message(
     {
         return Err(err("not_found", "conversation not found"));
     }
-    let members = crate::store::social::list_conversation_member_profiles(
-        &state.store,
-        &conversation_id,
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
+    let members =
+        crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
     let mentioned_account_ids =
         extract_mentioned_account_ids(req.text.trim(), &account_id, &members);
     let row = crate::store::social::insert_message(
@@ -682,12 +678,10 @@ async fn hydrate_messages(
         .iter()
         .map(|row| row.message_id.clone())
         .collect::<Vec<_>>();
-    let mut mentions_by_message = crate::store::social::list_message_mentions(
-        &state.store,
-        &message_ids,
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
+    let mut mentions_by_message =
+        crate::store::social::list_message_mentions(&state.store, &message_ids)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
         let mentioned_account_ids = mentions_by_message

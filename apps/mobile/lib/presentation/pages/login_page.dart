@@ -32,7 +32,7 @@ class LoginPage extends ConsumerStatefulWidget {
 class _LoginPageState extends ConsumerState<LoginPage> {
   AuthMode _mode = AuthMode.login;
   bool _inFlight = false;
-  MinosError? _error;
+  Object? _error;
 
   @override
   void initState() {
@@ -43,8 +43,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   Future<void> _submit(String email, String password) async {
     setState(() {
       _inFlight = true;
-      _error = null;
     });
+
+    var nextMode = _mode;
+    Object? nextError;
+    var clearError = false;
+
     try {
       final notifier = ref.read(authControllerProvider.notifier);
       if (_mode == AuthMode.login) {
@@ -52,20 +56,31 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       } else {
         await notifier.register(email, password);
       }
+      clearError = true;
     } on MinosError catch (e) {
-      if (!mounted) return;
       // EmailTaken in register mode is the one auto-mode-switch we do —
       // see class doc.
       if (e.kind == ErrorKind.emailTaken && _mode == AuthMode.register) {
-        setState(() {
-          _mode = AuthMode.login;
-          _error = e;
-        });
+        nextMode = AuthMode.login;
+        nextError = e;
       } else {
-        setState(() => _error = e);
+        nextError = e;
       }
+    } catch (e, st) {
+      debugPrint('auth submit failed unexpectedly: $e\n$st');
+      nextError = e;
     } finally {
-      if (mounted) setState(() => _inFlight = false);
+      if (mounted) {
+        setState(() {
+          _inFlight = false;
+          _mode = nextMode;
+          if (clearError) {
+            _error = null;
+          } else if (nextError != null) {
+            _error = nextError;
+          }
+        });
+      }
     }
   }
 

@@ -2342,6 +2342,7 @@ dependencies = [
  "minos-protocol",
  "minos-ui-protocol",
  "openwire",
+ "openwire-core",
  "rustls",
  "serde",
  "serde_json",
@@ -2354,6 +2355,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -2576,7 +2578,6 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 [[package]]
 name = "openwire"
 version = "0.1.0"
-source = "git+https://github.com/peterich-rs/openwire.git?rev=08b542394a5a376aa89f562a4581f349db7679d0#08b542394a5a376aa89f562a4581f349db7679d0"
 dependencies = [
  "base64",
  "bytes",
@@ -2604,7 +2605,6 @@ dependencies = [
 [[package]]
 name = "openwire-core"
 version = "0.1.0"
-source = "git+https://github.com/peterich-rs/openwire.git?rev=08b542394a5a376aa89f562a4581f349db7679d0#08b542394a5a376aa89f562a4581f349db7679d0"
 dependencies = [
  "bytes",
  "futures-core",
@@ -2625,7 +2625,6 @@ dependencies = [
 [[package]]
 name = "openwire-rustls"
 version = "0.1.0"
-source = "git+https://github.com/peterich-rs/openwire.git?rev=08b542394a5a376aa89f562a4581f349db7679d0#08b542394a5a376aa89f562a4581f349db7679d0"
 dependencies = [
  "bytes",
  "futures-util",
@@ -2647,7 +2646,6 @@ dependencies = [
 [[package]]
 name = "openwire-tokio"
 version = "0.1.0"
-source = "git+https://github.com/peterich-rs/openwire.git?rev=08b542394a5a376aa89f562a4581f349db7679d0#08b542394a5a376aa89f562a4581f349db7679d0"
 dependencies = [
  "hyper",
  "openwire-core",

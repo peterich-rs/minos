@@ -12,14 +12,14 @@ minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
 tokio = { workspace = true }
-tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 http = { workspace = true }
 rustls = { workspace = true }
-openwire = { workspace = true, features = ["json"] }
+openwire = { workspace = true, features = ["json", "websocket"] }
+openwire-core = { workspace = true, features = ["websocket"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 mars-xlog = { workspace = true }
@@ -29,13 +29,14 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
 # Optional CLI deps for the fake-peer dev binary (gated on the `cli` feature).
-# tokio-tungstenite and futures-util are always-on (the envelope client
-# depends on them) so the cli feature only enables the CLI-specific extras.
+# Production mobile networking now routes through OpenWire's HTTP + WebSocket
+# clients so platform TLS verification stays on the same transport stack.
 anyhow = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 tracing-android = "0.2.0"
+webpki-roots = "0.26.11"
 
 [features]
 default = []
@@ -58,6 +59,7 @@ tokio-test = { workspace = true }
 tempfile = { workspace = true }
 minos-backend = { path = "../minos-backend", version = "0.1.0", features = ["test-support"] }
 axum = { workspace = true }
+tokio-tungstenite = { workspace = true }
 
 [lints]
 workspace = true

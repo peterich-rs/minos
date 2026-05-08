@@ -1143,7 +1143,10 @@ mod tests {
 
         assert_eq!(reg.broadcast_mobile_account("acct-1", frame.clone()), 1);
         assert_eq!(rx1.recv().await.unwrap(), frame);
-        assert!(rx2.try_recv().is_err(), "different account must not receive");
+        assert!(
+            rx2.try_recv().is_err(),
+            "different account must not receive"
+        );
         assert!(rx3.try_recv().is_err(), "agent-host must not receive");
         assert!(rx4.try_recv().is_err(), "unbound mobile must not receive");
     }

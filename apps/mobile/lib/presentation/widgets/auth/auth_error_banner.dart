@@ -7,17 +7,17 @@ import 'package:minos/domain/minos_error_display.dart';
 import 'package:minos/src/rust/api/minos.dart' show MinosError;
 
 /// Auto-dismissing destructive [ShadAlert] driven by an externally-owned
-/// [MinosError]. The 6-second timer matches the Remodex iOS clone — long
+/// auth error object. The 6-second timer matches the Remodex iOS clone — long
 /// enough for the user to read the title + detail, short enough not to
 /// linger after a successful retry.
 ///
-/// Title is the localized [MinosErrorDisplay.userMessage]; description is
-/// the dynamic [MinosErrorDisplay.detail] payload (omitted when the
-/// variant has no attached data).
+/// Typed [MinosError] values use the localized Rust-owned copy; unexpected
+/// FRB / Dart exceptions fall back to a generic title plus a normalized
+/// description so the page never crashes back to Flutter's red error UI.
 class AuthErrorBanner extends StatefulWidget {
   const AuthErrorBanner({super.key, required this.error});
 
-  final MinosError? error;
+  final Object? error;
 
   @override
   State<AuthErrorBanner> createState() => _AuthErrorBannerState();
@@ -65,11 +65,29 @@ class _AuthErrorBannerState extends State<AuthErrorBanner> {
   Widget build(BuildContext context) {
     final err = widget.error;
     if (!_visible || err == null) return const SizedBox.shrink();
-    final detail = err.detail;
+    final title = switch (err) {
+      final MinosError typed => typed.userMessage(),
+      _ when _normalizedFallbackDetail(err).contains('CryptoProvider') =>
+        'TLS 初始化失败',
+      _ => '操作失败',
+    };
+    final detail = switch (err) {
+      final MinosError typed => typed.detail,
+      _ => _normalizedFallbackDetail(err),
+    };
     return ShadAlert.destructive(
       icon: const Icon(Icons.error_outline),
-      title: Text(err.userMessage()),
+      title: Text(title),
       description: detail == null ? null : Text(detail),
     );
   }
+}
+
+String _normalizedFallbackDetail(Object error) {
+  var text = error.toString().trim();
+  if (text.startsWith('PanicException(') && text.endsWith(')')) {
+    text = text.substring('PanicException('.length, text.length - 1).trim();
+  }
+
+  return text.replaceAll(RegExp(r'\s+'), ' ');
 }
