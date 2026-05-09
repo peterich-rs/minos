@@ -672,7 +672,8 @@ impl MobileHttpClient {
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                body.last_read_at_ms.map(|ts| format!("last_read_at_ms={ts}")),
+                body.last_read_at_ms
+                    .map(|ts| format!("last_read_at_ms={ts}")),
                 Some(conversation_id.into()),
             );
             Ok(body)
@@ -760,9 +761,7 @@ impl MobileHttpClient {
         conversation_id: &str,
         message_id: &str,
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
-        let path = format!(
-            "/v1/conversations/{conversation_id}/messages/{message_id}/recall"
-        );
+        let path = format!("/v1/conversations/{conversation_id}/messages/{message_id}/recall");
         let url = format!("{}{}", self.base, path);
         let trace_id = start_http_trace(
             Method::POST.as_str(),

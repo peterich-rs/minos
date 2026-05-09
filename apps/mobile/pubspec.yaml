@@ -68,6 +68,7 @@ dependencies:
   # Keychain-backed persistence for the paired backend URL, CF Access
   # service-token headers, and the long-lived `DeviceSecret`. See plan 05 §D5.
   flutter_secure_storage: ^9.2.0
+  flutter_list_view: ^1.1.29
 
 dev_dependencies:
   flutter_test:

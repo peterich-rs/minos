@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_list_view/flutter_list_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 class SocialChatPage extends ConsumerStatefulWidget {
   const SocialChatPage({
@@ -26,7 +26,8 @@ class SocialChatPage extends ConsumerStatefulWidget {
 class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   final TextEditingController _controller = TextEditingController();
   final FocusNode _composerFocusNode = FocusNode();
-  final ScrollController _scrollController = ScrollController();
+  final FlutterListViewController _scrollController =
+      FlutterListViewController();
 
   @override
   void dispose() {
@@ -141,7 +142,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
             Expanded(
               child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
-                onTap: () => _composerFocusNode.unfocus(),
+                onTap: _composerFocusNode.unfocus,
                 child: _ConversationMessagePane(
                   conversationId: widget.conversationId,
                   kind: widget.kind,
@@ -173,7 +174,7 @@ class _ConversationMessagePane extends ConsumerWidget {
 
   final String conversationId;
   final ConversationKind kind;
-  final ScrollController scrollController;
+  final FlutterListViewController scrollController;
 
   Future<void> _showMessageActions(
     BuildContext context,
@@ -285,65 +286,81 @@ class _ConversationMessagePane extends ConsumerWidget {
                 ),
               ],
             )
-          : ListView.builder(
+          : FlutterListView(
               controller: scrollController,
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
               physics: const AlwaysScrollableScrollPhysics(),
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              itemCount: state.messages.length,
-              itemBuilder: (context, index) {
-                final message = state.messages[index];
-                final previous = index == 0 ? null : state.messages[index - 1];
-                final showTimeSeparator = _shouldShowTimeSeparator(
-                  previous?.createdAtMs,
-                  message.createdAtMs,
-                );
-                final isMine = message.sender.accountId == state.myAccountId;
-                final mentionsMe =
-                    !isMine &&
-                    state.myAccountId != null &&
-                    message.mentionedAccountIds.contains(state.myAccountId);
-                final retryAction =
-                    message.deliveryState == SocialMessageDeliveryState.failed
-                    ? () => ref
-                          .read(
-                            socialConversationProvider(conversationId).notifier,
-                          )
-                          .retryMessage(message.localId)
-                    : null;
-                final actionHandler =
-                    message.canReply || (isMine && message.canRecall)
-                    ? () => _showMessageActions(
-                        context,
-                        ref,
-                        message: message,
-                        isMine: isMine,
-                      )
-                    : null;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (showTimeSeparator)
-                      _ChatTimeSeparator(
-                        label: _formatTimelineLabel(message.createdAtMs),
-                      ),
-                    _ChatBubble(
-                      title: kind == ConversationKind.group
-                          ? message.sender.displayName
-                          : null,
-                      senderName: message.sender.displayName,
-                      text: message.text,
-                      isMine: isMine,
-                      mentionsMe: mentionsMe,
-                      replyTo: message.replyTo,
-                      recalledAtMs: message.recalledAtMs,
-                      deliveryState: message.deliveryState,
-                      onRetry: retryAction,
-                      onLongPress: actionHandler,
+              delegate: FlutterListViewDelegate(
+                (context, index) {
+                  final message = state.messages[index];
+                  final previous = index == 0
+                      ? null
+                      : state.messages[index - 1];
+                  final showTimeSeparator = _shouldShowTimeSeparator(
+                    previous?.createdAtMs,
+                    message.createdAtMs,
+                  );
+                  final isMine = message.sender.accountId == state.myAccountId;
+                  final mentionsMe =
+                      !isMine &&
+                      state.myAccountId != null &&
+                      message.mentionedAccountIds.contains(state.myAccountId);
+                  final retryAction =
+                      message.deliveryState == SocialMessageDeliveryState.failed
+                      ? () => ref
+                            .read(
+                              socialConversationProvider(
+                                conversationId,
+                              ).notifier,
+                            )
+                            .retryMessage(message.localId)
+                      : null;
+                  final actionHandler =
+                      message.canReply || (isMine && message.canRecall)
+                      ? () => _showMessageActions(
+                          context,
+                          ref,
+                          message: message,
+                          isMine: isMine,
+                        )
+                      : null;
+                  return Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      12,
+                      index == 0 ? 12 : 0,
+                      12,
+                      index == state.messages.length - 1 ? 20 : 0,
                     ),
-                  ],
-                );
-              },
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        if (showTimeSeparator)
+                          _ChatTimeSeparator(
+                            label: _formatTimelineLabel(message.createdAtMs),
+                          ),
+                        _ChatBubble(
+                          title: kind == ConversationKind.group
+                              ? message.sender.displayName
+                              : null,
+                          senderName: message.sender.displayName,
+                          text: message.text,
+                          isMine: isMine,
+                          mentionsMe: mentionsMe,
+                          replyTo: message.replyTo,
+                          recalledAtMs: message.recalledAtMs,
+                          deliveryState: message.deliveryState,
+                          onRetry: retryAction,
+                          onLongPress: actionHandler,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+                childCount: state.messages.length,
+                onItemKey: (index) => state.messages[index].localId,
+                keepPosition: true,
+                keepPositionOffset: 80,
+              ),
             ),
     );
   }
