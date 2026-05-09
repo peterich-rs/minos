@@ -5,8 +5,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use minos_protocol::{
-    ChatMessageSummary, ConversationKind, ConversationMembersResponse, ConversationReadResponse,
-    ConversationResponse, ConversationSummary, ConversationsResponse, CreateFriendRequestRequest,
+    ChatMessageReplySummary, ChatMessageSummary, ConversationKind,
+    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
+    ConversationSummary, ConversationsResponse, CreateFriendRequestRequest,
     CreateGroupConversationRequest, EnsureDirectConversationRequest, Envelope, EventKind,
     FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse, FriendSummary,
     FriendsResponse, ListChatMessagesResponse, MyProfileResponse, SearchUsersResponse,
@@ -49,6 +50,10 @@ pub fn router() -> Router<BackendState> {
         .route(
             "/conversations/:conversation_id/messages",
             get(list_messages).post(send_message),
+        )
+        .route(
+            "/conversations/:conversation_id/messages/:message_id/recall",
+            post(recall_message),
         )
 }
 
@@ -544,7 +549,8 @@ async fn send_message(
     Json(req): Json<SendChatMessageRequest>,
 ) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
     let account_id = require_account_id(&state, &headers).await?;
-    if req.text.trim().is_empty() {
+    let trimmed = req.text.trim().to_string();
+    if trimmed.is_empty() {
         return Err(err("bad_request", "message text is required"));
     }
     if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
@@ -553,23 +559,82 @@ async fn send_message(
     {
         return Err(err("not_found", "conversation not found"));
     }
+    let reply_to_message_id = match req.reply_to_message_id.as_deref() {
+        Some(message_id) => {
+            let Some(reply_target) = crate::store::social::get_message(&state.store, message_id)
+                .await
+                .map_err(|e| err("internal", e.to_string()))?
+            else {
+                return Err(err("bad_request", "reply target not found"));
+            };
+            if reply_target.conversation_id != conversation_id {
+                return Err(err("bad_request", "reply target not in conversation"));
+            }
+            Some(reply_target.message_id)
+        }
+        None => None,
+    };
     let members =
         crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
             .await
             .map_err(|e| err("internal", e.to_string()))?;
     let mentioned_account_ids =
-        extract_mentioned_account_ids(req.text.trim(), &account_id, &members);
+        extract_mentioned_account_ids(&trimmed, &account_id, &members);
     let row = crate::store::social::insert_message(
         &state.store,
         &conversation_id,
         &account_id,
-        req.text.trim(),
+        &trimmed,
         chrono::Utc::now().timestamp_millis(),
+        reply_to_message_id.as_deref(),
         &mentioned_account_ids,
     )
     .await
     .map_err(|e| err("internal", e.to_string()))?;
     let mut hydrated = hydrate_messages(&state, vec![row]).await?;
+    let message = hydrated.remove(0);
+    fan_out_social_message(&state, &message).await;
+    Ok(Json(message))
+}
+
+async fn recall_message(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Path((conversation_id, message_id)): Path<(String, String)>,
+) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = require_account_id(&state, &headers).await?;
+    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+    {
+        return Err(err("not_found", "conversation not found"));
+    }
+
+    let Some(existing) = crate::store::social::get_message(&state.store, &message_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+    else {
+        return Err(err("not_found", "message not found"));
+    };
+    if existing.conversation_id != conversation_id {
+        return Err(err("not_found", "message not found"));
+    }
+    if existing.sender_account_id != account_id {
+        return Err(err("bad_request", "only the sender can recall this message"));
+    }
+
+    let recalled = crate::store::social::recall_message(
+        &state.store,
+        &conversation_id,
+        &message_id,
+        &account_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?
+    .ok_or_else(|| err("not_found", "message not found"))?;
+
+    let mut hydrated = hydrate_messages(&state, vec![recalled]).await?;
     let message = hydrated.remove(0);
     fan_out_social_message(&state, &message).await;
     Ok(Json(message))
@@ -682,11 +747,36 @@ async fn hydrate_messages(
         crate::store::social::list_message_mentions(&state.store, &message_ids)
             .await
             .map_err(|e| err("internal", e.to_string()))?;
+    let reply_ids = rows
+        .iter()
+        .filter_map(|row| row.reply_to_message_id.clone())
+        .collect::<Vec<_>>();
+    let reply_rows = crate::store::social::list_messages_by_ids(&state.store, &reply_ids)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+        .into_iter()
+        .map(|row| (row.message_id.clone(), row))
+        .collect::<HashMap<_, _>>();
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
         let mentioned_account_ids = mentions_by_message
             .remove(&row.message_id)
             .unwrap_or_default();
+        let reply_to = if let Some(reply_id) = row.reply_to_message_id.as_ref() {
+            if let Some(reply_row) = reply_rows.get(reply_id).cloned() {
+                let reply_sender = load_profile(state, &reply_row.sender_account_id).await?;
+                Some(ChatMessageReplySummary {
+                    message_id: reply_row.message_id,
+                    sender: to_user_summary(&reply_sender),
+                    text: reply_row.text,
+                    recalled_at_ms: reply_row.recalled_at_ms,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let sender = load_profile(state, &row.sender_account_id).await?;
         output.push(ChatMessageSummary {
             message_id: row.message_id,
@@ -694,6 +784,8 @@ async fn hydrate_messages(
             sender: to_user_summary(&sender),
             text: row.text,
             created_at_ms: row.created_at_ms,
+            reply_to,
+            recalled_at_ms: row.recalled_at_ms,
             mentioned_account_ids,
         });
     }

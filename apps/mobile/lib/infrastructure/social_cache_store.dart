@@ -11,7 +11,7 @@ class SocialCacheStore {
   SocialCacheStore();
 
   static const _dbName = 'social_cache.db';
-  static const _dbVersion = 1;
+  static const _dbVersion = 2;
 
   Future<Database?>? _databaseFuture;
 
@@ -49,6 +49,9 @@ class SocialCacheStore {
               created_at_ms INTEGER NOT NULL,
               client_seq INTEGER NOT NULL,
               server_order_key INTEGER,
+              reply_to_message_id TEXT,
+              reply_to_preview_json TEXT,
+              recalled_at_ms INTEGER,
               mentioned_account_ids_json TEXT NOT NULL,
               delivery_state TEXT NOT NULL
             )
@@ -63,6 +66,19 @@ class SocialCacheStore {
             )
           ''');
         },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await db.execute(
+              'ALTER TABLE cached_social_messages ADD COLUMN reply_to_message_id TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE cached_social_messages ADD COLUMN reply_to_preview_json TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE cached_social_messages ADD COLUMN recalled_at_ms INTEGER',
+            );
+          }
+        },
       );
     } catch (_) {
       return null;
@@ -74,11 +90,10 @@ class SocialCacheStore {
     if (db == null) {
       return;
     }
-    await db.insert(
-      'cached_social_meta',
-      <String, Object?>{'key': 'current_account_id', 'value': accountId},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('cached_social_meta', <String, Object?>{
+      'key': 'current_account_id',
+      'value': accountId,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<String?> loadCurrentAccountId() async {
@@ -113,7 +128,9 @@ class SocialCacheStore {
     );
   }
 
-  Future<void> saveConversations(List<ConversationSummary> conversations) async {
+  Future<void> saveConversations(
+    List<ConversationSummary> conversations,
+  ) async {
     final db = await _database();
     if (db == null) {
       return;
@@ -173,6 +190,7 @@ class SocialCacheStore {
     required String conversationId,
     required UserSummary sender,
     required String text,
+    ChatMessageReplySummary? replyTo,
   }) async {
     final localMessage = SocialChatMessage(
       localId: _newLocalId(),
@@ -182,6 +200,7 @@ class SocialCacheStore {
       createdAtMs: DateTime.now().millisecondsSinceEpoch,
       clientSeq: DateTime.now().microsecondsSinceEpoch,
       deliveryState: SocialMessageDeliveryState.sending,
+      replyTo: replyTo,
       mentionedAccountIds: const <String>[],
     );
 
@@ -210,7 +229,9 @@ class SocialCacheStore {
     }
     await db.update(
       'cached_social_messages',
-      <String, Object?>{'delivery_state': SocialMessageDeliveryState.sending.name},
+      <String, Object?>{
+        'delivery_state': SocialMessageDeliveryState.sending.name,
+      },
       where: 'local_id = ?',
       whereArgs: <Object>[localId],
     );
@@ -224,7 +245,9 @@ class SocialCacheStore {
     }
     await db.update(
       'cached_social_messages',
-      <String, Object?>{'delivery_state': SocialMessageDeliveryState.failed.name},
+      <String, Object?>{
+        'delivery_state': SocialMessageDeliveryState.failed.name,
+      },
       where: 'local_id = ?',
       whereArgs: <Object>[localId],
     );
@@ -260,6 +283,11 @@ class SocialCacheStore {
           'text': message.text,
           'created_at_ms': message.createdAtMs,
           'server_order_key': message.createdAtMs,
+          'reply_to_message_id': message.replyTo?.messageId,
+          'reply_to_preview_json': message.replyTo == null
+              ? null
+              : jsonEncode(_replyPreviewToMap(message.replyTo!)),
+          'recalled_at_ms': message.recalledAtMs,
           'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
           'delivery_state': SocialMessageDeliveryState.sent.name,
           'client_seq': existing.clientSeq,
@@ -291,7 +319,10 @@ class SocialCacheStore {
     );
   }
 
-  Future<int> _nextClientSeq(DatabaseExecutor executor, String conversationId) async {
+  Future<int> _nextClientSeq(
+    DatabaseExecutor executor,
+    String conversationId,
+  ) async {
     final rows = await executor.rawQuery(
       'SELECT COALESCE(MAX(client_seq), 0) AS max_seq FROM cached_social_messages WHERE conversation_id = ?',
       <Object>[conversationId],
@@ -320,6 +351,11 @@ class SocialCacheStore {
           'text': message.text,
           'created_at_ms': message.createdAtMs,
           'server_order_key': message.createdAtMs,
+          'reply_to_message_id': message.replyTo?.messageId,
+          'reply_to_preview_json': message.replyTo == null
+              ? null
+              : jsonEncode(_replyPreviewToMap(message.replyTo!)),
+          'recalled_at_ms': message.recalledAtMs,
           'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
           'delivery_state': SocialMessageDeliveryState.sent.name,
           'client_seq': existing.clientSeq,
@@ -331,25 +367,29 @@ class SocialCacheStore {
     }
 
     final nextClientSeq = await _nextClientSeq(txn, message.conversationId);
-    await txn.insert(
-      'cached_social_messages',
-      <String, Object?>{
-        'local_id': 'srv:${message.messageId}',
-        'conversation_id': message.conversationId,
-        'server_message_id': message.messageId,
-        'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
-        'text': message.text,
-        'created_at_ms': message.createdAtMs,
-        'client_seq': nextClientSeq,
-        'server_order_key': message.createdAtMs,
-        'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
-        'delivery_state': SocialMessageDeliveryState.sent.name,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await txn.insert('cached_social_messages', <String, Object?>{
+      'local_id': 'srv:${message.messageId}',
+      'conversation_id': message.conversationId,
+      'server_message_id': message.messageId,
+      'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+      'text': message.text,
+      'created_at_ms': message.createdAtMs,
+      'client_seq': nextClientSeq,
+      'server_order_key': message.createdAtMs,
+      'reply_to_message_id': message.replyTo?.messageId,
+      'reply_to_preview_json': message.replyTo == null
+          ? null
+          : jsonEncode(_replyPreviewToMap(message.replyTo!)),
+      'recalled_at_ms': message.recalledAtMs,
+      'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
+      'delivery_state': SocialMessageDeliveryState.sent.name,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<SocialChatMessage?> _loadMessageByLocalId(Database db, String localId) async {
+  Future<SocialChatMessage?> _loadMessageByLocalId(
+    Database db,
+    String localId,
+  ) async {
     final rows = await db.query(
       'cached_social_messages',
       where: 'local_id = ?',
@@ -407,8 +447,11 @@ class SocialCacheStore {
       ),
       serverMessageId: row['server_message_id'] as String?,
       serverOrderKey: row['server_order_key'] as int?,
+      replyTo: _replyPreviewFromJson(row['reply_to_preview_json'] as String?),
+      recalledAtMs: row['recalled_at_ms'] as int?,
       mentionedAccountIds:
-          (jsonDecode(row['mentioned_account_ids_json']! as String) as List<dynamic>)
+          (jsonDecode(row['mentioned_account_ids_json']! as String)
+                  as List<dynamic>)
               .map((value) => value as String)
               .toList(growable: false),
     );
@@ -424,9 +467,36 @@ class SocialCacheStore {
       'created_at_ms': message.createdAtMs,
       'client_seq': message.clientSeq,
       'server_order_key': message.serverOrderKey,
+      'reply_to_message_id': message.replyTo?.messageId,
+      'reply_to_preview_json': message.replyTo == null
+          ? null
+          : jsonEncode(_replyPreviewToMap(message.replyTo!)),
+      'recalled_at_ms': message.recalledAtMs,
       'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
       'delivery_state': message.deliveryState.name,
     };
+  }
+
+  Map<String, Object?> _replyPreviewToMap(ChatMessageReplySummary reply) {
+    return <String, Object?>{
+      'message_id': reply.messageId,
+      'sender': _userSummaryToMap(reply.sender),
+      'text': reply.text,
+      'recalled_at_ms': reply.recalledAtMs,
+    };
+  }
+
+  ChatMessageReplySummary? _replyPreviewFromJson(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return null;
+    }
+    final map = jsonDecode(raw) as Map<String, Object?>;
+    return ChatMessageReplySummary(
+      messageId: map['message_id']! as String,
+      sender: _userSummaryFromMap(map['sender']! as Map<String, Object?>),
+      text: map['text']! as String,
+      recalledAtMs: map['recalled_at_ms'] as int?,
+    );
   }
 
   Map<String, Object?> _userSummaryToMap(UserSummary user) {

@@ -3,9 +3,11 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
-import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
+
+import '../frb_generated.dart';
+
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `parse_device_id`, `spawn_state_forwarder`
@@ -161,6 +163,11 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Read a window of translated UI events for one thread.
   Future<ReadThreadResponse> readThread({required ReadThreadParams req});
 
+  Future<ChatMessageSummary> recallChatMessage({
+    required String conversationId,
+    required String messageId,
+  });
+
   /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
   /// `Authenticated` / `RefreshFailed` transitions on the auth-state
   /// stream.
@@ -185,6 +192,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
+    String? replyToMessageId,
   });
 
   /// Send a follow-up user message to an existing agent session.
@@ -303,12 +311,45 @@ class AuthSummary {
           email == other.email;
 }
 
+class ChatMessageReplySummary {
+  final String messageId;
+  final UserSummary sender;
+  final String text;
+  final PlatformInt64? recalledAtMs;
+
+  const ChatMessageReplySummary({
+    required this.messageId,
+    required this.sender,
+    required this.text,
+    this.recalledAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      messageId.hashCode ^
+      sender.hashCode ^
+      text.hashCode ^
+      recalledAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatMessageReplySummary &&
+          runtimeType == other.runtimeType &&
+          messageId == other.messageId &&
+          sender == other.sender &&
+          text == other.text &&
+          recalledAtMs == other.recalledAtMs;
+}
+
 class ChatMessageSummary {
   final String messageId;
   final String conversationId;
   final UserSummary sender;
   final String text;
   final PlatformInt64 createdAtMs;
+  final ChatMessageReplySummary? replyTo;
+  final PlatformInt64? recalledAtMs;
   final List<String> mentionedAccountIds;
 
   const ChatMessageSummary({
@@ -317,6 +358,8 @@ class ChatMessageSummary {
     required this.sender,
     required this.text,
     required this.createdAtMs,
+    this.replyTo,
+    this.recalledAtMs,
     required this.mentionedAccountIds,
   });
 
@@ -327,6 +370,8 @@ class ChatMessageSummary {
       sender.hashCode ^
       text.hashCode ^
       createdAtMs.hashCode ^
+      replyTo.hashCode ^
+      recalledAtMs.hashCode ^
       mentionedAccountIds.hashCode;
 
   @override
@@ -339,6 +384,8 @@ class ChatMessageSummary {
           sender == other.sender &&
           text == other.text &&
           createdAtMs == other.createdAtMs &&
+          replyTo == other.replyTo &&
+          recalledAtMs == other.recalledAtMs &&
           mentionedAccountIds == other.mentionedAccountIds;
 }
 

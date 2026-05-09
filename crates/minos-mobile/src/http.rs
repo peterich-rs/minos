@@ -754,6 +754,41 @@ impl MobileHttpClient {
         }
     }
 
+    pub async fn recall_chat_message(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
+        let path = format!(
+            "/v1/conversations/{conversation_id}/messages/{message_id}/recall"
+        );
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some(format!("recall={message_id}")),
+        );
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "ChatMessageSummary").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("message recalled".into()),
+                Some(conversation_id.into()),
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
     // ─────────────────────────── auth endpoints ───────────────────────────
 
     /// `POST /v1/auth/register` — create an account on the backend.

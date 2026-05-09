@@ -205,12 +205,26 @@ pub struct ConversationReadResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessageReplySummary {
+    pub message_id: String,
+    pub sender: UserSummary,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recalled_at_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessageSummary {
     pub message_id: String,
     pub conversation_id: String,
     pub sender: UserSummary,
     pub text: String,
     pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<ChatMessageReplySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recalled_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentioned_account_ids: Vec<String>,
 }
@@ -227,6 +241,8 @@ pub struct ListChatMessagesResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SendChatMessageRequest {
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

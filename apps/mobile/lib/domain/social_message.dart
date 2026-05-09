@@ -13,6 +13,8 @@ class SocialChatMessage {
     required this.deliveryState,
     this.serverMessageId,
     this.serverOrderKey,
+    this.replyTo,
+    this.recalledAtMs,
     this.mentionedAccountIds = const <String>[],
   });
 
@@ -25,7 +27,21 @@ class SocialChatMessage {
   final SocialMessageDeliveryState deliveryState;
   final String? serverMessageId;
   final int? serverOrderKey;
+  final ChatMessageReplySummary? replyTo;
+  final int? recalledAtMs;
   final List<String> mentionedAccountIds;
+
+  bool get isRecalled => recalledAtMs != null;
+
+  bool get canReply =>
+      deliveryState == SocialMessageDeliveryState.sent &&
+      !isRecalled &&
+      serverMessageId != null;
+
+  bool get canRecall =>
+      deliveryState == SocialMessageDeliveryState.sent &&
+      !isRecalled &&
+      serverMessageId != null;
 
   SocialChatMessage copyWith({
     String? localId,
@@ -37,6 +53,8 @@ class SocialChatMessage {
     SocialMessageDeliveryState? deliveryState,
     Object? serverMessageId = _socialMessageUnset,
     Object? serverOrderKey = _socialMessageUnset,
+    Object? replyTo = _socialMessageUnset,
+    Object? recalledAtMs = _socialMessageUnset,
     List<String>? mentionedAccountIds,
   }) {
     return SocialChatMessage(
@@ -53,6 +71,12 @@ class SocialChatMessage {
       serverOrderKey: identical(serverOrderKey, _socialMessageUnset)
           ? this.serverOrderKey
           : serverOrderKey as int?,
+      replyTo: identical(replyTo, _socialMessageUnset)
+          ? this.replyTo
+          : replyTo as ChatMessageReplySummary?,
+      recalledAtMs: identical(recalledAtMs, _socialMessageUnset)
+          ? this.recalledAtMs
+          : recalledAtMs as int?,
       mentionedAccountIds: mentionedAccountIds ?? this.mentionedAccountIds,
     );
   }

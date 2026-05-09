@@ -153,6 +153,13 @@ class _FakeCore implements MinosCoreProtocol {
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
+    String? replyToMessageId,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<ChatMessageSummary> recallChatMessage({
+    required String conversationId,
+    required String messageId,
   }) async => throw UnimplementedError();
 
   @override

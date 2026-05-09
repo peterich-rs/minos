@@ -61,6 +61,103 @@ abstract class _$SocialSearchQuery extends $Notifier<String> {
   }
 }
 
+@ProviderFor(SocialReplyDraft)
+final socialReplyDraftProvider = SocialReplyDraftFamily._();
+
+final class SocialReplyDraftProvider
+    extends $NotifierProvider<SocialReplyDraft, String?> {
+  SocialReplyDraftProvider._({
+    required SocialReplyDraftFamily super.from,
+    required String super.argument,
+  }) : super(
+         retry: null,
+         name: r'socialReplyDraftProvider',
+         isAutoDispose: true,
+         dependencies: null,
+         $allTransitiveDependencies: null,
+       );
+
+  @override
+  String debugGetCreateSourceHash() => _$socialReplyDraftHash();
+
+  @override
+  String toString() {
+    return r'socialReplyDraftProvider'
+        ''
+        '($argument)';
+  }
+
+  @$internal
+  @override
+  SocialReplyDraft create() => SocialReplyDraft();
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(String? value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<String?>(value),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is SocialReplyDraftProvider && other.argument == argument;
+  }
+
+  @override
+  int get hashCode {
+    return argument.hashCode;
+  }
+}
+
+String _$socialReplyDraftHash() => r'dd4fb184db1a7a9be3ebc79f00b15305a656fd52';
+
+final class SocialReplyDraftFamily extends $Family
+    with
+        $ClassFamilyOverride<
+          SocialReplyDraft,
+          String?,
+          String?,
+          String?,
+          String
+        > {
+  SocialReplyDraftFamily._()
+    : super(
+        retry: null,
+        name: r'socialReplyDraftProvider',
+        dependencies: null,
+        $allTransitiveDependencies: null,
+        isAutoDispose: true,
+      );
+
+  SocialReplyDraftProvider call(String conversationId) =>
+      SocialReplyDraftProvider._(argument: conversationId, from: this);
+
+  @override
+  String toString() => r'socialReplyDraftProvider';
+}
+
+abstract class _$SocialReplyDraft extends $Notifier<String?> {
+  late final _$args = ref.$arg as String;
+  String get conversationId => _$args;
+
+  String? build(String conversationId);
+  @$mustCallSuper
+  @override
+  void runBuild() {
+    final ref = this.ref as $Ref<String?, String?>;
+    final element =
+        ref.element
+            as $ClassProviderElement<
+              AnyNotifier<String?, String?>,
+              String?,
+              Object?,
+              Object?
+            >;
+    element.handleCreate(ref, () => build(_$args));
+  }
+}
+
 @ProviderFor(SocialConversation)
 final socialConversationProvider = SocialConversationFamily._();
 
@@ -111,7 +208,7 @@ final class SocialConversationProvider
 }
 
 String _$socialConversationHash() =>
-    r'59692406893f26c1488b009a0f38c511ec768972';
+    r'b557741a1c0bce8dde91d7c2cecf63491065f4f9';
 
 final class SocialConversationFamily extends $Family
     with

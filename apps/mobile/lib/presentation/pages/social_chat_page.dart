@@ -38,14 +38,20 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     if (text.isEmpty) {
       return;
     }
+    final replyTarget = ref.read(
+      socialReplyMessageProvider(widget.conversationId),
+    );
     try {
       await ref
           .read(socialConversationProvider(widget.conversationId).notifier)
-          .sendMessage(text);
+          .sendMessage(text, replyToMessage: replyTarget);
       if (!mounted) {
         return;
       }
       _controller.clear();
+      ref
+          .read(socialReplyDraftProvider(widget.conversationId).notifier)
+          .clear();
     } catch (error) {
       if (!mounted) {
         return;
@@ -162,6 +168,86 @@ class _ConversationMessagePane extends ConsumerWidget {
   final ConversationKind kind;
   final ScrollController scrollController;
 
+  Future<void> _showMessageActions(
+    BuildContext context,
+    WidgetRef ref, {
+    required SocialChatMessage message,
+    required bool isMine,
+  }) async {
+    final canReply = message.canReply;
+    final canRecall = isMine && message.canRecall;
+    if (!canReply && !canRecall) {
+      return;
+    }
+
+    final action = await showModalBottomSheet<_MessageAction>(
+      context: context,
+      useSafeArea: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            if (canReply)
+              ListTile(
+                leading: const Icon(LucideIcons.reply),
+                title: const Text('引用消息'),
+                onTap: () => Navigator.of(context).pop(_MessageAction.reply),
+              ),
+            if (canRecall)
+              ListTile(
+                leading: const Icon(LucideIcons.undo2),
+                title: const Text('撤回消息'),
+                onTap: () => Navigator.of(context).pop(_MessageAction.recall),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || action == null) {
+      return;
+    }
+
+    switch (action) {
+      case _MessageAction.reply:
+        ref
+            .read(socialReplyDraftProvider(conversationId).notifier)
+            .select(message.localId);
+        return;
+      case _MessageAction.recall:
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('撤回这条消息？'),
+            content: const Text('撤回后，对话中会显示该消息已被撤回。'),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('撤回'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true || !context.mounted) {
+          return;
+        }
+        try {
+          await ref
+              .read(socialConversationProvider(conversationId).notifier)
+              .recallMessage(message.localId);
+        } catch (error) {
+          if (!context.mounted) {
+            return;
+          }
+          _showError(context, '撤回失败', error);
+        }
+        return;
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(socialConversationProvider(conversationId));
@@ -208,11 +294,22 @@ class _ConversationMessagePane extends ConsumerWidget {
                     state.myAccountId != null &&
                     message.mentionedAccountIds.contains(state.myAccountId);
                 final retryAction =
-                  message.deliveryState == SocialMessageDeliveryState.failed
-                  ? () => ref
-                      .read(socialConversationProvider(conversationId).notifier)
-                      .retryMessage(message.localId)
-                  : null;
+                    message.deliveryState == SocialMessageDeliveryState.failed
+                    ? () => ref
+                          .read(
+                            socialConversationProvider(conversationId).notifier,
+                          )
+                          .retryMessage(message.localId)
+                    : null;
+                final actionHandler =
+                    message.canReply || (isMine && message.canRecall)
+                    ? () => _showMessageActions(
+                        context,
+                        ref,
+                        message: message,
+                        isMine: isMine,
+                      )
+                    : null;
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
@@ -224,11 +321,15 @@ class _ConversationMessagePane extends ConsumerWidget {
                       title: kind == ConversationKind.group
                           ? message.sender.displayName
                           : null,
+                      senderName: message.sender.displayName,
                       text: message.text,
                       isMine: isMine,
                       mentionsMe: mentionsMe,
+                      replyTo: message.replyTo,
+                      recalledAtMs: message.recalledAtMs,
                       deliveryState: message.deliveryState,
                       onRetry: retryAction,
+                      onLongPress: actionHandler,
                     ),
                   ],
                 );
@@ -256,6 +357,7 @@ class _ConversationComposer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final shadTheme = ShadTheme.of(context);
+    final replyTarget = ref.watch(socialReplyMessageProvider(conversationId));
     final myAccountId = ref.watch(
       socialConversationProvider(
         conversationId,
@@ -278,29 +380,103 @@ class _ConversationComposer extends ConsumerWidget {
         border: Border(top: BorderSide(color: shadTheme.colorScheme.border)),
       ),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          if (kind == ConversationKind.group) ...<Widget>[
-            ShadButton.outline(
-              onPressed: mentionable.isEmpty
-                  ? null
-                  : () => onShowMentionPicker(mentionable),
-              child: const Text('@'),
+          if (replyTarget != null) ...<Widget>[
+            _ComposerReplyBanner(
+              senderName: replyTarget.sender.displayName,
+              text: replyTarget.text,
+              isRecalled: replyTarget.recalledAtMs != null,
+              onClear: () => ref
+                  .read(socialReplyDraftProvider(conversationId).notifier)
+                  .clear(),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(height: 10),
           ],
-          Expanded(
-            child: ShadInput(
-              controller: controller,
-              minLines: 1,
-              maxLines: 4,
-              placeholder: const Text('发送消息...'),
-              onSubmitted: (_) => onSend(),
-            ),
+          Row(
+            children: <Widget>[
+              if (kind == ConversationKind.group) ...<Widget>[
+                ShadButton.outline(
+                  onPressed: mentionable.isEmpty
+                      ? null
+                      : () => onShowMentionPicker(mentionable),
+                  child: const Text('@'),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: ShadInput(
+                  controller: controller,
+                  minLines: 1,
+                  maxLines: 4,
+                  placeholder: const Text('发送消息...'),
+                  onSubmitted: (_) => onSend(),
+                ),
+              ),
+              const SizedBox(width: 10),
+              ShadButton(onPressed: onSend, child: const Text('发送')),
+            ],
           ),
-          const SizedBox(width: 10),
-          ShadButton(onPressed: onSend, child: const Text('发送')),
         ],
+      ),
+    );
+  }
+}
+
+class _ComposerReplyBanner extends StatelessWidget {
+  const _ComposerReplyBanner({
+    required this.senderName,
+    required this.text,
+    required this.isRecalled,
+    required this.onClear,
+  });
+
+  final String senderName;
+  final String text;
+  final bool isRecalled;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: shadTheme.colorScheme.secondary,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: shadTheme.colorScheme.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(
+                    '回复 $senderName',
+                    style: shadTheme.textTheme.small.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    isRecalled ? '原消息已撤回' : text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: shadTheme.textTheme.muted,
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              onPressed: onClear,
+              icon: const Icon(LucideIcons.x, size: 18),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -340,22 +516,31 @@ class _ChatBubble extends StatelessWidget {
   const _ChatBubble({
     required this.text,
     required this.isMine,
+    required this.senderName,
     this.title,
     this.mentionsMe = false,
+    this.replyTo,
+    this.recalledAtMs,
     this.deliveryState = SocialMessageDeliveryState.sent,
     this.onRetry,
+    this.onLongPress,
   });
 
   final String? title;
+  final String senderName;
   final String text;
   final bool isMine;
   final bool mentionsMe;
+  final ChatMessageReplySummary? replyTo;
+  final int? recalledAtMs;
   final SocialMessageDeliveryState deliveryState;
   final VoidCallback? onRetry;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
     final shadTheme = ShadTheme.of(context);
+    final isRecalled = recalledAtMs != null;
     final bubbleColor = isMine
         ? shadTheme.colorScheme.primary
         : shadTheme.colorScheme.secondary;
@@ -365,95 +550,127 @@ class _ChatBubble extends StatelessWidget {
     final mentionAccent = isMine
         ? foreground.withValues(alpha: 0.88)
         : shadTheme.colorScheme.primary;
+
     return Padding(
       padding: EdgeInsets.fromLTRB(isMine ? 52 : 0, 0, isMine ? 0 : 52, 12),
       child: Align(
         alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.76,
-          ),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: bubbleColor,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: mentionsMe
-                    ? const Color(0xFFF59E0B)
-                    : isMine
-                    ? bubbleColor
-                    : shadTheme.colorScheme.border.withValues(alpha: 0.9),
-              ),
+        child: GestureDetector(
+          onLongPress: onLongPress,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.76,
             ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  if (mentionsMe) ...<Widget>[
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF59E0B).withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: isRecalled ? shadTheme.colorScheme.muted : bubbleColor,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: mentionsMe
+                      ? const Color(0xFFF59E0B)
+                      : isMine
+                      ? bubbleColor
+                      : shadTheme.colorScheme.border.withValues(alpha: 0.9),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    if (mentionsMe) ...<Widget>[
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(
+                            0xFFF59E0B,
+                          ).withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(999),
                         ),
-                        child: Text(
-                          '提到了你',
-                          style: shadTheme.textTheme.small.copyWith(
-                            color: const Color(0xFFB45309),
-                            fontWeight: FontWeight.w700,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          child: Text(
+                            '提到了你',
+                            style: shadTheme.textTheme.small.copyWith(
+                              color: const Color(0xFFB45309),
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                  ],
-                  if (title != null) ...<Widget>[
-                    Text(
-                      title!,
-                      style: shadTheme.textTheme.small.copyWith(
-                        color: foreground.withValues(alpha: 0.8),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                  ],
-                  RichText(
-                    text: TextSpan(
-                      style: TextStyle(color: foreground, height: 1.35),
-                      children: _buildMentionSpans(
-                        text,
-                        foreground,
-                        mentionAccent,
-                      ),
-                    ),
-                  ),
-                  if (isMine &&
-                      deliveryState != SocialMessageDeliveryState.sent) ...<Widget>[
-                    const SizedBox(height: 6),
-                    GestureDetector(
-                      onTap: onRetry,
-                      child: Text(
-                        switch (deliveryState) {
-                          SocialMessageDeliveryState.sending => '发送中...',
-                          SocialMessageDeliveryState.failed => '发送失败，点击重试',
-                          SocialMessageDeliveryState.sent => '',
-                        },
+                      const SizedBox(height: 6),
+                    ],
+                    if (title != null) ...<Widget>[
+                      Text(
+                        title!,
                         style: shadTheme.textTheme.small.copyWith(
-                          color: deliveryState == SocialMessageDeliveryState.failed
-                              ? const Color(0xFFFCA5A5)
-                              : foreground.withValues(alpha: 0.82),
-                          fontWeight: deliveryState == SocialMessageDeliveryState.failed
-                              ? FontWeight.w700
-                              : FontWeight.w500,
+                          color: foreground.withValues(alpha: 0.8),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 4),
+                    ],
+                    if (!isRecalled && replyTo != null) ...<Widget>[
+                      _ReplyPreviewBlock(
+                        senderName: replyTo!.sender.displayName,
+                        text: replyTo!.text,
+                        isRecalled: replyTo!.recalledAtMs != null,
+                        foreground: foreground,
+                        borderColor: foreground.withValues(alpha: 0.22),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    if (isRecalled)
+                      Text(
+                        isMine ? '你撤回了一条消息' : '$senderName 撤回了一条消息',
+                        style: shadTheme.textTheme.small.copyWith(
+                          color: shadTheme.colorScheme.mutedForeground,
+                          fontStyle: FontStyle.italic,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    else
+                      RichText(
+                        text: TextSpan(
+                          style: TextStyle(color: foreground, height: 1.35),
+                          children: _buildMentionSpans(
+                            text,
+                            foreground,
+                            mentionAccent,
+                          ),
+                        ),
+                      ),
+                    if (isMine &&
+                        !isRecalled &&
+                        deliveryState !=
+                            SocialMessageDeliveryState.sent) ...<Widget>[
+                      const SizedBox(height: 6),
+                      GestureDetector(
+                        onTap: onRetry,
+                        child: Text(
+                          switch (deliveryState) {
+                            SocialMessageDeliveryState.sending => '发送中...',
+                            SocialMessageDeliveryState.failed => '发送失败，点击重试',
+                            SocialMessageDeliveryState.sent => '',
+                          },
+                          style: shadTheme.textTheme.small.copyWith(
+                            color:
+                                deliveryState ==
+                                    SocialMessageDeliveryState.failed
+                                ? const Color(0xFFFCA5A5)
+                                : foreground.withValues(alpha: 0.82),
+                            fontWeight:
+                                deliveryState ==
+                                    SocialMessageDeliveryState.failed
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),
@@ -462,6 +679,60 @@ class _ChatBubble extends StatelessWidget {
     );
   }
 }
+
+class _ReplyPreviewBlock extends StatelessWidget {
+  const _ReplyPreviewBlock({
+    required this.senderName,
+    required this.text,
+    required this.isRecalled,
+    required this.foreground,
+    required this.borderColor,
+  });
+
+  final String senderName;
+  final String text;
+  final bool isRecalled;
+  final Color foreground;
+  final Color borderColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: borderColor),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              senderName,
+              style: shadTheme.textTheme.small.copyWith(
+                color: foreground.withValues(alpha: 0.82),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              isRecalled ? '原消息已撤回' : text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: shadTheme.textTheme.small.copyWith(
+                color: foreground.withValues(alpha: 0.82),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _MessageAction { reply, recall }
 
 List<InlineSpan> _buildMentionSpans(
   String text,

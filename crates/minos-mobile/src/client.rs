@@ -685,10 +685,29 @@ impl MobileClient {
         &self,
         conversation_id: String,
         text: String,
+        reply_to_message_id: Option<String>,
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
         let access = self.access_token_or_unauthorized().await?;
         self.http_client_no_secret()?
-            .send_chat_message(&access, &conversation_id, SendChatMessageRequest { text })
+            .send_chat_message(
+                &access,
+                &conversation_id,
+                SendChatMessageRequest {
+                    text,
+                    reply_to_message_id,
+                },
+            )
+            .await
+    }
+
+    pub async fn recall_chat_message(
+        &self,
+        conversation_id: String,
+        message_id: String,
+    ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        self.http_client_no_secret()?
+            .recall_chat_message(&access, &conversation_id, &message_id)
             .await
     }
 
@@ -2423,6 +2442,8 @@ mod tests {
                     },
                     text: "hello".into(),
                     created_at_ms: 123,
+                    reply_to: None,
+                    recalled_at_ms: None,
                     mentioned_account_ids: Vec::new(),
                 },
             },

@@ -39,13 +39,14 @@ pub use minos_domain::{
     PairingState,
 };
 pub use minos_protocol::{
-    AuthSummary, ChatMessageSummary, ConversationKind, ConversationMembersResponse,
-    ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
-    FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse, FriendSummary,
-    FriendsResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, HostSummary,
-    ListChatMessagesResponse, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
-    MyProfileResponse, ReadThreadParams, ReadThreadResponse, SearchUsersResponse,
-    StartAgentResponse, ThreadSummary, UserSummary, WriteHostSkillConfigResponse,
+    AuthSummary, ChatMessageReplySummary, ChatMessageSummary, ConversationKind,
+    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
+    ConversationSummary, ConversationsResponse, FriendRequestStatus, FriendRequestSummary,
+    FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
+    HostSkillSummary, HostSkillsEntry, HostSummary, ListChatMessagesResponse,
+    ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse, MyProfileResponse,
+    ReadThreadParams, ReadThreadResponse, SearchUsersResponse, StartAgentResponse,
+    ThreadSummary, UserSummary, WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
@@ -361,8 +362,19 @@ impl MobileClient {
         &self,
         conversation_id: String,
         text: String,
+        reply_to_message_id: Option<String>,
     ) -> Result<ChatMessageSummary, MinosError> {
-        self.0.send_chat_message(conversation_id, text).await
+        self.0
+            .send_chat_message(conversation_id, text, reply_to_message_id)
+            .await
+    }
+
+    pub async fn recall_chat_message(
+        &self,
+        conversation_id: String,
+        message_id: String,
+    ) -> Result<ChatMessageSummary, MinosError> {
+        self.0.recall_chat_message(conversation_id, message_id).await
     }
 
     /// Override the active Mac the next forward-RPC routes to.
@@ -1184,6 +1196,15 @@ pub struct _ConversationReadResponse {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(ChatMessageReplySummary))]
+pub struct _ChatMessageReplySummary {
+    pub message_id: String,
+    pub sender: UserSummary,
+    pub text: String,
+    pub recalled_at_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(ChatMessageSummary))]
 pub struct _ChatMessageSummary {
     pub message_id: String,
@@ -1191,6 +1212,8 @@ pub struct _ChatMessageSummary {
     pub sender: UserSummary,
     pub text: String,
     pub created_at_ms: i64,
+    pub reply_to: Option<ChatMessageReplySummary>,
+    pub recalled_at_ms: Option<i64>,
     pub mentioned_account_ids: Vec<String>,
 }
 

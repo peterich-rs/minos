@@ -220,7 +220,21 @@ class MinosCore implements MinosCoreProtocol {
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
-  }) => _client.sendChatMessage(conversationId: conversationId, text: text);
+    String? replyToMessageId,
+  }) => _client.sendChatMessage(
+    conversationId: conversationId,
+    text: text,
+    replyToMessageId: replyToMessageId,
+  );
+
+  @override
+  Future<ChatMessageSummary> recallChatMessage({
+    required String conversationId,
+    required String messageId,
+  }) => _client.recallChatMessage(
+    conversationId: conversationId,
+    messageId: messageId,
+  );
 
   @override
   Future<ListThreadsResponse> listThreads(ListThreadsParams params) =>

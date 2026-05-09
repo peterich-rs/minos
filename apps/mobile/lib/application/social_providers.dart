@@ -45,6 +45,41 @@ final conversationMembersProvider = FutureProvider.family
       return response.members;
     });
 
+@riverpod
+class SocialReplyDraft extends _$SocialReplyDraft {
+  @override
+  String? build(String conversationId) {
+    return null;
+  }
+
+  void select(String localId) {
+    state = localId;
+  }
+
+  void clear() {
+    state = null;
+  }
+}
+
+final socialReplyMessageProvider = Provider.family<SocialChatMessage?, String>((
+  ref,
+  conversationId,
+) {
+  final localId = ref.watch(socialReplyDraftProvider(conversationId));
+  if (localId == null) {
+    return null;
+  }
+  final messages = ref
+      .watch(socialConversationProvider(conversationId))
+      .messages;
+  for (final message in messages) {
+    if (message.localId == localId && message.canReply) {
+      return message;
+    }
+  }
+  return null;
+});
+
 final socialUnreadCountProvider = Provider<int>((ref) {
   return ref
       .watch(conversationsProvider)
@@ -115,17 +150,22 @@ class SocialConversation extends _$SocialConversation {
 
   Future<void> refresh() => _load();
 
-  Future<void> sendMessage(String text) async {
+  Future<void> sendMessage(
+    String text, {
+    SocialChatMessage? replyToMessage,
+  }) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
       return;
     }
 
     final cache = ref.read(socialCacheStoreProvider);
+    final replyPreview = _replyPreviewForMessage(replyToMessage);
     final pending = await cache.insertPendingMessage(
       conversationId: _conversationId,
       sender: await _localSender(),
       text: trimmed,
+      replyTo: replyPreview,
     );
     await cache.touchConversationPreview(
       conversationId: _conversationId,
@@ -139,21 +179,28 @@ class SocialConversation extends _$SocialConversation {
     ref.invalidate(conversationsProvider);
 
     try {
-      final message = await ref.read(minosCoreProvider).sendChatMessage(
-        conversationId: _conversationId,
-        text: trimmed,
-      );
+      final message = await ref
+          .read(minosCoreProvider)
+          .sendChatMessage(
+            conversationId: _conversationId,
+            text: trimmed,
+            replyToMessageId: replyPreview?.messageId,
+          );
       await cache.markMessageSent(localId: pending.localId, message: message);
       await cache.touchConversationPreview(
         conversationId: _conversationId,
         preview: message.text,
         createdAtMs: message.createdAtMs,
       );
-      state = state.copyWith(messages: await cache.loadMessages(_conversationId));
+      state = state.copyWith(
+        messages: await cache.loadMessages(_conversationId),
+      );
       ref.invalidate(conversationsProvider);
     } catch (error) {
       await cache.markMessageFailed(pending.localId);
-      state = state.copyWith(messages: await cache.loadMessages(_conversationId));
+      state = state.copyWith(
+        messages: await cache.loadMessages(_conversationId),
+      );
       rethrow;
     }
   }
@@ -176,23 +223,66 @@ class SocialConversation extends _$SocialConversation {
     state = state.copyWith(messages: await cache.loadMessages(_conversationId));
 
     try {
-      final message = await ref.read(minosCoreProvider).sendChatMessage(
-        conversationId: _conversationId,
-        text: target.text,
-      );
+      final replyToMessageId = target.replyTo?.recalledAtMs == null
+          ? target.replyTo?.messageId
+          : null;
+      final message = await ref
+          .read(minosCoreProvider)
+          .sendChatMessage(
+            conversationId: _conversationId,
+            text: target.text,
+            replyToMessageId: replyToMessageId,
+          );
       await cache.markMessageSent(localId: localId, message: message);
       await cache.touchConversationPreview(
         conversationId: _conversationId,
         preview: message.text,
         createdAtMs: message.createdAtMs,
       );
-      state = state.copyWith(messages: await cache.loadMessages(_conversationId));
+      state = state.copyWith(
+        messages: await cache.loadMessages(_conversationId),
+      );
       ref.invalidate(conversationsProvider);
     } catch (error) {
       await cache.markMessageFailed(localId);
-      state = state.copyWith(messages: await cache.loadMessages(_conversationId));
+      state = state.copyWith(
+        messages: await cache.loadMessages(_conversationId),
+      );
       rethrow;
     }
+  }
+
+  Future<void> recallMessage(String localId) async {
+    SocialChatMessage? target;
+    for (final message in state.messages) {
+      if (message.localId == localId) {
+        target = message;
+        break;
+      }
+    }
+    if (target == null || !target.canRecall || target.serverMessageId == null) {
+      return;
+    }
+
+    final message = await ref
+        .read(minosCoreProvider)
+        .recallChatMessage(
+          conversationId: _conversationId,
+          messageId: target.serverMessageId!,
+        );
+    final cache = ref.read(socialCacheStoreProvider);
+    await cache.upsertRemoteMessage(message);
+    await cache.touchConversationPreview(
+      conversationId: _conversationId,
+      preview: message.text,
+      createdAtMs: message.createdAtMs,
+    );
+    state = state.copyWith(messages: await cache.loadMessages(_conversationId));
+    final replyDraft = ref.read(socialReplyDraftProvider(_conversationId));
+    if (replyDraft == localId) {
+      ref.read(socialReplyDraftProvider(_conversationId).notifier).clear();
+    }
+    ref.invalidate(conversationsProvider);
   }
 
   Future<void> _load({SocialConversationState? seedState}) async {
@@ -273,10 +363,20 @@ class SocialConversation extends _$SocialConversation {
         state.myAccountId ??
         await ref.read(socialCacheStoreProvider).loadCurrentAccountId() ??
         'local-self';
-    return UserSummary(
-      accountId: accountId,
-      minosId: 'me',
-      displayName: '我',
+    return UserSummary(accountId: accountId, minosId: 'me', displayName: '我');
+  }
+
+  ChatMessageReplySummary? _replyPreviewForMessage(SocialChatMessage? message) {
+    if (message == null ||
+        !message.canReply ||
+        message.serverMessageId == null) {
+      return null;
+    }
+    return ChatMessageReplySummary(
+      messageId: message.serverMessageId!,
+      sender: message.sender,
+      text: message.text,
+      recalledAtMs: message.recalledAtMs,
     );
   }
 }

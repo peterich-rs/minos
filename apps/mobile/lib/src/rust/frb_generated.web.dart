@@ -6,11 +6,13 @@
 // Static analysis wrongly picks the IO variant, thus ignore this
 // ignore_for_file: argument_type_not_assignable
 
-import 'api/minos.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'frb_generated.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
+
+import 'api/minos.dart';
+import 'frb_generated.dart';
 
 abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RustLibApiImplPlatform({
@@ -100,6 +102,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AuthSummary dco_decode_box_autoadd_auth_summary(dynamic raw);
 
   @protected
+  ChatMessageReplySummary dco_decode_box_autoadd_chat_message_reply_summary(
+    dynamic raw,
+  );
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
@@ -130,6 +137,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   UserSummary dco_decode_box_autoadd_user_summary(dynamic raw);
+
+  @protected
+  ChatMessageReplySummary dco_decode_chat_message_reply_summary(dynamic raw);
 
   @protected
   ChatMessageSummary dco_decode_chat_message_summary(dynamic raw);
@@ -278,6 +288,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AgentName? dco_decode_opt_box_autoadd_agent_name(dynamic raw);
+
+  @protected
+  ChatMessageReplySummary?
+  dco_decode_opt_box_autoadd_chat_message_reply_summary(dynamic raw);
 
   @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
@@ -440,6 +454,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AuthSummary sse_decode_box_autoadd_auth_summary(SseDeserializer deserializer);
 
   @protected
+  ChatMessageReplySummary sse_decode_box_autoadd_chat_message_reply_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
@@ -476,6 +495,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   UserSummary sse_decode_box_autoadd_user_summary(SseDeserializer deserializer);
+
+  @protected
+  ChatMessageReplySummary sse_decode_chat_message_reply_summary(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ChatMessageSummary sse_decode_chat_message_summary(
@@ -672,6 +696,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AgentName? sse_decode_opt_box_autoadd_agent_name(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ChatMessageReplySummary?
+  sse_decode_opt_box_autoadd_chat_message_reply_summary(
     SseDeserializer deserializer,
   );
 
@@ -877,6 +907,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_chat_message_reply_summary(
+    ChatMessageReplySummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
     SseSerializer serializer,
@@ -924,6 +960,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_user_summary(
     UserSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_chat_message_reply_summary(
+    ChatMessageReplySummary self,
     SseSerializer serializer,
   );
 
@@ -1179,6 +1221,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_agent_name(
     AgentName? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_chat_message_reply_summary(
+    ChatMessageReplySummary? self,
     SseSerializer serializer,
   );
 

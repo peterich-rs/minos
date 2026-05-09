@@ -85,6 +85,12 @@ abstract class MinosCoreProtocol {
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
+    String? replyToMessageId,
+  });
+
+  Future<ChatMessageSummary> recallChatMessage({
+    required String conversationId,
+    required String messageId,
   });
 
   /// Paged thread summaries for the paired agent-host.

@@ -68,6 +68,8 @@ pub struct ChatMessageRow {
     pub sender_account_id: String,
     pub text: String,
     pub created_at_ms: i64,
+    pub reply_to_message_id: Option<String>,
+    pub recalled_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
@@ -467,6 +469,7 @@ pub async fn list_conversations_for(
                                     FROM chat_messages m
                                  WHERE m.conversation_id = c.conversation_id
                                      AND m.sender_account_id <> ?
+                                     AND m.recalled_at_ms IS NULL
                                      AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
                         ), 0) AS unread_count,
                         COALESCE((
@@ -475,6 +478,7 @@ pub async fn list_conversations_for(
                                     JOIN chat_message_mentions mm ON mm.message_id = m.message_id
                                  WHERE m.conversation_id = c.conversation_id
                                      AND m.sender_account_id <> ?
+                                     AND m.recalled_at_ms IS NULL
                                      AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
                                      AND mm.mentioned_account_id = ?
                         ), 0) AS unread_mention_count
@@ -547,6 +551,21 @@ pub async fn is_conversation_member(
     Ok(row > 0)
 }
 
+pub async fn get_message(
+    pool: &SqlitePool,
+    message_id: &str,
+) -> Result<Option<ChatMessageRow>, BackendError> {
+    sqlx::query_as::<_, ChatMessageRow>(
+        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms
+           FROM chat_messages
+          WHERE message_id = ?",
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(store_err("social::get_message"))
+}
+
 pub async fn list_messages(
     pool: &SqlitePool,
     conversation_id: &str,
@@ -556,7 +575,7 @@ pub async fn list_messages(
     let effective_limit = i64::from(limit.min(200));
     let before = before_ts_ms.unwrap_or(i64::MAX);
     sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms
+        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms
            FROM chat_messages
           WHERE conversation_id = ? AND created_at_ms < ?
           ORDER BY created_at_ms DESC
@@ -568,6 +587,32 @@ pub async fn list_messages(
     .fetch_all(pool)
     .await
     .map_err(store_err("social::list_messages"))
+}
+
+pub async fn list_messages_by_ids(
+    pool: &SqlitePool,
+    message_ids: &[String],
+) -> Result<Vec<ChatMessageRow>, BackendError> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms\n           FROM chat_messages\n          WHERE message_id IN (",
+    );
+    {
+        let mut separated = builder.separated(", ");
+        for message_id in message_ids {
+            separated.push_bind(message_id);
+        }
+    }
+    builder.push(')');
+
+    builder
+        .build_query_as::<ChatMessageRow>()
+        .fetch_all(pool)
+        .await
+        .map_err(store_err("social::list_messages_by_ids"))
 }
 
 pub async fn list_message_mentions(
@@ -655,6 +700,7 @@ pub async fn insert_message(
     sender_account_id: &str,
     text: &str,
     created_at_ms: i64,
+    reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
     let mut tx = pool
@@ -664,14 +710,15 @@ pub async fn insert_message(
     let message_id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO chat_messages
-            (message_id, conversation_id, sender_account_id, text, created_at_ms)
-         VALUES (?, ?, ?, ?, ?)",
+            (message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&message_id)
     .bind(conversation_id)
     .bind(sender_account_id)
     .bind(text)
     .bind(created_at_ms)
+    .bind(reply_to_message_id)
     .execute(&mut *tx)
     .await
     .map_err(store_err("social::insert_message.insert"))?;
@@ -709,7 +756,63 @@ pub async fn insert_message(
         sender_account_id: sender_account_id.to_string(),
         text: text.to_string(),
         created_at_ms,
+        reply_to_message_id: reply_to_message_id.map(ToOwned::to_owned),
+        recalled_at_ms: None,
     })
+}
+
+pub async fn recall_message(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    message_id: &str,
+    sender_account_id: &str,
+    recalled_at_ms: i64,
+) -> Result<Option<ChatMessageRow>, BackendError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(store_err("social::recall_message.begin"))?;
+    sqlx::query(
+        "UPDATE chat_messages
+            SET text = '消息已撤回',
+                recalled_at_ms = COALESCE(recalled_at_ms, ?)
+          WHERE message_id = ?
+            AND conversation_id = ?
+            AND sender_account_id = ?",
+    )
+    .bind(recalled_at_ms)
+    .bind(message_id)
+    .bind(conversation_id)
+    .bind(sender_account_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(store_err("social::recall_message.update_message"))?;
+
+    sqlx::query(
+        "DELETE FROM chat_message_mentions
+          WHERE message_id = ?",
+    )
+    .bind(message_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(store_err("social::recall_message.delete_mentions"))?;
+
+    sqlx::query(
+        "UPDATE conversations
+            SET updated_at_ms = MAX(updated_at_ms, ?)
+          WHERE conversation_id = ?",
+    )
+    .bind(recalled_at_ms)
+    .bind(conversation_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(store_err("social::recall_message.touch_conversation"))?;
+
+    tx.commit()
+        .await
+        .map_err(store_err("social::recall_message.commit"))?;
+
+    get_message(pool, message_id).await
 }
 
 fn normalized_pair<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
@@ -772,7 +875,7 @@ mod tests {
         let pool = memory_pool().await;
         let (conversation_id, alice, bob, carol) = seed_group(&pool).await;
 
-        insert_message(&pool, &conversation_id, &alice, "hello team", T0 + 1, &[])
+        insert_message(&pool, &conversation_id, &alice, "hello team", T0 + 1, None, &[])
             .await
             .unwrap();
         let last_read = mark_conversation_read_to_latest(&pool, &conversation_id, &carol, T0 + 1)
@@ -786,6 +889,7 @@ mod tests {
             &bob,
             "@carol please review",
             T0 + 2,
+            None,
             std::slice::from_ref(&carol),
         )
         .await
@@ -813,6 +917,7 @@ mod tests {
             &bob,
             "@carol @carol hello",
             T0 + 5,
+            None,
             &[carol.clone(), carol.clone()],
         )
         .await
@@ -821,5 +926,74 @@ mod tests {
         let mentions = list_message_mentions(&pool, &[message.message_id]).await.unwrap();
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions.values().next().unwrap(), &vec![carol]);
+    }
+
+    #[tokio::test]
+    async fn replied_message_tracks_parent_message() {
+        let pool = memory_pool().await;
+        let (conversation_id, alice, bob, _carol) = seed_group(&pool).await;
+
+        let original = insert_message(
+            &pool,
+            &conversation_id,
+            &alice,
+            "hello team",
+            T0 + 1,
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+        let reply = insert_message(
+            &pool,
+            &conversation_id,
+            &bob,
+            "收到",
+            T0 + 2,
+            Some(&original.message_id),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let rows = list_messages(&pool, &conversation_id, None, 20).await.unwrap();
+        let reply_row = rows.iter().find(|row| row.message_id == reply.message_id).unwrap();
+        assert_eq!(reply_row.reply_to_message_id.as_deref(), Some(original.message_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn recalled_messages_stop_counting_as_unread() {
+        let pool = memory_pool().await;
+        let (conversation_id, alice, bob, carol) = seed_group(&pool).await;
+
+        let last_read = mark_conversation_read_to_latest(&pool, &conversation_id, &carol, T0)
+            .await
+            .unwrap();
+        assert_eq!(last_read, None);
+
+        let message = insert_message(
+            &pool,
+            &conversation_id,
+            &bob,
+            "@carol please review",
+            T0 + 2,
+            None,
+            std::slice::from_ref(&carol),
+        )
+        .await
+        .unwrap();
+        recall_message(&pool, &conversation_id, &message.message_id, &bob, T0 + 3)
+            .await
+            .unwrap();
+
+        let carol_rows = list_conversations_for(&pool, &carol).await.unwrap();
+        assert_eq!(carol_rows.len(), 1);
+        assert_eq!(carol_rows[0].unread_count, 0);
+        assert_eq!(carol_rows[0].unread_mention_count, 0);
+        assert_eq!(carol_rows[0].last_message_preview.as_deref(), Some("消息已撤回"));
+
+        let alice_rows = list_conversations_for(&pool, &alice).await.unwrap();
+        assert_eq!(alice_rows.len(), 1);
+        assert_eq!(alice_rows[0].last_message_preview.as_deref(), Some("消息已撤回"));
     }
 }
