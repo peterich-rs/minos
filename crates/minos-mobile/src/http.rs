@@ -987,15 +987,17 @@ impl MobileHttpClient {
 }
 
 fn connect_err(url: &str, e: &WireError) -> MinosError {
-    if e.response_status() == Some(StatusCode::UNAUTHORIZED) {
-        MinosError::CfAuthFailed {
+    match e.response_status() {
+        Some(StatusCode::UNAUTHORIZED) => MinosError::Unauthorized {
+            reason: format!("{url}: {e}"),
+        },
+        Some(StatusCode::FOUND | StatusCode::FORBIDDEN) => MinosError::CfAuthFailed {
             message: format!("{url}: {e}"),
-        }
-    } else {
-        MinosError::ConnectFailed {
+        },
+        _ => MinosError::ConnectFailed {
             url: url.into(),
             message: e.to_string(),
-        }
+        },
     }
 }
 
@@ -1018,10 +1020,17 @@ async fn decode_error(resp: Response<ResponseBody>) -> MinosError {
     let status = resp.status();
     let body: Result<ErrorEnvelope, _> = resp.into_body().json().await;
     match body {
-        Ok(env) => MinosError::RpcCallFailed {
-            method: format!("http {status}"),
-            message: format!("{}: {}", env.error.code, env.error.message),
-        },
+        Ok(env) => {
+            let detail = format!("{}: {}", env.error.code, env.error.message);
+            if status == StatusCode::UNAUTHORIZED {
+                MinosError::Unauthorized { reason: detail }
+            } else {
+                MinosError::RpcCallFailed {
+                    method: format!("http {status}"),
+                    message: detail,
+                }
+            }
+        }
         Err(_) => MinosError::BackendInternal {
             message: format!("backend {status}"),
         },

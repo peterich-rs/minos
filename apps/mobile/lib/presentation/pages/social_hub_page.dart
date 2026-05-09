@@ -4,6 +4,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/application/minos_providers.dart';
+import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/presentation/pages/social_chat_page.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
@@ -520,11 +521,11 @@ class _SectionMessage extends StatelessWidget {
 }
 
 void _showSocialError(BuildContext context, String title, Object error) {
-  ShadToaster.maybeOf(context)?.show(
-    ShadToast.destructive(
-      title: Text(title),
-      description: Text(error.toString()),
-    ),
+  showLoggedErrorToast(
+    context,
+    target: 'social_hub',
+    title: title,
+    error: error,
   );
 }
 

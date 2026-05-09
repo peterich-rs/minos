@@ -25,6 +25,16 @@ Future<void> initLogging({required String logDir}) =>
 String kindMessage({required ErrorKind kind, required Lang lang}) =>
     RustLib.instance.api.crateApiMinosKindMessage(kind: kind, lang: lang);
 
+void emitLog({
+  required LogLevel level,
+  required String target,
+  required String message,
+}) => RustLib.instance.api.crateApiMinosEmitLog(
+  level: level,
+  target: target,
+  message: message,
+);
+
 /// Snapshot the records currently held in the ring buffer (oldest first).
 /// Pair this with [`subscribe_log_records`] when populating a freshly
 /// mounted log panel so prior events are not lost.

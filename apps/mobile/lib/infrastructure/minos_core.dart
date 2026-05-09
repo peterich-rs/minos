@@ -382,7 +382,21 @@ class MinosCore implements MinosCoreProtocol {
   void notifyBackgrounded() => _client.notifyBackgrounded();
 
   @override
-  Stream<AuthStateFrame> get authStates => _client.subscribeAuthState();
+  Stream<AuthStateFrame> get authStates async* {
+    await for (final frame in _client.subscribeAuthState()) {
+      if (frame is AuthStateFrame_Authenticated) {
+        await _saveClientStateBestEffort(_secure, _client);
+      } else if (frame is AuthStateFrame_Unauthenticated ||
+          frame is AuthStateFrame_RefreshFailed) {
+        try {
+          await _secure.clearAuth();
+        } catch (_) {
+          // Keep auth-state delivery best-effort even if keychain writes fail.
+        }
+      }
+      yield frame;
+    }
+  }
 
   @override
   Future<void> resumePersistedSession() async {

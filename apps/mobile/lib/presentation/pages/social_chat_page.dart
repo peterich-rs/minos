@@ -4,6 +4,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/domain/social_message.dart';
+import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 class SocialChatPage extends ConsumerStatefulWidget {
@@ -822,10 +823,10 @@ bool _isSameDay(DateTime lhs, DateTime rhs) {
 }
 
 void _showError(BuildContext context, String title, Object error) {
-  ShadToaster.maybeOf(context)?.show(
-    ShadToast.destructive(
-      title: Text(title),
-      description: Text(error.toString()),
-    ),
+  showLoggedErrorToast(
+    context,
+    target: 'social_chat',
+    title: title,
+    error: error,
   );
 }

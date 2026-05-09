@@ -53,6 +53,15 @@ use crate::ReconnectController;
 
 const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
+macro_rules! auth_http_call {
+    ($self:expr, |$http:ident, $access:ident| $call:expr) => {{
+        let $access = $self.access_token_or_unauthorized().await?;
+        let $http = $self.http_client_no_secret()?;
+        let result = $call.await;
+        $self.finish_authenticated_http_call(result).await
+    }};
+}
+
 /// One live UI event pushed from backend fan-out. Mobile layers consume
 /// these via [`MobileClient::ui_events_stream`] (broadcast receiver).
 #[derive(Debug, Clone)]
@@ -457,7 +466,7 @@ impl MobileClient {
             self.self_name.clone(),
             cf.clone(),
         )?;
-        let pair_resp = http
+        let pair_resp = match http
             .pair_consume(
                 minos_protocol::PairConsumeRequest {
                     token: minos_domain::PairingToken(qr.pairing_token),
@@ -465,7 +474,15 @@ impl MobileClient {
                 },
                 &access,
             )
-            .await?;
+            .await
+        {
+            Ok(resp) => resp,
+            Err(error @ MinosError::Unauthorized { .. }) => {
+                self.clear_auth_session_and_disconnect().await;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
 
         // Persist the device id (rebound across runs) and remember the
         // newly-paired Mac as the active forward target. Bearer-only post
@@ -520,9 +537,7 @@ impl MobileClient {
         &self,
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        let http = self.http_client_no_secret()?;
-        http.list_threads(&access, req).await
+        auth_http_call!(self, |http, access| http.list_threads(&access, req))
     }
 
     /// Read a window of translated UI events from one thread.
@@ -530,9 +545,7 @@ impl MobileClient {
         &self,
         req: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        let http = self.http_client_no_secret()?;
-        http.read_thread(&access, req).await
+        auth_http_call!(self, |http, access| http.read_thread(&access, req))
     }
 
     /// Host-only helper (mobile rarely uses this; included for parity).
@@ -540,96 +553,83 @@ impl MobileClient {
         &self,
         req: GetThreadLastSeqParams,
     ) -> Result<GetThreadLastSeqResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        let http = self.http_client_no_secret()?;
-        http.get_thread_last_seq(&access, &req.thread_id).await
+        auth_http_call!(self, |http, access| {
+            http.get_thread_last_seq(&access, &req.thread_id)
+        })
     }
 
     /// List every Mac paired to the caller's account.
     pub async fn list_paired_hosts(&self) -> Result<Vec<HostSummary>, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        let http = self.http_client_no_secret()?;
-        let resp = http.list_paired_hosts(&access).await?;
+        let resp = auth_http_call!(self, |http, access| http.list_paired_hosts(&access))?;
         Ok(resp.hosts)
     }
 
     pub async fn my_profile(&self) -> Result<MyProfileResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?.my_profile(&access).await
+        auth_http_call!(self, |http, access| http.my_profile(&access))
     }
 
     pub async fn set_minos_id(&self, minos_id: String) -> Result<MyProfileResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .set_minos_id(&access, SetMinosIdRequest { minos_id })
-            .await
+        auth_http_call!(self, |http, access| {
+            http.set_minos_id(&access, SetMinosIdRequest { minos_id })
+        })
     }
 
     pub async fn search_users(&self, minos_id: String) -> Result<Vec<UserSummary>, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        let resp = self
-            .http_client_no_secret()?
-            .search_users(&access, &minos_id)
-            .await?;
+        let resp = auth_http_call!(self, |http, access| {
+            http.search_users(&access, &minos_id)
+        })?;
         Ok(resp.users)
     }
 
     pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?.friends(&access).await
+        auth_http_call!(self, |http, access| http.friends(&access))
     }
 
     pub async fn create_friend_request(
         &self,
         target_minos_id: String,
     ) -> Result<FriendRequestSummary, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .create_friend_request(&access, CreateFriendRequestRequest { target_minos_id })
-            .await
+        auth_http_call!(self, |http, access| {
+            http.create_friend_request(&access, CreateFriendRequestRequest { target_minos_id })
+        })
     }
 
     pub async fn friend_requests(&self) -> Result<FriendRequestsResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?.friend_requests(&access).await
+        auth_http_call!(self, |http, access| http.friend_requests(&access))
     }
 
     pub async fn accept_friend_request(
         &self,
         request_id: String,
     ) -> Result<FriendRequestSummary, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .accept_friend_request(&access, &request_id)
-            .await
+        auth_http_call!(self, |http, access| {
+            http.accept_friend_request(&access, &request_id)
+        })
     }
 
     pub async fn reject_friend_request(
         &self,
         request_id: String,
     ) -> Result<FriendRequestSummary, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .reject_friend_request(&access, &request_id)
-            .await
+        auth_http_call!(self, |http, access| {
+            http.reject_friend_request(&access, &request_id)
+        })
     }
 
     pub async fn conversations(&self) -> Result<ConversationsResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?.conversations(&access).await
+        auth_http_call!(self, |http, access| http.conversations(&access))
     }
 
     pub async fn ensure_direct_conversation(
         &self,
         friend_account_id: String,
     ) -> Result<ConversationResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .ensure_direct_conversation(
+        auth_http_call!(self, |http, access| {
+            http.ensure_direct_conversation(
                 &access,
                 EnsureDirectConversationRequest { friend_account_id },
             )
-            .await
+        })
     }
 
     pub async fn create_group_conversation(
@@ -637,36 +637,33 @@ impl MobileClient {
         title: String,
         member_account_ids: Vec<String>,
     ) -> Result<ConversationResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .create_group_conversation(
+        auth_http_call!(self, |http, access| {
+            http.create_group_conversation(
                 &access,
                 CreateGroupConversationRequest {
                     title,
                     member_account_ids,
                 },
             )
-            .await
+        })
     }
 
     pub async fn conversation_members(
         &self,
         conversation_id: String,
     ) -> Result<ConversationMembersResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .conversation_members(&access, &conversation_id)
-            .await
+        auth_http_call!(self, |http, access| {
+            http.conversation_members(&access, &conversation_id)
+        })
     }
 
     pub async fn mark_conversation_read(
         &self,
         conversation_id: String,
     ) -> Result<ConversationReadResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .mark_conversation_read(&access, &conversation_id)
-            .await
+        auth_http_call!(self, |http, access| {
+            http.mark_conversation_read(&access, &conversation_id)
+        })
     }
 
     pub async fn list_chat_messages(
@@ -675,10 +672,9 @@ impl MobileClient {
         before_ts_ms: Option<i64>,
         limit: u32,
     ) -> Result<ListChatMessagesResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .list_chat_messages(&access, &conversation_id, before_ts_ms, limit)
-            .await
+        auth_http_call!(self, |http, access| {
+            http.list_chat_messages(&access, &conversation_id, before_ts_ms, limit)
+        })
     }
 
     pub async fn send_chat_message(
@@ -687,9 +683,8 @@ impl MobileClient {
         text: String,
         reply_to_message_id: Option<String>,
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .send_chat_message(
+        auth_http_call!(self, |http, access| {
+            http.send_chat_message(
                 &access,
                 &conversation_id,
                 SendChatMessageRequest {
@@ -697,7 +692,7 @@ impl MobileClient {
                     reply_to_message_id,
                 },
             )
-            .await
+        })
     }
 
     pub async fn recall_chat_message(
@@ -705,10 +700,9 @@ impl MobileClient {
         conversation_id: String,
         message_id: String,
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        self.http_client_no_secret()?
-            .recall_chat_message(&access, &conversation_id, &message_id)
-            .await
+        auth_http_call!(self, |http, access| {
+            http.recall_chat_message(&access, &conversation_id, &message_id)
+        })
     }
 
     /// Override the active forward target. Subsequent `Envelope::Forward`
@@ -736,9 +730,9 @@ impl MobileClient {
 
     /// Pluck the live access token out of `auth_session`, or surface
     /// `Unauthorized` if no session is in place. Used by every
-    /// account-aware HTTP call. The reconnect loop is responsible for
-    /// triggering a refresh before the token expires; callers do not
-    /// retry on 401 here (Phase 6 Task 6.4 layers retry on top).
+    /// account-aware HTTP call. The reconnect loop keeps the token fresh
+    /// even while the websocket stays connected; callers only need the
+    /// latest cached bearer here.
     async fn access_token_or_unauthorized(&self) -> Result<String, MinosError> {
         self.auth_session
             .read()
@@ -748,6 +742,19 @@ impl MobileClient {
             .ok_or_else(|| MinosError::Unauthorized {
                 reason: "no active session".into(),
             })
+    }
+
+    async fn finish_authenticated_http_call<T>(
+        &self,
+        result: Result<T, MinosError>,
+    ) -> Result<T, MinosError> {
+        match result {
+            Err(error @ MinosError::Unauthorized { .. }) => {
+                self.clear_auth_session_and_disconnect().await;
+                Err(error)
+            }
+            other => other,
+        }
     }
 
     // ─────────────────────────── agent dispatch ────────────────────────────
@@ -1619,6 +1626,12 @@ fn connect_error_to_minos(
         "mobile: WebSocket connect failed"
     );
 
+    if matches!(detail.http_status, Some(401)) && bearer_present {
+        return MinosError::Unauthorized {
+            reason: detail.message,
+        };
+    }
+
     if matches!(detail.http_status, Some(302 | 401 | 403)) {
         return MinosError::CfAuthFailed {
             message: detail.message,
@@ -1717,7 +1730,13 @@ fn describe_wire_error_kind(kind: WireErrorKind) -> &'static str {
 }
 
 fn access_token_needs_refresh(session: &AuthSession) -> bool {
-    session.access_expires_at <= Instant::now() + Duration::from_secs(120)
+    refresh_check_delay(session).is_zero()
+}
+
+fn refresh_check_delay(session: &AuthSession) -> Duration {
+    session
+        .access_expires_at
+        .saturating_duration_since(Instant::now() + Duration::from_secs(120))
 }
 
 fn restored_auth(state: &PersistedPairingState) -> Option<crate::store::PersistedAuth> {
@@ -1783,7 +1802,8 @@ struct ReconnectContext {
 /// Spec §6.3:
 /// - Sleeps `reconnect.next_delay()` between attempts.
 /// - Honours `reconnect.is_paused()` after the background grace window.
-/// - Refreshes the access token if its expiry is within 2 minutes.
+/// - Refreshes the access token if its expiry is within 2 minutes, even while
+///   the websocket stays connected.
 /// - Calls into [`connect_with_handles`] (mirrors `MobileClient::connect`
 ///   but keeps the loop free of `&self`).
 /// - On success, records success and waits for the connection to drop;
@@ -1851,14 +1871,31 @@ async fn reconnect_loop(ctx: ReconnectContext) {
                     if matches!(*state_rx.borrow_and_update(), ConnectionState::Disconnected) {
                         break;
                     }
-                    if state_rx.changed().await.is_err() {
-                        return;
+                    tokio::select! {
+                        changed = state_rx.changed() => {
+                            if changed.is_err() {
+                                return;
+                            }
+                        }
+                        _ = tokio::time::sleep(connected_refresh_delay(&ctx).await) => {
+                            let needs_refresh = {
+                                let guard = ctx.auth_session.read().await;
+                                guard.as_ref().is_some_and(access_token_needs_refresh)
+                            };
+                            if needs_refresh && !refresh_inline(&ctx, backend_url).await {
+                                return;
+                            }
+                        }
                     }
                 }
             }
             Err(e) => {
                 tracing::warn!(?e, "mobile: reconnect attempt failed");
                 let _ = ctx.state_tx.send(ConnectionState::Disconnected);
+                if matches!(e, MinosError::Unauthorized { .. }) {
+                    clear_auth_session_and_disconnect_ctx(&ctx).await;
+                    return;
+                }
                 ctx.reconnect.record_failure().await;
             }
         }
@@ -1866,6 +1903,14 @@ async fn reconnect_loop(ctx: ReconnectContext) {
         let delay = ctx.reconnect.next_delay().await;
         tokio::time::sleep(delay).await;
     }
+}
+
+async fn connected_refresh_delay(ctx: &ReconnectContext) -> Duration {
+    let guard = ctx.auth_session.read().await;
+    let Some(session) = guard.as_ref() else {
+        return Duration::from_secs(1);
+    };
+    refresh_check_delay(session)
 }
 
 /// Inline-refresh path used by [`reconnect_loop`]. Returns `true` on
@@ -1946,6 +1991,19 @@ async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
             false
         }
     }
+}
+
+async fn clear_auth_session_and_disconnect_ctx(ctx: &ReconnectContext) {
+    *ctx.auth_session.write().await = None;
+    let _ = ctx.store.clear_auth().await;
+    let _ = ctx.auth_state_tx.send(AuthStateFrame::Unauthenticated);
+    *ctx.outbox.lock().await = None;
+    drain_pending(&ctx.pending);
+    let mut tasks = ctx.tasks.lock().await;
+    for handle in tasks.drain(..) {
+        handle.abort();
+    }
+    let _ = ctx.state_tx.send(ConnectionState::Disconnected);
 }
 
 /// Standalone connect helper that takes the same handle bundle as the
@@ -2162,6 +2220,30 @@ mod tests {
                 );
             }
             other => panic!("expected CfAuthFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ws_401_with_bearer_maps_to_unauthorized() {
+        let err = connect_error_to_minos(
+            "wss://example.com/devices",
+            WebSocketError::Handshake {
+                status: Some(http::StatusCode::UNAUTHORIZED),
+                reason: HandshakeFailure::UnexpectedStatus,
+            },
+            &DeviceId::new(),
+            true,
+            false,
+        );
+
+        match err {
+            MinosError::Unauthorized { reason } => {
+                assert!(
+                    reason.contains("401"),
+                    "expected unauthorized reason to include status: {reason}"
+                );
+            }
+            other => panic!("expected Unauthorized, got {other:?}"),
         }
     }
 

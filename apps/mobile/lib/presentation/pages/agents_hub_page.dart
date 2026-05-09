@@ -9,6 +9,7 @@ import 'package:minos/application/auth_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/auth_state.dart';
+import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/presentation/pages/pairing_page.dart';
 import 'package:minos/presentation/pages/thread_view_page.dart';
 import 'package:minos/presentation/widgets/shimmer_box.dart';
@@ -433,11 +434,11 @@ String _humanDisplayName(String email) {
 }
 
 void _showRefreshError(BuildContext context, String title, Object error) {
-  ShadToaster.maybeOf(context)?.show(
-    ShadToast.destructive(
-      title: Text(title),
-      description: Text(error.toString()),
-    ),
+  showLoggedErrorToast(
+    context,
+    target: 'agents_hub',
+    title: title,
+    error: error,
   );
 }
 
@@ -1354,7 +1355,7 @@ class _ProfilesSection extends ConsumerWidget {
                         .read(agentProfilesControllerProvider.notifier)
                         .setPreferredProfile(ordered[index].id),
                     onDelete: () {
-                      showShadDialog(
+                      showShadDialog<void>(
                         context: context,
                         builder: (context) => ShadDialog.alert(
                           title: const Text('删除 Agent'),
@@ -1474,7 +1475,7 @@ class _HostRuntimeCard extends ConsumerWidget {
                       .read(activeMacProvider.notifier)
                       .setActive(hosts[index].hostDeviceId),
                   onDelete: () {
-                    showShadDialog(
+                    showShadDialog<void>(
                       context: context,
                       builder: (context) => ShadDialog.alert(
                         title: const Text('移除设备'),

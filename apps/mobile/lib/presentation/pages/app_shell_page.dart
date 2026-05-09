@@ -15,6 +15,7 @@ import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/auth_state.dart';
+import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/presentation/pages/agent_start_page.dart';
 import 'package:minos/presentation/pages/agents_hub_page.dart';
 import 'package:minos/presentation/pages/log_viewer_page.dart';
@@ -1780,13 +1781,11 @@ Color _scaffoldBg(BuildContext context) {
 }
 
 void _showRefreshError(BuildContext context, String title, Object error) {
-  final toaster = ShadToaster.maybeOf(context);
-  if (toaster == null) return;
-  toaster.show(
-    ShadToast.destructive(
-      title: Text(title),
-      description: Text(error.toString()),
-    ),
+  showLoggedErrorToast(
+    context,
+    target: 'app_shell',
+    title: title,
+    error: error,
   );
 }
 

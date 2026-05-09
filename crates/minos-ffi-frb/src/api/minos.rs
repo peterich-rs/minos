@@ -42,11 +42,11 @@ pub use minos_protocol::{
     AuthSummary, ChatMessageReplySummary, ChatMessageSummary, ConversationKind,
     ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
     ConversationSummary, ConversationsResponse, FriendRequestStatus, FriendRequestSummary,
-    FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
-    HostSkillSummary, HostSkillsEntry, HostSummary, ListChatMessagesResponse,
-    ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse, MyProfileResponse,
-    ReadThreadParams, ReadThreadResponse, SearchUsersResponse, StartAgentResponse,
-    ThreadSummary, UserSummary, WriteHostSkillConfigResponse,
+    FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary,
+    HostSkillsEntry, HostSummary, ListChatMessagesResponse, ListHostSkillsResponse,
+    ListThreadsParams, ListThreadsResponse, MyProfileResponse, ReadThreadParams,
+    ReadThreadResponse, SearchUsersResponse, StartAgentResponse, ThreadSummary, UserSummary,
+    WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
@@ -374,7 +374,9 @@ impl MobileClient {
         conversation_id: String,
         message_id: String,
     ) -> Result<ChatMessageSummary, MinosError> {
-        self.0.recall_chat_message(conversation_id, message_id).await
+        self.0
+            .recall_chat_message(conversation_id, message_id)
+            .await
     }
 
     /// Override the active Mac the next forward-RPC routes to.
@@ -657,6 +659,27 @@ impl From<CoreLogLevel> for LogLevel {
             CoreLogLevel::Info => Self::Info,
             CoreLogLevel::Warn => Self::Warn,
             CoreLogLevel::Error => Self::Error,
+        }
+    }
+}
+
+#[frb(sync)]
+pub fn emit_log(level: LogLevel, target: String, message: String) {
+    match level {
+        LogLevel::Trace => {
+            tracing::trace!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
+        }
+        LogLevel::Debug => {
+            tracing::debug!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
+        }
+        LogLevel::Info => {
+            tracing::info!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
+        }
+        LogLevel::Warn => {
+            tracing::warn!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
+        }
+        LogLevel::Error => {
+            tracing::error!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
         }
     }
 }

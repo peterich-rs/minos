@@ -8,6 +8,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/minos_error_display.dart';
+import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/presentation/pages/permission_denied_page.dart';
 import 'package:minos/presentation/widgets/qr_scanner_view.dart';
 import 'package:minos/src/rust/api/minos.dart' as core;
@@ -33,18 +34,19 @@ class _PairingPageState extends ConsumerState<PairingPage> {
       if (next is! AsyncError) return;
       final err = next.error;
       if (err is core.MinosError) {
-        ShadToaster.of(context).show(
-          ShadToast.destructive(
-            title: Text(err.userMessage()),
-            description: err.detail == null ? null : Text(err.detail!),
-          ),
+        showLoggedErrorToast(
+          context,
+          target: 'pairing',
+          title: err.userMessage(),
+          error: err,
+          description: err.detail,
         );
       } else if (err != null) {
-        ShadToaster.of(context).show(
-          ShadToast.destructive(
-            title: const Text('添加失败'),
-            description: Text(err.toString()),
-          ),
+        showLoggedErrorToast(
+          context,
+          target: 'pairing',
+          title: '添加失败',
+          error: err,
         );
       }
     });

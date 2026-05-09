@@ -274,6 +274,20 @@ class SocialCacheStore {
         return;
       }
       final existing = _messageFromRow(existingRows.first);
+      final duplicateRows = await txn.query(
+        'cached_social_messages',
+        columns: const <String>['local_id'],
+        where: 'server_message_id = ? AND local_id != ?',
+        whereArgs: <Object>[message.messageId, localId],
+        limit: 1,
+      );
+      if (duplicateRows.isNotEmpty) {
+        await txn.delete(
+          'cached_social_messages',
+          where: 'local_id = ?',
+          whereArgs: <Object>[duplicateRows.first['local_id']! as String],
+        );
+      }
       await txn.update(
         'cached_social_messages',
         <String, Object?>{
