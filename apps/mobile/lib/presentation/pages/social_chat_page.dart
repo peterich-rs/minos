@@ -25,11 +25,13 @@ class SocialChatPage extends ConsumerStatefulWidget {
 
 class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   final TextEditingController _controller = TextEditingController();
+  final FocusNode _composerFocusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
 
   @override
   void dispose() {
     _controller.dispose();
+    _composerFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -42,6 +44,9 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     final replyTarget = ref.read(
       socialReplyMessageProvider(widget.conversationId),
     );
+    _controller.clear();
+    ref.read(socialReplyDraftProvider(widget.conversationId).notifier).clear();
+    _jumpToBottom();
     try {
       await ref
           .read(socialConversationProvider(widget.conversationId).notifier)
@@ -49,10 +54,6 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       if (!mounted) {
         return;
       }
-      _controller.clear();
-      ref
-          .read(socialReplyDraftProvider(widget.conversationId).notifier)
-          .clear();
     } catch (error) {
       if (!mounted) {
         return;
@@ -138,16 +139,21 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
         child: Column(
           children: <Widget>[
             Expanded(
-              child: _ConversationMessagePane(
-                conversationId: widget.conversationId,
-                kind: widget.kind,
-                scrollController: _scrollController,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _composerFocusNode.unfocus(),
+                child: _ConversationMessagePane(
+                  conversationId: widget.conversationId,
+                  kind: widget.kind,
+                  scrollController: _scrollController,
+                ),
               ),
             ),
             _ConversationComposer(
               conversationId: widget.conversationId,
               kind: widget.kind,
               controller: _controller,
+              focusNode: _composerFocusNode,
               onSend: _send,
               onShowMentionPicker: _showMentionPicker,
             ),
@@ -261,12 +267,14 @@ class _ConversationMessagePane extends ConsumerWidget {
               controller: scrollController,
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
               physics: const AlwaysScrollableScrollPhysics(),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               children: const <Widget>[],
             )
           : state.error != null && state.messages.isEmpty
           ? ListView(
               controller: scrollController,
               physics: const AlwaysScrollableScrollPhysics(),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               children: <Widget>[
                 Padding(
                   padding: const EdgeInsets.all(24),
@@ -281,6 +289,7 @@ class _ConversationMessagePane extends ConsumerWidget {
               controller: scrollController,
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
               physics: const AlwaysScrollableScrollPhysics(),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               itemCount: state.messages.length,
               itemBuilder: (context, index) {
                 final message = state.messages[index];
@@ -345,6 +354,7 @@ class _ConversationComposer extends ConsumerWidget {
     required this.conversationId,
     required this.kind,
     required this.controller,
+    required this.focusNode,
     required this.onSend,
     required this.onShowMentionPicker,
   });
@@ -352,6 +362,7 @@ class _ConversationComposer extends ConsumerWidget {
   final String conversationId;
   final ConversationKind kind;
   final TextEditingController controller;
+  final FocusNode focusNode;
   final VoidCallback onSend;
   final Future<void> Function(List<UserSummary> members) onShowMentionPicker;
 
@@ -409,6 +420,7 @@ class _ConversationComposer extends ConsumerWidget {
               Expanded(
                 child: ShadInput(
                   controller: controller,
+                  focusNode: focusNode,
                   minLines: 1,
                   maxLines: 4,
                   placeholder: const Text('发送消息...'),

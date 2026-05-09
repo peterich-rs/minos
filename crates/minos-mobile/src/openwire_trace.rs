@@ -5,29 +5,26 @@ use std::sync::Arc;
 
 use http::{Method, Request, Response};
 use openwire::{
-    CallContext, ConnectionId, EventListener, EventListenerFactory, LogLevel,
-    LoggerInterceptor, RequestBody, ResponseBody, WireError,
+    CallContext, ConnectionId, EventListener, EventListenerFactory, LogLevel, LoggerInterceptor,
+    RequestBody, ResponseBody, WireError,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OpenwireTraceFactory {
-    component: &'static str,
+    _component: &'static str,
 }
 
 impl OpenwireTraceFactory {
     pub(crate) const fn new(component: &'static str) -> Self {
-        Self { component }
+        Self {
+            _component: component,
+        }
     }
 }
 
-pub(crate) fn logger_interceptor(component: &'static str) -> LoggerInterceptor {
+pub(crate) fn logger_interceptor(_component: &'static str) -> LoggerInterceptor {
     LoggerInterceptor::with_logger(LogLevel::Body, move |message: &str| {
-        tracing::info!(
-            target: "minos_mobile::network",
-            component,
-            message = %message,
-            "openwire http"
-        );
+        tracing::info!(target: "minos_mobile::network", message = %message, "openwire http");
     })
 }
 
@@ -47,7 +44,7 @@ fn error_source_chain(error: &WireError) -> String {
 }
 
 fn log_wire_error(
-    component: &'static str,
+    _component: &'static str,
     ctx: &CallContext,
     method: &Method,
     uri: &str,
@@ -61,7 +58,6 @@ fn log_wire_error(
 
     tracing::warn!(
         target: "minos_mobile::network",
-        component,
         call_id = %ctx.call_id(),
         method = %method,
         uri,
@@ -87,7 +83,7 @@ fn log_wire_error(
 impl EventListenerFactory for OpenwireTraceFactory {
     fn create(&self, request: &Request<RequestBody>) -> Arc<dyn EventListener> {
         Arc::new(OpenwireTraceListener {
-            component: self.component,
+            _component: self._component,
             method: request.method().clone(),
             uri: request.uri().to_string(),
             dial_attempt: AtomicU32::new(0),
@@ -99,7 +95,7 @@ impl EventListenerFactory for OpenwireTraceFactory {
 
 #[derive(Debug)]
 struct OpenwireTraceListener {
-    component: &'static str,
+    _component: &'static str,
     method: Method,
     uri: String,
     dial_attempt: AtomicU32,
@@ -129,7 +125,6 @@ impl EventListener for OpenwireTraceListener {
     fn call_start(&self, ctx: &CallContext, _request: &Request<RequestBody>) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -143,7 +138,6 @@ impl EventListener for OpenwireTraceListener {
     fn call_end(&self, ctx: &CallContext) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -156,7 +150,7 @@ impl EventListener for OpenwireTraceListener {
 
     fn call_failed(&self, ctx: &CallContext, error: &WireError) {
         log_wire_error(
-            self.component,
+            self._component,
             ctx,
             &self.method,
             &self.uri,
@@ -172,7 +166,6 @@ impl EventListener for OpenwireTraceListener {
         let dial_attempt = self.next_dial_attempt();
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt,
             retry_count = self.retry_count(),
@@ -193,7 +186,6 @@ impl EventListener for OpenwireTraceListener {
             .join(", ");
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -208,7 +200,7 @@ impl EventListener for OpenwireTraceListener {
 
     fn dns_failed(&self, ctx: &CallContext, host: &str, error: &WireError) {
         log_wire_error(
-            self.component,
+            self._component,
             ctx,
             &self.method,
             &self.uri,
@@ -223,7 +215,6 @@ impl EventListener for OpenwireTraceListener {
     fn route_plan(&self, ctx: &CallContext, route_count: usize, fast_fallback_enabled: bool) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -239,7 +230,6 @@ impl EventListener for OpenwireTraceListener {
     fn connect_start(&self, ctx: &CallContext, addr: SocketAddr) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -254,7 +244,6 @@ impl EventListener for OpenwireTraceListener {
     fn connect_end(&self, ctx: &CallContext, connection_id: ConnectionId, addr: SocketAddr) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -269,7 +258,7 @@ impl EventListener for OpenwireTraceListener {
 
     fn connect_failed(&self, ctx: &CallContext, addr: SocketAddr, error: &WireError) {
         log_wire_error(
-            self.component,
+            self._component,
             ctx,
             &self.method,
             &self.uri,
@@ -284,7 +273,6 @@ impl EventListener for OpenwireTraceListener {
     fn tls_start(&self, ctx: &CallContext, server_name: &str) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -299,7 +287,6 @@ impl EventListener for OpenwireTraceListener {
     fn tls_end(&self, ctx: &CallContext, server_name: &str) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -313,7 +300,7 @@ impl EventListener for OpenwireTraceListener {
 
     fn tls_failed(&self, ctx: &CallContext, server_name: &str, error: &WireError) {
         log_wire_error(
-            self.component,
+            self._component,
             ctx,
             &self.method,
             &self.uri,
@@ -335,7 +322,6 @@ impl EventListener for OpenwireTraceListener {
     ) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -359,7 +345,6 @@ impl EventListener for OpenwireTraceListener {
     ) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -383,7 +368,6 @@ impl EventListener for OpenwireTraceListener {
     ) {
         tracing::warn!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -401,7 +385,6 @@ impl EventListener for OpenwireTraceListener {
     fn response_headers_end(&self, ctx: &CallContext, response: &Response<ResponseBody>) {
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
@@ -417,7 +400,6 @@ impl EventListener for OpenwireTraceListener {
         self.retry_count.store(attempt, Ordering::Relaxed);
         tracing::warn!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = attempt,
@@ -434,7 +416,6 @@ impl EventListener for OpenwireTraceListener {
         self.redirect_count.store(attempt, Ordering::Relaxed);
         tracing::info!(
             target: "minos_mobile::network",
-            component = self.component,
             call_id = %ctx.call_id(),
             dial_attempt = self.current_dial_attempt(),
             retry_count = self.retry_count(),
