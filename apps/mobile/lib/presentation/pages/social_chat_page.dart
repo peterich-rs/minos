@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_list_view/flutter_list_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/social_providers.dart';
+import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/presentation/error_feedback.dart';
+import 'package:minos/presentation/pages/group_members_page.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
@@ -77,10 +80,25 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     );
   }
 
-  Future<void> _showMentionPicker(List<UserSummary> members) async {
-    if (members.isEmpty) return;
+  void _insertAgentMention(AgentProfile agent) {
+    final mention = '@${agent.agentId} ';
+    final value = _controller.value;
+    final selection = value.selection;
+    final start = selection.isValid ? selection.start : value.text.length;
+    final end = selection.isValid ? selection.end : value.text.length;
+    final nextText = value.text.replaceRange(start, end, mention);
+    final nextOffset = start + mention.length;
+    _controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+    );
+  }
 
-    final selected = await showModalBottomSheet<UserSummary>(
+  Future<void> _showMentionPicker(List<UserSummary> members) async {
+    final groupAgents = ref.read(groupAgentsProvider(widget.conversationId));
+    if (members.isEmpty && groupAgents.isEmpty) return;
+
+    final selected = await showModalBottomSheet<_MentionSelection>(
       context: context,
       useSafeArea: true,
       builder: (context) => SafeArea(
@@ -94,18 +112,55 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                 style: ShadTheme.of(context).textTheme.h4,
               ),
             ),
-            for (final member in members)
-              ListTile(
-                title: Text(member.displayName),
-                subtitle: Text('@${member.minosId}'),
-                onTap: () => Navigator.of(context).pop(member),
+            if (groupAgents.isNotEmpty) ...<Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: Text(
+                  'Agents',
+                  style: ShadTheme.of(context).textTheme.small.copyWith(
+                    color: ShadTheme.of(context).colorScheme.mutedForeground,
+                  ),
+                ),
               ),
+              for (final agent in groupAgents)
+                ListTile(
+                  leading: const Icon(LucideIcons.bot, size: 20),
+                  title: Text('🤖 ${agent.name}'),
+                  subtitle: Text('@${agent.agentId}'),
+                  onTap: () =>
+                      Navigator.of(context).pop(_MentionSelection.agent(agent)),
+                ),
+              const Divider(),
+            ],
+            if (members.isNotEmpty) ...<Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: Text(
+                  '成员',
+                  style: ShadTheme.of(context).textTheme.small.copyWith(
+                    color: ShadTheme.of(context).colorScheme.mutedForeground,
+                  ),
+                ),
+              ),
+              for (final member in members)
+                ListTile(
+                  title: Text(member.displayName),
+                  subtitle: Text('@${member.minosId}'),
+                  onTap: () =>
+                      Navigator.of(context).pop(_MentionSelection.user(member)),
+                ),
+            ],
           ],
         ),
       ),
     );
     if (selected != null) {
-      _insertMention(selected);
+      switch (selected) {
+        case _MentionSelectionUser(:final user):
+          _insertMention(user);
+        case _MentionSelectionAgent(:final agent):
+          _insertAgentMention(agent);
+      }
     }
   }
 
@@ -134,6 +189,21 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       appBar: AppBar(
         title: Text(widget.title),
         surfaceTintColor: Colors.transparent,
+        actions: <Widget>[
+          if (widget.kind == ConversationKind.group)
+            IconButton(
+              icon: const Icon(LucideIcons.users),
+              tooltip: '群成员',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => GroupMembersPage(
+                    conversationId: widget.conversationId,
+                    title: widget.title,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
       body: SafeArea(
         bottom: false,
@@ -402,6 +472,10 @@ class _ConversationComposer extends ConsumerWidget {
     final mentionable = groupMembers
         .where((member) => member.accountId != myAccountId)
         .toList(growable: false);
+    final groupAgents = kind == ConversationKind.group
+        ? ref.watch(groupAgentsProvider(conversationId))
+        : const <AgentProfile>[];
+    final hasMentionable = mentionable.isNotEmpty || groupAgents.isNotEmpty;
 
     return Container(
       decoration: BoxDecoration(
@@ -427,7 +501,7 @@ class _ConversationComposer extends ConsumerWidget {
             children: <Widget>[
               if (kind == ConversationKind.group) ...<Widget>[
                 ShadButton.outline(
-                  onPressed: mentionable.isEmpty
+                  onPressed: !hasMentionable
                       ? null
                       : () => onShowMentionPicker(mentionable),
                   child: const Text('@'),
@@ -763,6 +837,23 @@ class _ReplyPreviewBlock extends StatelessWidget {
 }
 
 enum _MessageAction { reply, recall }
+
+/// Sealed class for mention picker selection result.
+sealed class _MentionSelection {
+  const _MentionSelection();
+  factory _MentionSelection.user(UserSummary user) = _MentionSelectionUser;
+  factory _MentionSelection.agent(AgentProfile agent) = _MentionSelectionAgent;
+}
+
+class _MentionSelectionUser extends _MentionSelection {
+  const _MentionSelectionUser(this.user);
+  final UserSummary user;
+}
+
+class _MentionSelectionAgent extends _MentionSelection {
+  const _MentionSelectionAgent(this.agent);
+  final AgentProfile agent;
+}
 
 List<InlineSpan> _buildMentionSpans(
   String text,

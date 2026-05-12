@@ -544,7 +544,6 @@ enum ErrorKind {
   envelopeVersionUnsupported,
   peerOffline,
   backendInternal,
-  cfAuthFailed,
   codexSpawnFailed,
   codexConnectFailed,
   codexProtocolError,
@@ -552,7 +551,6 @@ enum ErrorKind {
   agentNotRunning,
   agentNotSupported,
   agentSessionIdMismatch,
-  cfAccessMisconfigured,
   ingestSeqConflict,
   threadNotFound,
   translationNotImplemented,
@@ -958,8 +956,6 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_PeerOffline;
   const factory MinosError.backendInternal({required String message}) =
       MinosError_BackendInternal;
-  const factory MinosError.cfAuthFailed({required String message}) =
-      MinosError_CfAuthFailed;
   const factory MinosError.codexSpawnFailed({required String message}) =
       MinosError_CodexSpawnFailed;
   const factory MinosError.codexConnectFailed({
@@ -977,8 +973,6 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_AgentNotSupported;
   const factory MinosError.agentSessionIdMismatch() =
       MinosError_AgentSessionIdMismatch;
-  const factory MinosError.cfAccessMisconfigured({required String reason}) =
-      MinosError_CfAccessMisconfigured;
   const factory MinosError.ingestSeqConflict({
     required String threadId,
     required BigInt seq,

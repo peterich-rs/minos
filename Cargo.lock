@@ -2209,6 +2209,7 @@ dependencies = [
  "tokio-test",
  "tokio-tungstenite 0.29.0",
  "tower 0.5.3",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -2222,6 +2223,7 @@ dependencies = [
  "async-trait",
  "minos-domain",
  "mockall",
+ "tempfile",
  "tokio",
  "tokio-test",
  "tracing",
@@ -2249,6 +2251,7 @@ dependencies = [
  "futures",
  "futures-util",
  "http",
+ "http-body-util",
  "jsonrpsee",
  "mars-xlog",
  "minos-agent-runtime",
@@ -2259,11 +2262,11 @@ dependencies = [
  "minos-pairing",
  "minos-protocol",
  "minos-transport",
+ "minos-ui-protocol",
  "openwire",
  "openwire-core",
  "pretty_assertions",
  "rustls",
- "security-framework",
  "serde",
  "serde_json",
  "sqlx",
@@ -2271,6 +2274,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-tungstenite 0.29.0",
+ "tower 0.5.3",
  "tracing",
  "tracing-subscriber",
  "uniffi",
@@ -2299,6 +2303,7 @@ name = "minos-ffi-frb"
 version = "0.1.0"
 dependencies = [
  "flutter_rust_bridge",
+ "getrandom 0.2.17",
  "minos-domain",
  "minos-mobile",
  "minos-protocol",
@@ -4281,6 +4286,20 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.6.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68d6fdd9f81c2819c9a8b0e0cd91660e7746a8e6ea2ba7c6b2b057985f6bcb51"
+dependencies = [
+ "bitflags",
+ "bytes",
+ "http",
+ "pin-project-lite",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]

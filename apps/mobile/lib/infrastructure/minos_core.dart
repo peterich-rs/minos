@@ -1,8 +1,9 @@
-import 'dart:io';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:meta/meta.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
+import 'package:minos/infrastructure/frb_external_library.dart';
+import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/infrastructure/secure_pairing_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/src/rust/frb_generated.dart';
@@ -28,17 +29,10 @@ class MinosCore implements MinosCoreProtocol {
     required String logDir,
     SecurePairingStore? secureStore,
   }) async {
-    // On iOS the Rust pod force-loads `libminos_ffi_frb.a` into Runner, so
-    // frb must resolve symbols from the current process instead of opening a
-    // non-existent `minos_ffi_frb.framework/minos_ffi_frb`.
-    final externalLibrary = Platform.isIOS
-        ? ExternalLibrary.process(
-            iKnowHowToUseIt: true,
-            debugInfo: ' (libminos_ffi_frb.a is linked into Runner)',
-          )
-        : null;
-    await RustLib.init(externalLibrary: externalLibrary);
-    await initLogging(logDir: logDir);
+    await RustLib.init(externalLibrary: resolveFrbExternalLibrary());
+    if (!kIsWeb) {
+      await initLogging(logDir: logDir);
+    }
     final secure = secureStore ?? SecurePairingStore();
     final client = await resolveClient(
       secure: secure,
@@ -212,7 +206,7 @@ class MinosCore implements MinosCoreProtocol {
     int limit = 50,
   }) => _client.listChatMessages(
     conversationId: conversationId,
-    beforeTsMs: beforeTsMs,
+    beforeTsMs: beforeTsMs == null ? null : platformInt64FromInt(beforeTsMs),
     limit: limit,
   );
 

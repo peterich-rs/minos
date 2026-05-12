@@ -1,15 +1,14 @@
 //! HTTP client for the backend's `/v1/*` control plane.
 //!
 //! The mobile client uses this for the pre-WS pairing handshake (POST
-//! `/v1/pairing/consume`), for listing the account's paired Macs
-//! (`GET /v1/me/hosts`), and for tearing a specific pair down
+//! `/v1/pairing/consume`), for POST-first query reads such as
+//! `/v1/me/hosts/query`, and for tearing a specific pair down
 //! (`DELETE /v1/pairings/:host_device_id`). The post-pair `Forward` /
 //! `Forwarded` and event push traffic still flows over the WebSocket.
 //!
 //! ADR-0020 removed the iOS device-secret rail; every iOS-originated
 //! request authenticates with the bearer alone.
 
-use std::fmt::Write as _;
 use std::time::Duration;
 
 use http::header::CONTENT_TYPE;
@@ -19,10 +18,11 @@ use minos_protocol::{
     AuthRequest, AuthResponse, ConversationMembersResponse, ConversationReadResponse,
     ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
     CreateGroupConversationRequest, EnsureDirectConversationRequest, FriendRequestsResponse,
-    FriendsResponse, GetThreadLastSeqResponse, ListChatMessagesResponse, ListThreadsParams,
-    ListThreadsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse, PairConsumeRequest,
-    PairResponse, ReadThreadParams, ReadThreadResponse, RefreshRequest, RefreshResponse,
-    SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
+    FriendsResponse, GetThreadLastSeqParams, GetThreadLastSeqResponse, ListChatMessagesRequest,
+    ListChatMessagesResponse, ListThreadsParams, ListThreadsResponse, LogoutRequest,
+    MeHostsResponse, MyProfileResponse, PairConsumeRequest, PairResponse, ReadThreadParams,
+    ReadThreadResponse, RefreshRequest, RefreshResponse, SearchUsersRequest, SearchUsersResponse,
+    SendChatMessageRequest, SetMinosIdRequest,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -49,7 +49,6 @@ pub struct MobileHttpClient {
     device_id: DeviceId,
     device_name: String,
     device_role: &'static str,
-    cf_access: Option<(String, String)>,
 }
 
 impl MobileHttpClient {
@@ -57,7 +56,6 @@ impl MobileHttpClient {
         backend_ws_url: &str,
         device_id: DeviceId,
         device_name: impl Into<String>,
-        cf_access: Option<(String, String)>,
     ) -> Result<Self, MinosError> {
         let tls_connector =
             crate::tls::build_mobile_tls_connector().map_err(|e| MinosError::BackendInternal {
@@ -83,7 +81,6 @@ impl MobileHttpClient {
             device_id,
             device_name: device_name.into(),
             device_role: "mobile-client",
-            cf_access,
         })
     }
 
@@ -158,9 +155,10 @@ impl MobileHttpClient {
         &self,
         access_token: &str,
     ) -> Result<MeHostsResponse, MinosError> {
-        let url = format!("{}/v1/me/hosts", self.base);
-        let trace_id = start_http_trace(Method::GET.as_str(), "/v1/me/hosts", None, None);
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let path = "/v1/me/hosts/query";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -185,25 +183,18 @@ impl MobileHttpClient {
         access_token: &str,
         params: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
+        let path = "/v1/threads/query";
         let trace_id = start_http_trace(
-            Method::GET.as_str(),
-            "/v1/threads",
+            Method::POST.as_str(),
+            path,
             None,
             Some(format!(
                 "limit={} before_ts_ms={:?} agent={:?}",
                 params.limit, params.before_ts_ms, params.agent
             )),
         );
-        let mut url = format!("{}/v1/threads?limit={}", self.base, params.limit);
-        if let Some(before) = params.before_ts_ms {
-            let _ = write!(url, "&before_ts_ms={before}");
-        }
-        if let Some(agent) = params.agent {
-            let agent_str = serde_json::to_string(&agent).unwrap_or_default();
-            let agent_str = agent_str.trim_matches('"');
-            let _ = write!(url, "&agent={agent_str}");
-        }
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let url = format!("{}{path}", self.base);
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &params)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -229,23 +220,18 @@ impl MobileHttpClient {
         params: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
         let thread_id = params.thread_id.clone();
+        let path = "/v1/threads/read";
         let trace_id = start_http_trace(
-            Method::GET.as_str(),
-            &format!("/v1/threads/{thread_id}/events"),
+            Method::POST.as_str(),
+            path,
             Some(thread_id.clone()),
             Some(format!(
                 "limit={} from_seq={:?}",
                 params.limit, params.from_seq
             )),
         );
-        let mut url = format!(
-            "{}/v1/threads/{}/events?limit={}",
-            self.base, params.thread_id, params.limit
-        );
-        if let Some(from) = params.from_seq {
-            let _ = write!(url, "&from_seq={from}");
-        }
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let url = format!("{}{path}", self.base);
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &params)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -275,14 +261,17 @@ impl MobileHttpClient {
         access_token: &str,
         thread_id: &str,
     ) -> Result<GetThreadLastSeqResponse, MinosError> {
-        let url = format!("{}/v1/threads/{}/last_seq", self.base, thread_id);
-        let trace_id = start_http_trace(
-            Method::GET.as_str(),
-            &format!("/v1/threads/{thread_id}/last_seq"),
-            Some(thread_id.into()),
-            None,
-        );
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let path = "/v1/threads/last-seq";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::POST.as_str(), path, Some(thread_id.into()), None);
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            Some(access_token),
+            &GetThreadLastSeqParams {
+                thread_id: thread_id.into(),
+            },
+        )?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -303,10 +292,10 @@ impl MobileHttpClient {
     }
 
     pub async fn my_profile(&self, access_token: &str) -> Result<MyProfileResponse, MinosError> {
-        let path = "/v1/me/profile";
+        let path = "/v1/me/profile/query";
         let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -362,16 +351,17 @@ impl MobileHttpClient {
         access_token: &str,
         minos_id: &str,
     ) -> Result<SearchUsersResponse, MinosError> {
-        let encoded: String = url::form_urlencoded::byte_serialize(minos_id.as_bytes()).collect();
-        let path = format!("/v1/users/search?minos_id={encoded}");
-        let url = format!("{}{}", self.base, path);
-        let trace_id = start_http_trace(
-            Method::GET.as_str(),
-            "/v1/users/search",
-            None,
-            Some(minos_id.into()),
-        );
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let path = "/v1/users/search/query";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, Some(minos_id.into()));
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            Some(access_token),
+            &SearchUsersRequest {
+                minos_id: minos_id.into(),
+            },
+        )?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -392,10 +382,10 @@ impl MobileHttpClient {
     }
 
     pub async fn friends(&self, access_token: &str) -> Result<FriendsResponse, MinosError> {
-        let path = "/v1/friends";
+        let path = "/v1/friends/query";
         let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -450,10 +440,10 @@ impl MobileHttpClient {
         &self,
         access_token: &str,
     ) -> Result<FriendRequestsResponse, MinosError> {
-        let path = "/v1/friend-requests";
+        let path = "/v1/friend-requests/query";
         let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -533,10 +523,10 @@ impl MobileHttpClient {
         &self,
         access_token: &str,
     ) -> Result<ConversationsResponse, MinosError> {
-        let path = "/v1/conversations";
+        let path = "/v1/conversations/query";
         let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -622,15 +612,15 @@ impl MobileHttpClient {
         access_token: &str,
         conversation_id: &str,
     ) -> Result<ConversationMembersResponse, MinosError> {
-        let path = format!("/v1/conversations/{conversation_id}/members");
+        let path = format!("/v1/conversations/{conversation_id}/members/query");
         let url = format!("{}{}", self.base, path);
         let trace_id = start_http_trace(
-            Method::GET.as_str(),
+            Method::POST.as_str(),
             &path,
             Some(conversation_id.into()),
             None,
         );
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -691,18 +681,23 @@ impl MobileHttpClient {
         before_ts_ms: Option<i64>,
         limit: u32,
     ) -> Result<ListChatMessagesResponse, MinosError> {
-        let mut path = format!("/v1/conversations/{conversation_id}/messages?limit={limit}");
-        if let Some(before_ts_ms) = before_ts_ms {
-            let _ = write!(path, "&before_ts_ms={before_ts_ms}");
-        }
+        let path = format!("/v1/conversations/{conversation_id}/messages/query");
         let url = format!("{}{}", self.base, path);
         let trace_id = start_http_trace(
-            Method::GET.as_str(),
+            Method::POST.as_str(),
             &path,
             Some(conversation_id.into()),
             None,
         );
-        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            Some(access_token),
+            &ListChatMessagesRequest {
+                before_ts_ms,
+                limit: Some(limit),
+            },
+        )?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -878,9 +873,8 @@ impl MobileHttpClient {
         }
     }
 
-    /// Build a request stamped with the device-id + bearer token. CF-Access
-    /// is also stamped if configured. Use this for any account-aware route
-    /// the daemon adds in future phases.
+    /// Build a request stamped with the device-id + bearer token. Use this
+    /// for any account-aware route the daemon adds in future phases.
     pub fn build_authed_request(
         &self,
         method: Method,
@@ -940,11 +934,6 @@ impl MobileHttpClient {
         if let Some(access_token) = access_token {
             req = req.header("authorization", format!("Bearer {access_token}"));
         }
-        if let Some((id, sec)) = &self.cf_access {
-            req = req
-                .header("cf-access-client-id", id)
-                .header("cf-access-client-secret", sec);
-        }
         req
     }
 
@@ -990,8 +979,8 @@ fn connect_err(url: &str, e: &WireError) -> MinosError {
         Some(StatusCode::UNAUTHORIZED) => MinosError::Unauthorized {
             reason: format!("{url}: {e}"),
         },
-        Some(StatusCode::FOUND | StatusCode::FORBIDDEN) => MinosError::CfAuthFailed {
-            message: format!("{url}: {e}"),
+        Some(StatusCode::FOUND | StatusCode::FORBIDDEN) => MinosError::Unauthorized {
+            reason: format!("{url}: {e}"),
         },
         _ => MinosError::ConnectFailed {
             url: url.into(),

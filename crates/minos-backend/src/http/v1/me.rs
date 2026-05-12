@@ -1,14 +1,14 @@
-//! `GET /v1/me/*` — caller's session-scoped views.
+//! `/v1/me/*` caller-scoped views on a POST-first query surface.
 //!
-//! Post ADR-0020 `GET /v1/me/hosts` lists every Mac paired to the caller's
+//! Post ADR-0020 `/v1/me/hosts` lists every Mac paired to the caller's
 //! account on the bearer-authenticated mobile rail. The host-authenticated
-//! `GET /v1/me/peer` remains available for the Mac daemon's post-connect
+//! `/v1/me/peer` path remains available for the Mac daemon's post-connect
 //! refresh path and resolves against the newer `account_host_pairings`
 //! table rather than the retired legacy pairings store.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{delete, get};
+use axum::routing::{delete, post};
 use axum::{Json, Router};
 use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::envelope::{Envelope, EventKind};
@@ -21,10 +21,13 @@ use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
     Router::new()
-        .route("/me/hosts", get(get_me_hosts))
-        .route("/me/peers", get(get_me_peers))
+        .route("/me/hosts", post(get_me_hosts))
+        .route("/me/hosts/query", post(get_me_hosts))
+        .route("/me/peers", post(get_me_peers))
+        .route("/me/peers/query", post(get_me_peers))
         .route("/me/peers/:mobile_device_id", delete(delete_me_peer))
-        .route("/me/peer", get(get_me_peer))
+        .route("/me/peer", post(get_me_peer))
+        .route("/me/peer/query", post(get_me_peer))
 }
 
 /// Return every Mac paired to the caller's `account_id`. Bearer-only.

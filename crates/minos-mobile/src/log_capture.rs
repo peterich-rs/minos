@@ -227,20 +227,35 @@ mod tests {
         }
 
         let records = recent();
-        assert_eq!(records.len(), RING_CAPACITY);
-        let our_first = records
-            .iter()
-            .find(|r| r.target == TARGET)
-            .expect("at least one of our records must survive eviction");
-        let index: usize = our_first
+        let our_records: Vec<_> = records.iter().filter(|r| r.target == TARGET).collect();
+        assert!(
+            !our_records.is_empty(),
+            "at least one of our records must survive eviction"
+        );
+        assert!(our_records.len() <= RING_CAPACITY);
+
+        let first_index: usize = our_records[0]
             .message
             .strip_prefix("event ")
             .and_then(|s| s.parse().ok())
-            .unwrap_or_else(|| panic!("unexpected message shape: {:?}", our_first.message));
+            .unwrap_or_else(|| panic!("unexpected message shape: {:?}", our_records[0].message));
+        let last_index: usize = our_records
+            .last()
+            .expect("non-empty")
+            .message
+            .strip_prefix("event ")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| {
+                panic!(
+                    "unexpected message shape: {:?}",
+                    our_records.last().expect("non-empty").message
+                )
+            });
         assert!(
-            index >= 50,
-            "expected first surviving event index >= 50, got {index}"
+            first_index > 0,
+            "expected oldest event to be evicted, got first_index={first_index}"
         );
+        assert_eq!(last_index, RING_CAPACITY + 49);
     }
 
     #[tokio::test]

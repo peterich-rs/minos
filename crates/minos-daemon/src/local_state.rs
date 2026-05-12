@@ -1,7 +1,6 @@
 //! Plain-JSON persistence for the Mac-side non-secret state:
 //! `self_device_id` (UUIDv4) + `peer` (nullable `PeerRecord`).
-//! Secrets (CF tokens, device_secret) are NOT stored here — they go to
-//! the Keychain via `keychain_store.rs`.
+//! Secrets (CF tokens, device_secret) are NOT stored here.
 
 use crate::relay_pairing::PeerRecord;
 use minos_domain::{DeviceId, MinosError};

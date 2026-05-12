@@ -92,7 +92,7 @@ async fn post_consume(
     headers: HeaderMap,
     Json(params): Json<PairConsumeRequest>,
 ) -> Result<Json<PairResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let outcome = auth::authenticate_role(&state.store, &headers, DeviceRole::MobileClient)
+    let outcome = auth::authenticate(&state.store, &headers)
         .await
         .map_err(|e| match e {
             auth::AuthError::Unauthorized(m) => {
@@ -102,6 +102,15 @@ async fn post_consume(
                 (StatusCode::INTERNAL_SERVER_ERROR, err_body("internal", m))
             }
         })?;
+    if !outcome.role.is_account_client() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            err_body(
+                "unauthorized",
+                format!("role required: account client, got {}", outcome.role),
+            ),
+        ));
+    }
     let consumer_id = outcome.device_id;
 
     // Phase 2 Task 2.3: pairing/consume must come from a logged-in iOS

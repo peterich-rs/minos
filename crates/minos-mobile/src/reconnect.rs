@@ -112,8 +112,7 @@ impl ReconnectController {
         let mut s = self.state.write().await;
         if !s.paused
             && !s.foreground
-            && s
-                .backgrounded_at
+            && s.backgrounded_at
                 .is_some_and(|at| at.elapsed() >= BACKGROUND_PAUSE_GRACE)
         {
             s.paused = true;

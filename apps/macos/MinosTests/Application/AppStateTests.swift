@@ -8,14 +8,19 @@ import XCTest
 final class AppStateTests: XCTestCase {
     private actor StopGate {
         private var continuation: CheckedContinuation<Void, Never>?
+        private var isReleased = false
 
         func waitUntilReleased() async {
+            if isReleased {
+                return
+            }
             await withCheckedContinuation { continuation in
                 self.continuation = continuation
             }
         }
 
         func release() {
+            isReleased = true
             continuation?.resume()
             continuation = nil
         }
@@ -274,7 +279,9 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(replies.isEmpty)
 
         await gate.release()
-        await AppStateFixtures.drainMainActor()
+        for _ in 0..<20 where replies.isEmpty {
+            await AppStateFixtures.drainMainActor()
+        }
 
         XCTAssertEqual(replies, [true])
         XCTAssertEqual(relayLinkSub.cancelCallCount, 1)

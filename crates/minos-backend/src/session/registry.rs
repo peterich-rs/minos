@@ -300,13 +300,14 @@ impl SessionRegistry {
         }
     }
 
-    /// Revoke and drop every iOS session bound to `account_id`, except an
+    /// Revoke and drop every account-client session bound to `account_id`, except an
     /// optional `except` device id (provided as a string, matching the
     /// `DeviceId::to_string` representation that bearer claims carry).
     ///
     /// Retained for administrative/session-revocation flows. Normal login no
-    /// longer calls this because multiple iOS devices on the same account may
-    /// stay connected concurrently. Mac sessions are not touched.
+    /// longer calls this because multiple account-client devices on the same
+    /// account may stay connected concurrently. Agent-host sessions are not
+    /// touched.
     ///
     /// Returns the number of sessions actually closed.
     pub fn close_account_sessions(&self, account_id: &str, except: Option<&str>) -> usize {
@@ -315,7 +316,7 @@ impl SessionRegistry {
             .iter()
             .filter(|entry| {
                 let h = entry.value();
-                if h.role != DeviceRole::MobileClient {
+                if !h.role.is_account_client() {
                     return false;
                 }
                 if h.account_id().as_deref() != Some(account_id) {
@@ -380,12 +381,12 @@ impl SessionRegistry {
         }
     }
 
-    /// Best-effort broadcast of `frame` to every live mobile session bound to
+    /// Best-effort broadcast of `frame` to every live account-client session bound to
     /// `account_id`.
     pub fn broadcast_mobile_account(&self, account_id: &str, frame: ServerFrame) -> usize {
         let mut delivered = 0;
         for handle in self.0.iter() {
-            if handle.role != DeviceRole::MobileClient {
+            if !handle.role.is_account_client() {
                 continue;
             }
             if handle.account_id().as_deref() != Some(account_id) {

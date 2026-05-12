@@ -35,5 +35,8 @@ tokio = { workspace = true }
 # we round-trip it back into `minos_domain::DeviceId` here.
 uuid = { workspace = true }
 
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.2.17", features = ["js"] }
+
 [lints]
 workspace = true

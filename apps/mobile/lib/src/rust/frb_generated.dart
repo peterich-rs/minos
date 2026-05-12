@@ -2996,72 +2996,66 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 15:
         return MinosError_BackendInternal(message: dco_decode_String(raw[1]));
       case 16:
-        return MinosError_CfAuthFailed(message: dco_decode_String(raw[1]));
-      case 17:
         return MinosError_CodexSpawnFailed(message: dco_decode_String(raw[1]));
-      case 18:
+      case 17:
         return MinosError_CodexConnectFailed(
           url: dco_decode_String(raw[1]),
           message: dco_decode_String(raw[2]),
         );
-      case 19:
+      case 18:
         return MinosError_CodexProtocolError(
           method: dco_decode_String(raw[1]),
           message: dco_decode_String(raw[2]),
         );
-      case 20:
+      case 19:
         return const MinosError_AgentAlreadyRunning();
-      case 21:
+      case 20:
         return const MinosError_AgentNotRunning();
-      case 22:
+      case 21:
         return MinosError_AgentNotSupported(
           agent: dco_decode_agent_name(raw[1]),
         );
-      case 23:
+      case 22:
         return const MinosError_AgentSessionIdMismatch();
-      case 24:
-        return MinosError_CfAccessMisconfigured(
-          reason: dco_decode_String(raw[1]),
-        );
-      case 25:
+      case 23:
         return MinosError_IngestSeqConflict(
           threadId: dco_decode_String(raw[1]),
           seq: dco_decode_u_64(raw[2]),
         );
-      case 26:
+      case 24:
         return MinosError_ThreadNotFound(threadId: dco_decode_String(raw[1]));
-      case 27:
+      case 25:
         return MinosError_TranslationNotImplemented(
           agent: dco_decode_agent_name(raw[1]),
         );
-      case 28:
+      case 26:
         return MinosError_TranslationFailed(
           agent: dco_decode_agent_name(raw[1]),
           message: dco_decode_String(raw[2]),
         );
-      case 29:
+      case 27:
         return MinosError_PairingQrVersionUnsupported(
           version: dco_decode_u_8(raw[1]),
         );
-      case 30:
+      case 28:
         return const MinosError_Timeout();
-      case 31:
+      case 29:
         return const MinosError_NotConnected();
-      case 32:
+      case 30:
         return const MinosError_RequestDropped();
-      case 33:
+      case 31:
         return MinosError_AuthRefreshFailed(message: dco_decode_String(raw[1]));
-      case 34:
+      case 32:
         return const MinosError_EmailTaken();
-      case 35:
+      case 33:
         return const MinosError_WeakPassword();
-      case 36:
+      case 34:
         return MinosError_RateLimited(retryAfterS: dco_decode_u_32(raw[1]));
-      case 37:
+      case 35:
         return const MinosError_InvalidCredentials();
-      case 38:
+      case 36:
         return MinosError_AgentStartFailed(reason: dco_decode_String(raw[1]));
-      case 39:
+      case 37:
         return const MinosError_PairingTokenExpired();
       default:
         throw Exception("unreachable");
@@ -4343,81 +4337,75 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return MinosError_BackendInternal(message: var_message);
       case 16:
         final var_message = sse_decode_String(deserializer);
-        return MinosError_CfAuthFailed(message: var_message);
-      case 17:
-        final var_message = sse_decode_String(deserializer);
         return MinosError_CodexSpawnFailed(message: var_message);
-      case 18:
+      case 17:
         final var_url = sse_decode_String(deserializer);
         final var_message = sse_decode_String(deserializer);
         return MinosError_CodexConnectFailed(
           url: var_url,
           message: var_message,
         );
-      case 19:
+      case 18:
         final var_method = sse_decode_String(deserializer);
         final var_message = sse_decode_String(deserializer);
         return MinosError_CodexProtocolError(
           method: var_method,
           message: var_message,
         );
-      case 20:
+      case 19:
         return const MinosError_AgentAlreadyRunning();
-      case 21:
+      case 20:
         return const MinosError_AgentNotRunning();
-      case 22:
+      case 21:
         final var_agent = sse_decode_agent_name(deserializer);
         return MinosError_AgentNotSupported(agent: var_agent);
-      case 23:
+      case 22:
         return const MinosError_AgentSessionIdMismatch();
-      case 24:
-        final var_reason = sse_decode_String(deserializer);
-        return MinosError_CfAccessMisconfigured(reason: var_reason);
-      case 25:
+      case 23:
         final var_threadId = sse_decode_String(deserializer);
         final var_seq = sse_decode_u_64(deserializer);
         return MinosError_IngestSeqConflict(
           threadId: var_threadId,
           seq: var_seq,
         );
-      case 26:
+      case 24:
         final var_threadId = sse_decode_String(deserializer);
         return MinosError_ThreadNotFound(threadId: var_threadId);
-      case 27:
+      case 25:
         final var_agent = sse_decode_agent_name(deserializer);
         return MinosError_TranslationNotImplemented(agent: var_agent);
-      case 28:
+      case 26:
         final var_agent = sse_decode_agent_name(deserializer);
         final var_message = sse_decode_String(deserializer);
         return MinosError_TranslationFailed(
           agent: var_agent,
           message: var_message,
         );
-      case 29:
+      case 27:
         final var_version = sse_decode_u_8(deserializer);
         return MinosError_PairingQrVersionUnsupported(version: var_version);
-      case 30:
+      case 28:
         return const MinosError_Timeout();
-      case 31:
+      case 29:
         return const MinosError_NotConnected();
-      case 32:
+      case 30:
         return const MinosError_RequestDropped();
-      case 33:
+      case 31:
         final var_message = sse_decode_String(deserializer);
         return MinosError_AuthRefreshFailed(message: var_message);
-      case 34:
+      case 32:
         return const MinosError_EmailTaken();
-      case 35:
+      case 33:
         return const MinosError_WeakPassword();
-      case 36:
+      case 34:
         final var_retryAfterS = sse_decode_u_32(deserializer);
         return MinosError_RateLimited(retryAfterS: var_retryAfterS);
-      case 37:
+      case 35:
         return const MinosError_InvalidCredentials();
-      case 38:
+      case 36:
         final var_reason = sse_decode_String(deserializer);
         return MinosError_AgentStartFailed(reason: var_reason);
-      case 39:
+      case 37:
         return const MinosError_PairingTokenExpired();
       default:
         throw UnimplementedError('');
@@ -5783,84 +5771,78 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case MinosError_BackendInternal(message: final message):
         sse_encode_i_32(15, serializer);
         sse_encode_String(message, serializer);
-      case MinosError_CfAuthFailed(message: final message):
-        sse_encode_i_32(16, serializer);
-        sse_encode_String(message, serializer);
       case MinosError_CodexSpawnFailed(message: final message):
-        sse_encode_i_32(17, serializer);
+        sse_encode_i_32(16, serializer);
         sse_encode_String(message, serializer);
       case MinosError_CodexConnectFailed(
         url: final url,
         message: final message,
       ):
-        sse_encode_i_32(18, serializer);
+        sse_encode_i_32(17, serializer);
         sse_encode_String(url, serializer);
         sse_encode_String(message, serializer);
       case MinosError_CodexProtocolError(
         method: final method,
         message: final message,
       ):
-        sse_encode_i_32(19, serializer);
+        sse_encode_i_32(18, serializer);
         sse_encode_String(method, serializer);
         sse_encode_String(message, serializer);
       case MinosError_AgentAlreadyRunning():
-        sse_encode_i_32(20, serializer);
+        sse_encode_i_32(19, serializer);
       case MinosError_AgentNotRunning():
-        sse_encode_i_32(21, serializer);
+        sse_encode_i_32(20, serializer);
       case MinosError_AgentNotSupported(agent: final agent):
-        sse_encode_i_32(22, serializer);
+        sse_encode_i_32(21, serializer);
         sse_encode_agent_name(agent, serializer);
       case MinosError_AgentSessionIdMismatch():
-        sse_encode_i_32(23, serializer);
-      case MinosError_CfAccessMisconfigured(reason: final reason):
-        sse_encode_i_32(24, serializer);
-        sse_encode_String(reason, serializer);
+        sse_encode_i_32(22, serializer);
       case MinosError_IngestSeqConflict(
         threadId: final threadId,
         seq: final seq,
       ):
-        sse_encode_i_32(25, serializer);
+        sse_encode_i_32(23, serializer);
         sse_encode_String(threadId, serializer);
         sse_encode_u_64(seq, serializer);
       case MinosError_ThreadNotFound(threadId: final threadId):
-        sse_encode_i_32(26, serializer);
+        sse_encode_i_32(24, serializer);
         sse_encode_String(threadId, serializer);
       case MinosError_TranslationNotImplemented(agent: final agent):
-        sse_encode_i_32(27, serializer);
+        sse_encode_i_32(25, serializer);
         sse_encode_agent_name(agent, serializer);
       case MinosError_TranslationFailed(
         agent: final agent,
         message: final message,
       ):
-        sse_encode_i_32(28, serializer);
+        sse_encode_i_32(26, serializer);
         sse_encode_agent_name(agent, serializer);
         sse_encode_String(message, serializer);
       case MinosError_PairingQrVersionUnsupported(version: final version):
-        sse_encode_i_32(29, serializer);
+        sse_encode_i_32(27, serializer);
         sse_encode_u_8(version, serializer);
       case MinosError_Timeout():
-        sse_encode_i_32(30, serializer);
+        sse_encode_i_32(28, serializer);
       case MinosError_NotConnected():
-        sse_encode_i_32(31, serializer);
+        sse_encode_i_32(29, serializer);
       case MinosError_RequestDropped():
-        sse_encode_i_32(32, serializer);
+        sse_encode_i_32(30, serializer);
       case MinosError_AuthRefreshFailed(message: final message):
-        sse_encode_i_32(33, serializer);
+        sse_encode_i_32(31, serializer);
         sse_encode_String(message, serializer);
       case MinosError_EmailTaken():
-        sse_encode_i_32(34, serializer);
+        sse_encode_i_32(32, serializer);
       case MinosError_WeakPassword():
-        sse_encode_i_32(35, serializer);
+        sse_encode_i_32(33, serializer);
       case MinosError_RateLimited(retryAfterS: final retryAfterS):
-        sse_encode_i_32(36, serializer);
+        sse_encode_i_32(34, serializer);
         sse_encode_u_32(retryAfterS, serializer);
       case MinosError_InvalidCredentials():
-        sse_encode_i_32(37, serializer);
+        sse_encode_i_32(35, serializer);
       case MinosError_AgentStartFailed(reason: final reason):
-        sse_encode_i_32(38, serializer);
+        sse_encode_i_32(36, serializer);
         sse_encode_String(reason, serializer);
       case MinosError_PairingTokenExpired():
-        sse_encode_i_32(39, serializer);
+        sse_encode_i_32(37, serializer);
     }
   }
 
@@ -6291,7 +6273,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   MobileClientImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
     : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
 
-  static final _kStaticData = RustArcStaticData<MobileClient>(
+  static final _kStaticData = RustArcStaticData(
     rustArcIncrementStrongCount:
         RustLib.instance.api.rust_arc_increment_strong_count_MobileClient,
     rustArcDecrementStrongCount:

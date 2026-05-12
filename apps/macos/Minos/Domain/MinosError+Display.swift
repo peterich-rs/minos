@@ -35,8 +35,6 @@ extension MinosError {
             return .peerOffline
         case .BackendInternal:
             return .backendInternal
-        case .CfAuthFailed:
-            return .cfAuthFailed
         case .CodexSpawnFailed:
             return .codexSpawnFailed
         case .CodexConnectFailed:
@@ -51,8 +49,6 @@ extension MinosError {
             return .agentNotSupported
         case .AgentSessionIdMismatch:
             return .agentSessionIdMismatch
-        case .CfAccessMisconfigured:
-            return .cfAccessMisconfigured
         case .IngestSeqConflict:
             return .ingestSeqConflict
         case .ThreadNotFound:

@@ -31,12 +31,11 @@ release APK.
 
 ## Configuration
 
-`MINOS_BACKEND_URL` and `CF_ACCESS_CLIENT_*` are baked at build time
-from `.env.local` (workspace root). The Rust FFI reads them via
-`option_env!`; the Dart layer reads CF Access via `String.fromEnvironment`
-which `flutter run` populates with `--dart-define` (the just recipe wires
-both paths from the same `.env.local`).
+`MINOS_BACKEND_URL` is baked at build time
+from `.env.local` (workspace root). The Rust FFI reads it via
+`option_env!`, so Flutter and native IDE builds stay on the same backend
+endpoint when they re-enter the shared `just`/Cargokit build path.
 
 iOS Keychain (`flutter_secure_storage`) holds only Minos business state:
 `device_id`, `device_secret`, `account_id`, refresh tokens — never the
-backend URL or CF Access tokens.
+backend URL.

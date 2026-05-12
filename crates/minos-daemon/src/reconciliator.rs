@@ -67,7 +67,7 @@ pub struct Reconciliator {
     relay_out: mpsc::Sender<Envelope>,
     /// Optional override for the directory the codex CLI uses as its
     /// "home". Production leaves this `None` so JSONL recovery resolves
-    /// against `$HOME`; tests pass a temp dir to avoid touching the
+    /// against the current user's home dir; tests pass a temp dir to avoid touching the
     /// developer's real `~/.codex`.
     codex_home_override: Option<PathBuf>,
 }
@@ -88,7 +88,7 @@ impl Reconciliator {
 
     /// Same as [`Self::new`] but routes JSONL recovery against
     /// `codex_home_root` (the directory that contains `.codex/sessions/`)
-    /// instead of `$HOME`. Used by integration tests to stage a fake
+    /// instead of the current user's home dir. Used by integration tests to stage a fake
     /// codex home under a tempdir.
     pub fn with_codex_home(
         store: Arc<LocalStore>,
@@ -110,7 +110,7 @@ impl Reconciliator {
     /// Threads not present in the backend's map are treated as
     /// `backend_seq = 0` (the backend has no rows for them).
     pub async fn on_checkpoint(&self, backend_seqs: HashMap<String, u64>) -> Result<()> {
-        let mut local = self.store.list_threads(None, Some(500)).await?;
+        let mut local = self.store.list_threads(None, Some(500), None).await?;
         local.sort_by_key(|t| status_priority(&t.status));
 
         for thread in local {

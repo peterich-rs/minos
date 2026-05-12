@@ -31,8 +31,13 @@
 
 use std::{sync::Arc, time::Duration};
 
+use axum::http::{
+    header::{AUTHORIZATION, CONTENT_TYPE},
+    HeaderName, Method,
+};
 use axum::Router;
 use sqlx::SqlitePool;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     auth::rate_limit::RateLimiter, ingest::translate::ThreadTranslators, pairing::PairingService,
@@ -136,15 +141,29 @@ pub fn default_refresh_per_acc() -> Arc<RateLimiter> {
 
 /// Build the backend's top-level axum `Router`.
 ///
-/// Two routes (see module docs). No middleware is attached here — the
-/// edge (Cloudflare Access) handles auth, TLS, and rate limiting; logs
-/// are wired via `tracing` rather than `tower-http::trace` in this MVP.
+/// Two routes (see module docs). Logs are wired via `tracing` rather than
+/// `tower-http::trace` in this MVP.
 pub fn router(state: BackendState) -> Router {
     Router::new()
         .route("/health", axum::routing::get(health::get))
         .route("/devices", axum::routing::get(ws_devices::upgrade))
         .nest("/v1", v1::router())
+        .layer(cors_layer())
         .with_state(state)
+}
+
+fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers([
+            AUTHORIZATION,
+            CONTENT_TYPE,
+            HeaderName::from_static(auth::HDR_DEVICE_ID),
+            HeaderName::from_static(auth::HDR_DEVICE_ROLE),
+            HeaderName::from_static(auth::HDR_DEVICE_SECRET),
+            HeaderName::from_static(auth::HDR_DEVICE_NAME),
+        ])
 }
 
 /// Test scaffolding factories shared by the crate's integration tests.

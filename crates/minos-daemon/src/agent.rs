@@ -10,9 +10,13 @@ use minos_protocol::{
     AgentLaunchMode as ProtoAgentLaunchMode, CloseReason as ProtoCloseReason, CloseThreadRequest,
     GetThreadParams, GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
     InterruptThreadRequest, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, PauseReason as ProtoPauseReason, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ListThreadsResponse, PauseReason as ProtoPauseReason, ReadThreadResponse,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState,
+    ThreadSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+};
+use minos_ui_protocol::{
+    translate_claude, translate_codex, translate_gemini, CodexTranslatorState, ThreadEndReason,
+    UiEventMessage,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -62,6 +66,8 @@ impl AgentGlue {
     ) -> Self {
         let mut cfg = AgentRuntimeConfig::new(workspace_root.clone());
         cfg.subprocess_env = subprocess_env;
+        #[cfg(feature = "test-support")]
+        apply_test_ws_override(&mut cfg);
         let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
         let writer = Arc::new(EventWriter::spawn(store.clone(), relay_out_tx));
         Self::wire_with(manager, writer, store, workspace_root)
@@ -204,6 +210,131 @@ impl AgentGlue {
             .map_err(map_anyhow)
     }
 
+    pub async fn ensure_thread_registered(&self, thread_id: &str) -> Result<(), MinosError> {
+        if self.manager.has_thread(thread_id).await {
+            return Ok(());
+        }
+        let row = self
+            .store
+            .get_thread(thread_id)
+            .await
+            .map_err(|e| map_store_error("ensure_thread_registered", e))?
+            .ok_or(MinosError::AgentSessionIdMismatch)?;
+        let state = row_state_to_runtime(&row)?;
+        self.manager
+            .register_persisted_thread(
+                row.thread_id.clone(),
+                PathBuf::from(&row.workspace_root),
+                parse_agent_label(&row.agent)?,
+                row.codex_session_id.clone(),
+                state,
+                u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
+            )
+            .await
+            .map_err(map_anyhow)
+    }
+
+    pub async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentResponse, MinosError> {
+        let row = self
+            .store
+            .get_thread(thread_id)
+            .await
+            .map_err(|e| map_store_error("resume_thread", e))?
+            .ok_or(MinosError::AgentSessionIdMismatch)?;
+        if matches!(
+            row_state_to_runtime(&row)?,
+            minos_agent_runtime::ThreadState::Closed { .. }
+        ) {
+            return Err(MinosError::AgentSessionIdMismatch);
+        }
+        self.manager
+            .register_persisted_thread(
+                row.thread_id.clone(),
+                PathBuf::from(&row.workspace_root),
+                parse_agent_label(&row.agent)?,
+                row.codex_session_id.clone(),
+                row_state_to_runtime(&row)?,
+                u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
+            )
+            .await
+            .map_err(map_anyhow)?;
+        Ok(StartAgentResponse {
+            session_id: row.thread_id,
+            cwd: row.workspace_root,
+        })
+    }
+
+    pub async fn read_thread_history(
+        &self,
+        thread_id: &str,
+    ) -> Result<ReadThreadResponse, MinosError> {
+        let (row, ui_events, _) = self.load_thread_history(thread_id).await?;
+        Ok(ReadThreadResponse {
+            ui_events,
+            next_seq: None,
+            thread_end_reason: row_end_reason(&row),
+        })
+    }
+
+    pub async fn hydrate_codex_translator(
+        &self,
+        thread_id: &str,
+    ) -> Result<CodexTranslatorState, MinosError> {
+        let (_, _, translator) = self.load_thread_history(thread_id).await?;
+        Ok(translator)
+    }
+
+    async fn load_thread_history(
+        &self,
+        thread_id: &str,
+    ) -> Result<
+        (
+            crate::store::ThreadRow,
+            Vec<UiEventMessage>,
+            CodexTranslatorState,
+        ),
+        MinosError,
+    > {
+        let row = self
+            .store
+            .get_thread(thread_id)
+            .await
+            .map_err(|e| map_store_error("read_thread_history", e))?
+            .ok_or(MinosError::AgentSessionIdMismatch)?;
+        let max_seq = u64::try_from(row.last_seq.max(0)).unwrap_or(0);
+        let rows = self
+            .store
+            .read_events(thread_id, 1, max_seq.max(1))
+            .await
+            .map_err(|e| map_store_error("read_thread_history", e))?;
+        let agent = parse_agent_label(&row.agent)?;
+        let mut ui_events = Vec::new();
+        let mut translator = CodexTranslatorState::new(thread_id.to_string());
+        for event in rows {
+            let payload: serde_json::Value =
+                serde_json::from_slice(&event.payload).map_err(|e| {
+                    MinosError::CodexProtocolError {
+                        method: "local_store.history_payload".into(),
+                        message: e.to_string(),
+                    }
+                })?;
+            let translated = match agent {
+                minos_domain::AgentName::Codex => translate_codex(&mut translator, &payload),
+                minos_domain::AgentName::Claude => translate_claude(&payload),
+                minos_domain::AgentName::Gemini => translate_gemini(&payload),
+            }
+            .unwrap_or_else(|error| {
+                vec![UiEventMessage::Error {
+                    code: "translation_failed".into(),
+                    message: error.to_string(),
+                    message_id: None,
+                }]
+            });
+            ui_events.extend(translated);
+        }
+        Ok((row, ui_events, translator))
+    }
+
     pub async fn list_host_skills(
         &self,
         req: ListHostSkillsRequest,
@@ -271,22 +402,15 @@ impl AgentGlue {
         &self,
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
-        let _ = req; // Filter / agent / pagination plumbing lands with the
-                     // SQLite-backed history list (C21+).
-        let snap = self.manager.list_threads().await;
-        let threads: Vec<ThreadSummary> = snap
+        let agent_filter = req.agent.map(agent_label);
+        let threads = self
+            .store
+            .list_threads(req.before_ts_ms, Some(req.limit), agent_filter)
+            .await
+            .map_err(|e| map_store_error("list_threads", e))?
             .into_iter()
-            .map(|s| ThreadSummary {
-                thread_id: s.thread_id,
-                agent: minos_domain::AgentName::Codex,
-                title: None,
-                first_ts_ms: 0,
-                last_ts_ms: 0,
-                message_count: 0,
-                ended_at_ms: None,
-                end_reason: None,
-            })
-            .collect();
+            .map(thread_summary_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(ListThreadsResponse {
             threads,
             next_before_ts_ms: None,
@@ -294,24 +418,23 @@ impl AgentGlue {
     }
 
     pub async fn get_thread(&self, req: GetThreadParams) -> Result<GetThreadResponse, MinosError> {
-        let snap = self.manager.list_threads().await;
-        let s = snap
-            .into_iter()
-            .find(|s| s.thread_id == req.thread_id)
+        let row = self
+            .store
+            .get_thread(&req.thread_id)
+            .await
+            .map_err(|e| map_store_error("get_thread", e))?
             .ok_or(MinosError::AgentSessionIdMismatch)?;
-        let thread = ThreadSummary {
-            thread_id: s.thread_id.clone(),
-            agent: minos_domain::AgentName::Codex,
-            title: None,
-            first_ts_ms: 0,
-            last_ts_ms: 0,
-            message_count: 0,
-            ended_at_ms: None,
-            end_reason: None,
-        };
+        let live_state = self
+            .manager
+            .list_threads()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.thread_id == req.thread_id)
+            .map(|snapshot| state_to_proto(&snapshot.state));
+        let thread = thread_summary_from_row(row.clone())?;
         Ok(GetThreadResponse {
             thread,
-            state: state_to_proto(&s.state),
+            state: live_state.unwrap_or(row_state_to_proto(&row)?),
         })
     }
 
@@ -346,6 +469,21 @@ impl AgentGlue {
     }
 }
 
+#[cfg(feature = "test-support")]
+fn apply_test_ws_override(cfg: &mut AgentRuntimeConfig) {
+    let Some(raw) = std::env::var("MINOS_TEST_CODEX_WS_URL")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    cfg.test_ws_url = Some(
+        url::Url::parse(&raw)
+            .unwrap_or_else(|error| panic!("invalid MINOS_TEST_CODEX_WS_URL `{raw}`: {error}")),
+    );
+}
+
 fn runtime_mode(mode: ProtoAgentLaunchMode) -> AgentLaunchMode {
     match mode {
         ProtoAgentLaunchMode::Jsonl => AgentLaunchMode::Jsonl,
@@ -358,6 +496,149 @@ fn resolve_workspace(default_workspace: &std::path::Path, workspace: &str) -> Pa
         default_workspace.to_path_buf()
     } else {
         PathBuf::from(workspace)
+    }
+}
+
+fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary, MinosError> {
+    let end_reason = row_end_reason(&row);
+    Ok(ThreadSummary {
+        thread_id: row.thread_id,
+        agent: parse_agent_label(&row.agent)?,
+        title: None,
+        first_ts_ms: row.started_at,
+        last_ts_ms: row.last_activity_at,
+        message_count: u32::try_from(row.last_seq.max(0)).unwrap_or(u32::MAX),
+        ended_at_ms: row.ended_at,
+        end_reason,
+    })
+}
+
+fn row_end_reason(row: &crate::store::ThreadRow) -> Option<ThreadEndReason> {
+    match row.last_close_reason.as_deref() {
+        Some("user_close") => Some(ThreadEndReason::UserStopped),
+        Some("terminal_error") => Some(ThreadEndReason::Crashed {
+            message: "terminal_error".into(),
+        }),
+        Some(other) => Some(ThreadEndReason::Crashed {
+            message: other.to_string(),
+        }),
+        None => None,
+    }
+}
+
+fn row_state_to_proto(row: &crate::store::ThreadRow) -> Result<ProtoThreadState, MinosError> {
+    match row.status.as_str() {
+        "starting" => Ok(ProtoThreadState::Starting),
+        "idle" => Ok(ProtoThreadState::Idle),
+        "running" => Ok(ProtoThreadState::Running {
+            turn_started_at_ms: row.last_activity_at,
+        }),
+        "resuming" => Ok(ProtoThreadState::Resuming),
+        "suspended" => Ok(ProtoThreadState::Suspended {
+            reason: parse_pause_reason(row.last_pause_reason.as_deref())?,
+        }),
+        "closed" => Ok(ProtoThreadState::Closed {
+            reason: parse_close_reason(row.last_close_reason.as_deref())?,
+        }),
+        other => Err(MinosError::CodexProtocolError {
+            method: "local_store.thread_status".into(),
+            message: format!("unknown persisted thread status: {other}"),
+        }),
+    }
+}
+
+fn row_state_to_runtime(
+    row: &crate::store::ThreadRow,
+) -> Result<minos_agent_runtime::ThreadState, MinosError> {
+    match row.status.as_str() {
+        "starting" => Ok(minos_agent_runtime::ThreadState::Starting),
+        "idle" => Ok(minos_agent_runtime::ThreadState::Idle),
+        "running" => Ok(minos_agent_runtime::ThreadState::Running {
+            turn_started_at_ms: row.last_activity_at,
+        }),
+        "resuming" => Ok(minos_agent_runtime::ThreadState::Resuming),
+        "suspended" => Ok(minos_agent_runtime::ThreadState::Suspended {
+            reason: parse_pause_reason_runtime(row.last_pause_reason.as_deref())?,
+        }),
+        "closed" => Ok(minos_agent_runtime::ThreadState::Closed {
+            reason: parse_close_reason_runtime(row.last_close_reason.as_deref())?,
+        }),
+        other => Err(MinosError::CodexProtocolError {
+            method: "local_store.thread_status".into(),
+            message: format!("unknown persisted thread status: {other}"),
+        }),
+    }
+}
+
+fn parse_agent_label(agent: &str) -> Result<minos_domain::AgentName, MinosError> {
+    match agent {
+        "codex" => Ok(minos_domain::AgentName::Codex),
+        "claude" => Ok(minos_domain::AgentName::Claude),
+        "gemini" => Ok(minos_domain::AgentName::Gemini),
+        other => Err(MinosError::CodexProtocolError {
+            method: "local_store.thread_agent".into(),
+            message: format!("unknown persisted agent: {other}"),
+        }),
+    }
+}
+
+fn agent_label(agent: minos_domain::AgentName) -> &'static str {
+    match agent {
+        minos_domain::AgentName::Codex => "codex",
+        minos_domain::AgentName::Claude => "claude",
+        minos_domain::AgentName::Gemini => "gemini",
+    }
+}
+
+fn parse_pause_reason(reason: Option<&str>) -> Result<ProtoPauseReason, MinosError> {
+    match reason.unwrap_or("daemon_restart") {
+        "user_interrupt" => Ok(ProtoPauseReason::UserInterrupt),
+        "codex_crashed" => Ok(ProtoPauseReason::CodexCrashed),
+        "daemon_restart" => Ok(ProtoPauseReason::DaemonRestart),
+        "instance_reaped" => Ok(ProtoPauseReason::InstanceReaped),
+        other => Err(MinosError::CodexProtocolError {
+            method: "local_store.pause_reason".into(),
+            message: format!("unknown persisted pause reason: {other}"),
+        }),
+    }
+}
+
+fn parse_pause_reason_runtime(
+    reason: Option<&str>,
+) -> Result<minos_agent_runtime::PauseReason, MinosError> {
+    match reason.unwrap_or("daemon_restart") {
+        "user_interrupt" => Ok(minos_agent_runtime::PauseReason::UserInterrupt),
+        "codex_crashed" => Ok(minos_agent_runtime::PauseReason::CodexCrashed),
+        "daemon_restart" => Ok(minos_agent_runtime::PauseReason::DaemonRestart),
+        "instance_reaped" => Ok(minos_agent_runtime::PauseReason::InstanceReaped),
+        other => Err(MinosError::CodexProtocolError {
+            method: "local_store.pause_reason".into(),
+            message: format!("unknown persisted pause reason: {other}"),
+        }),
+    }
+}
+
+fn parse_close_reason(reason: Option<&str>) -> Result<ProtoCloseReason, MinosError> {
+    match reason.unwrap_or("user_close") {
+        "user_close" => Ok(ProtoCloseReason::UserClose),
+        "terminal_error" => Ok(ProtoCloseReason::TerminalError),
+        other => Err(MinosError::CodexProtocolError {
+            method: "local_store.close_reason".into(),
+            message: format!("unknown persisted close reason: {other}"),
+        }),
+    }
+}
+
+fn parse_close_reason_runtime(
+    reason: Option<&str>,
+) -> Result<minos_agent_runtime::CloseReason, MinosError> {
+    match reason.unwrap_or("user_close") {
+        "user_close" => Ok(minos_agent_runtime::CloseReason::UserClose),
+        "terminal_error" => Ok(minos_agent_runtime::CloseReason::TerminalError),
+        other => Err(MinosError::CodexProtocolError {
+            method: "local_store.close_reason".into(),
+            message: format!("unknown persisted close reason: {other}"),
+        }),
     }
 }
 
@@ -407,6 +688,13 @@ fn map_anyhow(e: anyhow::Error) -> MinosError {
     }
 }
 
+fn map_store_error(operation: &str, e: anyhow::Error) -> MinosError {
+    MinosError::StoreIo {
+        path: "local_store".into(),
+        message: format!("{operation}: {e}"),
+    }
+}
+
 fn current_unix_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -429,6 +717,273 @@ fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState 
         RtState::Closed { reason } => ProtoThreadState::Closed {
             reason: close_to_proto(reason),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestGlue {
+        _tmp: tempfile::TempDir,
+        glue: AgentGlue,
+    }
+
+    async fn test_glue() -> TestGlue {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("daemon.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let (out_tx, _out_rx) = mpsc::channel(8);
+        TestGlue {
+            glue: AgentGlue::new(
+                tmp.path().join("workspaces"),
+                Arc::new(std::collections::HashMap::new()),
+                store,
+                out_tx,
+            ),
+            _tmp: tmp,
+        }
+    }
+
+    async fn seed_thread(
+        glue: &AgentGlue,
+        thread_id: &str,
+        agent: &str,
+        started_at: i64,
+        last_activity_at: i64,
+    ) {
+        glue.store.upsert_workspace("/w", started_at).await.unwrap();
+        sqlx::query(
+            "INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+             VALUES (?, '/w', ?, 'idle', 3, ?, ?)",
+        )
+        .bind(thread_id)
+        .bind(agent)
+        .bind(started_at)
+        .bind(last_activity_at)
+        .execute(glue.store.pool())
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_threads_reads_persisted_rows_and_filters_agent() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-a", "codex", 10, 20).await;
+        seed_thread(&test.glue, "thr-b", "claude", 30, 40).await;
+
+        let response = test
+            .glue
+            .list_threads(ListThreadsParams {
+                limit: 50,
+                before_ts_ms: None,
+                agent: Some(minos_domain::AgentName::Claude),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.threads.len(), 1);
+        assert_eq!(response.threads[0].thread_id, "thr-b");
+        assert_eq!(response.threads[0].agent, minos_domain::AgentName::Claude);
+        assert_eq!(response.threads[0].message_count, 3);
+        assert_eq!(response.threads[0].first_ts_ms, 30);
+        assert_eq!(response.threads[0].last_ts_ms, 40);
+    }
+
+    #[tokio::test]
+    async fn get_thread_uses_persisted_suspended_state() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-s", "codex", 10, 20).await;
+        sqlx::query(
+            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart' WHERE thread_id = 'thr-s'",
+        )
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+
+        let response = test
+            .glue
+            .get_thread(GetThreadParams {
+                thread_id: "thr-s".into(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.thread.thread_id, "thr-s");
+        assert_eq!(
+            response.state,
+            ProtoThreadState::Suspended {
+                reason: ProtoPauseReason::DaemonRestart,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn get_thread_maps_closed_reason_from_store() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-c", "codex", 10, 20).await;
+        test.glue
+            .store
+            .close_thread_row("thr-c", "user_close", 55)
+            .await
+            .unwrap();
+
+        let response = test
+            .glue
+            .get_thread(GetThreadParams {
+                thread_id: "thr-c".into(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.thread.ended_at_ms, Some(55));
+        assert_eq!(
+            response.thread.end_reason,
+            Some(ThreadEndReason::UserStopped)
+        );
+        assert_eq!(
+            response.state,
+            ProtoThreadState::Closed {
+                reason: ProtoCloseReason::UserClose,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_thread_registers_persisted_thread_and_returns_workspace() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-r", "codex", 10, 20).await;
+        sqlx::query(
+            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', codex_session_id = 'thr-r' WHERE thread_id = 'thr-r'",
+        )
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+
+        let response = test.glue.resume_thread("thr-r").await.unwrap();
+        assert_eq!(response.session_id, "thr-r");
+        assert_eq!(response.cwd, "/w");
+        assert!(test.glue.manager.has_thread("thr-r").await);
+    }
+
+    #[tokio::test]
+    async fn read_thread_history_translates_local_events() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-h", "codex", 10, 20).await;
+        let payloads = [
+            serde_json::json!({
+                "method":"item/started",
+                "params":{
+                    "threadId":"thr-h",
+                    "item":{
+                        "type":"userMessage",
+                        "id":"u1",
+                        "content":[{"type":"text","text":"hello"}]
+                    }
+                }
+            }),
+            serde_json::json!({
+                "method":"item/started",
+                "params":{
+                    "threadId":"thr-h",
+                    "item":{"type":"agentMessage","id":"a1","text":""}
+                }
+            }),
+            serde_json::json!({
+                "method":"item/agentMessage/delta",
+                "params":{"threadId":"thr-h","itemId":"a1","delta":"world"}
+            }),
+            serde_json::json!({
+                "method":"turn/completed",
+                "params":{"threadId":"thr-h","finishedAtMs":30}
+            }),
+        ];
+        for (idx, payload) in payloads.into_iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
+            )
+            .bind("thr-h")
+            .bind((idx + 1) as i64)
+            .bind(serde_json::to_vec(&payload).unwrap())
+            .bind((idx + 1) as i64)
+            .execute(test.glue.store.pool())
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE threads SET last_seq = 4 WHERE thread_id = 'thr-h'")
+            .execute(test.glue.store.pool())
+            .await
+            .unwrap();
+
+        let history = test.glue.read_thread_history("thr-h").await.unwrap();
+        assert!(history.ui_events.iter().any(|event| matches!(
+            event,
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "u1" && text == "hello"
+        )));
+        assert!(history.ui_events.iter().any(|event| matches!(
+            event,
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "a1" && text == "world"
+        )));
+    }
+
+    #[tokio::test]
+    async fn hydrate_codex_translator_restores_open_message_state() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-open", "codex", 10, 20).await;
+        let payloads = [
+            serde_json::json!({
+                "method":"item/started",
+                "params":{
+                    "threadId":"thr-open",
+                    "item":{"type":"agentMessage","id":"a1","text":""}
+                }
+            }),
+            serde_json::json!({
+                "method":"item/agentMessage/delta",
+                "params":{"threadId":"thr-open","itemId":"a1","delta":"hello "}
+            }),
+        ];
+        for (idx, payload) in payloads.into_iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
+            )
+            .bind("thr-open")
+            .bind((idx + 1) as i64)
+            .bind(serde_json::to_vec(&payload).unwrap())
+            .bind((idx + 1) as i64)
+            .execute(test.glue.store.pool())
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE threads SET last_seq = 2 WHERE thread_id = 'thr-open'")
+            .execute(test.glue.store.pool())
+            .await
+            .unwrap();
+
+        let mut translator = test
+            .glue
+            .hydrate_codex_translator("thr-open")
+            .await
+            .unwrap();
+        let continued = translate_codex(
+            &mut translator,
+            &serde_json::json!({
+                "method":"item/agentMessage/delta",
+                "params":{"threadId":"thr-open","itemId":"a1","delta":"world"}
+            }),
+        )
+        .unwrap();
+
+        assert!(continued.iter().any(|event| matches!(
+            event,
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "a1" && text == "world"
+        )));
     }
 }
 

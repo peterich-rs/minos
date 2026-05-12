@@ -15,6 +15,7 @@ import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/auth_state.dart';
+import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/presentation/pages/agent_start_page.dart';
 import 'package:minos/presentation/pages/agents_hub_page.dart';
@@ -316,7 +317,9 @@ class _SocialConversationsPane extends ConsumerWidget {
                   return ThreadListTile.social(
                     title: conversation.title,
                     preview: preview,
-                    timestampMs: conversation.lastMessageAtMs,
+                    timestampMs: platformInt64ToInt(
+                      conversation.lastMessageAtMs,
+                    ),
                     avatarLabel: conversation.kind == ConversationKind.group
                         ? 'G'
                         : _avatarInitial(conversation.counterpart?.displayName),

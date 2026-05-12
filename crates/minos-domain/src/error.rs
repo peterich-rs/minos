@@ -38,7 +38,6 @@ pub enum ErrorKind {
     EnvelopeVersionUnsupported,
     PeerOffline,
     BackendInternal,
-    CfAuthFailed,
     CodexSpawnFailed,
     CodexConnectFailed,
     CodexProtocolError,
@@ -46,7 +45,6 @@ pub enum ErrorKind {
     AgentNotRunning,
     AgentNotSupported,
     AgentSessionIdMismatch,
-    CfAccessMisconfigured,
     IngestSeqConflict,
     ThreadNotFound,
     TranslationNotImplemented,
@@ -84,12 +82,8 @@ impl ErrorKind {
             (Self::BindFailed, Lang::En) => {
                 "Cannot bind backend listen address; check MINOS_BACKEND_LISTEN"
             }
-            (Self::ConnectFailed, Lang::Zh) => {
-                "无法连接后端服务；请检查网络与 Cloudflare Access 令牌"
-            }
-            (Self::ConnectFailed, Lang::En) => {
-                "Cannot reach backend; check network and Cloudflare Access token"
-            }
+            (Self::ConnectFailed, Lang::Zh) => "无法连接后端服务；请检查网络或服务地址",
+            (Self::ConnectFailed, Lang::En) => "Cannot reach backend; check network or server URL",
             (Self::Disconnected, Lang::Zh) => "连接已断开，正在重试",
             (Self::Disconnected, Lang::En) => "Disconnected; reconnecting",
             (Self::PairingTokenInvalid, Lang::Zh) => "二维码已过期，请重新扫描",
@@ -126,10 +120,6 @@ impl ErrorKind {
             (Self::PeerOffline, Lang::En) => "Paired device offline; please check status",
             (Self::BackendInternal, Lang::Zh) => "后端服务异常，请稍后重试",
             (Self::BackendInternal, Lang::En) => "Backend service error; please retry later",
-            (Self::CfAuthFailed, Lang::Zh) => "Cloudflare Access 认证失败，请检查 Service Token",
-            (Self::CfAuthFailed, Lang::En) => {
-                "Cloudflare Access authentication failed; please check the Service Token"
-            }
             (Self::CodexSpawnFailed, Lang::Zh) => "无法启动 Codex CLI；请确认已安装 `codex`",
             (Self::CodexSpawnFailed, Lang::En) => "Failed to launch codex CLI; is codex installed?",
             (Self::CodexConnectFailed, Lang::Zh) => "无法连接 Codex 服务",
@@ -145,10 +135,6 @@ impl ErrorKind {
             (Self::AgentSessionIdMismatch, Lang::Zh) => "会话已失效，请重新启动",
             (Self::AgentSessionIdMismatch, Lang::En) => {
                 "Session is no longer active; please restart"
-            }
-            (Self::CfAccessMisconfigured, Lang::Zh) => "Cloudflare Access 凭据未正确配置",
-            (Self::CfAccessMisconfigured, Lang::En) => {
-                "Cloudflare Access credentials are misconfigured"
             }
             (Self::IngestSeqConflict, Lang::Zh) => "事件序号冲突",
             (Self::IngestSeqConflict, Lang::En) => "Event sequence conflict",
@@ -247,9 +233,6 @@ pub enum MinosError {
     #[error("backend internal error: {message}")]
     BackendInternal { message: String },
 
-    #[error("cloudflare access authentication failed: {message}")]
-    CfAuthFailed { message: String },
-
     // ── agent runtime layer (spec §5.3) ──
     #[error("failed to spawn codex: {message}")]
     CodexSpawnFailed { message: String },
@@ -272,10 +255,7 @@ pub enum MinosError {
     #[error("session id does not match the active session")]
     AgentSessionIdMismatch,
 
-    // ── backend ingest / translation / cf-access (spec §7.4 additions) ──
-    #[error("cf access misconfigured: {reason}")]
-    CfAccessMisconfigured { reason: String },
-
+    // ── backend ingest / translation (spec §7.4 additions) ──
     #[error("ingest seq conflict for thread {thread_id}: seq {seq} already present")]
     IngestSeqConflict { thread_id: String, seq: u64 },
 
@@ -347,7 +327,6 @@ impl MinosError {
             Self::EnvelopeVersionUnsupported { .. } => ErrorKind::EnvelopeVersionUnsupported,
             Self::PeerOffline { .. } => ErrorKind::PeerOffline,
             Self::BackendInternal { .. } => ErrorKind::BackendInternal,
-            Self::CfAuthFailed { .. } => ErrorKind::CfAuthFailed,
             Self::CodexSpawnFailed { .. } => ErrorKind::CodexSpawnFailed,
             Self::CodexConnectFailed { .. } => ErrorKind::CodexConnectFailed,
             Self::CodexProtocolError { .. } => ErrorKind::CodexProtocolError,
@@ -355,7 +334,6 @@ impl MinosError {
             Self::AgentNotRunning => ErrorKind::AgentNotRunning,
             Self::AgentNotSupported { .. } => ErrorKind::AgentNotSupported,
             Self::AgentSessionIdMismatch => ErrorKind::AgentSessionIdMismatch,
-            Self::CfAccessMisconfigured { .. } => ErrorKind::CfAccessMisconfigured,
             Self::IngestSeqConflict { .. } => ErrorKind::IngestSeqConflict,
             Self::ThreadNotFound { .. } => ErrorKind::ThreadNotFound,
             Self::TranslationNotImplemented { .. } => ErrorKind::TranslationNotImplemented,
@@ -509,12 +487,6 @@ mod tests {
                 ErrorKind::BackendInternal,
             ),
             (
-                MinosError::CfAuthFailed {
-                    message: String::new(),
-                },
-                ErrorKind::CfAuthFailed,
-            ),
-            (
                 MinosError::CodexSpawnFailed {
                     message: String::new(),
                 },
@@ -548,12 +520,6 @@ mod tests {
             (
                 MinosError::AgentSessionIdMismatch,
                 ErrorKind::AgentSessionIdMismatch,
-            ),
-            (
-                MinosError::CfAccessMisconfigured {
-                    reason: String::new(),
-                },
-                ErrorKind::CfAccessMisconfigured,
             ),
             (
                 MinosError::IngestSeqConflict {
@@ -617,7 +583,7 @@ mod tests {
         ];
         assert_eq!(
             cases.len(),
-            40,
+            38,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -644,7 +610,6 @@ mod tests {
         ErrorKind::EnvelopeVersionUnsupported,
         ErrorKind::PeerOffline,
         ErrorKind::BackendInternal,
-        ErrorKind::CfAuthFailed,
         ErrorKind::CodexSpawnFailed,
         ErrorKind::CodexConnectFailed,
         ErrorKind::CodexProtocolError,
@@ -652,7 +617,6 @@ mod tests {
         ErrorKind::AgentNotRunning,
         ErrorKind::AgentNotSupported,
         ErrorKind::AgentSessionIdMismatch,
-        ErrorKind::CfAccessMisconfigured,
         ErrorKind::IngestSeqConflict,
         ErrorKind::ThreadNotFound,
         ErrorKind::TranslationNotImplemented,
@@ -674,7 +638,7 @@ mod tests {
     fn every_error_kind_has_user_message_in_both_langs() {
         assert_eq!(
             ALL_KINDS.len(),
-            40,
+            38,
             "add a kind when you add an ErrorKind variant"
         );
         for k in ALL_KINDS {
@@ -707,7 +671,6 @@ mod tests {
     #[test]
     fn every_new_kind_has_messages_in_both_langs() {
         for kind in [
-            ErrorKind::CfAccessMisconfigured,
             ErrorKind::IngestSeqConflict,
             ErrorKind::ThreadNotFound,
             ErrorKind::TranslationNotImplemented,
@@ -746,32 +709,6 @@ mod tests {
     }
 
     #[test]
-    fn cf_access_misconfigured_display_contains_reason() {
-        let e = MinosError::CfAccessMisconfigured {
-            reason: "missing CF_ACCESS_CLIENT_ID".into(),
-        };
-        assert!(format!("{e}").contains("missing CF_ACCESS_CLIENT_ID"));
-    }
-
-    #[test]
-    fn cf_auth_failed_display_and_kind() {
-        let err = MinosError::CfAuthFailed {
-            message: "Cloudflare denied".into(),
-        };
-        assert_eq!(err.kind(), ErrorKind::CfAuthFailed);
-        let s = err.to_string();
-        assert!(s.contains("cloudflare"));
-        assert!(s.contains("Cloudflare denied"));
-    }
-
-    #[test]
-    fn cf_auth_failed_user_message_zh_no_tailscale_wording() {
-        let m = ErrorKind::CfAuthFailed.user_message(Lang::Zh);
-        assert!(m.contains("Cloudflare"));
-        assert!(!m.to_lowercase().contains("tailscale"));
-    }
-
-    #[test]
     fn backend_error_variants_user_messages_match_spec() {
         // Spot-check the backend-facing copy so edits to the translation table
         // show up as failing asserts rather than silent drift.
@@ -781,7 +718,7 @@ mod tests {
         );
         assert_eq!(
             ErrorKind::ConnectFailed.user_message(Lang::En),
-            "Cannot reach backend; check network and Cloudflare Access token"
+            "Cannot reach backend; check network or server URL"
         );
         assert_eq!(
             ErrorKind::Unauthorized.user_message(Lang::En),

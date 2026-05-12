@@ -4,6 +4,14 @@ import 'dart:io';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/infrastructure/app_paths.dart';
 
+/// __SAFETY_ASSERT__: Agent profiles are strictly CLIENT-LOCAL.
+/// They are never synced to or stored on the backend.
+/// If you find yourself writing code that POSTs profile data to any backend
+/// endpoint, you are violating the architecture contract (spec §5.5).
+///
+/// Profiles exist only in the local JSON file on the device.
+/// The backend has no knowledge of profiles and must never receive them.
+
 abstract class AgentProfileStore {
   Future<AgentWorkspaceState> load();
 

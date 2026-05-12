@@ -1,0 +1,352 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
+
+import 'package:minos/application/agent_profiles_provider.dart';
+import 'package:minos/application/group_agent_provider.dart';
+import 'package:minos/application/social_providers.dart';
+import 'package:minos/domain/agent_profile.dart';
+import 'package:minos/presentation/error_feedback.dart';
+import 'package:minos/src/rust/api/minos.dart';
+
+/// Page for viewing and managing group conversation members.
+/// Supports viewing existing members (users), adding new user members,
+/// and adding/removing agents.
+class GroupMembersPage extends ConsumerWidget {
+  const GroupMembersPage({
+    super.key,
+    required this.conversationId,
+    required this.title,
+  });
+
+  final String conversationId;
+  final String title;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final shadTheme = ShadTheme.of(context);
+    final membersAsync = ref.watch(conversationMembersProvider(conversationId));
+    final groupAgents = ref.watch(groupAgentsProvider(conversationId));
+
+    return Scaffold(
+      backgroundColor: shadTheme.colorScheme.background,
+      appBar: AppBar(
+        title: Text('$title · 成员'),
+        surfaceTintColor: Colors.transparent,
+        actions: <Widget>[
+          IconButton(
+            icon: const Icon(LucideIcons.userPlus),
+            tooltip: '添加成员',
+            onPressed: () => _showAddMemberSheet(context, ref),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+        children: <Widget>[
+          // --- User members section ---
+          _SectionHeader(title: '成员'),
+          membersAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: ShadProgress()),
+            ),
+            error: (error, _) => Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('加载失败: $error'),
+            ),
+            data: (members) => _UserMembersList(members: members),
+          ),
+          const SizedBox(height: 24),
+          // --- Agent members section ---
+          _SectionHeader(
+            title: 'Agents',
+            trailing: ShadButton.ghost(
+              onPressed: () => _showAddAgentSheet(context, ref),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(LucideIcons.bot, size: 16),
+                  SizedBox(width: 4),
+                  Text('添加 Agent'),
+                ],
+              ),
+            ),
+          ),
+          if (groupAgents.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('暂无 Agent 成员，点击上方按钮添加'),
+            )
+          else
+            _AgentMembersList(
+              conversationId: conversationId,
+              agents: groupAgents,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showAddMemberSheet(BuildContext context, WidgetRef ref) async {
+    final friendsAsync = await ref.read(friendsProvider.future);
+    final existingMembers =
+        ref.read(conversationMembersProvider(conversationId)).asData?.value ??
+        const <UserSummary>[];
+    final existingIds = existingMembers
+        .map((member) => member.accountId)
+        .toSet();
+    final available = friendsAsync.friends
+        .where((friend) => !existingIds.contains(friend.accountId))
+        .toList();
+
+    if (!context.mounted) return;
+
+    if (available.isEmpty) {
+      ShadToaster.maybeOf(
+        context,
+      )?.show(const ShadToast(title: Text('所有好友都已在群中')));
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                '添加成员到群聊',
+                style: ShadTheme.of(sheetContext).textTheme.h4,
+              ),
+            ),
+            for (final friend in available)
+              ListTile(
+                leading: const Icon(LucideIcons.user),
+                title: Text(friend.displayName),
+                subtitle: Text('@${friend.minosId}'),
+                onTap: () async {
+                  Navigator.of(sheetContext).pop();
+                  try {
+                    // TODO: Call backend API to add member to group
+                    // await ref.read(minosCoreProvider).addGroupMember(
+                    //   conversationId: conversationId,
+                    //   memberAccountId: friend.accountId,
+                    // );
+                    ref.invalidate(conversationMembersProvider(conversationId));
+                    if (context.mounted) {
+                      ShadToaster.maybeOf(context)?.show(
+                        ShadToast(title: Text('已添加 ${friend.displayName}')),
+                      );
+                    }
+                  } catch (error) {
+                    if (context.mounted) {
+                      showLoggedErrorToast(
+                        context,
+                        target: 'group_members',
+                        title: '添加成员失败',
+                        error: error,
+                      );
+                    }
+                  }
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAddAgentSheet(BuildContext context, WidgetRef ref) async {
+    final workspaceState = ref
+        .read(agentProfilesControllerProvider)
+        .asData
+        ?.value;
+    if (workspaceState == null || workspaceState.profiles.isEmpty) {
+      if (context.mounted) {
+        ShadToaster.maybeOf(
+          context,
+        )?.show(const ShadToast(title: Text('请先创建一个 Agent')));
+      }
+      return;
+    }
+
+    final existingAgents = ref.read(groupAgentsProvider(conversationId));
+    final existingAgentIds = existingAgents
+        .map((agent) => agent.agentId)
+        .toSet();
+    final available = workspaceState.profiles
+        .where((profile) => !existingAgentIds.contains(profile.agentId))
+        .toList();
+
+    if (available.isEmpty) {
+      if (context.mounted) {
+        ShadToaster.maybeOf(
+          context,
+        )?.show(const ShadToast(title: Text('所有 Agent 都已在群中')));
+      }
+      return;
+    }
+
+    if (!context.mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                '添加 Agent 到群聊',
+                style: ShadTheme.of(sheetContext).textTheme.h4,
+              ),
+            ),
+            for (final profile in available)
+              ListTile(
+                leading: const Icon(LucideIcons.bot),
+                title: Text(profile.name),
+                subtitle: Text(
+                  '${profile.runtimeAgent.name} · ${profile.model}',
+                ),
+                onTap: () async {
+                  Navigator.of(sheetContext).pop();
+                  await ref
+                      .read(groupAgentBindingsProvider.notifier)
+                      .addAgentToGroup(
+                        conversationId: conversationId,
+                        agentId: profile.agentId,
+                      );
+                  if (context.mounted) {
+                    ShadToaster.maybeOf(context)?.show(
+                      ShadToast(title: Text('已添加 Agent: ${profile.name}')),
+                    );
+                  }
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.title, this.trailing});
+
+  final String title;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              title,
+              style: shadTheme.textTheme.small.copyWith(
+                color: shadTheme.colorScheme.mutedForeground,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          if (trailing != null) trailing!,
+        ],
+      ),
+    );
+  }
+}
+
+class _UserMembersList extends StatelessWidget {
+  const _UserMembersList({required this.members});
+
+  final List<UserSummary> members;
+
+  @override
+  Widget build(BuildContext context) {
+    if (members.isEmpty) {
+      return const Padding(padding: EdgeInsets.all(16), child: Text('暂无成员'));
+    }
+    return Column(
+      children: <Widget>[
+        for (final member in members)
+          ListTile(
+            leading: CircleAvatar(
+              radius: 18,
+              child: Text(
+                member.displayName.isNotEmpty
+                    ? member.displayName[0].toUpperCase()
+                    : '?',
+              ),
+            ),
+            title: Text(member.displayName),
+            subtitle: Text('@${member.minosId}'),
+          ),
+      ],
+    );
+  }
+}
+
+class _AgentMembersList extends ConsumerWidget {
+  const _AgentMembersList({required this.conversationId, required this.agents});
+
+  final String conversationId;
+  final List<AgentProfile> agents;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Column(
+      children: <Widget>[
+        for (final agent in agents)
+          ListTile(
+            leading: const CircleAvatar(
+              radius: 18,
+              backgroundColor: Color(0xFF7C3AED),
+              child: Icon(LucideIcons.bot, size: 18, color: Colors.white),
+            ),
+            title: Text(agent.name),
+            subtitle: Text('${agent.runtimeAgent.name} · @${agent.agentId}'),
+            trailing: IconButton(
+              icon: const Icon(LucideIcons.userMinus, size: 18),
+              tooltip: '移除 Agent',
+              onPressed: () async {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (dialogContext) => AlertDialog(
+                    title: const Text('移除 Agent？'),
+                    content: Text('确定要将 ${agent.name} 从群聊中移除吗？'),
+                    actions: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(false),
+                        child: const Text('取消'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(true),
+                        child: const Text('移除'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed == true) {
+                  await ref
+                      .read(groupAgentBindingsProvider.notifier)
+                      .removeAgentFromGroup(
+                        conversationId: conversationId,
+                        agentId: agent.agentId,
+                      );
+                }
+              },
+            ),
+          ),
+      ],
+    );
+  }
+}

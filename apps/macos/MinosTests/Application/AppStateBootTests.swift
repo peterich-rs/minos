@@ -116,7 +116,7 @@ final class AppStateBootTests: XCTestCase {
         appState.peer = .pairing
         appState.isShowingQr = true
 
-        let error = MinosError.CfAuthFailed(message: "Cloudflare denied")
+        let error = MinosError.Unauthorized(reason: "backend rejected bootstrap")
         appState.failBoot(with: error)
 
         XCTAssertEqual(relayLinkSub.cancelCallCount, 1)
@@ -129,63 +129,29 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertFalse(appState.isShowingQr)
     }
 
-    func testDaemonBootstrapEnvCredsAcceptsCompletePair() throws {
-        let creds = try XCTUnwrap(DaemonBootstrap.envCreds(from: [
-            "CF_ACCESS_CLIENT_ID": " client-id ",
-            "CF_ACCESS_CLIENT_SECRET": " client-secret "
-        ]))
-
-        XCTAssertEqual(creds.clientId, "client-id")
-        XCTAssertEqual(creds.clientSecret, "client-secret")
-    }
-
-    func testDaemonBootstrapEnvCredsRejectsPartialPair() {
-        XCTAssertThrowsError(try DaemonBootstrap.envCreds(from: [
-            "CF_ACCESS_CLIENT_ID": "client-id"
-        ])) { error in
-            guard case let .some(.CfAccessMisconfigured(reason)) = error as? MinosError else {
-                XCTFail("expected CfAccessMisconfigured, got \(error)")
-                return
-            }
-            XCTAssertTrue(reason.contains("CF_ACCESS_CLIENT_SECRET"))
-        }
-    }
-
     func testDaemonBootstrapRelayConfigReadsFromInfoPlist() throws {
         let config = try DaemonBootstrap.relayConfig(
             infoDictionary: [
-                "MINOS_BACKEND_URL": " wss://relay.example/devices ",
-                "CF_ACCESS_CLIENT_ID": " info-id ",
-                "CF_ACCESS_CLIENT_SECRET": " info-secret "
+                "MINOS_BACKEND_URL": " wss://relay.example/devices "
             ]
         )
 
         XCTAssertEqual(config.backendUrl, "wss://relay.example/devices")
-        XCTAssertEqual(config.cfClientId, "info-id")
-        XCTAssertEqual(config.cfClientSecret, "info-secret")
     }
 
     func testDaemonBootstrapRelayConfigFallsBackToEnvironment() throws {
         let config = try DaemonBootstrap.relayConfig(
             infoDictionary: [:],
-            env: [
-                "MINOS_BACKEND_URL": " wss://env.example/devices ",
-                "CF_ACCESS_CLIENT_ID": " env-id ",
-                "CF_ACCESS_CLIENT_SECRET": " env-secret "
-            ]
+            env: ["MINOS_BACKEND_URL": " wss://env.example/devices "]
         )
 
         XCTAssertEqual(config.backendUrl, "wss://env.example/devices")
-        XCTAssertEqual(config.cfClientId, "env-id")
-        XCTAssertEqual(config.cfClientSecret, "env-secret")
     }
 
     func testDaemonBootstrapRelayConfigDefaultsBlankWhenInfoPlistEmpty() throws {
         let config = try DaemonBootstrap.relayConfig(infoDictionary: [:], env: [:])
 
         XCTAssertEqual(config.backendUrl, "")
-        XCTAssertEqual(config.cfClientId, "")
-        XCTAssertEqual(config.cfClientSecret, "")
     }
 
     @MainActor

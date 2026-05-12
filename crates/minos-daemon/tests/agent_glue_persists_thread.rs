@@ -57,7 +57,7 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
         .expect("start_agent should succeed against the fake codex");
 
     // (a) parent rows now exist.
-    let threads = store.list_threads(None, None).await.unwrap();
+    let threads = store.list_threads(None, None, None).await.unwrap();
     assert_eq!(
         threads.len(),
         1,

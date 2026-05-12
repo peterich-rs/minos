@@ -6,8 +6,9 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use minos_backend::auth::jwt;
 use minos_backend::http;
-use minos_backend::http::test_support::backend_state;
+use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
 use serde_json::json;
 
 mod common;
@@ -40,6 +41,13 @@ fn ios_headers(device_id: &str) -> Vec<(&str, &str)> {
     ]
 }
 
+fn browser_headers(device_id: &str) -> Vec<(&str, &str)> {
+    vec![
+        ("x-device-id", device_id),
+        ("x-device-role", "browser-admin"),
+    ]
+}
+
 #[tokio::test]
 async fn auth_register_returns_access_and_refresh_tokens() {
     let state = backend_state().await;
@@ -57,6 +65,46 @@ async fn auth_register_returns_access_and_refresh_tokens() {
     assert!(!body["refresh_token"].as_str().unwrap().is_empty());
     assert_eq!(body["account"]["email"], "alice@example.com");
     assert!(body["expires_in"].as_i64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn auth_ws_ticket_returns_short_lived_browser_upgrade_token() {
+    let state = backend_state().await;
+    let mut app = http::router(state);
+    let device_id = uuid::Uuid::new_v4().to_string();
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/register",
+        &browser_headers(&device_id),
+        json!({"email": "browser@example.com", "password": "testpass1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let access = body["access_token"].as_str().unwrap().to_string();
+    let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
+
+    let auth_hdr = format!("Bearer {access}");
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/ws-ticket",
+        &[
+            ("x-device-id", &device_id),
+            ("x-device-role", "browser-admin"),
+            ("authorization", &auth_hdr),
+        ],
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(body["device_id"], device_id);
+    assert_eq!(body["device_role"], "browser-admin");
+    assert_eq!(body["expires_in"], jwt::WS_TICKET_TTL_SECS);
+    let ticket = body["ticket"].as_str().unwrap();
+    let claims = jwt::verify_ws_ticket(TEST_JWT_SECRET.as_bytes(), ticket).unwrap();
+    assert_eq!(claims.sub, account_id);
+    assert_eq!(claims.did, device_id);
+    assert_eq!(claims.role.to_string(), "browser-admin");
 }
 
 #[tokio::test]

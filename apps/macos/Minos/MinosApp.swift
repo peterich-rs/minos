@@ -48,8 +48,10 @@ final class AppTerminationController {
         reply: @escaping @MainActor (Bool) -> Void
     ) async {
         await appState.shutdownForTermination()
-        reply(true)
-        shutdownTask = nil
+        await MainActor.run {
+            reply(true)
+            shutdownTask = nil
+        }
     }
 }
 

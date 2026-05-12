@@ -272,6 +272,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn spawn_ok_for_echo() {
         // `echo` exits immediately; we just verify spawn doesn't error and
@@ -305,6 +306,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn kill_on_drop_terminates_long_running_sleep() {
         // `sleep 60` will outlive the process struct — verify drop SIGKILLs it.
@@ -327,6 +329,7 @@ mod tests {
         assert!(!alive, "child should have been killed on drop");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stop_graceful_exits_cleanly_for_sigterm_respecting_process() {
         // `sleep 30` exits on SIGTERM without needing escalation.
@@ -342,6 +345,7 @@ mod tests {
         assert!(!status.success(), "expected non-zero exit, got {status:?}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stop_graceful_escalates_for_sigterm_trapping_process() {
         // `bash -c 'trap "" TERM; sleep 30'` ignores SIGTERM; stop_graceful
@@ -364,6 +368,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stderr_drain_consumes_output() {
         // `bash -c 'for i in 1 2 3; do echo line$i 1>&2; done; sleep 1'`
@@ -384,18 +389,25 @@ mod tests {
 
     #[test]
     fn reason_from_exit_codes() {
-        // Construct synthetic ExitStatus values via a portable command. `bash`
-        // is available on both Linux and macOS; `exit N` pins the exit code
-        // deterministically without relying on `/bin/true` / `/bin/false`
-        // (which don't exist on every host — macOS omits `/bin/true` on some
-        // builds).
-        let status = std::process::Command::new("bash")
+        #[cfg(unix)]
+        let status = std::process::Command::new("sh")
             .args(["-c", "exit 0"])
             .status()
             .unwrap();
+        #[cfg(windows)]
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "exit 0"])
+            .status()
+            .unwrap();
         assert_eq!(reason_from_exit(status), "exit code 0");
-        let status = std::process::Command::new("bash")
+        #[cfg(unix)]
+        let status = std::process::Command::new("sh")
             .args(["-c", "exit 1"])
+            .status()
+            .unwrap();
+        #[cfg(windows)]
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "exit 1"])
             .status()
             .unwrap();
         assert_eq!(reason_from_exit(status), "exit code 1");

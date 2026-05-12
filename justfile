@@ -21,7 +21,7 @@ default:
 # Prints a summary; doesn't print secret values.
 check-env:
     @if [ ! -f .env.local ]; then \
-        if [ -z "${MINOS_BACKEND_URL:-}" ] && [ -z "${MINOS_JWT_SECRET:-}" ] && [ -z "${CF_ACCESS_CLIENT_ID:-}" ] && [ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]; then \
+        if [ -z "${MINOS_BACKEND_URL:-}" ] && [ -z "${MINOS_JWT_SECRET:-}" ]; then \
             echo "error: .env.local not found and no Minos env vars are set in the parent process."; \
             echo "error: run: cp .env.example .env.local"; \
             exit 1; \
@@ -32,8 +32,6 @@ check-env:
     fi
     @echo "MINOS_BACKEND_URL = ${MINOS_BACKEND_URL:-<unset>}"
     @echo "MINOS_JWT_SECRET  = ${MINOS_JWT_SECRET:+<set, ${#MINOS_JWT_SECRET} chars>}"
-    @echo "CF_ACCESS_CLIENT_ID     = ${CF_ACCESS_CLIENT_ID:-<unset>}"
-    @echo "CF_ACCESS_CLIENT_SECRET = ${CF_ACCESS_CLIENT_SECRET:+<set>}"
 
 # Internal: patch the built macOS app Info.plist with config loaded by just.
 # Xcode calls this after ProcessInfoPlistFile so Finder/Xcode launches get the
@@ -45,11 +43,6 @@ _patch-macos-info-plist plist_path:
         echo "error: Info.plist not found at {{ plist_path }}"; \
         exit 1; \
     fi
-    @if { [ -n "${CF_ACCESS_CLIENT_ID:-}" ] && [ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]; } || \
-        { [ -z "${CF_ACCESS_CLIENT_ID:-}" ] && [ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]; }; then \
-        echo "error: CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must be set together"; \
-        exit 1; \
-    fi
     @plist="{{ plist_path }}"; \
     set_string() { \
         key="$1"; value="$2"; \
@@ -59,8 +52,6 @@ _patch-macos-info-plist plist_path:
         fi; \
     }; \
     set_string MINOS_BACKEND_URL "${MINOS_BACKEND_URL:-}"; \
-    set_string CF_ACCESS_CLIENT_ID "${CF_ACCESS_CLIENT_ID:-}"; \
-    set_string CF_ACCESS_CLIENT_SECRET "${CF_ACCESS_CLIENT_SECRET:-}"; \
     echo "Patched Minos runtime env into $plist"
 
 # Run minos-backend with .env.local; requires MINOS_JWT_SECRET (32+ bytes).
@@ -77,6 +68,22 @@ backend:
 # Workspace-wide compile + test gate. Wraps cargo xtask check-all.
 check:
     cargo xtask check-all
+
+# Run the standalone web admin client.
+dev-web:
+    cd apps/web && pnpm dev
+
+# Production build for the standalone web admin client.
+build-web:
+    cd apps/web && pnpm build
+
+# Build and serve the production web bundle locally.
+preview-web host='0.0.0.0' port='5173':
+    cd apps/web && pnpm build && pnpm preview --host "{{ host }}" --port "{{ port }}"
+
+# Web-only verification.
+check-web:
+    cd apps/web && pnpm check
 
 # Run the fake-peer smoke binary with a subcommand (default: register).
 
@@ -101,8 +108,6 @@ build-daemon profile='release':
         exit 1; \
     fi
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
     cargo build -p minos-daemon --bin minos-daemon --profile {{ profile }}
 
 # Build the macOS app through Xcode. The generated project also calls back
@@ -131,12 +136,10 @@ build-mobile-rust target='aarch64-apple-ios' profile='release':
         exit 1; \
     fi
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
     cargo build -p minos-ffi-frb --target {{ target }} --profile {{ profile }}
 
-# Build a Release iOS app via xcodebuild. Env vars MINOS_BACKEND_URL /
-# CF_ACCESS_CLIENT_* are exported into the xcodebuild environment; Cargokit
+# Build a Release iOS app via xcodebuild. MINOS_BACKEND_URL is exported
+# into the xcodebuild environment; Cargokit
 # also self-bootstraps through just so direct Xcode/Flutter builds load the
 # same .env.local before cargo evaluates option_env!.
 #
@@ -151,8 +154,6 @@ build-mobile-ios configuration='Release':
     cd apps/mobile && flutter build ios --config-only --release
     cd apps/mobile/ios && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
     xcodebuild \
         -workspace Runner.xcworkspace \
         -scheme Runner \
@@ -161,10 +162,8 @@ build-mobile-ios configuration='Release':
         -destination 'generic/platform=iOS' \
         build
 
-# Hot-reload dev workflow. Runs `flutter run` in debug mode with --dart-define
-# for Cloudflare Access, and exports MINOS_BACKEND_URL into the parent shell.
-
-# Cargokit still self-bootstraps through just before the Rust compile.
+# Hot-reload dev workflow. Cargokit still self-bootstraps through just
+# before the Rust compile.
 dev-mobile-ios:
     @just check-env >/dev/null
     @if [ -z "${MINOS_BACKEND_URL:-}" ]; then \
@@ -173,11 +172,7 @@ dev-mobile-ios:
     fi
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
-    flutter run \
-        --dart-define=CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-        --dart-define=CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
+    flutter run
 
 # Hot-reload Android workflow. Mirrors `dev-mobile-ios` so Android debug runs
 # stay on the same `.env.local` / cargokit path as release builds.
@@ -189,12 +184,7 @@ dev-mobile-android:
     fi
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
-    flutter run \
-        -d android \
-        --dart-define=CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-        --dart-define=CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
+    flutter run -d android
 
 # Build Android APK with just-loaded env passthrough.
 build-mobile-android:
@@ -205,12 +195,4 @@ build-mobile-android:
     fi
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-    CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}" \
-    flutter build apk \
-        --dart-define=CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID:-}" \
-        --dart-define=CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
-
-# Print the CF Access rotation runbook. Pure documentation; no state mutation.
-rotate-cf-access:
-    @cat docs/ops/secrets-rotation.md
+    flutter build apk

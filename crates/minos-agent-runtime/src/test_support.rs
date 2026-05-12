@@ -68,6 +68,8 @@ pub enum Step {
         method: String,
         params: serde_json::Value,
     },
+    /// Keep the WebSocket open for a short interval without sending frames.
+    Sleep { ms: u64 },
     /// Close the WS abruptly without a close frame.
     DieUnexpectedly,
 }
@@ -283,6 +285,9 @@ async fn run_script(
                     tracing::warn!(error = %e, "FakeCodexServer: send server request failed");
                     return;
                 }
+            }
+            Step::Sleep { ms } => {
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
             }
             Step::DieUnexpectedly => {
                 // Drop the sender/receiver without sending a close frame.

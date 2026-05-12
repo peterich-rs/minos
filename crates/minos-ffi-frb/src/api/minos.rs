@@ -45,8 +45,8 @@ pub use minos_protocol::{
     FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary,
     HostSkillsEntry, HostSummary, ListChatMessagesResponse, ListHostSkillsResponse,
     ListThreadsParams, ListThreadsResponse, MyProfileResponse, ReadThreadParams,
-    ReadThreadResponse, SearchUsersResponse, StartAgentResponse, ThreadSummary, UserSummary,
-    WriteHostSkillConfigResponse,
+    ReadThreadResponse, SearchUsersResponse, SenderType, StartAgentResponse, ThreadSummary,
+    UserSummary, WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
@@ -913,7 +913,6 @@ pub enum _ErrorKind {
     EnvelopeVersionUnsupported,
     PeerOffline,
     BackendInternal,
-    CfAuthFailed,
     CodexSpawnFailed,
     CodexConnectFailed,
     CodexProtocolError,
@@ -921,7 +920,6 @@ pub enum _ErrorKind {
     AgentNotRunning,
     AgentNotSupported,
     AgentSessionIdMismatch,
-    CfAccessMisconfigured,
     IngestSeqConflict,
     ThreadNotFound,
     TranslationNotImplemented,
@@ -958,7 +956,6 @@ pub enum _MinosError {
     EnvelopeVersionUnsupported { version: u8 },
     PeerOffline { peer_device_id: String },
     BackendInternal { message: String },
-    CfAuthFailed { message: String },
     CodexSpawnFailed { message: String },
     CodexConnectFailed { url: String, message: String },
     CodexProtocolError { method: String, message: String },
@@ -966,7 +963,6 @@ pub enum _MinosError {
     AgentNotRunning,
     AgentNotSupported { agent: AgentName },
     AgentSessionIdMismatch,
-    CfAccessMisconfigured { reason: String },
     IngestSeqConflict { thread_id: String, seq: u64 },
     ThreadNotFound { thread_id: String },
     TranslationNotImplemented { agent: AgentName },
@@ -1238,6 +1234,14 @@ pub struct _ChatMessageSummary {
     pub reply_to: Option<ChatMessageReplySummary>,
     pub recalled_at_ms: Option<i64>,
     pub mentioned_account_ids: Vec<String>,
+    pub sender_type: SenderType,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(SenderType))]
+pub enum _SenderType {
+    User,
+    Agent,
 }
 
 #[allow(dead_code)]

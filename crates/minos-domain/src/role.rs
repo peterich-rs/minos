@@ -32,6 +32,13 @@ impl fmt::Display for DeviceRole {
     }
 }
 
+impl DeviceRole {
+    #[must_use]
+    pub const fn is_account_client(self) -> bool {
+        matches!(self, Self::MobileClient | Self::BrowserAdmin)
+    }
+}
+
 impl FromStr for DeviceRole {
     type Err = String;
 

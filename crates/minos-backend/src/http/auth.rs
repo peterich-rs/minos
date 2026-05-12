@@ -22,8 +22,6 @@ pub const HDR_DEVICE_ID: &str = "x-device-id";
 pub const HDR_DEVICE_ROLE: &str = "x-device-role";
 pub const HDR_DEVICE_SECRET: &str = "x-device-secret";
 pub const HDR_DEVICE_NAME: &str = "x-device-name";
-pub const HDR_CF_ACCESS_ID: &str = "cf-access-client-id";
-pub const HDR_CF_ACCESS_SECRET: &str = "cf-access-client-secret";
 
 const DEFAULT_DISPLAY_NAME: &str = "unnamed";
 
@@ -73,7 +71,6 @@ pub async fn authenticate(
     let display_name = provided_display_name
         .clone()
         .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.into());
-    log_cf_access_presence(headers);
 
     let existing = store::devices::get_device(pool, device_id)
         .await
@@ -99,7 +96,9 @@ pub async fn authenticate(
         }
     } else if should_backfill_display_name {
         if let Some(new_display_name) = provided_display_name.as_deref() {
-            if let Err(e) = store::devices::set_display_name(pool, &device_id, new_display_name).await {
+            if let Err(e) =
+                store::devices::set_display_name(pool, &device_id, new_display_name).await
+            {
                 tracing::warn!(
                     target: "minos_backend::http::auth",
                     error = %e,
@@ -231,19 +230,6 @@ pub fn extract_device_name(headers: &HeaderMap) -> Option<String> {
         .get(HDR_DEVICE_NAME)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned)
-}
-
-pub fn log_cf_access_presence(headers: &HeaderMap) {
-    let cf_id = headers.contains_key(HDR_CF_ACCESS_ID);
-    let cf_sec = headers.contains_key(HDR_CF_ACCESS_SECRET);
-    if cf_id || cf_sec {
-        tracing::debug!(
-            target: "minos_backend::http::auth",
-            cf_access_client_id_present = cf_id,
-            cf_access_client_secret_present = cf_sec,
-            "CF-Access headers observed (edge-validated; backend does not re-check)",
-        );
-    }
 }
 
 #[cfg(test)]
@@ -432,9 +418,15 @@ mod tests {
     async fn authenticate_backfills_existing_unnamed_device_name() {
         let pool = memory_pool().await;
         let device_id = DeviceId::new();
-        insert_device(&pool, device_id, DEFAULT_DISPLAY_NAME, DeviceRole::MobileClient, 0)
-            .await
-            .unwrap();
+        insert_device(
+            &pool,
+            device_id,
+            DEFAULT_DISPLAY_NAME,
+            DeviceRole::MobileClient,
+            0,
+        )
+        .await
+        .unwrap();
 
         let mut headers = HeaderMap::new();
         headers.insert(HDR_DEVICE_ID, device_id.to_string().parse().unwrap());

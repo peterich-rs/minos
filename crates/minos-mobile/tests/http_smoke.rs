@@ -44,8 +44,7 @@ async fn pair_consume_round_trips_against_real_backend() {
 
     let consumer_id = DeviceId::new();
     let client =
-        MobileHttpClient::new(&format!("ws://{addr}/devices"), consumer_id, "iPhone", None)
-            .unwrap();
+        MobileHttpClient::new(&format!("ws://{addr}/devices"), consumer_id, "iPhone").unwrap();
 
     // ADR-0020: bearer-only iOS rail. Register an account bound to this
     // device id so we can stamp the Bearer.
@@ -92,13 +91,8 @@ async fn auth_register_round_trips_against_real_backend() {
         let _ = axum::serve(listener, app).await;
     });
     let device_id = DeviceId::new();
-    let client = MobileHttpClient::new(
-        &format!("ws://{addr}/devices"),
-        device_id,
-        "Fan's iPhone",
-        None,
-    )
-    .unwrap();
+    let client =
+        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "Fan's iPhone").unwrap();
 
     let resp = client
         .register("smoke@example.com", "testpass1")
@@ -121,7 +115,7 @@ async fn auth_register_then_login_then_refresh_roundtrip() {
     let addr = spawn_backend().await;
     let device_id = DeviceId::new();
     let client =
-        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone", None).unwrap();
+        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone").unwrap();
 
     let registered = client
         .register("flow@example.com", "testpass1")
@@ -147,7 +141,7 @@ async fn auth_register_with_weak_password_maps_to_weak_password_variant() {
     let addr = spawn_backend().await;
     let device_id = DeviceId::new();
     let client =
-        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone", None).unwrap();
+        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone").unwrap();
 
     let err = client
         .register("weak@example.com", "short")
@@ -164,7 +158,7 @@ async fn auth_login_with_wrong_password_maps_to_invalid_credentials() {
     let addr = spawn_backend().await;
     let device_id = DeviceId::new();
     let client =
-        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone", None).unwrap();
+        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone").unwrap();
     let _ = client
         .register("wrong@example.com", "testpass1")
         .await
@@ -184,7 +178,7 @@ async fn auth_register_duplicate_email_maps_to_email_taken() {
     let addr = spawn_backend().await;
     let device_id = DeviceId::new();
     let client =
-        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone", None).unwrap();
+        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone").unwrap();
     let _ = client
         .register("dup@example.com", "testpass1")
         .await
@@ -204,7 +198,7 @@ async fn auth_logout_revokes_the_named_refresh_token() {
     let addr = spawn_backend().await;
     let device_id = DeviceId::new();
     let client =
-        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone", None).unwrap();
+        MobileHttpClient::new(&format!("ws://{addr}/devices"), device_id, "iPhone").unwrap();
     let resp = client
         .register("logout@example.com", "testpass1")
         .await

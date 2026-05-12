@@ -6,17 +6,29 @@
 
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use minos_domain::DeviceRole;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::BackendError;
 
 pub const ACCESS_TTL_SECS: i64 = 15 * 60;
+pub const WS_TICKET_TTL_SECS: i64 = 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Claims {
     pub sub: String,
     pub did: String,
+    pub iat: i64,
+    pub exp: i64,
+    pub jti: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WsTicketClaims {
+    pub sub: String,
+    pub did: String,
+    pub role: DeviceRole,
     pub iat: i64,
     pub exp: i64,
     pub jti: String,
@@ -41,6 +53,31 @@ pub fn sign(secret: &[u8], account_id: &str, device_id: &str) -> Result<String, 
     })
 }
 
+pub fn sign_ws_ticket(
+    secret: &[u8],
+    account_id: &str,
+    device_id: &str,
+    role: DeviceRole,
+) -> Result<String, BackendError> {
+    let now = Utc::now().timestamp();
+    let claims = WsTicketClaims {
+        sub: account_id.into(),
+        did: device_id.into(),
+        role,
+        iat: now,
+        exp: now + WS_TICKET_TTL_SECS,
+        jti: Uuid::new_v4().to_string(),
+    };
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(secret),
+    )
+    .map_err(|e| BackendError::JwtSign {
+        message: e.to_string(),
+    })
+}
+
 /// Parse + verify (signature + exp). Caller is responsible for
 /// `did == X-Device-Id` check (`bearer.rs` does it).
 pub fn verify(secret: &[u8], token: &str) -> Result<Claims, BackendError> {
@@ -51,6 +88,16 @@ pub fn verify(secret: &[u8], token: &str) -> Result<Claims, BackendError> {
             BackendError::JwtVerify {
                 message: e.to_string(),
             }
+        })?;
+    Ok(data.claims)
+}
+
+pub fn verify_ws_ticket(secret: &[u8], token: &str) -> Result<WsTicketClaims, BackendError> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.leeway = 5;
+    let data = decode::<WsTicketClaims>(token, &DecodingKey::from_secret(secret), &validation)
+        .map_err(|e| BackendError::JwtVerify {
+            message: e.to_string(),
         })?;
     Ok(data.claims)
 }
@@ -93,5 +140,16 @@ mod tests {
         let c1 = verify(&secret, &t1).unwrap();
         let c2 = verify(&secret, &t2).unwrap();
         assert_ne!(c1.jti, c2.jti);
+    }
+
+    #[test]
+    fn ws_ticket_roundtrip_preserves_role() {
+        let secret = b"a".repeat(32);
+        let tok = sign_ws_ticket(&secret, "acct-1", "dev-1", DeviceRole::BrowserAdmin).unwrap();
+        let claims = verify_ws_ticket(&secret, &tok).unwrap();
+        assert_eq!(claims.sub, "acct-1");
+        assert_eq!(claims.did, "dev-1");
+        assert_eq!(claims.role, DeviceRole::BrowserAdmin);
+        assert_eq!(claims.exp - claims.iat, WS_TICKET_TTL_SECS);
     }
 }

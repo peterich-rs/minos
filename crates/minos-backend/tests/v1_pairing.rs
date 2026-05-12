@@ -38,6 +38,31 @@ fn seed_live_session(
     outbox_rx
 }
 
+fn pairing_consume_request(
+    consumer_id: DeviceId,
+    role: DeviceRole,
+    bearer: &str,
+    token: PairingToken,
+    device_name: &str,
+) -> Request<Body> {
+    let auth_hdr = format!("Bearer {bearer}");
+    Request::builder()
+        .method(Method::POST)
+        .uri("/v1/pairing/consume")
+        .header("x-device-id", consumer_id.to_string())
+        .header("x-device-role", role.to_string())
+        .header("authorization", auth_hdr)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(json_body(
+            serde_json::to_value(PairConsumeRequest {
+                token,
+                device_name: device_name.into(),
+            })
+            .unwrap(),
+        ))
+        .unwrap()
+}
+
 #[tokio::test]
 async fn post_pairing_tokens_mints_qr_payload_for_agent_host() {
     let state = backend_state().await;
@@ -123,22 +148,13 @@ async fn post_pairing_consume_happy_path_pairs_account_and_mac() {
         .await
         .unwrap();
     let bearer = sign_bearer(consumer_id, &account.account_id);
-    let auth_hdr = format!("Bearer {bearer}");
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/v1/pairing/consume")
-        .header("x-device-id", consumer_id.to_string())
-        .header("x-device-role", "mobile-client")
-        .header("authorization", &auth_hdr)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(json_body(
-            serde_json::to_value(PairConsumeRequest {
-                token: token.clone(),
-                device_name: "iPhone".into(),
-            })
-            .unwrap(),
-        ))
-        .unwrap();
+    let req = pairing_consume_request(
+        consumer_id,
+        DeviceRole::MobileClient,
+        &bearer,
+        token.clone(),
+        "iPhone",
+    );
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::OK);
 
@@ -202,22 +218,13 @@ async fn pairing_consume_ios_writes_account_id_to_pairing_record() {
         .await
         .unwrap();
     let bearer = sign_bearer(consumer_id, &account.account_id);
-    let auth_hdr = format!("Bearer {bearer}");
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/v1/pairing/consume")
-        .header("x-device-id", consumer_id.to_string())
-        .header("x-device-role", "mobile-client")
-        .header("authorization", &auth_hdr)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(json_body(
-            serde_json::to_value(PairConsumeRequest {
-                token: token.clone(),
-                device_name: "iPhone".into(),
-            })
-            .unwrap(),
-        ))
-        .unwrap();
+    let req = pairing_consume_request(
+        consumer_id,
+        DeviceRole::MobileClient,
+        &bearer,
+        token.clone(),
+        "iPhone",
+    );
     let (status, _body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::OK);
 
@@ -258,23 +265,14 @@ async fn post_pairing_consume_invalid_token_returns_409() {
         .await
         .unwrap();
     let bearer = sign_bearer(consumer_id, &account.account_id);
-    let auth_hdr = format!("Bearer {bearer}");
     let mut app = router(state);
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/v1/pairing/consume")
-        .header("x-device-id", consumer_id.to_string())
-        .header("x-device-role", "mobile-client")
-        .header("authorization", &auth_hdr)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(json_body(
-            serde_json::to_value(PairConsumeRequest {
-                token: PairingToken::generate(),
-                device_name: "iPhone".into(),
-            })
-            .unwrap(),
-        ))
-        .unwrap();
+    let req = pairing_consume_request(
+        consumer_id,
+        DeviceRole::MobileClient,
+        &bearer,
+        PairingToken::generate(),
+        "iPhone",
+    );
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"]["code"], "pairing_token_invalid");
@@ -301,6 +299,62 @@ async fn post_pairing_consume_rejects_agent_host_role() {
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[tokio::test]
+async fn post_pairing_consume_accepts_browser_admin_role() {
+    let state = backend_state().await;
+
+    let mac_id = DeviceId::new();
+    insert_device(&state.store, mac_id, "Mac", DeviceRole::AgentHost, 0)
+        .await
+        .unwrap();
+    let svc = PairingService::new(state.store.clone());
+    let (token, _expires) = svc
+        .request_token(mac_id, StdDuration::from_mins(5))
+        .await
+        .unwrap();
+
+    let _mac_outbox = seed_live_session(&state, mac_id, DeviceRole::AgentHost);
+
+    let mut app = router(state.clone());
+    let browser_id = DeviceId::new();
+    let account =
+        minos_backend::store::accounts::create(&state.store, "browser-pair@example.com", "phc")
+            .await
+            .unwrap();
+    let bearer = sign_bearer(browser_id, &account.account_id);
+    let req = pairing_consume_request(
+        browser_id,
+        DeviceRole::BrowserAdmin,
+        &bearer,
+        token.clone(),
+        "Browser admin",
+    );
+
+    let (status, body) = common::send(&mut app, req).await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    let resp: PairResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(resp.peer_device_id, mac_id);
+
+    assert!(minos_backend::store::account_host_pairings::exists(
+        &state.store,
+        mac_id,
+        &account.account_id,
+    )
+    .await
+    .unwrap());
+
+    let browser_row = minos_backend::store::devices::get_device(&state.store, browser_id)
+        .await
+        .unwrap()
+        .expect("browser device row");
+    assert_eq!(browser_row.role, DeviceRole::BrowserAdmin);
+    assert_eq!(
+        browser_row.account_id.as_deref(),
+        Some(account.account_id.as_str()),
+    );
 }
 
 #[tokio::test]

@@ -123,7 +123,6 @@ async fn registered_client(addr: std::net::SocketAddr, email: &str) -> MobileCli
         &format!("ws://{addr}/devices"),
         device_id,
         "iPhone",
-        None,
     )
     .unwrap();
     let resp = http.register(email, "testpass1").await.expect("register");
@@ -251,11 +250,7 @@ async fn register_pair_start_agent_round_trips_synthetic_session_id() {
 
     let resp = tokio::time::timeout(
         Duration::from_secs(5),
-        client.start_agent(
-            AgentName::Codex,
-            "Hello from e2e".into(),
-            String::new(),
-        ),
+        client.start_agent(AgentName::Codex, "Hello from e2e".into(), String::new()),
     )
     .await
     .expect("start_agent must complete within 5s")
@@ -308,11 +303,7 @@ async fn start_agent_returns_before_first_message_delivery_round_trip() {
 
     let resp = tokio::time::timeout(
         Duration::from_millis(500),
-        client.start_agent(
-            AgentName::Codex,
-            "Hello from e2e".into(),
-            String::new(),
-        ),
+        client.start_agent(AgentName::Codex, "Hello from e2e".into(), String::new()),
     )
     .await
     .expect("start_agent should resolve before first-message delivery")

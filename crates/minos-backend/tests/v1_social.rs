@@ -46,11 +46,11 @@ async fn social_friend_and_chat_flow_round_trips() {
     let (status, body) = common::send(
         &mut app,
         authed_request(
-            Method::GET,
-            "/v1/me/profile",
+            Method::POST,
+            "/v1/me/profile/query",
             alice_device,
             &alice.account_id,
-            Body::empty(),
+            Body::from("{}"),
         ),
     )
     .await;
@@ -58,15 +58,14 @@ async fn social_friend_and_chat_flow_round_trips() {
     assert_eq!(body["email"], "alice@example.com");
     assert_eq!(body["minos_id"], alice.minos_id);
 
-    let search_uri = format!("/v1/users/search?minos_id={}", &bob.minos_id[..4]);
     let (status, body) = common::send(
         &mut app,
         authed_request(
-            Method::GET,
-            &search_uri,
+            Method::POST,
+            "/v1/users/search/query",
             alice_device,
             &alice.account_id,
-            Body::empty(),
+            Body::from(serde_json::json!({ "minos_id": &bob.minos_id[..4] }).to_string()),
         ),
     )
     .await;
@@ -91,11 +90,11 @@ async fn social_friend_and_chat_flow_round_trips() {
     let (status, body) = common::send(
         &mut app,
         authed_request(
-            Method::GET,
-            "/v1/friend-requests",
+            Method::POST,
+            "/v1/friend-requests/query",
             bob_device,
             &bob.account_id,
-            Body::empty(),
+            Body::from("{}"),
         ),
     )
     .await;
@@ -118,11 +117,11 @@ async fn social_friend_and_chat_flow_round_trips() {
     let (status, body) = common::send(
         &mut app,
         authed_request(
-            Method::GET,
-            "/v1/friends",
+            Method::POST,
+            "/v1/friends/query",
             alice_device,
             &alice.account_id,
-            Body::empty(),
+            Body::from("{}"),
         ),
     )
     .await;
@@ -160,11 +159,11 @@ async fn social_friend_and_chat_flow_round_trips() {
     let (status, body) = common::send(
         &mut app,
         authed_request(
-            Method::GET,
-            &format!("/v1/conversations/{conversation_id}/messages?limit=50"),
+            Method::POST,
+            &format!("/v1/conversations/{conversation_id}/messages/query"),
             bob_device,
             &bob.account_id,
-            Body::empty(),
+            Body::from(r#"{"limit":50}"#),
         ),
     )
     .await;
@@ -172,4 +171,33 @@ async fn social_friend_and_chat_flow_round_trips() {
     assert_eq!(body["messages"].as_array().unwrap().len(), 1);
     assert_eq!(body["messages"][0]["text"], "hello bob");
     assert_eq!(body["messages"][0]["sender"]["minos_id"], alice.minos_id);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/query",
+            bob_device,
+            &bob.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(body["conversations"][0]["conversation_id"], conversation_id);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!("/v1/conversations/{conversation_id}/members/query"),
+            bob_device,
+            &bob.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["members"].as_array().unwrap().len(), 2);
 }

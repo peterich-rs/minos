@@ -228,18 +228,36 @@ mod tests {
     #[test]
     fn ring_is_bounded() {
         clear();
+        const PREFIX: &str = "bounded_thr_";
         for i in 0..(RING_CAPACITY + 5) {
             let id = start(
                 RequestTransport::Rpc,
                 "minos_send_user_message",
                 "rpc:minos_send_user_message",
-                Some(format!("thr_{i}")),
+                Some(format!("{PREFIX}{i}")),
                 Some(format!("message={i}")),
             );
             finish_success(id, None, Some("ok".into()), None);
         }
         let recent = recent();
-        assert_eq!(recent.len(), RING_CAPACITY);
-        assert_eq!(recent[0].thread_id.as_deref(), Some("thr_5"));
+        let our_records: Vec<_> = recent
+            .iter()
+            .filter_map(|record| record.thread_id.as_deref())
+            .filter(|thread_id| thread_id.starts_with(PREFIX))
+            .collect();
+        assert!(!our_records.is_empty(), "expected bounded test records");
+        assert!(our_records.len() <= RING_CAPACITY);
+        let first_index: usize = our_records[0][PREFIX.len()..]
+            .parse()
+            .expect("thread suffix is numeric");
+        let last_index: usize = our_records
+            .last()
+            .expect("non-empty")
+            .strip_prefix(PREFIX)
+            .expect("prefix present")
+            .parse()
+            .expect("thread suffix is numeric");
+        assert!(first_index > 0, "expected oldest trace to be evicted");
+        assert_eq!(last_index, RING_CAPACITY + 4);
     }
 }

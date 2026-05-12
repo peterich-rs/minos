@@ -104,9 +104,9 @@ fn relay_url(relay: &Relay) -> String {
     format!("ws://{}/devices", relay.addr)
 }
 
-/// Default empty-CF config — the in-process backend is not behind CF Access.
+/// Default config for the in-process backend.
 fn test_config() -> RelayConfig {
-    RelayConfig::new(String::new(), String::new(), String::new())
+    RelayConfig::new(String::new())
 }
 
 /// Fresh in-memory `PersistenceCtx` for relay-client tests.

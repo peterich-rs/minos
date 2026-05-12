@@ -27,6 +27,7 @@ use crate::error::BackendError;
 use crate::http::auth::authenticate;
 use crate::http::BackendState;
 use crate::store::{accounts, refresh_tokens};
+use minos_protocol::WsTicketResponse;
 
 /// Lazily-initialised argon2id PHC string used to burn the same compute
 /// time on `find_by_email → None` as on `find_by_email → Some` followed
@@ -152,6 +153,7 @@ fn check_bucket(limiter: &RateLimiter, key: &str) -> Option<Response> {
     limiter.check(key).err().map(rate_limited_response)
 }
 
+#[tracing::instrument(skip_all, fields(email = %req.email))]
 pub async fn post_register(
     State(state): State<BackendState>,
     headers: HeaderMap,
@@ -221,6 +223,7 @@ pub async fn post_register(
         .into_response()
 }
 
+#[tracing::instrument(skip_all, fields(email = %req.email))]
 pub async fn post_login(
     State(state): State<BackendState>,
     headers: HeaderMap,
@@ -311,6 +314,7 @@ pub async fn post_login(
     .into_response()
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn post_refresh(
     State(state): State<BackendState>,
     headers: HeaderMap,
@@ -323,7 +327,7 @@ pub async fn post_refresh(
 
     let row = match refresh_tokens::find_active(&state.store, &req.refresh_token).await {
         Ok(Some(r)) => r,
-        Ok(None) => return (StatusCode::UNAUTHORIZED, err("invalid_refresh")).into_response(),
+        Ok(_) => return (StatusCode::UNAUTHORIZED, err("invalid_refresh")).into_response(),
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
     };
 
@@ -364,6 +368,7 @@ pub async fn post_refresh(
     .into_response()
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn post_logout(
     State(state): State<BackendState>,
     headers: HeaderMap,
@@ -391,6 +396,98 @@ pub async fn post_logout(
     StatusCode::NO_CONTENT.into_response()
 }
 
+#[tracing::instrument(skip_all)]
+pub async fn post_ws_ticket(State(state): State<BackendState>, headers: HeaderMap) -> Response {
+    let Ok(outcome) = authenticate(&state.store, &headers).await else {
+        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
+    };
+    if !outcome.role.is_account_client() {
+        return (StatusCode::BAD_REQUEST, err("ws_ticket_unsupported_role")).into_response();
+    }
+    let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
+    };
+    let _ = crate::store::devices::set_account_id(
+        &state.store,
+        &outcome.device_id,
+        &bearer_outcome.account_id,
+    )
+    .await;
+
+    let Ok(ticket) = jwt::sign_ws_ticket(
+        state.jwt_secret.as_bytes(),
+        &bearer_outcome.account_id,
+        &outcome.device_id.to_string(),
+        outcome.role,
+    ) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+    };
+
+    Json(WsTicketResponse {
+        ticket,
+        expires_in: jwt::WS_TICKET_TTL_SECS,
+        device_id: outcome.device_id.to_string(),
+        device_role: outcome.role,
+    })
+    .into_response()
+}
+
+/// `POST /v1/auth/change-password`
+///
+/// Requires both the device rail (`X-Device-Id`/secret) and a valid bearer
+/// token so only the logged-in owner of the account can rotate the password.
+/// On success every active refresh token for the account is revoked,
+/// forcing other devices to sign in again — matching the intuition that a
+/// password change is a credential rotation, not a private-device-only
+/// event.
+#[tracing::instrument(skip_all)]
+pub async fn post_change_password(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Json(req): Json<minos_protocol::ChangePasswordRequest>,
+) -> Response {
+    if authenticate(&state.store, &headers).await.is_err() {
+        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
+    }
+    let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
+    };
+    if req.new_password.len() < 8 {
+        return (StatusCode::BAD_REQUEST, err("weak_password")).into_response();
+    }
+    // Reuse the per-account refresh bucket: change-password writes
+    // refresh_tokens (revokes all) and mutates account credentials, so
+    // rate-limiting it alongside refresh/logout keeps credential writes
+    // capped per account.
+    if let Some(resp) = check_bucket(&state.auth_refresh_per_acc, &bearer_outcome.account_id) {
+        return resp;
+    }
+    let account = match accounts::find_by_id(&state.store, &bearer_outcome.account_id).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
+    };
+    let Ok(ok) = passwords::verify(&req.current_password, &account.password_hash) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+    };
+    if !ok {
+        return (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response();
+    }
+    let Ok(next_hash) = passwords::hash(&req.new_password) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+    };
+    if accounts::set_password_hash(&state.store, &account.account_id, &next_hash)
+        .await
+        .is_err()
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+    }
+    // Invalidate every active refresh token for this account. Callers
+    // must re-login on other devices.
+    let _ = refresh_tokens::revoke_all_for_account(&state.store, &account.account_id).await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
 pub fn router() -> Router<BackendState> {
     // Routes are mounted under `/v1` by `crate::http::v1::router`, so the
     // path prefixes here are relative to `/v1`.
@@ -399,6 +496,8 @@ pub fn router() -> Router<BackendState> {
         .route("/auth/login", post(post_login))
         .route("/auth/refresh", post(post_refresh))
         .route("/auth/logout", post(post_logout))
+        .route("/auth/ws-ticket", post(post_ws_ticket))
+        .route("/auth/change-password", post(post_change_password))
 }
 
 #[cfg(test)]

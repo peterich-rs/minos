@@ -1,4 +1,5 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 /// Keychain-backed persistence for the mobile pairing state.
@@ -17,10 +18,10 @@ import 'package:minos/src/rust/api/minos.dart';
 /// The legacy `minos.device_secret` keychain entry is wiped on the next
 /// cold launch by [loadState] (see "Legacy wipe" below).
 ///
-/// Backend URL and Cloudflare Access credentials are no longer persisted
-/// here — they live in `minos_mobile::build_config` (compile-time consts
-/// populated by `option_env!` from the cargo-build env). Transport-edge
-/// configuration never enters durable storage now.
+/// Backend routing config is no longer persisted here — it lives in
+/// `minos_mobile::build_config` (compile-time consts populated by
+/// `option_env!` from the cargo-build env). Transport-edge configuration
+/// never enters durable storage now.
 class SecurePairingStore {
   SecurePairingStore({FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
@@ -68,7 +69,9 @@ class SecurePairingStore {
     final state = PersistedPairingState(
       deviceId: deviceId,
       accessToken: accessToken,
-      accessExpiresAtMs: accessExpiresAtMs,
+      accessExpiresAtMs: accessExpiresAtMs == null
+          ? null
+          : platformInt64FromInt(accessExpiresAtMs),
       refreshToken: refreshToken,
       accountId: accountId,
       accountEmail: accountEmail,

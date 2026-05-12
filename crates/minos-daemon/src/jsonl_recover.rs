@@ -18,7 +18,8 @@
 //!
 //! ## Test-injection of the codex home
 //!
-//! Production reads from `$HOME/.codex/sessions/{sid}.jsonl`. Tests pass
+//! Production reads from the current user's `~/.codex/sessions/{sid}.jsonl`.
+//! Tests pass
 //! [`recover_with_root`] a temp dir as `codex_home_root` to avoid
 //! touching the developer's real codex sessions.
 
@@ -30,12 +31,13 @@ use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-/// Production entrypoint: derive `codex_home` from `$HOME`.
+/// Production entrypoint: derive `codex_home` from the current user's home
+/// directory.
 ///
 /// Returns `Ok(())` (logged) when:
 /// - `codex_session_id` is `None` (the thread's runtime never recorded
 ///   one — e.g. an orphan from before app-server was wired),
-/// - `$HOME` is unset,
+/// - the home directory cannot be resolved,
 /// - the JSONL file is missing or unreadable.
 ///
 /// Recovery is best-effort: a partial replay is better than aborting
@@ -46,11 +48,11 @@ pub async fn recover(
     codex_session_id: Option<&str>,
     writer: &Arc<EventWriter>,
 ) -> Result<()> {
-    let Ok(home) = std::env::var("HOME") else {
+    let Ok(home) = crate::paths::user_home_dir() else {
         tracing::warn!(
             target: "minos_daemon::jsonl_recover",
             thread_id,
-            "$HOME unset; skipping recovery"
+            "home directory unresolved; skipping recovery"
         );
         return Ok(());
     };
@@ -58,14 +60,14 @@ pub async fn recover(
         thread_id,
         missing_seqs,
         codex_session_id,
-        Path::new(&home),
+        &home,
         writer,
     )
     .await
 }
 
 /// Test-injectable entrypoint: caller passes the directory that should
-/// stand in for `$HOME` (i.e. the parent of `.codex/sessions/`).
+/// stand in for the user's home dir (i.e. the parent of `.codex/sessions/`).
 pub async fn recover_with_root(
     thread_id: &str,
     _missing_seqs: &[u64],

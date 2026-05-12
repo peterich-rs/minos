@@ -96,13 +96,21 @@ async fn connect_devices_ws(
     if let Some(s) = secret {
         builder = builder.with_header("X-Device-Secret", s.to_string());
     }
-    if role == DeviceRole::MobileClient {
-        let acct = account_id.expect("iOS connect requires an account_id");
+    if role.is_account_client() {
+        let acct = account_id.expect("account client connect requires an account_id");
         let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), acct, &device_id.to_string())
             .expect("test bearer signs cleanly");
         builder = builder.with_header("Authorization", format!("Bearer {token}"));
     }
     let (ws, _resp) = tokio_tungstenite::connect_async(builder).await?;
+    Ok(ws)
+}
+
+async fn connect_devices_ws_with_ticket(relay: &Relay, ticket: &str) -> Result<WsClient, WsError> {
+    let url: Uri = format!("ws://{}/devices?ws_ticket={ticket}", relay.addr)
+        .parse()
+        .unwrap();
+    let (ws, _resp) = tokio_tungstenite::connect_async(url.to_string()).await?;
     Ok(ws)
 }
 
@@ -293,6 +301,37 @@ async fn devices_ws_does_not_emit_checkpoint_for_mobile_client() -> anyhow::Resu
             }
         }
         Ok(Err(e)) => return Err(e),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn devices_ws_accepts_browser_admin_ws_ticket_query_auth() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+
+    let account_id = store::accounts::create(&relay.pool, "browser-ws@example.com", "phc")
+        .await?
+        .account_id;
+    let browser_id = DeviceId::new();
+    store::devices::insert_device(&relay.pool, browser_id, "web", DeviceRole::BrowserAdmin, 0)
+        .await?;
+    store::devices::set_account_id(&relay.pool, &browser_id, &account_id).await?;
+
+    let ticket = jwt::sign_ws_ticket(
+        TEST_JWT_SECRET.as_bytes(),
+        &account_id,
+        &browser_id.to_string(),
+        DeviceRole::BrowserAdmin,
+    )?;
+    let mut ws = connect_devices_ws_with_ticket(&relay, &ticket).await?;
+
+    match recv_envelope(&mut ws).await? {
+        Envelope::Event {
+            event: EventKind::Unpaired,
+            ..
+        } => {}
+        other => panic!("expected initial Unpaired, got {other:?}"),
     }
 
     Ok(())

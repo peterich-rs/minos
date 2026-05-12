@@ -1,10 +1,10 @@
 //! HTTP client for the backend's `/v1/*` control plane.
 //!
-//! Built on `openwire`. Stamps the same `X-Device-*` and CF-Access
+//! Built on `openwire`. Stamps the same `X-Device-*`
 //! headers as the WS client and shares the same event-listener tracing
 //! surface used by the relay WebSocket. Used by `RelayClient` to issue
-//! pairing tokens and to forget pairings without going through the
-//! multiplexed envelope.
+//! pairing tokens, run POST-first control-plane queries, and forget
+//! pairings without going through the multiplexed envelope.
 
 use std::sync::Once;
 use std::time::Duration;
@@ -18,7 +18,6 @@ use minos_protocol::{
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::Deserialize;
 
-use crate::config::RelayConfig;
 use crate::openwire_trace::{logger_interceptor, OpenwireTraceFactory};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -41,7 +40,6 @@ pub struct RelayHttpClient {
     device_id: DeviceId,
     device_role: &'static str,
     device_name: String,
-    config: RelayConfig,
 }
 
 impl RelayHttpClient {
@@ -49,7 +47,6 @@ impl RelayHttpClient {
         backend_ws_url: &str,
         device_id: DeviceId,
         device_name: String,
-        config: RelayConfig,
     ) -> Result<Self, MinosError> {
         INSTALL_RUSTLS_PROVIDER.call_once(|| {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -73,7 +70,6 @@ impl RelayHttpClient {
             device_id,
             device_role: "agent-host",
             device_name,
-            config,
         })
     }
 
@@ -140,8 +136,8 @@ impl RelayHttpClient {
         &self,
         secret: &DeviceSecret,
     ) -> Result<Option<MePeerResponse>, MinosError> {
-        let url = format!("{}/v1/me/peer", self.base);
-        let request = self.request_without_body(Method::GET, &url, Some(secret), false)?;
+        let url = format!("{}/v1/me/peer/query", self.base);
+        let request = self.request_without_body(Method::POST, &url, Some(secret), false)?;
         let resp = self.execute(&url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -173,8 +169,8 @@ impl RelayHttpClient {
         &self,
         secret: &DeviceSecret,
     ) -> Result<Vec<HostPeerSummary>, MinosError> {
-        let url = format!("{}/v1/me/peers", self.base);
-        let request = self.request_without_body(Method::GET, &url, Some(secret), false)?;
+        let url = format!("{}/v1/me/peers/query", self.base);
+        let request = self.request_without_body(Method::POST, &url, Some(secret), false)?;
         let resp = self.execute(&url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -238,15 +234,6 @@ impl RelayHttpClient {
         if let Some(secret) = secret {
             req = req.header("x-device-secret", secret.as_str());
         }
-        if !self.config.cf_client_id.is_empty() {
-            req = req.header("cf-access-client-id", self.config.cf_client_id.as_str());
-        }
-        if !self.config.cf_client_secret.is_empty() {
-            req = req.header(
-                "cf-access-client-secret",
-                self.config.cf_client_secret.as_str(),
-            );
-        }
         req
     }
 
@@ -275,8 +262,8 @@ impl RelayHttpClient {
 
 fn connect_err(url: &str, e: &WireError) -> MinosError {
     if e.response_status() == Some(StatusCode::UNAUTHORIZED) {
-        MinosError::CfAuthFailed {
-            message: format!("{url}: {e}"),
+        MinosError::Unauthorized {
+            reason: format!("{url}: {e}"),
         }
     } else {
         MinosError::ConnectFailed {
@@ -333,8 +320,6 @@ pub(crate) fn http_base(ws_url: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    use crate::config::RelayConfig;
-
     #[test]
     fn derive_http_base_from_ws_url() {
         assert_eq!(
@@ -360,7 +345,6 @@ mod tests {
             "wss://example.com/devices",
             DeviceId::new(),
             "Minos Mac".into(),
-            RelayConfig::new(String::new(), String::new(), String::new()),
         )
         .unwrap();
 

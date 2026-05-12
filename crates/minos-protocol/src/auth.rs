@@ -5,6 +5,7 @@
 //! single-sourced. Snake-case is implicit because the field idents
 //! already use snake_case.
 
+use minos_domain::DeviceRole;
 use serde::{Deserialize, Serialize};
 
 /// Public summary of the account currently authenticated. Matches the
@@ -57,6 +58,17 @@ pub struct RefreshResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LogoutRequest {
     pub refresh_token: String,
+}
+
+/// Successful response from `POST /v1/auth/ws-ticket`. The ticket is a
+/// short-lived JWT-like bearer used exclusively for `/devices` websocket
+/// upgrades initiated from browser runtimes that cannot set custom headers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WsTicketResponse {
+    pub ticket: String,
+    pub expires_in: i64,
+    pub device_id: String,
+    pub device_role: DeviceRole,
 }
 
 #[cfg(test)]
@@ -124,5 +136,25 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         let back: LogoutRequest = serde_json::from_str(&s).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn ws_ticket_response_round_trip() {
+        let expected_json = serde_json::json!({
+            "ticket": "tok",
+            "expires_in": 60,
+            "device_id": "dev-1",
+            "device_role": "browser-admin",
+        });
+        let r = WsTicketResponse {
+            ticket: "tok".into(),
+            expires_in: 60,
+            device_id: "dev-1".into(),
+            device_role: DeviceRole::BrowserAdmin,
+        };
+        let serialized = serde_json::to_value(&r).unwrap();
+        assert_eq!(serialized, expected_json);
+        let decoded: WsTicketResponse = serde_json::from_value(expected_json).unwrap();
+        assert_eq!(decoded, r);
     }
 }

@@ -39,7 +39,7 @@ struct MenuBarView: View {
                     .font(.headline)
             }
 
-            Text("正在启动 agent host 并连接后端。Cloudflare Access 凭据仅从环境变量读取。")
+            Text("正在启动 agent host 并连接后端。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

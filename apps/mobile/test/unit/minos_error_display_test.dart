@@ -145,8 +145,8 @@ void main() {
       );
     });
 
-    test('cfAuthFailed exposes its message field', () {
-      const err = MinosError.cfAuthFailed(message: 'http 403');
+    test('unauthorized exposes its reason field', () {
+      const err = MinosError.unauthorized(reason: 'http 403');
       expect(err.detail, 'http 403');
     });
 

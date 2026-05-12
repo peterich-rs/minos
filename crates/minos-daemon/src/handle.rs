@@ -40,7 +40,7 @@ struct DaemonInner {
     #[allow(dead_code)]
     mac_name: String,
     /// Populated by the relay-client task on fatal exit paths (pre-upgrade
-    /// HTTP 401 → `CfAuthFailed`; post-upgrade WS close 4401 →
+    /// HTTP 401 → `Unauthorized`; post-upgrade WS close 4401 →
     /// `DeviceNotTrusted`; close 4400 → `EnvelopeVersionUnsupported`).
     /// Drained on read so the UI sees each failure at most once per
     /// occurrence.
@@ -264,7 +264,10 @@ impl DaemonHandle {
     /// Forget one specific mobile/account row by its mobile device id.
     #[allow(clippy::missing_errors_doc)]
     pub async fn forget_peer_device(&self, mobile_device_id: DeviceId) -> Result<(), MinosError> {
-        self.inner.relay.forget_peer_device(mobile_device_id).await?;
+        self.inner
+            .relay
+            .forget_peer_device(mobile_device_id)
+            .await?;
 
         let next_peers = {
             let mut guard = self.inner.peers.lock().unwrap();
@@ -302,7 +305,7 @@ impl DaemonHandle {
     /// avoids repeatedly flagging the same failure in the UI.
     ///
     /// Populated by the relay-client dispatch task on three paths:
-    /// - pre-upgrade HTTP 401 → `CfAuthFailed { message: <resp body> }`
+    /// - pre-upgrade HTTP 401 → `Unauthorized { reason: <resp body> }`
     /// - WS close 4401 → `DeviceNotTrusted { device_id: self_device_id }`
     /// - WS close 4400 → `EnvelopeVersionUnsupported { version: 1 }`
     ///

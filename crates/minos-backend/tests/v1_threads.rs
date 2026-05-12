@@ -73,6 +73,25 @@ async fn paired_pair(
     paired_pair_with_account(state, "threads-test@example.com").await
 }
 
+fn authed_post(
+    uri: &str,
+    ios_id: DeviceId,
+    secret: &minos_domain::DeviceSecret,
+    auth_hdr: &str,
+    body: serde_json::Value,
+) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("x-device-id", ios_id.to_string())
+        .header("x-device-role", "mobile-client")
+        .header("x-device-secret", secret.as_str())
+        .header("authorization", auth_hdr)
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
 #[tokio::test]
 async fn get_threads_returns_owner_scoped_list() {
     let state = backend_state().await;
@@ -100,15 +119,13 @@ async fn get_threads_returns_owner_scoped_list() {
     .unwrap();
 
     let mut app = router(state);
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/v1/threads?limit=50")
-        .header("x-device-id", ios_id.to_string())
-        .header("x-device-role", "mobile-client")
-        .header("x-device-secret", secret.as_str())
-        .header("authorization", &auth_hdr)
-        .body(Body::empty())
-        .unwrap();
+    let req = authed_post(
+        "/v1/threads/query",
+        ios_id,
+        &secret,
+        &auth_hdr,
+        serde_json::json!({ "limit": 50 }),
+    );
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::OK);
     let resp: ListThreadsResponse = serde_json::from_value(body).unwrap();
@@ -148,15 +165,16 @@ async fn get_thread_events_paginates() {
     .unwrap();
 
     let mut app = router(state);
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/v1/threads/thr_a/events?limit=10")
-        .header("x-device-id", ios_id.to_string())
-        .header("x-device-role", "mobile-client")
-        .header("x-device-secret", secret.as_str())
-        .header("authorization", &auth_hdr)
-        .body(Body::empty())
-        .unwrap();
+    let req = authed_post(
+        "/v1/threads/read",
+        ios_id,
+        &secret,
+        &auth_hdr,
+        serde_json::json!({
+            "thread_id": "thr_a",
+            "limit": 10
+        }),
+    );
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::OK);
     let resp: minos_protocol::ReadThreadResponse = serde_json::from_value(body).unwrap();
@@ -190,9 +208,50 @@ async fn get_thread_last_seq_returns_max() {
     .unwrap();
 
     let mut app = router(state);
+    let req = authed_post(
+        "/v1/threads/last-seq",
+        ios_id,
+        &secret,
+        &auth_hdr,
+        serde_json::json!({ "thread_id": "thr_a" }),
+    );
+    let (status, body) = common::send(&mut app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    let resp: minos_protocol::GetThreadLastSeqResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(resp.last_seq, 7);
+}
+
+#[tokio::test]
+async fn post_thread_last_seq_path_uses_path_thread_id() {
+    let state = backend_state().await;
+    let (mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
+    minos_backend::store::threads::upsert(
+        &state.store,
+        "thr_path",
+        AgentName::Codex,
+        &mac_id.to_string(),
+        100,
+    )
+    .await
+    .unwrap();
+    minos_backend::store::raw_events::insert_if_absent(
+        &state.store,
+        "thr_path",
+        9,
+        AgentName::Codex,
+        &serde_json::json!({"method":"x"}),
+        100,
+    )
+    .await
+    .unwrap();
+
+    let mut app = router(state);
     let req = Request::builder()
-        .method(Method::GET)
-        .uri("/v1/threads/thr_a/last_seq")
+        .method(Method::POST)
+        .uri("/v1/threads/thr_path/last_seq")
+        .header("content-type", "application/json")
         .header("x-device-id", ios_id.to_string())
         .header("x-device-role", "mobile-client")
         .header("x-device-secret", secret.as_str())
@@ -202,7 +261,7 @@ async fn get_thread_last_seq_returns_max() {
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::OK);
     let resp: minos_protocol::GetThreadLastSeqResponse = serde_json::from_value(body).unwrap();
-    assert_eq!(resp.last_seq, 7);
+    assert_eq!(resp.last_seq, 9);
 }
 
 #[tokio::test]
@@ -247,15 +306,13 @@ async fn routing_threads_filtered_by_account() {
     let bearer_a = bearer_for(&account_a, ios_a);
     let auth_hdr = format!("Bearer {bearer_a}");
     let mut app = router(state);
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/v1/threads?limit=50")
-        .header("x-device-id", ios_a.to_string())
-        .header("x-device-role", "mobile-client")
-        .header("x-device-secret", secret_a.as_str())
-        .header("authorization", &auth_hdr)
-        .body(Body::empty())
-        .unwrap();
+    let req = authed_post(
+        "/v1/threads/query",
+        ios_a,
+        &secret_a,
+        &auth_hdr,
+        serde_json::json!({ "limit": 50 }),
+    );
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::OK);
     let resp: ListThreadsResponse = serde_json::from_value(body).unwrap();
@@ -267,6 +324,27 @@ async fn routing_threads_filtered_by_account() {
         !ids.contains(&"thr_b1"),
         "B's thread must not leak across accounts"
     );
+}
+
+#[tokio::test]
+async fn legacy_get_threads_route_is_rejected() {
+    let state = backend_state().await;
+    let (_mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
+    let mut app = router(state);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/threads?limit=50")
+        .header("x-device-id", ios_id.to_string())
+        .header("x-device-role", "mobile-client")
+        .header("x-device-secret", secret.as_str())
+        .header("authorization", &auth_hdr)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = common::send(&mut app, req).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]
@@ -283,11 +361,12 @@ async fn get_threads_without_bearer_returns_401() {
 
     let mut app = router(state);
     let req = Request::builder()
-        .method(Method::GET)
-        .uri("/v1/threads?limit=10")
+        .method(Method::POST)
+        .uri("/v1/threads/query")
+        .header("content-type", "application/json")
         .header("x-device-id", id.to_string())
         .header("x-device-role", "mobile-client")
-        .body(Body::empty())
+        .body(Body::from(r#"{"limit":10}"#))
         .unwrap();
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);

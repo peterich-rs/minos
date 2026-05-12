@@ -45,22 +45,31 @@ impl LocalStore {
         &self,
         before_ts_ms: Option<i64>,
         limit: Option<u32>,
+        agent: Option<&str>,
     ) -> anyhow::Result<Vec<ThreadRow>> {
         let limit = limit.unwrap_or(50).min(500) as i64;
         let rows = match before_ts_ms {
             Some(ts) => {
                 sqlx::query_as::<_, ThreadRow>(
-                    "SELECT * FROM threads WHERE last_activity_at < ? ORDER BY last_activity_at DESC LIMIT ?",
+                    "SELECT * FROM threads \
+                     WHERE last_activity_at < ? AND (? IS NULL OR agent = ?) \
+                     ORDER BY last_activity_at DESC LIMIT ?",
                 )
                 .bind(ts)
+                .bind(agent)
+                .bind(agent)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
             }
             None => {
                 sqlx::query_as::<_, ThreadRow>(
-                    "SELECT * FROM threads ORDER BY last_activity_at DESC LIMIT ?",
+                    "SELECT * FROM threads \
+                     WHERE (? IS NULL OR agent = ?) \
+                     ORDER BY last_activity_at DESC LIMIT ?",
                 )
+                .bind(agent)
+                .bind(agent)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
@@ -294,9 +303,40 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let threads = store.list_threads(None, None).await.unwrap();
+        let threads = store.list_threads(None, None, None).await.unwrap();
         assert_eq!(threads.len(), 3);
         let one = store.get_thread("thr-1").await.unwrap();
         assert_eq!(one.unwrap().agent, "codex");
+    }
+
+    #[tokio::test]
+    async fn list_threads_filters_agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        for (thread_id, agent, ts) in [("thr-a", "codex", 10), ("thr-b", "claude", 20)] {
+            sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, '/w', ?, 'idle', 0, ?, ?)")
+                .bind(thread_id)
+                .bind(agent)
+                .bind(ts)
+                .bind(ts)
+                .execute(store.pool())
+                .await
+                .unwrap();
+        }
+
+        let threads = store
+            .list_threads(None, None, Some("claude"))
+            .await
+            .unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].thread_id, "thr-b");
     }
 }

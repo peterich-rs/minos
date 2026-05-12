@@ -1,5 +1,4 @@
-//! Integration tests for `GET /v1/me/hosts` and the host-authenticated
-//! `GET /v1/me/peer` refresh route.
+//! Integration tests for POST-first `/v1/me/*` query routes.
 //!
 //! `/v1/me/hosts` is bearer-only; iOS callers see every Mac paired to
 //! their account. `/v1/me/peer` is secret-authenticated on the Mac host
@@ -51,23 +50,22 @@ async fn paired_host(
 
 fn peer_request(host: DeviceId, secret: &DeviceSecret) -> Request<Body> {
     Request::builder()
-        .method(Method::GET)
-        .uri("/v1/me/peer")
+        .method(Method::POST)
+        .uri("/v1/me/peer/query")
+        .header("content-type", "application/json")
         .header("x-device-id", host.to_string())
         .header("x-device-role", "agent-host")
         .header("x-device-secret", secret.as_str())
-        .body(Body::empty())
+        .body(Body::from("{}"))
         .unwrap()
 }
 
-fn peers_request(host: DeviceId, secret: &DeviceSecret) -> Request<Body> {
+fn post_query_request(uri: &str, body: Body) -> Request<Body> {
     Request::builder()
-        .method(Method::GET)
-        .uri("/v1/me/peers")
-        .header("x-device-id", host.to_string())
-        .header("x-device-role", "agent-host")
-        .header("x-device-secret", secret.as_str())
-        .body(Body::empty())
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(body)
         .unwrap()
 }
 
@@ -107,27 +105,80 @@ async fn get_me_peer_without_pair_returns_not_paired() {
 }
 
 #[tokio::test]
+async fn get_me_peer_route_rejects_legacy_get() {
+    let state = backend_state().await;
+    let (host, _mobile, secret) = paired_host(&state).await;
+    let mut app = router(state.clone());
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/me/peer")
+        .header("x-device-id", host.to_string())
+        .header("x-device-role", "agent-host")
+        .header("x-device-secret", secret.as_str())
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = common::send(&mut app, req).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
 async fn get_me_hosts_without_bearer_returns_401() {
     let state = backend_state().await;
     let mut app = router(state);
 
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/v1/me/hosts")
-        .body(Body::empty())
-        .unwrap();
+    let req = post_query_request("/v1/me/hosts/query", Body::from("{}"));
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "unauthorized");
 }
 
 #[tokio::test]
-async fn get_me_peers_returns_all_host_mobile_rows() {
+async fn post_me_hosts_query_returns_all_paired_hosts() {
+    let state = backend_state().await;
+    let (host, mobile, _secret) = paired_host(&state).await;
+    let account =
+        minos_backend::store::accounts::find_by_email(&state.store, "me-test@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+    let token = minos_backend::auth::jwt::sign(
+        minos_backend::http::test_support::TEST_JWT_SECRET.as_bytes(),
+        &account.account_id,
+        &mobile.to_string(),
+    )
+    .unwrap();
+    let mut app = router(state.clone());
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/me/hosts/query")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-device-id", mobile.to_string())
+        .body(Body::from("{}"))
+        .unwrap();
+    let (status, body) = common::send(&mut app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["hosts"].as_array().unwrap().len(), 1);
+    assert_eq!(body["hosts"][0]["host_device_id"], host.to_string());
+}
+
+#[tokio::test]
+async fn post_me_peers_query_returns_all_host_mobile_rows() {
     let state = backend_state().await;
     let (host, mobile, secret) = paired_host(&state).await;
     let mut app = router(state.clone());
 
-    let req = peers_request(host, &secret);
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/me/peers/query")
+        .header("content-type", "application/json")
+        .header("x-device-id", host.to_string())
+        .header("x-device-role", "agent-host")
+        .header("x-device-secret", secret.as_str())
+        .body(Body::from("{}"))
+        .unwrap();
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["peers"].as_array().unwrap().len(), 1);

@@ -6,9 +6,8 @@ import Foundation
 /// pairing sheet. The payload is JSON-encoded with a stable field order
 /// so the iPhone scanner reliably parses it (the schema lives in spec
 /// §7.2: { v, host_display_name, pairing_token, expires_at_ms }). The
-/// backend URL and any Cloudflare Access service-token headers live in
-/// the mobile client's compile-time build config and are not part of the
-/// QR payload.
+/// backend URL lives in the mobile client's compile-time build config and
+/// is not part of the QR payload.
 ///
 /// Plan 05 Phase J.4 — switched from minos_pairing.QrPayload (with
 /// host/port/name fields) to the relay-flow shape.

@@ -1,6 +1,6 @@
 # Minos
 
-Native macOS status-bar app + Flutter mobile client + shared Rust core for remote AI-coding control. Drive `codex` / `claude` / `gemini` on a Mac from a paired phone. The macOS app (plan 05) talks to the `minos-relay` WSS broker behind Cloudflare Access; iOS / Flutter is still on the Tier A Tailscale pipeline until plan 06 ports it.
+Native macOS status-bar app + Flutter mobile client + shared Rust core for remote AI-coding control. Drive `codex` / `claude` / `gemini` on a Mac from a paired phone.
 
 ## Status
 
@@ -9,13 +9,15 @@ Plans 01–04 are ready in-repo.
 - **Plan 02** — macOS MenuBarExtra app, UniFFI bridge, XcodeGen project spec, Swift logic tests, macOS CI lane.
 - **Plan 03** — Flutter iOS app under `apps/mobile/` with `flutter_rust_bridge` v2 bindings over `minos-mobile::MobileClient`, Riverpod-codegen state layer, `shadcn_ui` UI, `mobile_scanner` QR capture, Dart-side `mars-xlog` via `peterich-rs/xlog-rs`, and the pair-over-Tailscale pipeline. Tier A scope: iOS scans macOS QR → `pair` JSON-RPC → WebSocket connected. `cargo xtask check-all` covers Rust + Swift + Flutter legs with an frb codegen drift guard. Real-device smoke (MVP spec §8.4 items 1–5) is the last gate and is driven manually — see `docs/superpowers/plans/03-flutter-app-and-frb-pairing.md` §Phase F.
 - **Plan 04** — `codex app-server` loopback integration via `minos-agent-runtime`, daemon-side `subscribe_events` streaming plus `start_agent` / `send_user_message` / `stop_agent` RPCs, and a debug-build macOS menubar Agent segment for maintainer smoke testing.
-- **Plan 05** (this branch) — Mac app migrated from Tailscale P2P to `minos-relay` WSS client. Tailscale code (`tailscale.rs`, `WsServer`, port-retry autobind) removed; Cloudflare Access Service Tokens are supplied from client environment/build configuration instead of user-entered Keychain forms; backend URL is baked at compile time via `option_env!("MINOS_BACKEND_URL")`; connection state split into `RelayLinkState` + `PeerState` (two orthogonal axes); new dev bin `cargo run -p minos-mobile --bin fake-peer --features cli` supports end-to-end smoke without iOS.
+- **Plan 05** (this branch) — Mac app migrated from Tailscale P2P to the hosted `minos-relay` WSS client path. Tailscale code (`tailscale.rs`, `WsServer`, port-retry autobind) removed; backend URL is baked at compile time via `option_env!("MINOS_BACKEND_URL")`; connection state split into `RelayLinkState` + `PeerState` (two orthogonal axes); new dev bin `cargo run -p minos-mobile --bin fake-peer --features cli` supports end-to-end smoke without iOS.
 
 Tier B (list_clis in Dart, auto-reconnect, Keychain-backed pairing store, "Forget this Mac") lives in a future `ios-mvp-completion-design.md` spec.
 
 ## Roadmap
 
 The next P1 surface is the streaming chat UI and the mobile-side consumer for the landed agent RPC/event stream. Until that exists, the macOS app exposes debug-build-only menubar controls to start Codex, send a test ping, and stop the session locally.
+
+An additional web surface now lives under `apps/web/`: a standalone React/Vite browser-admin console that uses the same backend auth + `/devices` relay. Because browsers cannot attach the native clients' custom auth headers during WebSocket upgrade, the backend exposes a short-lived `ws-ticket` flow for the web console.
 
 See `docs/superpowers/specs/minos-architecture-and-mvp-design.md` for the overall product design, `docs/superpowers/specs/flutter-app-and-frb-pairing-design.md` for the iOS Tier A design, and `docs/superpowers/plans/` for execution plans.
 
@@ -67,6 +69,42 @@ doesn't mix with the macOS app's platform-native paths.
 # relay backend URL (overridable at build time via MINOS_BACKEND_URL).
 cargo run -p minos-daemon -- doctor
 
+# Print a one-shot runtime status snapshot after the relay link comes up.
+cargo run -p minos-daemon -- status
+
+# Mint a fresh pairing QR as JSON without leaving a long-running daemon
+# process behind.
+cargo run -p minos-daemon -- pairing-qr
+
+# List every paired mobile/account row currently attached to this host.
+cargo run -p minos-daemon -- peers
+
+# Detect the host-side CLI agents Minos can launch.
+cargo run -p minos-daemon -- list-clis
+
+# Inspect host skills for one workspace, or toggle one explicit skill path.
+cargo run -p minos-daemon -- host-skills --workspace ~/dev/my-repo
+cargo run -p minos-daemon -- set-host-skill ~/.codex/skills/my-skill enable
+
+# Forget the first paired row, or target one explicitly with --device-id.
+cargo run -p minos-daemon -- forget-peer
+cargo run -p minos-daemon -- forget-peer --device-id <mobile-device-uuid>
+
+# Read persisted thread summaries or one thread snapshot from the local store.
+cargo run -p minos-daemon -- threads --limit 20
+cargo run -p minos-daemon -- thread <thread-id>
+cargo run -p minos-daemon -- history <thread-id>
+
+# Run one local codex prompt against the current repo and stream the reply.
+cargo run -p minos-daemon -- run "Summarize this workspace"
+cargo run -p minos-daemon -- run --thread <thread-id> "Continue this session"
+
+# Keep a local codex session open for multiple turns.
+cargo run -p minos-daemon -- chat --workspace ~/dev/my-repo
+
+# Re-attach to a persisted local thread.
+cargo run -p minos-daemon -- chat --thread <thread-id>
+
 # Start the daemon against the relay. Needs a reachable relay — boot a
 # local one first with `cargo run -p minos-relay`, or point to a hosted
 # one at build time. Pass `--print-qr` to mint a pairing QR once the
@@ -77,9 +115,11 @@ cargo run -p minos-daemon -- start --print-qr
 cargo run -p minos-daemon -- --platform-paths doctor
 ```
 
-CF Service Token credentials come from `CF_ACCESS_CLIENT_ID` /
-`CF_ACCESS_CLIENT_SECRET` for the CLI; the macOS app reads them from the
-Keychain (written via the in-app Settings sheet).
+`device-secret` persistence is file-backed under `~/.minos/secrets/` (or
+`$MINOS_HOME/secrets/`). The daemon no longer mirrors this value into the macOS
+Keychain, so pairing should not trigger login-keychain password prompts. When
+you pass `--minos-home`, the CLI now forwards that override into the daemon's
+SQLite/workspaces runtime instead of only affecting `local-state.json`.
 
 ## Mobile app (iOS)
 
@@ -185,12 +225,32 @@ cargo run -p minos-mobile --bin fake-peer --features cli -- smoke-session \
 
 The in-process e2e regression for the same path lives in `crates/minos-mobile/tests/e2e_register_login_dispatch_start_agent.rs`.
 
+## Web app
+
+The browser admin client lives in `apps/web/`.
+
+```bash
+# First-time:
+cd apps/web
+cp .env.example .env.local
+pnpm install
+
+# Run locally:
+just dev-web
+
+# Verify:
+just check-web
+```
+
+Set `VITE_MINOS_BACKEND_URL` when the backend is not running on `http://127.0.0.1:8787`.
+
 ## Repository layout
 
 ```
 crates/    Rust workspace (9 crates: domain, protocol, pairing, cli-detect,
            transport, daemon, mobile, ffi-uniffi, ffi-frb)
 apps/      macOS (SwiftUI/UniFFI, XcodeGen-managed) and mobile (Flutter/frb)
+          plus the standalone web admin client (React/Vite)
 xtask/     Build / codegen orchestration in Rust
 docs/      Specs (`docs/superpowers/specs/`) and ADRs (`docs/adr/`)
 ```

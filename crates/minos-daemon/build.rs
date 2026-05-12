@@ -2,8 +2,6 @@
 // the mobile FFI's env-tracking + release fail-fast for the daemon binary.
 fn main() {
     println!("cargo:rerun-if-env-changed=MINOS_BACKEND_URL");
-    println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_ID");
-    println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_SECRET");
     println!("cargo:rerun-if-env-changed=PROFILE");
 
     let profile = std::env::var("PROFILE").unwrap_or_default();

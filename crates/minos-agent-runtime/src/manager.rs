@@ -150,6 +150,42 @@ impl AgentManager {
             .map(|h| h.state_rx.clone())
     }
 
+    pub async fn has_thread(&self, thread_id: &str) -> bool {
+        self.threads.lock().await.contains_key(thread_id)
+    }
+
+    pub async fn register_persisted_thread(
+        &self,
+        thread_id: String,
+        workspace: PathBuf,
+        agent: AgentKind,
+        codex_session_id: Option<String>,
+        initial_state: ThreadState,
+        last_seq: u64,
+    ) -> anyhow::Result<()> {
+        let canon = std::fs::canonicalize(&workspace).unwrap_or(workspace);
+        let mut threads = self.threads.lock().await;
+        if threads.contains_key(&thread_id) {
+            return Ok(());
+        }
+        let mut handle = ThreadHandle::new(
+            thread_id.clone(),
+            canon.clone(),
+            agent,
+            initial_state.clone(),
+            last_seq,
+        );
+        handle.codex_session_id = codex_session_id;
+        threads.insert(thread_id.clone(), handle);
+        drop(threads);
+        let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
+            thread_id,
+            workspace: canon,
+            agent,
+        });
+        Ok(())
+    }
+
     pub async fn start_agent(
         &self,
         agent: AgentKind,
@@ -235,8 +271,42 @@ impl AgentManager {
             // (see crate::test_support) replies to the typed calls fired by
             // start_thread / send_user_message / interrupt_turn with canned
             // responses, so the handshake adds no test value.
-            let (crash_tx, _crash_rx) = tokio::sync::mpsc::channel::<()>(1);
+            let (crash_tx, mut crash_rx) = tokio::sync::mpsc::channel::<()>(1);
             let inst = build_fake_instance(workspace_buf.clone(), client, crash_tx);
+            let pump_client = inst.client.clone();
+            let pump_events = self.events_tx.clone();
+            let pump_threads = self.threads.clone();
+            let pump_workspace = workspace_buf.clone();
+            let pump_crash = inst.crash_signal.clone();
+            tokio::spawn(event_pump_loop(
+                pump_client,
+                pump_events,
+                pump_threads,
+                self.manager_tx.clone(),
+                pump_workspace,
+                pump_crash,
+            ));
+
+            let watcher_inst = inst.clone();
+            let watcher_threads = self.threads.clone();
+            let watcher_mgr_tx = self.manager_tx.clone();
+            tokio::spawn(async move {
+                let _ = crash_rx.recv().await;
+                let affected = watcher_inst.thread_ids().await;
+                let tg = watcher_threads.lock().await;
+                for tid in &affected {
+                    if let Some(h) = tg.get(tid) {
+                        let _ = h.transition(ThreadState::Suspended {
+                            reason: PauseReason::CodexCrashed,
+                        });
+                    }
+                }
+                drop(tg);
+                let _ = watcher_mgr_tx.send(ManagerEvent::InstanceCrashed {
+                    workspace: watcher_inst.workspace.clone(),
+                    affected_threads: affected,
+                });
+            });
             return Ok(inst);
         }
 
@@ -335,6 +405,7 @@ impl AgentManager {
             pump_client,
             pump_events,
             pump_threads,
+            self.manager_tx.clone(),
             pump_workspace,
             pump_crash,
         ));
@@ -572,6 +643,7 @@ impl AgentManager {
 
         let inst = self.ensure_instance(&workspace).await?;
         if let Some(sid) = codex_session_id {
+            inst.add_thread(thread_id.to_string()).await;
             inst.start_thread_resume(thread_id, &sid).await?;
         } else {
             let _ = handle.transition(ThreadState::Closed {
@@ -816,6 +888,7 @@ async fn event_pump_loop(
     client: Arc<CodexClient>,
     events_tx: broadcast::Sender<RawIngest>,
     threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    manager_tx: broadcast::Sender<ManagerEvent>,
     _workspace: PathBuf,
     crash_tx: tokio::sync::mpsc::Sender<()>,
 ) {
@@ -829,6 +902,28 @@ async fn event_pump_loop(
                 let Some(thread_id) = thread_id else {
                     continue;
                 };
+                if method == "turn/completed" {
+                    let maybe_transition = {
+                        let tg = threads.lock().await;
+                        tg.get(&thread_id).and_then(|handle| {
+                            let old = handle.current_state();
+                            if matches!(old, ThreadState::Running { .. } | ThreadState::Resuming) {
+                                handle.transition(ThreadState::Idle).ok()?;
+                                Some((old, ThreadState::Idle))
+                            } else {
+                                None
+                            }
+                        })
+                    };
+                    if let Some((old, new)) = maybe_transition {
+                        let _ = manager_tx.send(ManagerEvent::ThreadStateChanged {
+                            thread_id: thread_id.clone(),
+                            old,
+                            new,
+                            at_ms: current_unix_ms(),
+                        });
+                    }
+                }
                 // Look up agent kind for the thread; default to Codex if absent
                 // (notifications can race the manager's bookkeeping).
                 let agent = threads
@@ -942,12 +1037,16 @@ pub(crate) struct StartThreadResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AgentRuntimeConfig;
+    use crate::state_machine::PauseReason;
+    use crate::test_support::FakeCodexBackend;
 
     #[tokio::test]
-    #[ignore = "spawn_instance now spawns a real codex child; covered via FakeCodexBackend in C22"]
     async fn start_agent_creates_instance_and_thread() {
         let tmp = tempfile::tempdir().unwrap();
-        let cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
         let ws = std::path::PathBuf::from("/w-test");
         let resp = mgr.start_agent(AgentKind::Codex, ws.clone()).await.unwrap();
@@ -955,14 +1054,41 @@ mod tests {
         let snap = mgr.list_threads().await;
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].workspace, ws);
+        assert!(matches!(
+            mgr.thread_state(&resp.thread_id).await,
+            Some(ThreadState::Idle)
+        ));
+        assert_eq!(mgr.open_workspaces().await, vec![std::path::PathBuf::from("/w-test")]);
+        fake.stop().await;
     }
 
     #[tokio::test]
-    #[ignore = "implicit_resume requires FakeCodexBackend; full coverage lands in C22 multi-session smoke"]
     async fn implicit_resume_from_suspended() {
         let tmp = tempfile::tempdir().unwrap();
-        let cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
         let mgr = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
-        let _ = mgr;
+
+        let started = mgr
+            .start_agent(AgentKind::Codex, "/w-resume".into())
+            .await
+            .unwrap();
+        mgr.interrupt_thread(&started.thread_id).await.unwrap();
+        assert!(matches!(
+            mgr.thread_state(&started.thread_id).await,
+            Some(ThreadState::Suspended {
+                reason: PauseReason::UserInterrupt
+            })
+        ));
+
+        mgr.send_user_message(&started.thread_id, "resume".into())
+            .await
+            .unwrap();
+        assert!(matches!(
+            mgr.thread_state(&started.thread_id).await,
+            Some(ThreadState::Running { .. })
+        ));
+        fake.stop().await;
     }
 }

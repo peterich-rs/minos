@@ -70,12 +70,33 @@ pub struct ChatMessageRow {
     pub created_at_ms: i64,
     pub reply_to_message_id: Option<String>,
     pub recalled_at_ms: Option<i64>,
+    pub sender_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 struct MessageMentionRow {
     message_id: String,
     mentioned_account_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct AgentRow {
+    pub agent_id: String,
+    pub owner_account_id: String,
+    pub name: String,
+    pub description: String,
+    pub runtime_agent: String,
+    pub model: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct ConversationAgentMemberRow {
+    pub conversation_id: String,
+    pub agent_id: String,
+    pub added_by_account_id: String,
+    pub joined_at_ms: i64,
 }
 
 pub async fn profile_by_account(
@@ -146,6 +167,23 @@ pub async fn set_minos_id(
                 operation: "social::set_minos_id".into(),
                 message: e.to_string(),
             },
+        })?;
+    Ok(())
+}
+
+pub async fn set_display_name(
+    pool: &SqlitePool,
+    account_id: &str,
+    display_name: Option<&str>,
+) -> Result<(), BackendError> {
+    sqlx::query("UPDATE accounts SET display_name = ? WHERE account_id = ?")
+        .bind(display_name)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: "social::set_display_name".into(),
+            message: e.to_string(),
         })?;
     Ok(())
 }
@@ -501,20 +539,20 @@ pub async fn list_conversations_for(
 }
 
 pub async fn list_conversation_member_profiles(
-        pool: &SqlitePool,
-        conversation_id: &str,
+    pool: &SqlitePool,
+    conversation_id: &str,
 ) -> Result<Vec<ProfileRow>, BackendError> {
-        sqlx::query_as::<_, ProfileRow>(
-                "SELECT a.account_id, a.email, a.minos_id, a.display_name
+    sqlx::query_as::<_, ProfileRow>(
+        "SELECT a.account_id, a.email, a.minos_id, a.display_name
                      FROM accounts a
                      JOIN conversation_members cm ON cm.account_id = a.account_id
                     WHERE cm.conversation_id = ?
                     ORDER BY cm.joined_at_ms ASC, a.account_id ASC",
-        )
-        .bind(conversation_id)
-        .fetch_all(pool)
-        .await
-        .map_err(store_err("social::list_conversation_member_profiles"))
+    )
+    .bind(conversation_id)
+    .fetch_all(pool)
+    .await
+    .map_err(store_err("social::list_conversation_member_profiles"))
 }
 
 pub async fn list_conversation_members(
@@ -556,7 +594,7 @@ pub async fn get_message(
     message_id: &str,
 ) -> Result<Option<ChatMessageRow>, BackendError> {
     sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms
+        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
            FROM chat_messages
           WHERE message_id = ?",
     )
@@ -575,7 +613,7 @@ pub async fn list_messages(
     let effective_limit = i64::from(limit.min(200));
     let before = before_ts_ms.unwrap_or(i64::MAX);
     sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms
+        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
            FROM chat_messages
           WHERE conversation_id = ? AND created_at_ms < ?
           ORDER BY created_at_ms DESC
@@ -598,7 +636,7 @@ pub async fn list_messages_by_ids(
     }
 
     let mut builder = QueryBuilder::<Sqlite>::new(
-        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms\n           FROM chat_messages\n          WHERE message_id IN (",
+        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
     );
     {
         let mut separated = builder.separated(", ");
@@ -666,7 +704,9 @@ pub async fn mark_conversation_read_to_latest(
     .bind(conversation_id)
     .fetch_one(pool)
     .await
-    .map_err(store_err("social::mark_conversation_read_to_latest.fetch_latest"))?
+    .map_err(store_err(
+        "social::mark_conversation_read_to_latest.fetch_latest",
+    ))?
     else {
         return Ok(None);
     };
@@ -758,6 +798,7 @@ pub async fn insert_message(
         created_at_ms,
         reply_to_message_id: reply_to_message_id.map(ToOwned::to_owned),
         recalled_at_ms: None,
+        sender_type: "user".to_string(),
     })
 }
 
@@ -849,6 +890,237 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
     }
 }
 
+// ─── Agent Store Functions ─────────────────────────────────────────────
+
+pub async fn register_agent(
+    pool: &SqlitePool,
+    owner_account_id: &str,
+    name: &str,
+    description: &str,
+    runtime_agent: &str,
+    model: &str,
+    now_ms: i64,
+) -> Result<AgentRow, BackendError> {
+    let agent_id = format!("bot-{}", Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO agents (agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&agent_id)
+    .bind(owner_account_id)
+    .bind(name)
+    .bind(description)
+    .bind(runtime_agent)
+    .bind(model)
+    .bind(now_ms)
+    .bind(now_ms)
+    .execute(pool)
+    .await
+    .map_err(store_err("social::register_agent"))?;
+
+    get_agent(pool, &agent_id)
+        .await?
+        .ok_or_else(|| BackendError::StoreQuery {
+            operation: "social::register_agent.load".into(),
+            message: "agent missing after insert".into(),
+        })
+}
+
+pub async fn get_agent(
+    pool: &SqlitePool,
+    agent_id: &str,
+) -> Result<Option<AgentRow>, BackendError> {
+    sqlx::query_as::<_, AgentRow>(
+        "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms
+           FROM agents WHERE agent_id = ?",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(store_err("social::get_agent"))
+}
+
+pub async fn list_agents_for_owner(
+    pool: &SqlitePool,
+    owner_account_id: &str,
+) -> Result<Vec<AgentRow>, BackendError> {
+    sqlx::query_as::<_, AgentRow>(
+        "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms
+           FROM agents WHERE owner_account_id = ? ORDER BY created_at_ms DESC",
+    )
+    .bind(owner_account_id)
+    .fetch_all(pool)
+    .await
+    .map_err(store_err("social::list_agents_for_owner"))
+}
+
+pub async fn delete_agent(
+    pool: &SqlitePool,
+    agent_id: &str,
+    owner_account_id: &str,
+) -> Result<bool, BackendError> {
+    let result = sqlx::query(
+        "DELETE FROM agents WHERE agent_id = ? AND owner_account_id = ?",
+    )
+    .bind(agent_id)
+    .bind(owner_account_id)
+    .execute(pool)
+    .await
+    .map_err(store_err("social::delete_agent"))?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn add_agent_to_conversation(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    agent_id: &str,
+    added_by_account_id: &str,
+    now_ms: i64,
+) -> Result<(), BackendError> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO conversation_agent_members (conversation_id, agent_id, added_by_account_id, joined_at_ms)
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(conversation_id)
+    .bind(agent_id)
+    .bind(added_by_account_id)
+    .bind(now_ms)
+    .execute(pool)
+    .await
+    .map_err(store_err("social::add_agent_to_conversation"))?;
+    Ok(())
+}
+
+pub async fn remove_agent_from_conversation(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    agent_id: &str,
+) -> Result<bool, BackendError> {
+    let result = sqlx::query(
+        "DELETE FROM conversation_agent_members WHERE conversation_id = ? AND agent_id = ?",
+    )
+    .bind(conversation_id)
+    .bind(agent_id)
+    .execute(pool)
+    .await
+    .map_err(store_err("social::remove_agent_from_conversation"))?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn list_conversation_agents(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> Result<Vec<AgentRow>, BackendError> {
+    sqlx::query_as::<_, AgentRow>(
+        "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.runtime_agent, a.model, a.created_at_ms, a.updated_at_ms
+           FROM agents a
+           JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
+          WHERE cam.conversation_id = ?
+          ORDER BY cam.joined_at_ms ASC",
+    )
+    .bind(conversation_id)
+    .fetch_all(pool)
+    .await
+    .map_err(store_err("social::list_conversation_agents"))
+}
+
+pub async fn is_agent_in_conversation(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    agent_id: &str,
+) -> Result<bool, BackendError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM conversation_agent_members WHERE conversation_id = ? AND agent_id = ?",
+    )
+    .bind(conversation_id)
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(store_err("social::is_agent_in_conversation"))?;
+    Ok(row.is_some())
+}
+
+pub async fn add_member_to_group(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    account_id: &str,
+    now_ms: i64,
+) -> Result<(), BackendError> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO conversation_members (conversation_id, account_id, joined_at_ms)
+         VALUES (?, ?, ?)",
+    )
+    .bind(conversation_id)
+    .bind(account_id)
+    .bind(now_ms)
+    .execute(pool)
+    .await
+    .map_err(store_err("social::add_member_to_group"))?;
+    Ok(())
+}
+
+pub async fn insert_agent_message(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    agent_id: &str,
+    text: &str,
+    now_ms: i64,
+    reply_to_message_id: Option<&str>,
+    mentioned_account_ids: &[String],
+) -> Result<ChatMessageRow, BackendError> {
+    let message_id = Uuid::new_v4().to_string();
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(store_err("social::insert_agent_message.begin"))?;
+
+    sqlx::query(
+        "INSERT INTO chat_messages (message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, sender_type)
+         VALUES (?, ?, ?, ?, ?, ?, 'agent')",
+    )
+    .bind(&message_id)
+    .bind(conversation_id)
+    .bind(agent_id)
+    .bind(text)
+    .bind(now_ms)
+    .bind(reply_to_message_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(store_err("social::insert_agent_message.insert"))?;
+
+    for mentioned_id in mentioned_account_ids {
+        sqlx::query(
+            "INSERT OR IGNORE INTO chat_message_mentions (message_id, mentioned_account_id)
+             VALUES (?, ?)",
+        )
+        .bind(&message_id)
+        .bind(mentioned_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(store_err("social::insert_agent_message.mention"))?;
+    }
+
+    sqlx::query(
+        "UPDATE conversations SET updated_at_ms = ? WHERE conversation_id = ?",
+    )
+    .bind(now_ms)
+    .bind(conversation_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(store_err("social::insert_agent_message.update_conversation"))?;
+
+    tx.commit()
+        .await
+        .map_err(store_err("social::insert_agent_message.commit"))?;
+
+    get_message(pool, &message_id)
+        .await?
+        .ok_or_else(|| BackendError::StoreQuery {
+            operation: "social::insert_agent_message.load".into(),
+            message: "message missing after insert".into(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,9 +1147,17 @@ mod tests {
         let pool = memory_pool().await;
         let (conversation_id, alice, bob, carol) = seed_group(&pool).await;
 
-        insert_message(&pool, &conversation_id, &alice, "hello team", T0 + 1, None, &[])
-            .await
-            .unwrap();
+        insert_message(
+            &pool,
+            &conversation_id,
+            &alice,
+            "hello team",
+            T0 + 1,
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
         let last_read = mark_conversation_read_to_latest(&pool, &conversation_id, &carol, T0 + 1)
             .await
             .unwrap();
@@ -923,7 +1203,9 @@ mod tests {
         .await
         .unwrap();
 
-        let mentions = list_message_mentions(&pool, &[message.message_id]).await.unwrap();
+        let mentions = list_message_mentions(&pool, &[message.message_id])
+            .await
+            .unwrap();
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions.values().next().unwrap(), &vec![carol]);
     }
@@ -956,9 +1238,17 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = list_messages(&pool, &conversation_id, None, 20).await.unwrap();
-        let reply_row = rows.iter().find(|row| row.message_id == reply.message_id).unwrap();
-        assert_eq!(reply_row.reply_to_message_id.as_deref(), Some(original.message_id.as_str()));
+        let rows = list_messages(&pool, &conversation_id, None, 20)
+            .await
+            .unwrap();
+        let reply_row = rows
+            .iter()
+            .find(|row| row.message_id == reply.message_id)
+            .unwrap();
+        assert_eq!(
+            reply_row.reply_to_message_id.as_deref(),
+            Some(original.message_id.as_str())
+        );
     }
 
     #[tokio::test]
@@ -990,10 +1280,16 @@ mod tests {
         assert_eq!(carol_rows.len(), 1);
         assert_eq!(carol_rows[0].unread_count, 0);
         assert_eq!(carol_rows[0].unread_mention_count, 0);
-        assert_eq!(carol_rows[0].last_message_preview.as_deref(), Some("消息已撤回"));
+        assert_eq!(
+            carol_rows[0].last_message_preview.as_deref(),
+            Some("消息已撤回")
+        );
 
         let alice_rows = list_conversations_for(&pool, &alice).await.unwrap();
         assert_eq!(alice_rows.len(), 1);
-        assert_eq!(alice_rows[0].last_message_preview.as_deref(), Some("消息已撤回"));
+        assert_eq!(
+            alice_rows[0].last_message_preview.as_deref(),
+            Some("消息已撤回")
+        );
     }
 }

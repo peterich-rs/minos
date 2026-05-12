@@ -6,16 +6,32 @@ use std::os::unix::fs::PermissionsExt;
 
 use minos_domain::MinosError;
 
+pub fn user_home_dir() -> Result<PathBuf, MinosError> {
+    for value in [std::env::var_os("HOME"), std::env::var_os("USERPROFILE")] {
+        if let Some(path) = value.filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    let home_drive = std::env::var_os("HOMEDRIVE").filter(|value| !value.is_empty());
+    let home_path = std::env::var_os("HOMEPATH").filter(|value| !value.is_empty());
+    if let (Some(drive), Some(path)) = (home_drive, home_path) {
+        let mut joined = PathBuf::from(drive);
+        joined.push(path);
+        return Ok(joined);
+    }
+
+    Err(MinosError::StoreIo {
+        path: "$HOME/$USERPROFILE".into(),
+        message: "home directory env vars are not set".into(),
+    })
+}
+
 pub fn minos_home() -> Result<PathBuf, MinosError> {
     if let Ok(path) = std::env::var("MINOS_HOME") {
         return Ok(PathBuf::from(path));
     }
-
-    let home = std::env::var("HOME").map_err(|_| MinosError::StoreIo {
-        path: "$HOME".into(),
-        message: "HOME env var not set".into(),
-    })?;
-    Ok(PathBuf::from(home).join(".minos"))
+    Ok(user_home_dir()?.join(".minos"))
 }
 
 fn ensure_subdir(name: &str) -> Result<PathBuf, MinosError> {
@@ -94,6 +110,30 @@ mod tests {
         let resolved = minos_home().unwrap();
         assert_eq!(resolved, PathBuf::from("/tmp/minos-home-test"));
         std::env::remove_var("MINOS_HOME");
+    }
+
+    #[test]
+    fn user_home_dir_prefers_home_env() {
+        let _g = lock();
+        std::env::set_var("HOME", "/tmp/minos-home");
+        std::env::remove_var("USERPROFILE");
+        std::env::remove_var("HOMEDRIVE");
+        std::env::remove_var("HOMEPATH");
+        let resolved = user_home_dir().unwrap();
+        assert_eq!(resolved, PathBuf::from("/tmp/minos-home"));
+        std::env::remove_var("HOME");
+    }
+
+    #[test]
+    fn user_home_dir_falls_back_to_userprofile() {
+        let _g = lock();
+        std::env::remove_var("HOME");
+        std::env::set_var("USERPROFILE", "/tmp/minos-userprofile");
+        std::env::remove_var("HOMEDRIVE");
+        std::env::remove_var("HOMEPATH");
+        let resolved = user_home_dir().unwrap();
+        assert_eq!(resolved, PathBuf::from("/tmp/minos-userprofile"));
+        std::env::remove_var("USERPROFILE");
     }
 
     #[test]

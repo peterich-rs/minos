@@ -48,6 +48,7 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 mars-xlog = { workspace = true }
+tower-http = { version = "0.6", features = ["cors"] }
 
 # workspace crates
 minos-domain = { path = "../minos-domain", version = "0.1.0" }

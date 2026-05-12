@@ -76,12 +76,50 @@ jobs:
         # Linux-side.
         run: cargo build -p minos-daemon --bin minos-daemon
 
+      - name: cargo test -p minos-daemon --features test-support
+        # Relay-backed host e2e coverage depends on the daemon's
+        # `test-support` seam for injecting a fake codex app-server URL.
+        run: cargo test -p minos-daemon --features test-support
+
       - name: cargo check -p minos-ffi-frb (linux host)
         # The frb adapter is iOS/Android-oriented, but its host build must
         # also stay green so the repo compiles cleanly on contributors'
         # Linux boxes and so `flutter test` on the macOS lane has a host
         # dylib to load.
         run: cargo check -p minos-ffi-frb
+
+  windows-host:
+    name: windows (host crates)
+    # Scope this lane to the host-side Rust crates that must stay portable
+    # across Windows/macOS/Linux. The macOS GUI, Flutter, and Xcode-specific
+    # legs remain on the macOS runner; this lane exists purely to stop the
+    # host runtime from drifting back into Unix-only assumptions.
+    runs-on: windows-latest
+    env:
+      MINOS_BACKEND_URL: ws://127.0.0.1:8787/devices
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test -p minos-cli-detect
+        run: cargo test -p minos-cli-detect
+
+      - name: cargo test -p minos-agent-runtime
+        run: cargo test -p minos-agent-runtime
+
+      - name: cargo test -p minos-daemon --features test-support
+        run: cargo test -p minos-daemon --features test-support
+
+      - name: cargo build host binaries
+        run: |
+          cargo build -p minos-cli-detect --bin minos-detect
+          cargo build -p minos-daemon --bin minos-daemon
 
   dart:
     name: dart (apps/mobile analyze + codegen drift)
@@ -235,8 +273,6 @@ jobs:
 #
 #   env:
 #     MINOS_BACKEND_URL: ${{ secrets.MINOS_BACKEND_URL }}
-#     CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-#     CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 #   steps:
 #     - uses: extractions/setup-just@v2
 #     - run: just build-mobile-ios Release

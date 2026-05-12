@@ -1,9 +1,8 @@
 // Cargo's incremental cache pins `option_env!` outputs to the env snapshot at
 // the time of the last successful build. Without these declarations, changing
-// MINOS_BACKEND_URL or CF_ACCESS_CLIENT_{ID,SECRET} between builds (e.g.
-// dev → release) silently reuses the previously baked-in values. Declaring
-// `rerun-if-env-changed` forces cargo to mark the crate dirty and recompile
-// `build_config.rs` whenever any of the three change.
+// MINOS_BACKEND_URL between builds (e.g. dev → release) silently reuses the
+// previously baked-in value. Declaring `rerun-if-env-changed` forces cargo to
+// mark the crate dirty and recompile `build_config.rs` whenever it changes.
 //
 // Additionally surfaces missing-env diagnostics: a debug build with no
 // MINOS_BACKEND_URL emits a cargo:warning so the silent localhost fallback
@@ -12,8 +11,6 @@
 // artifact.
 fn main() {
     println!("cargo:rerun-if-env-changed=MINOS_BACKEND_URL");
-    println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_ID");
-    println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_SECRET");
     println!("cargo:rerun-if-env-changed=PROFILE");
 
     let profile = std::env::var("PROFILE").unwrap_or_default();

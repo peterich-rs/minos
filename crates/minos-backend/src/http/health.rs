@@ -1,26 +1,53 @@
-//! `GET /health` — plaintext liveness probe.
+//! `GET /health` — liveness probe with DB connectivity check.
 //!
-//! The body contains both the crate name (`minos-backend`) and its version so
-//! a deploy smoke can assert each independently. See plan §14's "manual
-//! smoke" acceptance for the exact contract.
+//! Returns 200 when the backend is healthy (DB reachable), or 503 when
+//! degraded (DB unreachable). Spec R7.6.
 
 use axum::{
     extract::State,
     http::{header, StatusCode},
     response::IntoResponse,
+    Json,
 };
+use serde::Serialize;
 
 use super::BackendState;
 
-/// Return `200 OK` with body `"minos-backend v<VERSION>\n"`.
-///
-/// `Content-Type` is set to `text/plain; charset=utf-8` so `curl -i` renders
-/// the body cleanly in the smoke.
-#[allow(clippy::unused_async)] // axum handlers must be `async`
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+}
+
+/// Return `200 OK` with JSON body when healthy, `503 Service Unavailable`
+/// when the DB is unreachable.
 pub async fn get(State(state): State<BackendState>) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        format!("minos-backend v{}\n", state.version),
-    )
+    let db_ok = sqlx::query("SELECT 1")
+        .execute(&state.store)
+        .await
+        .is_ok();
+
+    if db_ok {
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            Json(HealthResponse {
+                status: "ok",
+                version: format!("minos-backend v{}", state.version),
+                reason: None,
+            }),
+        )
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::CONTENT_TYPE, "application/json")],
+            Json(HealthResponse {
+                status: "degraded",
+                version: format!("minos-backend v{}", state.version),
+                reason: Some("db"),
+            }),
+        )
+    }
 }

@@ -87,6 +87,7 @@ class AgentProfileDraft {
 class AgentProfile {
   const AgentProfile({
     required this.id,
+    required this.agentId,
     required this.name,
     required this.description,
     required this.runtimeAgent,
@@ -100,6 +101,11 @@ class AgentProfile {
   });
 
   final String id;
+
+  /// Unique agent identifier used in group chats, similar to a user's uid.
+  /// This allows agents to be added to group conversations and mentioned
+  /// via @agentId.
+  final String agentId;
   final String name;
   final String description;
   final AgentName runtimeAgent;
@@ -113,6 +119,7 @@ class AgentProfile {
 
   AgentProfile copyWith({
     String? id,
+    String? agentId,
     String? name,
     String? description,
     AgentName? runtimeAgent,
@@ -126,6 +133,7 @@ class AgentProfile {
   }) {
     return AgentProfile(
       id: id ?? this.id,
+      agentId: agentId ?? this.agentId,
       name: name ?? this.name,
       description: description ?? this.description,
       runtimeAgent: runtimeAgent ?? this.runtimeAgent,
@@ -145,6 +153,7 @@ class AgentProfile {
   }) {
     return AgentProfile(
       id: id,
+      agentId: agentId,
       name: draft.name.trim(),
       description: draft.description.trim(),
       runtimeAgent: draft.runtimeAgent,
@@ -163,6 +172,7 @@ class AgentProfile {
   Map<String, Object?> toJson() {
     return <String, Object?>{
       'id': id,
+      'agentId': agentId,
       'name': name,
       'description': description,
       'runtimeAgent': runtimeAgent.name,
@@ -179,8 +189,10 @@ class AgentProfile {
   }
 
   factory AgentProfile.fromJson(Map<String, Object?> json) {
+    final id = json['id'] as String;
     return AgentProfile(
-      id: json['id'] as String,
+      id: id,
+      agentId: json['agentId'] as String? ?? _generateAgentId(id),
       name: json['name'] as String? ?? 'Agent',
       description: json['description'] as String? ?? '',
       runtimeAgent: _agentNameFromJson(json['runtimeAgent'] as String?),
@@ -350,4 +362,10 @@ AgentReasoningEffort _reasoningEffortFromJson(String? value) {
     'high' => AgentReasoningEffort.high,
     _ => AgentReasoningEffort.medium,
   };
+}
+
+/// Generate a stable agentId from the profile id for backward compatibility
+/// with profiles created before agentId was introduced.
+String _generateAgentId(String profileId) {
+  return 'bot-$profileId';
 }

@@ -21,6 +21,7 @@ minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0" }
 minos-codex-protocol = { path = "../minos-codex-protocol", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 minos-pairing = { path = "../minos-pairing", version = "0.1.0" }
 minos-cli-detect = { path = "../minos-cli-detect", version = "0.1.0" }
 minos-transport = { path = "../minos-transport", version = "0.1.0" }
@@ -47,9 +48,6 @@ async-trait = { workspace = true }
 uniffi = { workspace = true, optional = true, features = ["tokio"] }
 clap = { version = "4", features = ["derive"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-security-framework = { workspace = true, features = ["OSX_10_15"] }
-
 [dev-dependencies]
 minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", features = ["test-support"] }
 # Backend is pulled into dev-deps only so the relay_client_smoke integration
@@ -57,8 +55,10 @@ minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", feat
 # dependency cycle (daemon is the backend's client, not vice versa).
 minos-backend = { path = "../minos-backend", version = "0.1.0" }
 axum = { workspace = true }
+http-body-util = "0.1"
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
+tower = "0.5"
 pretty_assertions = { workspace = true }
 
 [lints]

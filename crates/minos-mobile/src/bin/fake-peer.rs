@@ -212,8 +212,8 @@ struct RegisteredAuth {
 
 async fn register_account(backend: &str, email: &str, password: &str) -> Result<RegisteredAuth> {
     let device_id = DeviceId::new();
-    let http = MobileHttpClient::new(backend, device_id, "fake-peer", None)
-        .context("build MobileHttpClient")?;
+    let http =
+        MobileHttpClient::new(backend, device_id, "fake-peer").context("build MobileHttpClient")?;
     eprintln!("→ POST /v1/auth/register email={email}");
     let resp = http
         .register(email, password)
@@ -236,8 +236,8 @@ async fn register_account(backend: &str, email: &str, password: &str) -> Result<
 /// already exists or not.
 async fn login_or_register(backend: &str, email: &str, password: &str) -> Result<RegisteredAuth> {
     let device_id = DeviceId::new();
-    let http = MobileHttpClient::new(backend, device_id, "fake-peer", None)
-        .context("build MobileHttpClient")?;
+    let http =
+        MobileHttpClient::new(backend, device_id, "fake-peer").context("build MobileHttpClient")?;
     eprintln!("→ POST /v1/auth/login email={email}");
     match http.login(email, password).await {
         Ok(resp) => {
@@ -268,8 +268,8 @@ async fn run_pair_then_tail(
     access_token: String,
 ) -> Result<()> {
     let device_id = DeviceId::new();
-    let http = MobileHttpClient::new(backend, device_id, device_name, None)
-        .context("build MobileHttpClient")?;
+    let http =
+        MobileHttpClient::new(backend, device_id, device_name).context("build MobileHttpClient")?;
     let pair_req = PairConsumeRequest {
         token: PairingToken(token.to_string()),
         device_name: device_name.to_string(),

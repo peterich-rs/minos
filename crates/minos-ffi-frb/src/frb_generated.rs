@@ -3106,9 +3106,6 @@ const _: fn() = || {
         crate::api::minos::MinosError::BackendInternal { message } => {
             let _: String = message;
         }
-        crate::api::minos::MinosError::CfAuthFailed { message } => {
-            let _: String = message;
-        }
         crate::api::minos::MinosError::CodexSpawnFailed { message } => {
             let _: String = message;
         }
@@ -3126,9 +3123,6 @@ const _: fn() = || {
             let _: crate::api::minos::AgentName = agent;
         }
         crate::api::minos::MinosError::AgentSessionIdMismatch => {}
-        crate::api::minos::MinosError::CfAccessMisconfigured { reason } => {
-            let _: String = reason;
-        }
         crate::api::minos::MinosError::IngestSeqConflict { thread_id, seq } => {
             let _: String = thread_id;
             let _: u64 = seq;
@@ -3539,6 +3533,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
             <Option<crate::api::minos::ChatMessageReplySummary>>::sse_decode(deserializer);
         let mut var_recalledAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_mentionedAccountIds = <Vec<String>>::sse_decode(deserializer);
+        let mut var_senderType = <crate::api::minos::SenderType>::sse_decode(deserializer);
         return crate::api::minos::ChatMessageSummary {
             message_id: var_messageId,
             conversation_id: var_conversationId,
@@ -3548,6 +3543,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
             reply_to: var_replyTo,
             recalled_at_ms: var_recalledAtMs,
             mentioned_account_ids: var_mentionedAccountIds,
+            sender_type: var_senderType,
         };
     }
 }
@@ -3680,30 +3676,28 @@ impl SseDecode for crate::api::minos::ErrorKind {
             13 => crate::api::minos::ErrorKind::EnvelopeVersionUnsupported,
             14 => crate::api::minos::ErrorKind::PeerOffline,
             15 => crate::api::minos::ErrorKind::BackendInternal,
-            16 => crate::api::minos::ErrorKind::CfAuthFailed,
-            17 => crate::api::minos::ErrorKind::CodexSpawnFailed,
-            18 => crate::api::minos::ErrorKind::CodexConnectFailed,
-            19 => crate::api::minos::ErrorKind::CodexProtocolError,
-            20 => crate::api::minos::ErrorKind::AgentAlreadyRunning,
-            21 => crate::api::minos::ErrorKind::AgentNotRunning,
-            22 => crate::api::minos::ErrorKind::AgentNotSupported,
-            23 => crate::api::minos::ErrorKind::AgentSessionIdMismatch,
-            24 => crate::api::minos::ErrorKind::CfAccessMisconfigured,
-            25 => crate::api::minos::ErrorKind::IngestSeqConflict,
-            26 => crate::api::minos::ErrorKind::ThreadNotFound,
-            27 => crate::api::minos::ErrorKind::TranslationNotImplemented,
-            28 => crate::api::minos::ErrorKind::TranslationFailed,
-            29 => crate::api::minos::ErrorKind::PairingQrVersionUnsupported,
-            30 => crate::api::minos::ErrorKind::Timeout,
-            31 => crate::api::minos::ErrorKind::NotConnected,
-            32 => crate::api::minos::ErrorKind::RequestDropped,
-            33 => crate::api::minos::ErrorKind::AuthRefreshFailed,
-            34 => crate::api::minos::ErrorKind::EmailTaken,
-            35 => crate::api::minos::ErrorKind::WeakPassword,
-            36 => crate::api::minos::ErrorKind::RateLimited,
-            37 => crate::api::minos::ErrorKind::InvalidCredentials,
-            38 => crate::api::minos::ErrorKind::AgentStartFailed,
-            39 => crate::api::minos::ErrorKind::PairingTokenExpired,
+            16 => crate::api::minos::ErrorKind::CodexSpawnFailed,
+            17 => crate::api::minos::ErrorKind::CodexConnectFailed,
+            18 => crate::api::minos::ErrorKind::CodexProtocolError,
+            19 => crate::api::minos::ErrorKind::AgentAlreadyRunning,
+            20 => crate::api::minos::ErrorKind::AgentNotRunning,
+            21 => crate::api::minos::ErrorKind::AgentNotSupported,
+            22 => crate::api::minos::ErrorKind::AgentSessionIdMismatch,
+            23 => crate::api::minos::ErrorKind::IngestSeqConflict,
+            24 => crate::api::minos::ErrorKind::ThreadNotFound,
+            25 => crate::api::minos::ErrorKind::TranslationNotImplemented,
+            26 => crate::api::minos::ErrorKind::TranslationFailed,
+            27 => crate::api::minos::ErrorKind::PairingQrVersionUnsupported,
+            28 => crate::api::minos::ErrorKind::Timeout,
+            29 => crate::api::minos::ErrorKind::NotConnected,
+            30 => crate::api::minos::ErrorKind::RequestDropped,
+            31 => crate::api::minos::ErrorKind::AuthRefreshFailed,
+            32 => crate::api::minos::ErrorKind::EmailTaken,
+            33 => crate::api::minos::ErrorKind::WeakPassword,
+            34 => crate::api::minos::ErrorKind::RateLimited,
+            35 => crate::api::minos::ErrorKind::InvalidCredentials,
+            36 => crate::api::minos::ErrorKind::AgentStartFailed,
+            37 => crate::api::minos::ErrorKind::PairingTokenExpired,
             _ => unreachable!("Invalid variant for ErrorKind: {}", inner),
         };
     }
@@ -4286,17 +4280,11 @@ impl SseDecode for crate::api::minos::MinosError {
             }
             16 => {
                 let mut var_message = <String>::sse_decode(deserializer);
-                return crate::api::minos::MinosError::CfAuthFailed {
-                    message: var_message,
-                };
-            }
-            17 => {
-                let mut var_message = <String>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::CodexSpawnFailed {
                     message: var_message,
                 };
             }
-            18 => {
+            17 => {
                 let mut var_url = <String>::sse_decode(deserializer);
                 let mut var_message = <String>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::CodexConnectFailed {
@@ -4304,7 +4292,7 @@ impl SseDecode for crate::api::minos::MinosError {
                     message: var_message,
                 };
             }
-            19 => {
+            18 => {
                 let mut var_method = <String>::sse_decode(deserializer);
                 let mut var_message = <String>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::CodexProtocolError {
@@ -4312,24 +4300,20 @@ impl SseDecode for crate::api::minos::MinosError {
                     message: var_message,
                 };
             }
-            20 => {
+            19 => {
                 return crate::api::minos::MinosError::AgentAlreadyRunning;
             }
-            21 => {
+            20 => {
                 return crate::api::minos::MinosError::AgentNotRunning;
             }
-            22 => {
+            21 => {
                 let mut var_agent = <crate::api::minos::AgentName>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::AgentNotSupported { agent: var_agent };
             }
-            23 => {
+            22 => {
                 return crate::api::minos::MinosError::AgentSessionIdMismatch;
             }
-            24 => {
-                let mut var_reason = <String>::sse_decode(deserializer);
-                return crate::api::minos::MinosError::CfAccessMisconfigured { reason: var_reason };
-            }
-            25 => {
+            23 => {
                 let mut var_threadId = <String>::sse_decode(deserializer);
                 let mut var_seq = <u64>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::IngestSeqConflict {
@@ -4337,19 +4321,19 @@ impl SseDecode for crate::api::minos::MinosError {
                     seq: var_seq,
                 };
             }
-            26 => {
+            24 => {
                 let mut var_threadId = <String>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::ThreadNotFound {
                     thread_id: var_threadId,
                 };
             }
-            27 => {
+            25 => {
                 let mut var_agent = <crate::api::minos::AgentName>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::TranslationNotImplemented {
                     agent: var_agent,
                 };
             }
-            28 => {
+            26 => {
                 let mut var_agent = <crate::api::minos::AgentName>::sse_decode(deserializer);
                 let mut var_message = <String>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::TranslationFailed {
@@ -4357,47 +4341,47 @@ impl SseDecode for crate::api::minos::MinosError {
                     message: var_message,
                 };
             }
-            29 => {
+            27 => {
                 let mut var_version = <u8>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::PairingQrVersionUnsupported {
                     version: var_version,
                 };
             }
-            30 => {
+            28 => {
                 return crate::api::minos::MinosError::Timeout;
             }
-            31 => {
+            29 => {
                 return crate::api::minos::MinosError::NotConnected;
             }
-            32 => {
+            30 => {
                 return crate::api::minos::MinosError::RequestDropped;
             }
-            33 => {
+            31 => {
                 let mut var_message = <String>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::AuthRefreshFailed {
                     message: var_message,
                 };
             }
-            34 => {
+            32 => {
                 return crate::api::minos::MinosError::EmailTaken;
             }
-            35 => {
+            33 => {
                 return crate::api::minos::MinosError::WeakPassword;
             }
-            36 => {
+            34 => {
                 let mut var_retryAfterS = <u32>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::RateLimited {
                     retry_after_s: var_retryAfterS,
                 };
             }
-            37 => {
+            35 => {
                 return crate::api::minos::MinosError::InvalidCredentials;
             }
-            38 => {
+            36 => {
                 let mut var_reason = <String>::sse_decode(deserializer);
                 return crate::api::minos::MinosError::AgentStartFailed { reason: var_reason };
             }
-            39 => {
+            37 => {
                 return crate::api::minos::MinosError::PairingTokenExpired;
             }
             _ => {
@@ -5548,30 +5532,28 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ErrorKind> 
             crate::api::minos::ErrorKind::EnvelopeVersionUnsupported => 13.into_dart(),
             crate::api::minos::ErrorKind::PeerOffline => 14.into_dart(),
             crate::api::minos::ErrorKind::BackendInternal => 15.into_dart(),
-            crate::api::minos::ErrorKind::CfAuthFailed => 16.into_dart(),
-            crate::api::minos::ErrorKind::CodexSpawnFailed => 17.into_dart(),
-            crate::api::minos::ErrorKind::CodexConnectFailed => 18.into_dart(),
-            crate::api::minos::ErrorKind::CodexProtocolError => 19.into_dart(),
-            crate::api::minos::ErrorKind::AgentAlreadyRunning => 20.into_dart(),
-            crate::api::minos::ErrorKind::AgentNotRunning => 21.into_dart(),
-            crate::api::minos::ErrorKind::AgentNotSupported => 22.into_dart(),
-            crate::api::minos::ErrorKind::AgentSessionIdMismatch => 23.into_dart(),
-            crate::api::minos::ErrorKind::CfAccessMisconfigured => 24.into_dart(),
-            crate::api::minos::ErrorKind::IngestSeqConflict => 25.into_dart(),
-            crate::api::minos::ErrorKind::ThreadNotFound => 26.into_dart(),
-            crate::api::minos::ErrorKind::TranslationNotImplemented => 27.into_dart(),
-            crate::api::minos::ErrorKind::TranslationFailed => 28.into_dart(),
-            crate::api::minos::ErrorKind::PairingQrVersionUnsupported => 29.into_dart(),
-            crate::api::minos::ErrorKind::Timeout => 30.into_dart(),
-            crate::api::minos::ErrorKind::NotConnected => 31.into_dart(),
-            crate::api::minos::ErrorKind::RequestDropped => 32.into_dart(),
-            crate::api::minos::ErrorKind::AuthRefreshFailed => 33.into_dart(),
-            crate::api::minos::ErrorKind::EmailTaken => 34.into_dart(),
-            crate::api::minos::ErrorKind::WeakPassword => 35.into_dart(),
-            crate::api::minos::ErrorKind::RateLimited => 36.into_dart(),
-            crate::api::minos::ErrorKind::InvalidCredentials => 37.into_dart(),
-            crate::api::minos::ErrorKind::AgentStartFailed => 38.into_dart(),
-            crate::api::minos::ErrorKind::PairingTokenExpired => 39.into_dart(),
+            crate::api::minos::ErrorKind::CodexSpawnFailed => 16.into_dart(),
+            crate::api::minos::ErrorKind::CodexConnectFailed => 17.into_dart(),
+            crate::api::minos::ErrorKind::CodexProtocolError => 18.into_dart(),
+            crate::api::minos::ErrorKind::AgentAlreadyRunning => 19.into_dart(),
+            crate::api::minos::ErrorKind::AgentNotRunning => 20.into_dart(),
+            crate::api::minos::ErrorKind::AgentNotSupported => 21.into_dart(),
+            crate::api::minos::ErrorKind::AgentSessionIdMismatch => 22.into_dart(),
+            crate::api::minos::ErrorKind::IngestSeqConflict => 23.into_dart(),
+            crate::api::minos::ErrorKind::ThreadNotFound => 24.into_dart(),
+            crate::api::minos::ErrorKind::TranslationNotImplemented => 25.into_dart(),
+            crate::api::minos::ErrorKind::TranslationFailed => 26.into_dart(),
+            crate::api::minos::ErrorKind::PairingQrVersionUnsupported => 27.into_dart(),
+            crate::api::minos::ErrorKind::Timeout => 28.into_dart(),
+            crate::api::minos::ErrorKind::NotConnected => 29.into_dart(),
+            crate::api::minos::ErrorKind::RequestDropped => 30.into_dart(),
+            crate::api::minos::ErrorKind::AuthRefreshFailed => 31.into_dart(),
+            crate::api::minos::ErrorKind::EmailTaken => 32.into_dart(),
+            crate::api::minos::ErrorKind::WeakPassword => 33.into_dart(),
+            crate::api::minos::ErrorKind::RateLimited => 34.into_dart(),
+            crate::api::minos::ErrorKind::InvalidCredentials => 35.into_dart(),
+            crate::api::minos::ErrorKind::AgentStartFailed => 36.into_dart(),
+            crate::api::minos::ErrorKind::PairingTokenExpired => 37.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -6027,70 +6009,64 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::MinosError>
             crate::api::minos::MinosError::BackendInternal { message } => {
                 [15.into_dart(), message.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::minos::MinosError::CfAuthFailed { message } => {
+            crate::api::minos::MinosError::CodexSpawnFailed { message } => {
                 [16.into_dart(), message.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::minos::MinosError::CodexSpawnFailed { message } => {
-                [17.into_dart(), message.into_into_dart().into_dart()].into_dart()
-            }
             crate::api::minos::MinosError::CodexConnectFailed { url, message } => [
-                18.into_dart(),
+                17.into_dart(),
                 url.into_into_dart().into_dart(),
                 message.into_into_dart().into_dart(),
             ]
             .into_dart(),
             crate::api::minos::MinosError::CodexProtocolError { method, message } => [
-                19.into_dart(),
+                18.into_dart(),
                 method.into_into_dart().into_dart(),
                 message.into_into_dart().into_dart(),
             ]
             .into_dart(),
-            crate::api::minos::MinosError::AgentAlreadyRunning => [20.into_dart()].into_dart(),
-            crate::api::minos::MinosError::AgentNotRunning => [21.into_dart()].into_dart(),
+            crate::api::minos::MinosError::AgentAlreadyRunning => [19.into_dart()].into_dart(),
+            crate::api::minos::MinosError::AgentNotRunning => [20.into_dart()].into_dart(),
             crate::api::minos::MinosError::AgentNotSupported { agent } => {
-                [22.into_dart(), agent.into_into_dart().into_dart()].into_dart()
+                [21.into_dart(), agent.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::minos::MinosError::AgentSessionIdMismatch => [23.into_dart()].into_dart(),
-            crate::api::minos::MinosError::CfAccessMisconfigured { reason } => {
-                [24.into_dart(), reason.into_into_dart().into_dart()].into_dart()
-            }
+            crate::api::minos::MinosError::AgentSessionIdMismatch => [22.into_dart()].into_dart(),
             crate::api::minos::MinosError::IngestSeqConflict { thread_id, seq } => [
-                25.into_dart(),
+                23.into_dart(),
                 thread_id.into_into_dart().into_dart(),
                 seq.into_into_dart().into_dart(),
             ]
             .into_dart(),
             crate::api::minos::MinosError::ThreadNotFound { thread_id } => {
-                [26.into_dart(), thread_id.into_into_dart().into_dart()].into_dart()
+                [24.into_dart(), thread_id.into_into_dart().into_dart()].into_dart()
             }
             crate::api::minos::MinosError::TranslationNotImplemented { agent } => {
-                [27.into_dart(), agent.into_into_dart().into_dart()].into_dart()
+                [25.into_dart(), agent.into_into_dart().into_dart()].into_dart()
             }
             crate::api::minos::MinosError::TranslationFailed { agent, message } => [
-                28.into_dart(),
+                26.into_dart(),
                 agent.into_into_dart().into_dart(),
                 message.into_into_dart().into_dart(),
             ]
             .into_dart(),
             crate::api::minos::MinosError::PairingQrVersionUnsupported { version } => {
-                [29.into_dart(), version.into_into_dart().into_dart()].into_dart()
+                [27.into_dart(), version.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::minos::MinosError::Timeout => [30.into_dart()].into_dart(),
-            crate::api::minos::MinosError::NotConnected => [31.into_dart()].into_dart(),
-            crate::api::minos::MinosError::RequestDropped => [32.into_dart()].into_dart(),
+            crate::api::minos::MinosError::Timeout => [28.into_dart()].into_dart(),
+            crate::api::minos::MinosError::NotConnected => [29.into_dart()].into_dart(),
+            crate::api::minos::MinosError::RequestDropped => [30.into_dart()].into_dart(),
             crate::api::minos::MinosError::AuthRefreshFailed { message } => {
-                [33.into_dart(), message.into_into_dart().into_dart()].into_dart()
+                [31.into_dart(), message.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::minos::MinosError::EmailTaken => [34.into_dart()].into_dart(),
-            crate::api::minos::MinosError::WeakPassword => [35.into_dart()].into_dart(),
+            crate::api::minos::MinosError::EmailTaken => [32.into_dart()].into_dart(),
+            crate::api::minos::MinosError::WeakPassword => [33.into_dart()].into_dart(),
             crate::api::minos::MinosError::RateLimited { retry_after_s } => {
-                [36.into_dart(), retry_after_s.into_into_dart().into_dart()].into_dart()
+                [34.into_dart(), retry_after_s.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::minos::MinosError::InvalidCredentials => [37.into_dart()].into_dart(),
+            crate::api::minos::MinosError::InvalidCredentials => [35.into_dart()].into_dart(),
             crate::api::minos::MinosError::AgentStartFailed { reason } => {
-                [38.into_dart(), reason.into_into_dart().into_dart()].into_dart()
+                [36.into_dart(), reason.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::minos::MinosError::PairingTokenExpired => [39.into_dart()].into_dart(),
+            crate::api::minos::MinosError::PairingTokenExpired => [37.into_dart()].into_dart(),
             _ => {
                 unimplemented!("");
             }
@@ -6782,6 +6758,31 @@ impl SseEncode for crate::api::minos::ChatMessageSummary {
         <Option<crate::api::minos::ChatMessageReplySummary>>::sse_encode(self.reply_to, serializer);
         <Option<i64>>::sse_encode(self.recalled_at_ms, serializer);
         <Vec<String>>::sse_encode(self.mentioned_account_ids, serializer);
+        <crate::api::minos::SenderType>::sse_encode(self.sender_type, serializer);
+    }
+}
+
+impl SseDecode for crate::api::minos::SenderType {
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => crate::api::minos::SenderType::User,
+            1 => crate::api::minos::SenderType::Agent,
+            _ => unreachable!("Invalid variant for SenderType: {}", tag_),
+        }
+    }
+}
+
+impl SseEncode for crate::api::minos::SenderType {
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::minos::SenderType::User => {
+                <i32>::sse_encode(0, serializer);
+            }
+            crate::api::minos::SenderType::Agent => {
+                <i32>::sse_encode(1, serializer);
+            }
+        }
     }
 }
 
@@ -6889,30 +6890,28 @@ impl SseEncode for crate::api::minos::ErrorKind {
                 crate::api::minos::ErrorKind::EnvelopeVersionUnsupported => 13,
                 crate::api::minos::ErrorKind::PeerOffline => 14,
                 crate::api::minos::ErrorKind::BackendInternal => 15,
-                crate::api::minos::ErrorKind::CfAuthFailed => 16,
-                crate::api::minos::ErrorKind::CodexSpawnFailed => 17,
-                crate::api::minos::ErrorKind::CodexConnectFailed => 18,
-                crate::api::minos::ErrorKind::CodexProtocolError => 19,
-                crate::api::minos::ErrorKind::AgentAlreadyRunning => 20,
-                crate::api::minos::ErrorKind::AgentNotRunning => 21,
-                crate::api::minos::ErrorKind::AgentNotSupported => 22,
-                crate::api::minos::ErrorKind::AgentSessionIdMismatch => 23,
-                crate::api::minos::ErrorKind::CfAccessMisconfigured => 24,
-                crate::api::minos::ErrorKind::IngestSeqConflict => 25,
-                crate::api::minos::ErrorKind::ThreadNotFound => 26,
-                crate::api::minos::ErrorKind::TranslationNotImplemented => 27,
-                crate::api::minos::ErrorKind::TranslationFailed => 28,
-                crate::api::minos::ErrorKind::PairingQrVersionUnsupported => 29,
-                crate::api::minos::ErrorKind::Timeout => 30,
-                crate::api::minos::ErrorKind::NotConnected => 31,
-                crate::api::minos::ErrorKind::RequestDropped => 32,
-                crate::api::minos::ErrorKind::AuthRefreshFailed => 33,
-                crate::api::minos::ErrorKind::EmailTaken => 34,
-                crate::api::minos::ErrorKind::WeakPassword => 35,
-                crate::api::minos::ErrorKind::RateLimited => 36,
-                crate::api::minos::ErrorKind::InvalidCredentials => 37,
-                crate::api::minos::ErrorKind::AgentStartFailed => 38,
-                crate::api::minos::ErrorKind::PairingTokenExpired => 39,
+                crate::api::minos::ErrorKind::CodexSpawnFailed => 16,
+                crate::api::minos::ErrorKind::CodexConnectFailed => 17,
+                crate::api::minos::ErrorKind::CodexProtocolError => 18,
+                crate::api::minos::ErrorKind::AgentAlreadyRunning => 19,
+                crate::api::minos::ErrorKind::AgentNotRunning => 20,
+                crate::api::minos::ErrorKind::AgentNotSupported => 21,
+                crate::api::minos::ErrorKind::AgentSessionIdMismatch => 22,
+                crate::api::minos::ErrorKind::IngestSeqConflict => 23,
+                crate::api::minos::ErrorKind::ThreadNotFound => 24,
+                crate::api::minos::ErrorKind::TranslationNotImplemented => 25,
+                crate::api::minos::ErrorKind::TranslationFailed => 26,
+                crate::api::minos::ErrorKind::PairingQrVersionUnsupported => 27,
+                crate::api::minos::ErrorKind::Timeout => 28,
+                crate::api::minos::ErrorKind::NotConnected => 29,
+                crate::api::minos::ErrorKind::RequestDropped => 30,
+                crate::api::minos::ErrorKind::AuthRefreshFailed => 31,
+                crate::api::minos::ErrorKind::EmailTaken => 32,
+                crate::api::minos::ErrorKind::WeakPassword => 33,
+                crate::api::minos::ErrorKind::RateLimited => 34,
+                crate::api::minos::ErrorKind::InvalidCredentials => 35,
+                crate::api::minos::ErrorKind::AgentStartFailed => 36,
+                crate::api::minos::ErrorKind::PairingTokenExpired => 37,
                 _ => {
                     unimplemented!("");
                 }
@@ -7360,95 +7359,87 @@ impl SseEncode for crate::api::minos::MinosError {
                 <i32>::sse_encode(15, serializer);
                 <String>::sse_encode(message, serializer);
             }
-            crate::api::minos::MinosError::CfAuthFailed { message } => {
+            crate::api::minos::MinosError::CodexSpawnFailed { message } => {
                 <i32>::sse_encode(16, serializer);
                 <String>::sse_encode(message, serializer);
             }
-            crate::api::minos::MinosError::CodexSpawnFailed { message } => {
-                <i32>::sse_encode(17, serializer);
-                <String>::sse_encode(message, serializer);
-            }
             crate::api::minos::MinosError::CodexConnectFailed { url, message } => {
-                <i32>::sse_encode(18, serializer);
+                <i32>::sse_encode(17, serializer);
                 <String>::sse_encode(url, serializer);
                 <String>::sse_encode(message, serializer);
             }
             crate::api::minos::MinosError::CodexProtocolError { method, message } => {
-                <i32>::sse_encode(19, serializer);
+                <i32>::sse_encode(18, serializer);
                 <String>::sse_encode(method, serializer);
                 <String>::sse_encode(message, serializer);
             }
             crate::api::minos::MinosError::AgentAlreadyRunning => {
-                <i32>::sse_encode(20, serializer);
+                <i32>::sse_encode(19, serializer);
             }
             crate::api::minos::MinosError::AgentNotRunning => {
-                <i32>::sse_encode(21, serializer);
+                <i32>::sse_encode(20, serializer);
             }
             crate::api::minos::MinosError::AgentNotSupported { agent } => {
-                <i32>::sse_encode(22, serializer);
+                <i32>::sse_encode(21, serializer);
                 <crate::api::minos::AgentName>::sse_encode(agent, serializer);
             }
             crate::api::minos::MinosError::AgentSessionIdMismatch => {
-                <i32>::sse_encode(23, serializer);
-            }
-            crate::api::minos::MinosError::CfAccessMisconfigured { reason } => {
-                <i32>::sse_encode(24, serializer);
-                <String>::sse_encode(reason, serializer);
+                <i32>::sse_encode(22, serializer);
             }
             crate::api::minos::MinosError::IngestSeqConflict { thread_id, seq } => {
-                <i32>::sse_encode(25, serializer);
+                <i32>::sse_encode(23, serializer);
                 <String>::sse_encode(thread_id, serializer);
                 <u64>::sse_encode(seq, serializer);
             }
             crate::api::minos::MinosError::ThreadNotFound { thread_id } => {
-                <i32>::sse_encode(26, serializer);
+                <i32>::sse_encode(24, serializer);
                 <String>::sse_encode(thread_id, serializer);
             }
             crate::api::minos::MinosError::TranslationNotImplemented { agent } => {
-                <i32>::sse_encode(27, serializer);
+                <i32>::sse_encode(25, serializer);
                 <crate::api::minos::AgentName>::sse_encode(agent, serializer);
             }
             crate::api::minos::MinosError::TranslationFailed { agent, message } => {
-                <i32>::sse_encode(28, serializer);
+                <i32>::sse_encode(26, serializer);
                 <crate::api::minos::AgentName>::sse_encode(agent, serializer);
                 <String>::sse_encode(message, serializer);
             }
             crate::api::minos::MinosError::PairingQrVersionUnsupported { version } => {
-                <i32>::sse_encode(29, serializer);
+                <i32>::sse_encode(27, serializer);
                 <u8>::sse_encode(version, serializer);
             }
             crate::api::minos::MinosError::Timeout => {
-                <i32>::sse_encode(30, serializer);
+                <i32>::sse_encode(28, serializer);
             }
             crate::api::minos::MinosError::NotConnected => {
-                <i32>::sse_encode(31, serializer);
+                <i32>::sse_encode(29, serializer);
             }
             crate::api::minos::MinosError::RequestDropped => {
-                <i32>::sse_encode(32, serializer);
+                <i32>::sse_encode(30, serializer);
             }
             crate::api::minos::MinosError::AuthRefreshFailed { message } => {
-                <i32>::sse_encode(33, serializer);
+                <i32>::sse_encode(31, serializer);
                 <String>::sse_encode(message, serializer);
             }
             crate::api::minos::MinosError::EmailTaken => {
-                <i32>::sse_encode(34, serializer);
+                <i32>::sse_encode(32, serializer);
             }
             crate::api::minos::MinosError::WeakPassword => {
-                <i32>::sse_encode(35, serializer);
+                <i32>::sse_encode(33, serializer);
             }
             crate::api::minos::MinosError::RateLimited { retry_after_s } => {
-                <i32>::sse_encode(36, serializer);
+                <i32>::sse_encode(34, serializer);
                 <u32>::sse_encode(retry_after_s, serializer);
             }
             crate::api::minos::MinosError::InvalidCredentials => {
-                <i32>::sse_encode(37, serializer);
+                <i32>::sse_encode(35, serializer);
             }
             crate::api::minos::MinosError::AgentStartFailed { reason } => {
-                <i32>::sse_encode(38, serializer);
+                <i32>::sse_encode(36, serializer);
                 <String>::sse_encode(reason, serializer);
             }
             crate::api::minos::MinosError::PairingTokenExpired => {
-                <i32>::sse_encode(39, serializer);
+                <i32>::sse_encode(37, serializer);
             }
             _ => {
                 unimplemented!("");

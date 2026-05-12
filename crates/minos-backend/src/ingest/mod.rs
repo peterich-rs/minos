@@ -270,10 +270,7 @@ async fn broadcast_to_peers_of(
                 }
             };
 
-        for device in devices
-            .iter()
-            .filter(|d| d.role == minos_domain::DeviceRole::MobileClient)
-        {
+        for device in devices.iter().filter(|d| d.role.is_account_client()) {
             let Some(handle) = registry.get(device.device_id) else {
                 tracing::debug!(
                     target: "minos_backend::ingest",

@@ -59,7 +59,6 @@ impl Ingestor {
         url: &str,
         device_id: &str,
         device_secret: Option<&str>,
-        cf_access: Option<(&str, &str)>,
     ) -> Result<(Self, IngestorHandle), MinosError> {
         let mut req = url
             .into_client_request()
@@ -88,23 +87,6 @@ impl Ingestor {
                 })?,
             );
         }
-        if let Some((cf_id, cf_secret)) = cf_access {
-            headers.insert(
-                "CF-Access-Client-Id",
-                cf_id.parse().map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "cf_client_id is not a valid header value".into(),
-                })?,
-            );
-            headers.insert(
-                "CF-Access-Client-Secret",
-                cf_secret.parse().map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "cf_client_secret is not a valid header value".into(),
-                })?,
-            );
-        }
-
         let (ws, _resp) = connect_async(req)
             .await
             .map_err(|e| MinosError::ConnectFailed {

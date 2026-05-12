@@ -1,11 +1,11 @@
 import Foundation
 
-/// Production daemon bootstrap. Resolves CF Service Token credentials from the
+/// Production daemon bootstrap. Resolves the runtime backend URL from the
 /// bundled Info.plist, spawns the daemon, and wires the dual-axis observers
 /// into AppState. The Mac's own `selfDeviceId` is persisted in
 /// `local-state.json`. The daemon's long-lived `deviceSecret` now lives in
-/// the Rust-managed secrets store (with Keychain as a best-effort macOS
-/// mirror), so Swift no longer needs to load or migrate it at bootstrap.
+/// the Rust-managed secrets store, so Swift no longer needs to load
+/// or migrate it at bootstrap.
 /// The peer relationship itself lives only on the backend; the daemon
 /// repopulates its in-memory peer mirror after each successful WebSocket
 /// connect.
@@ -13,8 +13,6 @@ import Foundation
 /// Plan 05 Phase I.6.
 enum DaemonBootstrap {
     private static let backendURLKey = "MINOS_BACKEND_URL"
-    private static let cfClientIdKey = "CF_ACCESS_CLIENT_ID"
-    private static let cfClientSecretKey = "CF_ACCESS_CLIENT_SECRET"
 
     /// Default startDaemon factory used in production. Reads `selfDeviceId`
     /// off `local-state.json` (minted on first launch). The daemon loads
@@ -167,64 +165,14 @@ enum DaemonBootstrap {
         await appState.failBoot(with: error)
     }
 
-    struct CfAccessCreds {
-        let clientId: String
-        let clientSecret: String
-    }
-
     static func relayConfig(
         infoDictionary: [String: Any]? = Bundle.main.infoDictionary,
         env: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> RelayConfig {
         let infoDictionary = infoDictionary ?? [:]
-        let creds = try infoCreds(from: infoDictionary) ?? envCreds(from: env)
         let backendUrl = infoString(infoDictionary[backendURLKey]) ?? blankToNil(env[backendURLKey]) ?? ""
 
-        return RelayConfig(
-            backendUrl: backendUrl,
-            cfClientId: creds?.clientId ?? "",
-            cfClientSecret: creds?.clientSecret ?? ""
-        )
-    }
-
-    static func envCreds(from env: [String: String] = ProcessInfo.processInfo.environment) throws -> CfAccessCreds? {
-        try creds(
-            clientId: blankToNil(env[cfClientIdKey]),
-            clientSecret: blankToNil(env[cfClientSecretKey]),
-            source: "process environment"
-        )
-    }
-
-    static func infoCreds(from infoDictionary: [String: Any]) throws -> CfAccessCreds? {
-        try creds(
-            clientId: infoString(infoDictionary[cfClientIdKey]),
-            clientSecret: infoString(infoDictionary[cfClientSecretKey]),
-            source: "Info.plist"
-        )
-    }
-
-    private static func creds(
-        clientId: String?,
-        clientSecret: String?,
-        source: String
-    ) throws -> CfAccessCreds? {
-        let id = blankToNil(clientId)
-        let secret = blankToNil(clientSecret)
-
-        switch (id, secret) {
-        case let (.some(id), .some(secret)):
-            return CfAccessCreds(clientId: id, clientSecret: secret)
-        case (nil, nil):
-            return nil
-        case (.some, nil):
-            throw MinosError.CfAccessMisconfigured(
-                reason: "CF_ACCESS_CLIENT_ID is set but CF_ACCESS_CLIENT_SECRET is missing in \(source)"
-            )
-        case (nil, .some):
-            throw MinosError.CfAccessMisconfigured(
-                reason: "CF_ACCESS_CLIENT_SECRET is set but CF_ACCESS_CLIENT_ID is missing in \(source)"
-            )
-        }
+        return RelayConfig(backendUrl: backendUrl)
     }
 
     private static func infoString(_ value: Any?) -> String? {
@@ -315,4 +263,3 @@ enum LocalStateLoader {
         try encoder.encode(state).write(to: path, options: .atomic)
     }
 }
-

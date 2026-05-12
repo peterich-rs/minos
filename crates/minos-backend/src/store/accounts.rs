@@ -134,6 +134,23 @@ pub async fn touch_last_login(pool: &SqlitePool, account_id: &str) -> Result<(),
     Ok(())
 }
 
+pub async fn set_password_hash(
+    pool: &SqlitePool,
+    account_id: &str,
+    password_hash: &str,
+) -> Result<(), BackendError> {
+    sqlx::query("UPDATE accounts SET password_hash = ? WHERE account_id = ?")
+        .bind(password_hash)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: "accounts::set_password_hash".into(),
+            message: e.to_string(),
+        })?;
+    Ok(())
+}
+
 pub async fn find_by_minos_id(
     pool: &SqlitePool,
     minos_id: &str,

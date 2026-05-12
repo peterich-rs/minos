@@ -87,8 +87,28 @@ pub struct SearchUsersResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SearchUsersRequest {
+    pub minos_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SetMinosIdRequest {
     pub minos_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SetDisplayNameRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -227,6 +247,10 @@ pub struct ChatMessageSummary {
     pub recalled_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentioned_account_ids: Vec<String>,
+    /// Distinguishes user-sent messages from agent-sent messages.
+    /// Defaults to "user" for backward compatibility.
+    #[serde(default = "default_sender_type")]
+    pub sender_type: SenderType,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -239,7 +263,103 @@ pub struct ListChatMessagesResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListChatMessagesRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_ts_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SendChatMessageRequest {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+}
+
+// ─── Agent in Group Chat ───────────────────────────────────────────────
+
+/// The type of sender for a chat message.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SenderType {
+    User,
+    Agent,
+}
+
+fn default_sender_type() -> SenderType {
+    SenderType::User
+}
+
+/// Request to register a new agent under the caller's account.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RegisterAgentRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub runtime_agent: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+/// Summary of a registered agent.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AgentSummary {
+    pub agent_id: String,
+    pub owner_account_id: String,
+    pub name: String,
+    pub description: String,
+    pub runtime_agent: String,
+    pub model: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Response for listing agents owned by the caller.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListAgentsResponse {
+    pub agents: Vec<AgentSummary>,
+}
+
+/// Request to add an agent to a group conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AddAgentToGroupRequest {
+    pub agent_id: String,
+}
+
+/// Request to remove an agent from a group conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RemoveAgentFromGroupRequest {
+    pub agent_id: String,
+}
+
+/// Request to add a user member to an existing group conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AddGroupMemberRequest {
+    pub member_account_id: String,
+}
+
+/// Response listing agent members of a conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationAgentMembersResponse {
+    pub agents: Vec<AgentSummary>,
+}
+
+/// Request for an agent to send a message in a group conversation.
+/// The agent_id identifies which agent is "speaking".
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SendAgentMessageRequest {
+    pub agent_id: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<String>,
@@ -458,11 +578,10 @@ pub struct GetThreadResponse {
 
 /// Deep-link QR payload minted by the Mac and scanned by iOS. Carries a
 /// display name for the host, a short-lived one-shot `pairing_token`, and
-/// its RFC-3339-ish epoch-ms expiry. The backend URL and any Cloudflare
-/// Access service-token headers live in the mobile client's compile-time
-/// build config (see `minos_mobile::build_config`); they are not transit
-/// values and never enter the QR payload, durable storage, or the
-/// post-pair business logic.
+/// its RFC-3339-ish epoch-ms expiry. The backend URL lives in the mobile
+/// client's compile-time build config (see `minos_mobile::build_config`);
+/// it is not a transit value and never enters the QR payload, durable
+/// storage, or the post-pair business logic.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PairingQrPayload {
     #[serde(default = "default_pairing_qr_version")]
@@ -627,6 +746,27 @@ mod tests {
         assert_eq!(back, hosts);
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(value["hosts"].is_array());
+    }
+
+    #[test]
+    fn search_users_request_round_trip() {
+        let req = SearchUsersRequest {
+            minos_id: "fan123".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: SearchUsersRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn list_chat_messages_request_round_trip() {
+        let req = ListChatMessagesRequest {
+            before_ts_ms: Some(42),
+            limit: Some(50),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ListChatMessagesRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
     }
 
     #[test]

@@ -5,8 +5,6 @@ pub mod config;
 pub mod device_secret_store;
 pub mod handle;
 pub mod jsonl_recover;
-#[cfg(target_os = "macos")]
-pub mod keychain_store;
 pub mod local_state;
 pub mod logging;
 mod openwire_trace;
@@ -22,8 +20,6 @@ pub mod subscription;
 pub use agent::AgentGlue;
 pub use config::{RelayConfig, BACKEND_URL};
 pub use handle::*;
-#[cfg(target_os = "macos")]
-pub use keychain_store::KeychainTrustedDeviceStore;
 pub use local_state::LocalState;
 pub use minos_agent_runtime::ThreadState;
 pub use relay_client::RelayClient;

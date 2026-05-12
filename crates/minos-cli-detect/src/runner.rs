@@ -44,12 +44,19 @@ impl RealCommandRunner {
     pub fn new(env: Arc<HashMap<String, String>>) -> Self {
         Self { env }
     }
+
+    fn path_var(&self) -> Option<&str> {
+        self.env
+            .get("PATH")
+            .or_else(|| self.env.get("Path"))
+            .map(String::as_str)
+    }
 }
 
 #[async_trait::async_trait]
 impl CommandRunner for RealCommandRunner {
     async fn which(&self, bin: &str) -> Option<String> {
-        let path = self.env.get("PATH")?;
+        let path = self.path_var()?;
         let mut iter = which::which_in_global(bin, Some(path)).ok()?;
         iter.next().map(|p| p.to_string_lossy().into_owned())
     }

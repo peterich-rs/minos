@@ -1,4 +1,5 @@
-//! `GET /devices` — WebSocket upgrade with header-based auth.
+//! `GET /devices` — WebSocket upgrade with header auth or short-lived
+//! query-ticket auth for browser clients.
 //!
 //! Implements the handshake defined in plan §9 (in turn derived from spec
 //! §7.1/§9.4). The flow is:
@@ -38,13 +39,6 @@
 //! stored role and rejects any mismatching header instead of reclassifying
 //! the device from client input.
 //!
-//! # Cloudflare Access
-//!
-//! `CF-Access-Client-Id` / `CF-Access-Client-Secret` are validated at the
-//! edge. The backend does not re-verify them; the auth helper emits a
-//! debug-level log when they are observed so dev builds can confirm header
-//! plumbing.
-//!
 //! # Unpaired-mode gating
 //!
 //! The HTTP `/v1/pairing/*` routes apply role / state gates per route
@@ -59,13 +53,15 @@ use std::sync::Arc;
 use axum::{
     extract::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
-        State,
+        Query, State,
     },
     http::{HeaderMap, StatusCode},
     response::Response,
 };
 use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::{Envelope, EventKind};
+use serde::Deserialize;
+use uuid::Uuid;
 
 use super::BackendState;
 use crate::{
@@ -83,6 +79,28 @@ const CLOSE_CODE_AUTH_FAILURE: u16 = 4401;
 /// WS close code used when activation-time revalidation itself fails.
 const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
 
+#[derive(Debug, Deserialize, Default)]
+pub struct DevicesWsQuery {
+    pub ws_ticket: Option<String>,
+}
+
+enum UpgradeAuth {
+    Headers {
+        requested_role: Option<DeviceRole>,
+        device_secret: Option<String>,
+    },
+    WsTicket {
+        claims: crate::auth::jwt::WsTicketClaims,
+    },
+}
+
+struct UpgradeIdentity {
+    device_id: DeviceId,
+    role: DeviceRole,
+    account_id: Option<String>,
+    auth: UpgradeAuth,
+}
+
 /// `GET /devices` handler: classify auth, then WS upgrade.
 ///
 /// Returns either:
@@ -92,36 +110,67 @@ const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
 ///   [`run_session`] as its post-upgrade callback.
 pub async fn upgrade(
     State(state): State<BackendState>,
+    Query(query): Query<DevicesWsQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
-    let outcome = auth::authenticate(&state.store, &headers)
-        .await
-        .map_err(AuthError::into_response_tuple)?;
-
-    let device_id = outcome.device_id;
-    let role = outcome.role;
-    let device_secret = auth::extract_device_secret(&headers);
-    // The header may be missing or malformed; both cases collapse to "no
-    // requested role" because pre-upgrade `authenticate` already validated
-    // the value when present. We use `.ok().flatten()` so we don't bubble
-    // a fresh error for a stale header read.
-    let requested_role = auth::extract_device_role(&headers).ok().flatten();
-
-    // Spec §5.5 / Phase 2 Task 2.2: iOS clients must present a valid
-    // bearer JWT bound to the same `X-Device-Id` for the WS upgrade. The
-    // Mac (`AgentHost`) rail keeps the device-secret-only path so existing
-    // pairings continue to authenticate without an account-side token.
-    let account_id: Option<String> = if role == DeviceRole::MobileClient {
-        let bearer_outcome =
-            bearer::require(&state, &headers).map_err(bearer::BearerError::into_response_tuple)?;
-        Some(bearer_outcome.account_id)
+    let identity = if let Some(ticket) = query.ws_ticket.as_deref() {
+        let claims = crate::auth::jwt::verify_ws_ticket(state.jwt_secret.as_bytes(), ticket)
+            .map_err(|error| {
+                tracing::debug!(
+                    target: "minos_backend::http",
+                    error = %error,
+                    "devices websocket ws_ticket verify failed"
+                );
+                (StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string())
+            })?;
+        let device_id = Uuid::parse_str(&claims.did)
+            .map(DeviceId)
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()))?;
+        if !claims.role.is_account_client() {
+            return Err((StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()));
+        }
+        UpgradeIdentity {
+            device_id,
+            role: claims.role,
+            account_id: Some(claims.sub.clone()),
+            auth: UpgradeAuth::WsTicket { claims },
+        }
     } else {
-        None
+        let outcome = auth::authenticate(&state.store, &headers)
+            .await
+            .map_err(AuthError::into_response_tuple)?;
+
+        let role = outcome.role;
+        let device_secret = auth::extract_device_secret(&headers);
+        // The header may be missing or malformed; both cases collapse to "no
+        // requested role" because pre-upgrade `authenticate` already validated
+        // the value when present. We use `.ok().flatten()` so we don't bubble
+        // a fresh error for a stale header read.
+        let requested_role = auth::extract_device_role(&headers).ok().flatten();
+        let account_id = if role.is_account_client() {
+            let bearer_outcome = bearer::require(&state, &headers)
+                .map_err(bearer::BearerError::into_response_tuple)?;
+            Some(bearer_outcome.account_id)
+        } else {
+            None
+        };
+
+        UpgradeIdentity {
+            device_id: outcome.device_id,
+            role,
+            account_id,
+            auth: UpgradeAuth::Headers {
+                requested_role,
+                device_secret,
+            },
+        }
     };
 
+    let device_id = identity.device_id;
+    let role = identity.role;
     let (handle, outbox_rx) = SessionHandle::new(device_id, role);
-    if let Some(aid) = account_id.as_ref() {
+    if let Some(aid) = identity.account_id.as_ref() {
         handle.set_account_id(aid.clone());
     }
 
@@ -130,15 +179,23 @@ pub async fn upgrade(
     let store = state.store.clone();
     let translators = Arc::clone(&state.translators);
     Ok(ws.on_upgrade(move |mut socket| async move {
-        match revalidate_live_session_auth(
-            &store,
-            device_id,
-            role,
-            requested_role,
-            device_secret.as_deref(),
-        )
-        .await
-        {
+        let revalidate = match &identity.auth {
+            UpgradeAuth::Headers {
+                requested_role,
+                device_secret,
+            } => {
+                revalidate_live_session_auth(
+                    &store,
+                    device_id,
+                    role,
+                    *requested_role,
+                    device_secret.as_deref(),
+                )
+                .await
+            }
+            UpgradeAuth::WsTicket { claims } => revalidate_ws_ticket_auth(&store, claims).await,
+        };
+        match revalidate {
             Ok(()) => {}
             Err(ActivationAuthError::Unauthorized(message)) => {
                 tracing::info!(
@@ -201,6 +258,38 @@ impl From<AuthError> for ActivationAuthError {
             AuthError::Unauthorized(m) => Self::Unauthorized(m),
             AuthError::Internal(m) => Self::Internal(m),
         }
+    }
+}
+
+async fn revalidate_ws_ticket_auth(
+    store: &sqlx::SqlitePool,
+    claims: &crate::auth::jwt::WsTicketClaims,
+) -> Result<(), ActivationAuthError> {
+    let device_id = Uuid::parse_str(&claims.did)
+        .map(DeviceId)
+        .map_err(|_| ActivationAuthError::Unauthorized("invalid ws_ticket device_id".into()))?;
+    let row = store::devices::get_device(store, device_id)
+        .await
+        .map_err(|e| ActivationAuthError::Internal(e.to_string()))?
+        .ok_or_else(|| {
+            ActivationAuthError::Unauthorized(
+                "device row missing during websocket activation".to_string(),
+            )
+        })?;
+
+    let resolved_role = auth::resolve_device_role(Some(&row), Some(claims.role))?;
+    if resolved_role != claims.role {
+        return Err(ActivationAuthError::Unauthorized(format!(
+            "device role changed during websocket activation: expected {}, got {}",
+            claims.role, resolved_role
+        )));
+    }
+
+    match auth::classify(Some(row), None, claims.role)? {
+        Classification::FirstConnect => Err(ActivationAuthError::Unauthorized(
+            "device row missing during websocket activation".to_string(),
+        )),
+        Classification::UnpairedExisting | Classification::Authenticated => Ok(()),
     }
 }
 

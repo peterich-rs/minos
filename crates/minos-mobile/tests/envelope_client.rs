@@ -136,7 +136,6 @@ async fn authenticated_client(backend: &RealBackend, email: &str) -> MobileClien
         &format!("ws://{}/devices", backend.addr),
         device_id,
         "iPhone",
-        None,
     )
     .unwrap();
     let resp = http
@@ -244,7 +243,7 @@ async fn list_threads_round_trips_over_envelope() {
         .expect("authenticated_client seeded the access token");
 
     let http =
-        minos_mobile::http::MobileHttpClient::new(&backend_url, device_id, "iPhone", None).unwrap();
+        minos_mobile::http::MobileHttpClient::new(&backend_url, device_id, "iPhone").unwrap();
     let resp = http
         .list_threads(
             &access,
@@ -287,14 +286,13 @@ async fn pair_exports_persisted_state_and_rehydrates_new_client() {
 // ── resume_persisted_session: WS-only fake backend ──────────────────────
 
 /// Accept the resume WS handshake, assert expected `X-Device-*`, the
-/// Bearer token, and CF-Access headers were forwarded, then keep the
+/// Bearer token, and the absence of legacy edge-auth headers, then keep the
 /// socket open until the client closes. ADR-0020 made the iOS rail
 /// bearer-only — no `X-Device-Secret` header is asserted any more.
 async fn fake_backend_resume_handshake(
     listener: TcpListener,
     expected_device_id: String,
     expected_bearer: String,
-    expected_cf_access: Option<(String, String)>,
 ) {
     let (stream, _) = listener.accept().await.expect("accept");
     let ws = accept_hdr_async(
@@ -318,23 +316,25 @@ async fn fake_backend_resume_handshake(
                     .and_then(|value| value.to_str().ok()),
                 Some(format!("Bearer {expected_bearer}").as_str())
             );
-            if let Some((id, secret)) = &expected_cf_access {
-                assert_eq!(
-                    headers
-                        .get("CF-Access-Client-Id")
-                        .and_then(|value| value.to_str().ok()),
-                    Some(id.as_str())
-                );
-                assert_eq!(
-                    headers
-                        .get("CF-Access-Client-Secret")
-                        .and_then(|value| value.to_str().ok()),
-                    Some(secret.as_str())
-                );
-            } else {
-                assert!(headers.get("CF-Access-Client-Id").is_none());
-                assert!(headers.get("CF-Access-Client-Secret").is_none());
-            }
+            let header_names: Vec<_> = headers
+                .keys()
+                .map(|name| name.as_str())
+                .filter(|name| name.starts_with("x-") || *name == "authorization")
+                .collect();
+            assert_eq!(
+                header_names.len(),
+                4,
+                "unexpected custom headers: {header_names:?}"
+            );
+            assert_eq!(
+                header_names,
+                vec![
+                    "x-device-id",
+                    "x-device-role",
+                    "x-device-name",
+                    "authorization"
+                ]
+            );
             Ok(response)
         },
     )
@@ -397,7 +397,7 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
     let backend_url = format!("ws://{addr}/devices");
     let resume = tokio::time::timeout(
         Duration::from_secs(2),
-        client.resume_persisted_session_at(&backend_url, None),
+        client.resume_persisted_session_at(&backend_url),
     )
     .await
     .expect("resume_persisted_session must not hang on a 4401 close");
@@ -416,13 +416,13 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
 
     // ADR-0020: tear down the reconnect loop explicitly so the spawned
     // backend's read.next() can return. See the matching note in the
-    // CF-Access test below.
+    // Header-behavior test below.
     let _ = client.logout().await;
     backend.await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
+async fn resume_persisted_session_reconnects_without_forwarding_legacy_edge_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let device_id = DeviceId::new();
@@ -430,7 +430,6 @@ async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
         listener,
         device_id.to_string(),
         "bearer_resume".into(),
-        Some(("cf-id".into(), "cf-secret".into())),
     ));
 
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -448,13 +447,13 @@ async fn resume_persisted_session_reconnects_and_forwards_cf_access_headers() {
 
     let backend_url = format!("ws://{addr}/devices");
     client
-        .resume_persisted_session_at(&backend_url, Some(("cf-id".into(), "cf-secret".into())))
+        .resume_persisted_session_at(&backend_url)
         .await
         .unwrap();
     assert_eq!(client.current_state(), ConnectionState::Connected);
 
-    // The fake backend asserted the resume handshake's X-Device-* and
-    // CF-Access headers; nothing more to verify on the WS side. The
+    // The fake backend asserted the resume handshake's X-Device-* headers and
+    // the absence of legacy edge-auth headers; nothing more to verify on the WS side. The
     // post-Phase-C `list_threads` round-trip lives in
     // `list_threads_round_trips_over_envelope` (real backend, HTTP-backed).
     //

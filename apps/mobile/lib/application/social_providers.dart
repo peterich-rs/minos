@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import 'package:minos/application/group_agent_dispatcher.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/social_message.dart';
+import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/infrastructure/social_cache_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
@@ -190,12 +192,22 @@ class SocialConversation extends _$SocialConversation {
       await cache.touchConversationPreview(
         conversationId: _conversationId,
         preview: message.text,
-        createdAtMs: message.createdAtMs,
+        createdAtMs: platformInt64ToInt(message.createdAtMs),
       );
       state = state.copyWith(
         messages: await cache.loadMessages(_conversationId),
       );
       ref.invalidate(conversationsProvider);
+
+      // Dispatch to mentioned agents in group chats
+      unawaited(
+        ref
+            .read(groupAgentDispatcherProvider)
+            .dispatchIfMentioned(
+              conversationId: _conversationId,
+              messageText: trimmed,
+            ),
+      );
     } catch (error) {
       await cache.markMessageFailed(pending.localId);
       state = state.copyWith(
@@ -237,7 +249,7 @@ class SocialConversation extends _$SocialConversation {
       await cache.touchConversationPreview(
         conversationId: _conversationId,
         preview: message.text,
-        createdAtMs: message.createdAtMs,
+        createdAtMs: platformInt64ToInt(message.createdAtMs),
       );
       state = state.copyWith(
         messages: await cache.loadMessages(_conversationId),
@@ -275,7 +287,7 @@ class SocialConversation extends _$SocialConversation {
     await cache.touchConversationPreview(
       conversationId: _conversationId,
       preview: message.text,
-      createdAtMs: message.createdAtMs,
+      createdAtMs: platformInt64ToInt(message.createdAtMs),
     );
     state = state.copyWith(messages: await cache.loadMessages(_conversationId));
     final replyDraft = ref.read(socialReplyDraftProvider(_conversationId));
@@ -339,7 +351,7 @@ class SocialConversation extends _$SocialConversation {
     await cache.touchConversationPreview(
       conversationId: message.conversationId,
       preview: message.text,
-      createdAtMs: message.createdAtMs,
+      createdAtMs: platformInt64ToInt(message.createdAtMs),
     );
     state = state.copyWith(
       messages: await cache.loadMessages(_conversationId),
@@ -376,7 +388,9 @@ class SocialConversation extends _$SocialConversation {
       messageId: message.serverMessageId!,
       sender: message.sender,
       text: message.text,
-      recalledAtMs: message.recalledAtMs,
+      recalledAtMs: message.recalledAtMs == null
+          ? null
+          : platformInt64FromInt(message.recalledAtMs!),
     );
   }
 }

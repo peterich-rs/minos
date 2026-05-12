@@ -7,27 +7,19 @@ pub const BACKEND_URL: &str = match option_env!("MINOS_BACKEND_URL") {
     None => minos_domain::defaults::DEV_BACKEND_URL,
 };
 
-/// Runtime relay config. Callers can override the backend URL and optional
-/// CF Service Token pair at bootstrap time; blank values fall back to the
-/// baked-in defaults.
+/// Runtime relay config. `backend_url` is the only live field.
 ///
 /// Derives `uniffi::Record` so Swift can pass it to
-/// `DaemonHandle::start`; the String fields marshal as plain strings.
+/// `DaemonHandle::start`; the String field marshals as plain text.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug)]
 pub struct RelayConfig {
     pub backend_url: String,
-    pub cf_client_id: String,
-    pub cf_client_secret: String,
 }
 
 impl RelayConfig {
-    pub fn new(backend_url: String, cf_client_id: String, cf_client_secret: String) -> Self {
-        Self {
-            backend_url,
-            cf_client_id,
-            cf_client_secret,
-        }
+    pub fn new(backend_url: String) -> Self {
+        Self { backend_url }
     }
 
     #[must_use]
@@ -47,23 +39,22 @@ mod tests {
 
     #[test]
     fn backend_url_has_a_sane_fallback() {
-        // With no MINOS_BACKEND_URL at test-build time, BACKEND_URL must
-        // fall back to the shared dev constant from minos-domain.
-        assert_eq!(BACKEND_URL, minos_domain::defaults::DEV_BACKEND_URL);
+        // CI/dev builds may bake an explicit MINOS_BACKEND_URL; the only
+        // invariant we rely on here is that the constant resolves to a
+        // websocket URL.
+        assert!(!BACKEND_URL.is_empty());
         assert!(BACKEND_URL.starts_with("ws://") || BACKEND_URL.starts_with("wss://"));
     }
 
     #[test]
     fn relay_config_ctor_stores_fields() {
-        let c = RelayConfig::new("wss://backend/devices".into(), "id".into(), "secret".into());
+        let c = RelayConfig::new("wss://backend/devices".into());
         assert_eq!(c.backend_url, "wss://backend/devices");
-        assert_eq!(c.cf_client_id, "id");
-        assert_eq!(c.cf_client_secret, "secret");
     }
 
     #[test]
     fn relay_config_uses_baked_backend_when_runtime_value_is_blank() {
-        let c = RelayConfig::new("   ".into(), "id".into(), "secret".into());
+        let c = RelayConfig::new("   ".into());
         assert_eq!(c.resolved_backend_url(), BACKEND_URL);
     }
 }

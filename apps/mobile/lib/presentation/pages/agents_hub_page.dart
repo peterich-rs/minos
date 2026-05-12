@@ -1,8 +1,6 @@
 import 'package:flutter/cupertino.dart' hide ConnectionState;
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/application/active_session_provider.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/auth_provider.dart';
@@ -17,6 +15,7 @@ import 'package:minos/src/rust/api/minos.dart'
     as minos_api
     show ConnectionState;
 import 'package:minos/src/rust/api/minos.dart' hide ConnectionState;
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 class AgentsHubTab extends ConsumerWidget {
   const AgentsHubTab({super.key});
@@ -182,17 +181,17 @@ class _AgentListSkeleton extends StatelessWidget {
     return Column(
       children: List.generate(
         2,
-        (index) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        (index) => const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const ShimmerBox(width: 42, height: 42, circular: true),
-              const SizedBox(width: 12),
+              ShimmerBox(width: 42, height: 42, circular: true),
+              SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
+                  children: [
                     ShimmerBox(width: 80, height: 12),
                     SizedBox(height: 8),
                     ShimmerBox(width: 120, height: 16),
@@ -219,16 +218,16 @@ class _DeviceListSkeleton extends StatelessWidget {
     return Column(
       children: List.generate(
         1,
-        (index) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        (index) => const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             children: [
-              const ShimmerBox(width: 42, height: 42, circular: true),
-              const SizedBox(width: 12),
+              ShimmerBox(width: 42, height: 42, circular: true),
+              SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
+                  children: [
                     ShimmerBox(width: 100, height: 16),
                     SizedBox(height: 8),
                     ShimmerBox(width: 140, height: 14),
@@ -248,16 +247,16 @@ class _HumanListSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
         children: [
-          const ShimmerBox(width: 42, height: 42, circular: true),
-          const SizedBox(width: 12),
+          ShimmerBox(width: 42, height: 42, circular: true),
+          SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
+              children: [
                 ShimmerBox(width: 120, height: 16),
                 SizedBox(height: 8),
                 ShimmerBox(width: 180, height: 14),
@@ -1449,9 +1448,9 @@ class _HostRuntimeCard extends ConsumerWidget {
                         builder: (_) => const PairingPage(),
                       ),
                     ),
-                    child: Row(
+                    child: const Row(
                       mainAxisSize: MainAxisSize.min,
-                      children: const [
+                      children: [
                         Icon(CupertinoIcons.qrcode_viewfinder, size: 16),
                         SizedBox(width: 8),
                         Text('添加 Runtime'),

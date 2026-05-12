@@ -2,8 +2,7 @@
 //!
 //! The relay depends on this value to reconnect after pairing. Keep the
 //! primary copy in the daemon's own secrets directory so every platform has
-//! the same persistence story; on macOS we still mirror to Keychain best-
-//! effort for migration and operator inspection.
+//! the same persistence story.
 
 use std::{
     fs,
@@ -14,7 +13,6 @@ use minos_domain::{DeviceSecret, MinosError};
 use serde::{Deserialize, Serialize};
 
 const FILE_NAME: &str = "device-secret.json";
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PersistedDeviceSecret {
     device_secret: DeviceSecret,
@@ -26,80 +24,17 @@ pub fn default_path() -> Result<PathBuf, MinosError> {
 
 pub fn read() -> Result<Option<DeviceSecret>, MinosError> {
     let path = default_path()?;
-    let from_file = read_file(&path)?;
-    if from_file.is_some() {
-        return Ok(from_file);
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let store = crate::keychain_store::KeychainTrustedDeviceStore;
-        match store.read() {
-            Ok(Some(secret)) => {
-                if let Err(error) = write_file(&path, &secret) {
-                    tracing::warn!(
-                        target: "minos_daemon::device_secret_store",
-                        error = %error,
-                        path = %path.display(),
-                        "loaded device secret from Keychain but failed to backfill file store"
-                    );
-                }
-                Ok(Some(secret))
-            }
-            Ok(None) => Ok(None),
-            Err(error) => {
-                tracing::warn!(
-                    target: "minos_daemon::device_secret_store",
-                    error = %error,
-                    "failed to read device secret from Keychain fallback"
-                );
-                Ok(None)
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(None)
-    }
+    read_file(&path)
 }
 
 pub fn write(secret: &DeviceSecret) -> Result<(), MinosError> {
     let path = default_path()?;
-    write_file(&path, secret)?;
-
-    #[cfg(target_os = "macos")]
-    {
-        let store = crate::keychain_store::KeychainTrustedDeviceStore;
-        if let Err(error) = store.write(secret) {
-            tracing::warn!(
-                target: "minos_daemon::device_secret_store",
-                error = %error,
-                "failed to mirror device secret into Keychain"
-            );
-        }
-    }
-
-    Ok(())
+    write_file(&path, secret)
 }
 
 pub fn delete() -> Result<(), MinosError> {
     let path = default_path()?;
-    delete_file(&path)?;
-
-    #[cfg(target_os = "macos")]
-    {
-        let store = crate::keychain_store::KeychainTrustedDeviceStore;
-        if let Err(error) = store.delete() {
-            tracing::warn!(
-                target: "minos_daemon::device_secret_store",
-                error = %error,
-                "failed to delete mirrored device secret from Keychain"
-            );
-        }
-    }
-
-    Ok(())
+    delete_file(&path)
 }
 
 fn read_file(path: &Path) -> Result<Option<DeviceSecret>, MinosError> {

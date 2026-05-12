@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/infrastructure/app_paths.dart';
+import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 class SocialCacheStore {
@@ -295,13 +296,13 @@ class SocialCacheStore {
           'server_message_id': message.messageId,
           'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
           'text': message.text,
-          'created_at_ms': message.createdAtMs,
-          'server_order_key': message.createdAtMs,
+          'created_at_ms': platformInt64ToInt(message.createdAtMs),
+          'server_order_key': platformInt64ToInt(message.createdAtMs),
           'reply_to_message_id': message.replyTo?.messageId,
           'reply_to_preview_json': message.replyTo == null
               ? null
               : jsonEncode(_replyPreviewToMap(message.replyTo!)),
-          'recalled_at_ms': message.recalledAtMs,
+          'recalled_at_ms': platformInt64ToNullableInt(message.recalledAtMs),
           'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
           'delivery_state': SocialMessageDeliveryState.sent.name,
           'client_seq': existing.clientSeq,
@@ -363,13 +364,13 @@ class SocialCacheStore {
           'conversation_id': message.conversationId,
           'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
           'text': message.text,
-          'created_at_ms': message.createdAtMs,
-          'server_order_key': message.createdAtMs,
+          'created_at_ms': platformInt64ToInt(message.createdAtMs),
+          'server_order_key': platformInt64ToInt(message.createdAtMs),
           'reply_to_message_id': message.replyTo?.messageId,
           'reply_to_preview_json': message.replyTo == null
               ? null
               : jsonEncode(_replyPreviewToMap(message.replyTo!)),
-          'recalled_at_ms': message.recalledAtMs,
+          'recalled_at_ms': platformInt64ToNullableInt(message.recalledAtMs),
           'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
           'delivery_state': SocialMessageDeliveryState.sent.name,
           'client_seq': existing.clientSeq,
@@ -387,14 +388,14 @@ class SocialCacheStore {
       'server_message_id': message.messageId,
       'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
       'text': message.text,
-      'created_at_ms': message.createdAtMs,
+      'created_at_ms': platformInt64ToInt(message.createdAtMs),
       'client_seq': nextClientSeq,
-      'server_order_key': message.createdAtMs,
+      'server_order_key': platformInt64ToInt(message.createdAtMs),
       'reply_to_message_id': message.replyTo?.messageId,
       'reply_to_preview_json': message.replyTo == null
           ? null
           : jsonEncode(_replyPreviewToMap(message.replyTo!)),
-      'recalled_at_ms': message.recalledAtMs,
+      'recalled_at_ms': platformInt64ToNullableInt(message.recalledAtMs),
       'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
       'delivery_state': SocialMessageDeliveryState.sent.name,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
@@ -424,7 +425,7 @@ class SocialCacheStore {
       counterpart: _userSummaryFromJson(row['counterpart_json'] as String?),
       memberCount: row['member_count']! as int,
       lastMessagePreview: row['last_message_preview'] as String?,
-      lastMessageAtMs: row['last_message_at_ms']! as int,
+      lastMessageAtMs: platformInt64FromInt(row['last_message_at_ms']! as int),
       unreadCount: row['unread_count']! as int,
       unreadMentionCount: row['unread_mention_count']! as int,
     );
@@ -440,7 +441,7 @@ class SocialCacheStore {
           : jsonEncode(_userSummaryToMap(conversation.counterpart!)),
       'member_count': conversation.memberCount,
       'last_message_preview': conversation.lastMessagePreview,
-      'last_message_at_ms': conversation.lastMessageAtMs,
+      'last_message_at_ms': platformInt64ToInt(conversation.lastMessageAtMs),
       'unread_count': conversation.unreadCount,
       'unread_mention_count': conversation.unreadMentionCount,
     };
@@ -496,7 +497,7 @@ class SocialCacheStore {
       'message_id': reply.messageId,
       'sender': _userSummaryToMap(reply.sender),
       'text': reply.text,
-      'recalled_at_ms': reply.recalledAtMs,
+      'recalled_at_ms': platformInt64ToNullableInt(reply.recalledAtMs),
     };
   }
 
@@ -509,7 +510,9 @@ class SocialCacheStore {
       messageId: map['message_id']! as String,
       sender: _userSummaryFromMap(map['sender']! as Map<String, Object?>),
       text: map['text']! as String,
-      recalledAtMs: map['recalled_at_ms'] as int?,
+      recalledAtMs: map['recalled_at_ms'] == null
+          ? null
+          : platformInt64FromInt(map['recalled_at_ms']! as int),
     );
   }
 

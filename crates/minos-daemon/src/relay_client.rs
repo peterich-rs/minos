@@ -23,11 +23,10 @@
 //!
 //! # Error handling
 //!
-//! - A connect-time HTTP 401 (CF Access or relay's pre-upgrade auth check)
-//!   is unambiguously an auth failure: `MinosError::CfAuthFailed` is written
-//!   into the shared `last_error` slot and the task exits with a
-//!   `Disconnected` link state. The caller must call [`RelayClient::stop`]
-//!   and spawn a fresh client once creds have been rotated.
+//! - A connect-time HTTP 401 is treated as a terminal auth failure:
+//!   `MinosError::Unauthorized` is written into the shared `last_error` slot
+//!   and the task exits with a `Disconnected` link state. The caller must
+//!   call [`RelayClient::stop`] and spawn a fresh client once auth is fixed.
 //! - WS close code `4401` (relay's post-upgrade stale-auth signal) is
 //!   terminal too: `MinosError::DeviceNotTrusted` lands in `last_error`
 //!   and the task exits — re-pairing is required before another connect
@@ -52,7 +51,7 @@ use futures_util::{SinkExt, StreamExt};
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, PeerState, RelayLinkState};
 use minos_protocol::envelope::{Envelope, EventKind};
 use minos_protocol::HostPeerSummary;
-use minos_transport::auth::{AuthHeaders, CfAccessToken};
+use minos_transport::auth::AuthHeaders;
 use minos_transport::backoff::delay_for_attempt;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -109,7 +108,7 @@ impl RelayClient {
     /// down cleanly; the returned `JoinHandle` is awaited internally.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
-        config: RelayConfig,
+        _config: RelayConfig,
         self_device_id: DeviceId,
         peer: Option<PeerRecord>,
         secret: Option<DeviceSecret>,
@@ -138,12 +137,7 @@ impl RelayClient {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let secret_store = Arc::new(StdMutex::new(secret));
-        let http = match RelayHttpClient::new(
-            &backend_url,
-            self_device_id,
-            mac_name.clone(),
-            config.clone(),
-        ) {
+        let http = match RelayHttpClient::new(&backend_url, self_device_id, mac_name.clone()) {
             Ok(c) => Arc::new(c),
             Err(e) => {
                 tracing::error!(
@@ -159,14 +153,12 @@ impl RelayClient {
                         "ws://invalid.localhost/devices",
                         self_device_id,
                         mac_name.clone(),
-                        config.clone(),
                     )
                     .expect("placeholder RelayHttpClient builds against canonical URL"),
                 )
             }
         };
         let dispatch_ctx = DispatchCtx {
-            config,
             self_device_id,
             secret: secret_store.clone(),
             mac_name: mac_name.clone(),
@@ -201,8 +193,7 @@ impl RelayClient {
     /// and wrap the response into the Mac-side QR payload shape.
     ///
     /// The QR carries only the host display name, the one-shot token, and
-    /// its expiry. Backend URL and any CF Access edge credentials live in
-    /// the mobile client's compile-time build config — never in the QR.
+    /// its expiry. Runtime routing/auth config never rides in the QR.
     pub async fn request_pairing_token(&self) -> Result<RelayQrPayload, MinosError> {
         let qr = self
             .inner
@@ -322,7 +313,6 @@ pub struct PersistenceCtx {
 /// `shutdown_rx` lives as a sibling variable in `run_dispatch` instead of a
 /// field so `tokio::select!` can borrow it independently of `&mut ctx`.
 struct DispatchCtx {
-    config: RelayConfig,
     self_device_id: DeviceId,
     secret: Arc<StdMutex<Option<DeviceSecret>>>,
     mac_name: String,
@@ -419,12 +409,7 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
 /// outer `shutdown_rx` fires mid-cycle.
 async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>) -> CycleOutcome {
     let secret = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error);
-    let headers = build_headers(
-        &ctx.config,
-        ctx.self_device_id,
-        secret.as_ref(),
-        &ctx.mac_name,
-    );
+    let headers = build_headers(ctx.self_device_id, secret.as_ref(), &ctx.mac_name);
     let request = match build_request(&ctx.backend_url, &headers) {
         Ok(r) => r,
         Err(e) => {
@@ -458,14 +443,14 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
                     .filter(|s| !s.is_empty())
                     .map(ToOwned::to_owned);
                 let message = body.unwrap_or_else(|| {
-                    "relay handshake returned HTTP 401 (CF Access or relay pre-upgrade check)".into()
+                    "relay handshake returned HTTP 401".into()
                 });
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
                     %message,
                     "relay handshake returned HTTP 401 — auth failure, exiting task"
                 );
-                store_last_error(&ctx.last_error, MinosError::CfAuthFailed { message });
+                store_last_error(&ctx.last_error, MinosError::Unauthorized { reason: message });
                 return CycleOutcome::AuthFailed;
             }
             Err(e) => {
@@ -514,7 +499,11 @@ fn apply_peers_snapshot(ctx: &DispatchCtx, peers: Vec<HostPeerSummary>) {
 }
 
 fn aggregate_peer_state(peers: &[HostPeerSummary]) -> PeerState {
-    let Some(primary) = peers.iter().find(|peer| peer.online).or_else(|| peers.first()) else {
+    let Some(primary) = peers
+        .iter()
+        .find(|peer| peer.online)
+        .or_else(|| peers.first())
+    else {
         return PeerState::Unpaired;
     };
     PeerState::Paired {
@@ -723,6 +712,17 @@ async fn route_event(event: EventKind, ctx: &DispatchCtx) {
                 "ignoring UiEventMessage on the host side"
             );
         }
+        EventKind::SocialMessage {
+            conversation_id, ..
+        } => {
+            // Browser/mobile social fan-out frame. The host daemon never
+            // consumes it; log at debug and drop.
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                conversation_id = %conversation_id,
+                "ignoring SocialMessage on the host side"
+            );
+        }
         EventKind::IngestCheckpoint {
             last_seq_per_thread,
         } => {
@@ -893,7 +893,6 @@ fn persist_device_secret(secret: &DeviceSecret, last_error: &Arc<StdMutex<Option
 /// Build the outbound auth-header bundle. Role is always `AgentHost` here —
 /// this module is the Mac-side client by construction.
 fn build_headers(
-    config: &RelayConfig,
     device_id: DeviceId,
     secret: Option<&DeviceSecret>,
     mac_name: &str,
@@ -901,12 +900,6 @@ fn build_headers(
     let mut headers = AuthHeaders::new(device_id, DeviceRole::AgentHost).with_name(mac_name);
     if let Some(s) = secret {
         headers = headers.with_secret(s.clone());
-    }
-    if !config.cf_client_id.is_empty() && !config.cf_client_secret.is_empty() {
-        headers = headers.with_cf_access(CfAccessToken::new(
-            config.cf_client_id.clone(),
-            config.cf_client_secret.clone(),
-        ));
     }
     headers
 }
@@ -936,31 +929,16 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn build_headers_without_cf_omits_cf_headers() {
-        let cfg = RelayConfig::new(String::new(), String::new(), String::new());
-        let headers = build_headers(&cfg, DeviceId::new(), None, "my-mac");
+    fn build_headers_omit_legacy_edge_headers() {
+        let headers = build_headers(DeviceId::new(), None, "my-mac");
         let keys: Vec<_> = headers.iter().map(|(k, _)| k).collect();
-        assert!(
-            !keys.iter().any(|k| k.starts_with("CF-Access")),
-            "unexpected CF-Access headers: {keys:?}"
-        );
-        assert!(keys.contains(&"X-Device-Name"));
-    }
-
-    #[test]
-    fn build_headers_with_cf_includes_both_cf_headers() {
-        let cfg = RelayConfig::new(String::new(), "cid".into(), "csec".into());
-        let headers = build_headers(&cfg, DeviceId::new(), None, "my-mac");
-        let keys: Vec<_> = headers.iter().map(|(k, _)| k).collect();
-        assert!(keys.contains(&"CF-Access-Client-Id"));
-        assert!(keys.contains(&"CF-Access-Client-Secret"));
+        assert_eq!(keys, vec!["X-Device-Id", "X-Device-Role", "X-Device-Name"]);
     }
 
     #[test]
     fn build_headers_with_secret_includes_x_device_secret() {
-        let cfg = RelayConfig::new(String::new(), String::new(), String::new());
         let secret = DeviceSecret("sentinel-123".into());
-        let headers = build_headers(&cfg, DeviceId::new(), Some(&secret), "my-mac");
+        let headers = build_headers(DeviceId::new(), Some(&secret), "my-mac");
         let entry = headers
             .iter()
             .find(|(k, _)| *k == "X-Device-Secret")

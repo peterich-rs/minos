@@ -44,8 +44,10 @@ class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
     final current = await future;
     final now = DateTime.now().millisecondsSinceEpoch;
     final id = 'agent-${now.toRadixString(36)}';
+    final agentId = 'bot-${now.toRadixString(36)}';
     final profile = AgentProfile(
       id: id,
+      agentId: agentId,
       name: draft.name.trim(),
       description: draft.description.trim(),
       runtimeAgent: draft.runtimeAgent,

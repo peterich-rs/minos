@@ -291,28 +291,19 @@ impl MobileClient {
     /// backing store. This is the cold-start resume path used by Dart after it
     /// reconstructs the client from secure storage.
     pub async fn resume_persisted_session(&self) -> Result<(), MinosError> {
-        self.resume_persisted_session_inner(crate::build_config::BACKEND_URL, None)
+        self.resume_persisted_session_inner(crate::build_config::BACKEND_URL)
             .await
     }
 
-    /// Test/dev override: resume against an explicit `backend_url` and CF
-    /// override. Used by integration tests; production callers go through
+    /// Test/dev override: resume against an explicit `backend_url`. Used by
+    /// integration tests; production callers go through
     /// [`Self::resume_persisted_session`].
     #[doc(hidden)]
-    pub async fn resume_persisted_session_at(
-        &self,
-        backend_url: &str,
-        cf_access: Option<(String, String)>,
-    ) -> Result<(), MinosError> {
-        self.resume_persisted_session_inner(backend_url, cf_access)
-            .await
+    pub async fn resume_persisted_session_at(&self, backend_url: &str) -> Result<(), MinosError> {
+        self.resume_persisted_session_inner(backend_url).await
     }
 
-    async fn resume_persisted_session_inner(
-        &self,
-        backend_url: &str,
-        cf_override: Option<(String, String)>,
-    ) -> Result<(), MinosError> {
+    async fn resume_persisted_session_inner(&self, backend_url: &str) -> Result<(), MinosError> {
         if matches!(self.current_state(), ConnectionState::Connected) {
             return Ok(());
         }
@@ -333,7 +324,6 @@ impl MobileClient {
             });
         }
 
-        let cf_access = cf_override.or_else(crate::build_config::cf_access);
         let _ = self
             .state_tx
             .send(ConnectionState::Reconnecting { attempt: 1 });
@@ -358,9 +348,7 @@ impl MobileClient {
             .as_ref()
             .map(|s| s.access_token.clone());
 
-        let result = self
-            .connect(backend_url, cf_access, access.as_deref())
-            .await;
+        let result = self.connect(backend_url, access.as_deref()).await;
 
         match result {
             Ok(()) => {
@@ -393,8 +381,7 @@ impl MobileClient {
         qr_json: String,
         backend_url: &str,
     ) -> Result<(), MinosError> {
-        self.pair_with_qr_json_inner(qr_json, backend_url, None)
-            .await
+        self.pair_with_qr_json_inner(qr_json, backend_url).await
     }
 
     /// Scan a QR v2 payload (raw JSON). Calls `POST /v1/pairing/consume`
@@ -404,11 +391,10 @@ impl MobileClient {
     /// `Pairing → Connected`. Bearer-only post ADR-0020.
     ///
     /// The QR carries only `host_display_name`, `pairing_token`, and the
-    /// expiry; backend URL and any CF Access edge credentials live in the
-    /// mobile crate's [`crate::build_config`] (read by `option_env!` from
-    /// the cargo build env). Older QR builds may still carry those fields
-    /// in the JSON — they are silently ignored by `serde` and never enter
-    /// durable storage.
+    /// expiry; backend routing stays in the mobile crate's
+    /// [`crate::build_config`]. Older QR builds may still carry extra
+    /// fields in the JSON — they are silently ignored by `serde` and never
+    /// enter durable storage.
     ///
     /// Errors:
     /// - `StoreCorrupt { path: "qr_payload", .. }` when the JSON doesn't
@@ -416,19 +402,16 @@ impl MobileClient {
     /// - `PairingQrVersionUnsupported` when `qr.v != 2`.
     /// - `ConnectFailed` / `Disconnected` on WS or RPC round-trip failures.
     pub async fn pair_with_qr_json(&self, qr_json: String) -> Result<(), MinosError> {
-        self.pair_with_qr_json_inner(qr_json, crate::build_config::BACKEND_URL, None)
+        self.pair_with_qr_json_inner(qr_json, crate::build_config::BACKEND_URL)
             .await
     }
 
     /// Shared implementation for `pair_with_qr_json` (production) and
-    /// `pair_with_qr_json_at` (test/dev). The optional `cf_override` lets
-    /// tests force a specific `(client_id, client_secret)` pair through;
-    /// when `None`, falls back to the compile-time `build_config::cf_access()`.
+    /// `pair_with_qr_json_at` (test/dev).
     async fn pair_with_qr_json_inner(
         &self,
         qr_json: String,
         backend_url: &str,
-        cf_override: Option<(String, String)>,
     ) -> Result<(), MinosError> {
         let qr: PairingQrPayload =
             serde_json::from_str(&qr_json).map_err(|e| MinosError::StoreCorrupt {
@@ -438,8 +421,6 @@ impl MobileClient {
         if qr.v != 2 {
             return Err(MinosError::PairingQrVersionUnsupported { version: qr.v });
         }
-        let cf = cf_override.or_else(crate::build_config::cf_access);
-
         let _ = self.state_tx.send(ConnectionState::Pairing);
 
         // Phase 2 made `/v1/pairing/consume` bearer-gated for ios-client.
@@ -464,7 +445,6 @@ impl MobileClient {
             backend_url,
             self.device_id,
             self.self_name.clone(),
-            cf.clone(),
         )?;
         let pair_resp = match http
             .pair_consume(
@@ -494,7 +474,7 @@ impl MobileClient {
 
         // Step 2: open the WS bearer-authenticated. The reconnect loop
         // re-uses the same auth_session.
-        self.connect(backend_url, cf, Some(&access)).await?;
+        self.connect(backend_url, Some(&access)).await?;
 
         let _ = self.state_tx.send(ConnectionState::Connected);
         Ok(())
@@ -506,17 +486,13 @@ impl MobileClient {
     /// different Mac is preserved.
     pub async fn forget_host(&self, host: DeviceId) -> Result<(), MinosError> {
         let backend_url = crate::build_config::BACKEND_URL;
-        let cf = crate::build_config::cf_access();
         let access = self.access_token_or_unauthorized().await?;
 
         // Best-effort delete on the backend. Failure here must not block
         // local cleanup — the user re-pairs to recover.
-        if let Ok(http) = crate::http::MobileHttpClient::new(
-            backend_url,
-            self.device_id,
-            self.self_name.clone(),
-            cf,
-        ) {
+        if let Ok(http) =
+            crate::http::MobileHttpClient::new(backend_url, self.device_id, self.self_name.clone())
+        {
             let _ = http.delete_pair(&access, host).await;
         }
 
@@ -1104,15 +1080,14 @@ impl MobileClient {
 
     /// Build an HTTP client without requiring a paired device-secret.
     /// Used by the auth surface — `register` / `login` happen before the
-    /// device is paired. The backend URL and any CF Access edge tokens
-    /// come from compile-time `build_config`. Sync because the helper no
-    /// longer awaits any store load.
+    /// device is paired. The backend URL comes from compile-time
+    /// `build_config`. Sync because the helper no longer awaits any store
+    /// load.
     fn http_client_no_secret(&self) -> Result<crate::http::MobileHttpClient, MinosError> {
         crate::http::MobileHttpClient::new(
             crate::build_config::BACKEND_URL,
             self.device_id,
             self.self_name.clone(),
-            crate::build_config::cf_access(),
         )
     }
 
@@ -1291,7 +1266,6 @@ impl MobileClient {
         url: &str,
         device_id: &DeviceId,
         self_name: &str,
-        cf_access: Option<&(String, String)>,
         access_token: Option<&str>,
     ) -> Result<Request<RequestBody>, MinosError> {
         let mut request = Request::builder()
@@ -1338,23 +1312,6 @@ impl MobileClient {
                     })?,
             );
         }
-        if let Some((id, secret)) = cf_access {
-            headers.insert(
-                "CF-Access-Client-Id",
-                id.parse().map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "cf_access_client_id is not a valid header value".into(),
-                })?,
-            );
-            headers.insert(
-                "CF-Access-Client-Secret",
-                secret.parse().map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "cf_access_client_secret is not a valid header value".into(),
-                })?,
-            );
-        }
-
         Ok(request)
     }
 
@@ -1362,14 +1319,10 @@ impl MobileClient {
         url: &str,
         device_id: &DeviceId,
         self_name: &str,
-        cf_access: Option<&(String, String)>,
         access_token: Option<&str>,
     ) -> Result<WebSocket, WebSocketError> {
-        let request =
-            Self::build_websocket_request(url, device_id, self_name, cf_access, access_token)
-                .map_err(|error| {
-                    WebSocketError::Io(WireError::invalid_request(error.to_string()))
-                })?;
+        let request = Self::build_websocket_request(url, device_id, self_name, access_token)
+            .map_err(|error| WebSocketError::Io(WireError::invalid_request(error.to_string())))?;
         let client = Self::build_websocket_client().map_err(|error| {
             WebSocketError::Io(WireError::new(WireErrorKind::Internal, error.to_string()))
         })?;
@@ -1385,39 +1338,21 @@ impl MobileClient {
     // `connect_with_handles`; deduplicating across them is deferred to
     // I2 (post-Wave-2 cleanup), so allow the line count for now.
     #[allow(clippy::too_many_lines)]
-    async fn connect(
-        &self,
-        url: &str,
-        cf_access: Option<(String, String)>,
-        access_token: Option<&str>,
-    ) -> Result<(), MinosError> {
-        let cf_access_present = cf_access.is_some();
+    async fn connect(&self, url: &str, access_token: Option<&str>) -> Result<(), MinosError> {
         let bearer_present = access_token.is_some();
         tracing::info!(
             target: "minos_mobile::client",
             url,
             device_id = %self.device_id,
-            cf_access_present,
             bearer_present,
             "mobile: opening backend WebSocket"
         );
-        let websocket = Self::open_backend_websocket(
-            url,
-            &self.device_id,
-            &self.self_name,
-            cf_access.as_ref(),
-            access_token,
-        )
-        .await
-        .map_err(|error| {
-            connect_error_to_minos(
-                url,
-                error,
-                &self.device_id,
-                bearer_present,
-                cf_access_present,
-            )
-        })?;
+        let websocket =
+            Self::open_backend_websocket(url, &self.device_id, &self.self_name, access_token)
+                .await
+                .map_err(|error| {
+                    connect_error_to_minos(url, error, &self.device_id, bearer_present)
+                })?;
         let (write, read) = websocket.split();
 
         let (tx, mut rx) = mpsc::channel::<Envelope>(256);
@@ -1607,7 +1542,6 @@ fn connect_error_to_minos(
     err: WebSocketError,
     device_id: &DeviceId,
     bearer_present: bool,
-    cf_access_present: bool,
 ) -> MinosError {
     let detail = describe_ws_error(&err);
     // `error_variant` is the OpenWire websocket failure class that fired
@@ -1619,7 +1553,6 @@ fn connect_error_to_minos(
         url,
         device_id = %device_id,
         bearer_present,
-        cf_access_present,
         error_variant = detail.kind,
         http_status = ?detail.http_status,
         message = %detail.message,
@@ -1633,8 +1566,8 @@ fn connect_error_to_minos(
     }
 
     if matches!(detail.http_status, Some(302 | 401 | 403)) {
-        return MinosError::CfAuthFailed {
-            message: detail.message,
+        return MinosError::Unauthorized {
+            reason: detail.message,
         };
     }
 
@@ -1650,7 +1583,7 @@ struct WsErrorDetail {
     kind: &'static str,
     message: String,
     /// Set when the handshake or underlying wire error surfaced an HTTP
-    /// status, letting the caller treat CF-Access redirects specially.
+    /// status.
     http_status: Option<u16>,
 }
 
@@ -1818,8 +1751,8 @@ async fn reconnect_loop(ctx: ReconnectContext) {
             continue;
         }
 
-        // Idle until we have a session. The backend URL and any CF
-        // Access edge tokens come from compile-time `build_config`.
+        // Idle until we have a session. The backend URL comes from
+        // compile-time `build_config`.
         let backend_url = crate::build_config::BACKEND_URL;
 
         // Stale-access pre-emptive refresh: if we're within 2 minutes of
@@ -1851,12 +1784,11 @@ async fn reconnect_loop(ctx: ReconnectContext) {
             continue;
         };
 
-        let cf = crate::build_config::cf_access();
         let _ = ctx
             .state_tx
             .send(ConnectionState::Reconnecting { attempt: 1 });
 
-        match connect_with_handles(&ctx, backend_url, cf, Some(&access)).await {
+        match connect_with_handles(&ctx, backend_url, Some(&access)).await {
             Ok(()) => {
                 // Subscribe BEFORE publishing `Connected` so the recv_loop
                 // can't fire `Disconnected` between the send and the
@@ -1930,26 +1862,22 @@ async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
     // mean the next iteration would also fail, so treating them as a
     // hard refresh failure (clear auth, return false) is strictly
     // better than looping with an expired token.
-    let cf_access = crate::build_config::cf_access();
-    let http = match crate::http::MobileHttpClient::new(
-        backend_url,
-        ctx.device_id,
-        ctx.self_name.clone(),
-        cf_access,
-    ) {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::warn!(?e, "mobile: refresh aborted; could not build HTTP client");
-            let _ = ctx.auth_state_tx.send(AuthStateFrame::RefreshFailed {
-                error: Arc::new(MinosError::AuthRefreshFailed {
-                    message: format!("build http client: {e}"),
-                }),
-            });
-            *ctx.auth_session.write().await = None;
-            let _ = ctx.store.clear_auth().await;
-            return false;
-        }
-    };
+    let http =
+        match crate::http::MobileHttpClient::new(backend_url, ctx.device_id, ctx.self_name.clone())
+        {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(?e, "mobile: refresh aborted; could not build HTTP client");
+                let _ = ctx.auth_state_tx.send(AuthStateFrame::RefreshFailed {
+                    error: Arc::new(MinosError::AuthRefreshFailed {
+                        message: format!("build http client: {e}"),
+                    }),
+                });
+                *ctx.auth_session.write().await = None;
+                let _ = ctx.store.clear_auth().await;
+                return false;
+            }
+        };
     let _ = ctx.auth_state_tx.send(AuthStateFrame::Refreshing);
     match http.refresh(&session.refresh_token).await {
         Ok(r) => {
@@ -2013,28 +1941,13 @@ async fn clear_auth_session_and_disconnect_ctx(ctx: &ReconnectContext) {
 async fn connect_with_handles(
     ctx: &ReconnectContext,
     url: &str,
-    cf_access: Option<(String, String)>,
     access_token: Option<&str>,
 ) -> Result<(), MinosError> {
-    let cf_access_present = cf_access.is_some();
     let bearer_present = access_token.is_some();
-    let websocket = MobileClient::open_backend_websocket(
-        url,
-        &ctx.device_id,
-        &ctx.self_name,
-        cf_access.as_ref(),
-        access_token,
-    )
-    .await
-    .map_err(|error| {
-        connect_error_to_minos(
-            url,
-            error,
-            &ctx.device_id,
-            bearer_present,
-            cf_access_present,
-        )
-    })?;
+    let websocket =
+        MobileClient::open_backend_websocket(url, &ctx.device_id, &ctx.self_name, access_token)
+            .await
+            .map_err(|error| connect_error_to_minos(url, error, &ctx.device_id, bearer_present))?;
     let (write, read) = websocket.split();
     let (tx, mut rx) = mpsc::channel::<Envelope>(256);
     let send_handle = tokio::spawn(async move {
@@ -2200,7 +2113,7 @@ mod tests {
     }
 
     #[test]
-    fn cf_access_http_rejection_maps_to_cf_auth_failed_with_status_in_message() {
+    fn forbidden_handshake_maps_to_unauthorized_with_status_in_reason() {
         let err = connect_error_to_minos(
             "wss://example.com/devices",
             WebSocketError::Handshake {
@@ -2209,17 +2122,16 @@ mod tests {
             },
             &DeviceId::new(),
             true,
-            false,
         );
 
         match err {
-            MinosError::CfAuthFailed { message } => {
+            MinosError::Unauthorized { reason } => {
                 assert!(
-                    message.contains("403"),
-                    "CfAuthFailed message should embed the status code: {message}"
+                    reason.contains("403"),
+                    "Unauthorized reason should embed the status code: {reason}"
                 );
             }
-            other => panic!("expected CfAuthFailed, got {other:?}"),
+            other => panic!("expected Unauthorized, got {other:?}"),
         }
     }
 
@@ -2233,7 +2145,6 @@ mod tests {
             },
             &DeviceId::new(),
             true,
-            false,
         );
 
         match err {
@@ -2257,7 +2168,6 @@ mod tests {
             },
             &DeviceId::new(),
             true,
-            false,
         );
 
         match err {
@@ -2285,7 +2195,6 @@ mod tests {
                 std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "nope"),
             )),
             &DeviceId::new(),
-            false,
             false,
         );
 
