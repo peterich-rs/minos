@@ -16,6 +16,7 @@ minos-mobile = { path = "../minos-mobile", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 
 # Pinned to =2.11.1 to keep the runtime lockstep with the

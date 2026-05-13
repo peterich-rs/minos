@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
-import 'package:minos/application/social_providers.dart';
 import 'package:minos/application/minos_providers.dart';
+import 'package:minos/application/social_providers.dart';
 import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/presentation/router.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 class SocialHubPage extends ConsumerStatefulWidget {
   const SocialHubPage({super.key});

@@ -66,7 +66,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
       body: permission.when(
         loading: () => const Center(child: ShadProgress()),
         error: (_, _) => const Center(child: ShadProgress()),
-        data: (status) => _buildForStatus(status),
+        data: _buildForStatus,
       ),
     );
   }
@@ -94,18 +94,18 @@ class _PairingPageState extends ConsumerState<PairingPage> {
     final candidate = _PairingCandidate.tryParse(raw);
     if (candidate == null) {
       ShadToaster.of(context).show(
-        ShadToast.destructive(
-          title: const Text('二维码不可用'),
-          description: const Text('请扫描 Minos runtime 上显示的添加伙伴二维码。'),
+        const ShadToast.destructive(
+          title: Text('二维码不可用'),
+          description: Text('请扫描 Minos runtime 上显示的添加伙伴二维码。'),
         ),
       );
       return false;
     }
     if (candidate.isExpired) {
       ShadToaster.of(context).show(
-        ShadToast.destructive(
-          title: const Text('二维码已过期'),
-          description: const Text('请在 runtime 上刷新二维码后重新扫描。'),
+        const ShadToast.destructive(
+          title: Text('二维码已过期'),
+          description: Text('请在 runtime 上刷新二维码后重新扫描。'),
         ),
       );
       return false;

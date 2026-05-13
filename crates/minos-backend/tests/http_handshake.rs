@@ -32,10 +32,8 @@ const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 async fn spawn_relay() -> (String, tokio::task::JoinHandle<()>, sqlx::SqlitePool) {
     let pool = store::connect("sqlite::memory:").await.unwrap();
     let registry = Arc::new(SessionRegistry::new());
-    let approval_relay = minos_backend::approval_relay::ApprovalRelay::new(
-        pool.clone(),
-        Arc::clone(&registry),
-    );
+    let approval_relay =
+        minos_backend::approval_relay::ApprovalRelay::new(pool.clone(), Arc::clone(&registry));
 
     let state = BackendState {
         registry,

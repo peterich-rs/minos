@@ -1,12 +1,11 @@
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:sqflite/sqflite.dart';
-
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/infrastructure/app_paths.dart';
 import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:sqflite/sqflite.dart';
 
 class SocialCacheStore {
   SocialCacheStore();

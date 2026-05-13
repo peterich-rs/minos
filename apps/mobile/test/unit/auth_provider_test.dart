@@ -62,6 +62,13 @@ class _FakeCore implements MinosCoreProtocol {
   Future<void> forgetHost(String hostDeviceId) async {}
 
   @override
+  Future<void> sendApprovalDecision({
+    required String requestId,
+    required String threadId,
+    required Map<String, dynamic> decision,
+  }) async {}
+
+  @override
   Future<List<HostSummaryDto>> listPairedHosts() async =>
       const <HostSummaryDto>[];
 
@@ -101,9 +108,32 @@ class _FakeCore implements MinosCoreProtocol {
   }) async => throw UnimplementedError();
 
   @override
+  Future<void> addGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  }) async {}
+
+  @override
   Future<ConversationMembersResponse> conversationMembers({
     required String conversationId,
   }) async => const ConversationMembersResponse(members: <UserSummary>[]);
+
+  @override
+  Future<ConversationAgentMembersResponse> listConversationAgents({
+    required String conversationId,
+  }) async => const ConversationAgentMembersResponse(agents: <AgentSummary>[]);
+
+  @override
+  Future<void> addAgentToConversation({
+    required String conversationId,
+    required String agentId,
+  }) async {}
+
+  @override
+  Future<void> removeAgentFromConversation({
+    required String conversationId,
+    required String agentId,
+  }) async {}
 
   @override
   Future<ConversationReadResponse> markConversationRead({
@@ -194,13 +224,6 @@ class _FakeCore implements MinosCoreProtocol {
       const ConnectionState.disconnected();
 
   @override
-  Future<StartAgentResponse> startAgent({
-    required AgentName agent,
-    required String prompt,
-    String workspace = '',
-  }) async => throw UnimplementedError();
-
-  @override
   Future<void> sendUserMessage({
     required String sessionId,
     required String text,
@@ -208,6 +231,12 @@ class _FakeCore implements MinosCoreProtocol {
 
   @override
   Future<void> closeThread({required String threadId}) async {}
+
+  @override
+  Future<void> deleteThread({required String threadId}) async {}
+
+  @override
+  Future<void> interruptThread({required String threadId}) async {}
 
   @override
   Future<List<AgentDescriptor>> listClis() async => const [];
@@ -256,13 +285,6 @@ class _FakeCore implements MinosCoreProtocol {
     int limit = 50,
     int? beforeTsMs,
   }) async => const ListProjectThreadsResponse(threads: <ThreadSummary>[]);
-
-  @override
-  Future<StartAgentResponse> startAgentInProject({
-    required AgentName agent,
-    required String prompt,
-    required String projectId,
-  }) async => const StartAgentResponse(sessionId: 'thr-proj', cwd: '/tmp');
 
   @override
   Future<void> resumePersistedSession() async {

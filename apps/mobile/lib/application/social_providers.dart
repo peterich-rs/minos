@@ -1,14 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-
-import 'package:minos/application/group_agent_dispatcher.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/infrastructure/social_cache_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'social_providers.g.dart';
 
@@ -203,16 +201,6 @@ class SocialConversation extends _$SocialConversation {
         messages: await cache.loadMessages(_conversationId),
       );
       ref.invalidate(conversationsProvider);
-
-      // Dispatch to mentioned agents in group chats
-      unawaited(
-        ref
-            .read(groupAgentDispatcherProvider)
-            .dispatchIfMentioned(
-              conversationId: _conversationId,
-              messageText: trimmed,
-            ),
-      );
     } catch (error) {
       await cache.markMessageFailed(pending.localId);
       state = state.copyWith(

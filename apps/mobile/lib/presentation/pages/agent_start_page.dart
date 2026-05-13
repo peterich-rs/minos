@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
+import 'package:minos/application/agent_conversation_actions.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/agent_profile.dart';
+import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/presentation/pages/agents_hub_page.dart'
     show AgentEditorSheet;
 import 'package:minos/presentation/router.dart';
@@ -20,7 +22,7 @@ class AgentStartPage extends ConsumerStatefulWidget {
 
 class _AgentStartPageState extends ConsumerState<AgentStartPage> {
   String? _selectedProfileId;
-  String _selectedWorkspace = '';
+  bool _isSubmitting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -30,7 +32,6 @@ class _AgentStartPageState extends ConsumerState<AgentStartPage> {
     final descriptors =
         ref.watch(runtimeAgentDescriptorsProvider).asData?.value ??
         const <AgentDescriptor>[];
-    final activeHostId = ref.watch(activeMacProvider).asData?.value;
     final shadTheme = ShadTheme.of(context);
 
     return Scaffold(
@@ -54,19 +55,6 @@ class _AgentStartPageState extends ConsumerState<AgentStartPage> {
             orderedProfiles,
             workspaceState.preferredProfileId,
           );
-          final effectiveHostId = selectedProfile?.hostDeviceId ?? activeHostId;
-          final hostSkillsAsync = effectiveHostId == null
-              ? const AsyncValue<List<HostSkillsEntry>>.data(
-                  <HostSkillsEntry>[],
-                )
-              : ref.watch(hostSkillsProvider(effectiveHostId));
-          final workspaceOptions = _workspaceOptions(
-            hostSkillsAsync.asData?.value ?? const <HostSkillsEntry>[],
-          );
-          final selectedWorkspace =
-              workspaceOptions.contains(_selectedWorkspace)
-              ? _selectedWorkspace
-              : '';
 
           return SafeArea(
             bottom: false,
@@ -74,7 +62,7 @@ class _AgentStartPageState extends ConsumerState<AgentStartPage> {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
               children: <Widget>[
                 Text(
-                  '先选择一个现有 Agent，再决定这次会话使用的工作区。',
+                  '先选择一个现有 Agent，然后创建一条新的对话。',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -111,7 +99,6 @@ class _AgentStartPageState extends ConsumerState<AgentStartPage> {
                                   if (value == null) return;
                                   setState(() {
                                     _selectedProfileId = value;
-                                    _selectedWorkspace = '';
                                   });
                                 },
                                 title: Text(profile.name),
@@ -127,90 +114,12 @@ class _AgentStartPageState extends ConsumerState<AgentStartPage> {
                           ],
                         ),
                 ),
-                const SizedBox(height: 16),
-                _PickerSection(
-                  title: '工作区',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 4,
-                        ),
-                        title: Text(_workspaceTitle(selectedWorkspace)),
-                        subtitle: Text(
-                          selectedProfile == null
-                              ? '先选择 Agent 后再挑工作区。'
-                              : _workspaceSubtitle(
-                                  selectedWorkspace,
-                                  effectiveHostId: effectiveHostId,
-                                  hosts: hosts,
-                                ),
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: selectedProfile == null
-                            ? null
-                            : () async {
-                                final picked = await _showWorkspacePicker(
-                                  context,
-                                  options: workspaceOptions,
-                                  currentValue: selectedWorkspace,
-                                );
-                                if (picked == null || !mounted) return;
-                                setState(() => _selectedWorkspace = picked);
-                              },
-                      ),
-                      if (hostSkillsAsync.isLoading)
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-                          child: LinearProgressIndicator(minHeight: 2),
-                        )
-                      else if (hostSkillsAsync.hasError)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                          child: Text(
-                            '工作区列表暂时不可用，将继续使用默认工作区。',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                ),
-                          ),
-                        )
-                      else
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                          child: Text(
-                            '默认工作区会保持当前行为；其它选项来自 runtime 返回的技能扫描目录。',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
                 const SizedBox(height: 20),
                 ShadButton(
-                  onPressed: selectedProfile == null
+                  onPressed: selectedProfile == null || _isSubmitting
                       ? null
-                      : () {
-                          context.push(
-                            AppRoutes.newThread,
-                            extra: ThreadRouteExtra(
-                              agentProfileId: selectedProfile.id,
-                              startupWorkspace: selectedWorkspace.isEmpty
-                                  ? null
-                                  : selectedWorkspace,
-                            ),
-                          );
-                        },
-                  child: const Text('继续'),
+                      : () => _createConversation(selectedProfile),
+                  child: Text(_isSubmitting ? '创建中…' : '开始对话'),
                 ),
               ],
             ),
@@ -254,6 +163,33 @@ class _AgentStartPageState extends ConsumerState<AgentStartPage> {
       backgroundColor: Theme.of(context).colorScheme.surface,
       builder: (_) => AgentEditorSheet(hosts: hosts, descriptors: descriptors),
     );
+  }
+
+  Future<void> _createConversation(AgentProfile profile) async {
+    setState(() => _isSubmitting = true);
+    try {
+      final conversation = await createAgentConversation(ref, profile: profile);
+      if (!mounted) return;
+      context.push(
+        '/social/chat/${conversation.conversationId}',
+        extra: SocialChatRouteExtra(
+          title: profile.name,
+          kind: ConversationKind.group,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showLoggedErrorToast(
+        context,
+        target: 'agent_start',
+        title: '创建对话失败',
+        error: error,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
   }
 }
 
@@ -386,92 +322,6 @@ String _profileSubtitle(AgentProfile profile, List<HostSummaryDto> hosts) {
       ? '${_runtimeLabel(profile.runtimeAgent)} · ${profile.model}'
       : profile.description.trim();
   return '$hostLabel · $detail';
-}
-
-Future<String?> _showWorkspacePicker(
-  BuildContext context, {
-  required List<String> options,
-  required String currentValue,
-}) {
-  return showModalBottomSheet<String>(
-    context: context,
-    useSafeArea: true,
-    showDragHandle: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    builder: (sheetContext) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Text(
-              '选择工作区',
-              style: Theme.of(
-                sheetContext,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: options.length,
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (_, index) {
-                  final option = options[index];
-                  final selected = option == currentValue;
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 4,
-                      vertical: 2,
-                    ),
-                    title: Text(_workspaceTitle(option)),
-                    subtitle: Text(option.isEmpty ? '保持当前默认工作区行为' : option),
-                    trailing: selected ? const Icon(Icons.check) : null,
-                    onTap: () => Navigator.of(sheetContext).pop(option),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-}
-
-List<String> _workspaceOptions(List<HostSkillsEntry> entries) {
-  final options = <String>{''};
-  for (final entry in entries) {
-    final cwd = entry.cwd.trim();
-    if (cwd.isNotEmpty) {
-      options.add(cwd);
-    }
-  }
-  final sorted = options.toList(growable: false)..sort();
-  if (sorted.isNotEmpty && sorted.first != '') {
-    return <String>['', ...sorted.where((value) => value.isNotEmpty)];
-  }
-  return sorted;
-}
-
-String _workspaceTitle(String workspace) {
-  if (workspace.isEmpty) {
-    return '默认工作区';
-  }
-  final segments = workspace.split('/');
-  return segments.isEmpty ? workspace : segments.last;
-}
-
-String _workspaceSubtitle(
-  String workspace, {
-  required String? effectiveHostId,
-  required List<HostSummaryDto> hosts,
-}) {
-  final hostLabel = _hostLabelForId(hosts, effectiveHostId) ?? '当前 runtime';
-  if (workspace.isEmpty) {
-    return '$hostLabel · 保持当前默认工作区行为';
-  }
-  return '$hostLabel · $workspace';
 }
 
 String? _hostLabelForId(List<HostSummaryDto> hosts, String? hostDeviceId) {

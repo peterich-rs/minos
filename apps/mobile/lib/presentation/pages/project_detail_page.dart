@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/project_providers.dart';
 import 'package:minos/presentation/pages/thread_view_page.dart';
+import 'package:minos/presentation/router.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Discord-style project detail page.
 /// Shows a sidebar-like thread/channel list on the left with the project name
@@ -51,6 +51,7 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                 onThreadSelected: (id) =>
                     setState(() => _selectedThreadId = id),
                 onNewThread: () => _startNewThread(context),
+                onDeleteThread: (id) => _deleteThread(context, id),
               ),
             ),
             const VerticalDivider(width: 1),
@@ -77,6 +78,7 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
           context.push('/thread/$id');
         },
         onNewThread: () => _startNewThread(context),
+        onDeleteThread: (id) => _deleteThread(context, id),
       ),
     );
   }
@@ -118,31 +120,42 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     if (result == null || result.isEmpty) return;
     if (!mounted) return;
 
-    // Start agent in project
+    // Start agent in project — in the refactored architecture, mobile
+    // sends messages directly via sendUserMessage. The host auto-creates
+    // a session when session_id is empty.
     final core = ref.read(minosCoreProvider);
     try {
-      final resp = await core.startAgentInProject(
-        agent: agentName,
-        prompt: result,
-        projectId: widget.projectId,
-      );
-
-      // Send the first user message
-      await core.sendUserMessage(sessionId: resp.sessionId, text: result);
+      await core.sendUserMessage(sessionId: '', text: result);
 
       // Refresh the thread list
       ref.invalidate(projectThreadsProvider(widget.projectId));
 
       if (!mounted) return;
 
-      // Navigate to the new thread
-      setState(() => _selectedThreadId = resp.sessionId);
-      context.push('/thread/${resp.sessionId}');
+      // Navigate to the new thread view (thread ID will arrive via events)
+      context.push(AppRoutes.newThread);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('启动失败: $e')));
+    }
+  }
+
+  Future<void> _deleteThread(BuildContext context, String threadId) async {
+    try {
+      await ref.read(minosCoreProvider).deleteThread(threadId: threadId);
+      ref.invalidate(projectThreadsProvider(widget.projectId));
+      if (_selectedThreadId == threadId && mounted) {
+        setState(() => _selectedThreadId = null);
+      }
+      if (!context.mounted) return;
+      ShadToaster.maybeOf(context)?.show(const ShadToast(title: Text('会话已删除')));
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('删除失败: $error')));
     }
   }
 }
@@ -157,6 +170,7 @@ class _ChannelSidebar extends ConsumerWidget {
     required this.selectedThreadId,
     required this.onThreadSelected,
     required this.onNewThread,
+    required this.onDeleteThread,
   });
 
   final String projectId;
@@ -165,6 +179,7 @@ class _ChannelSidebar extends ConsumerWidget {
   final String? selectedThreadId;
   final ValueChanged<String> onThreadSelected;
   final VoidCallback onNewThread;
+  final Future<void> Function(String threadId) onDeleteThread;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -250,10 +265,57 @@ class _ChannelSidebar extends ConsumerWidget {
                           final thread = threads[index];
                           final isSelected =
                               thread.threadId == selectedThreadId;
-                          return _ThreadChannelTile(
-                            thread: thread,
-                            isSelected: isSelected,
-                            onTap: () => onThreadSelected(thread.threadId),
+                          return Dismissible(
+                            key: ValueKey(thread.threadId),
+                            direction: DismissDirection.endToStart,
+                            confirmDismiss: (_) async {
+                              return showDialog<bool>(
+                                    context: context,
+                                    builder: (dialogContext) => AlertDialog(
+                                      title: const Text('删除会话'),
+                                      content: Text(
+                                        '确定要删除「${_threadTitle(thread)}」吗？',
+                                      ),
+                                      actions: <Widget>[
+                                        TextButton(
+                                          onPressed: () => Navigator.of(
+                                            dialogContext,
+                                          ).pop(false),
+                                          child: const Text('取消'),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => Navigator.of(
+                                            dialogContext,
+                                          ).pop(true),
+                                          child: const Text('删除'),
+                                        ),
+                                      ],
+                                    ),
+                                  ) ??
+                                  false;
+                            },
+                            onDismissed: (_) => onDeleteThread(thread.threadId),
+                            background: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 1),
+                              padding: const EdgeInsets.only(right: 16),
+                              alignment: Alignment.centerRight,
+                              decoration: BoxDecoration(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.errorContainer,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Icon(
+                                LucideIcons.trash2,
+                                size: 16,
+                                color: Theme.of(context).colorScheme.error,
+                              ),
+                            ),
+                            child: _ThreadChannelTile(
+                              thread: thread,
+                              isSelected: isSelected,
+                              onTap: () => onThreadSelected(thread.threadId),
+                            ),
                           );
                         },
                       ),
@@ -346,19 +408,6 @@ class _ThreadChannelTile extends StatelessWidget {
     );
   }
 
-  String _threadTitle(ThreadSummary thread) {
-    if (thread.title != null && thread.title!.isNotEmpty) {
-      return thread.title!;
-    }
-    final agent = switch (thread.agent) {
-      AgentName.codex => 'Codex',
-      AgentName.claude => 'Claude',
-      AgentName.gemini => 'Gemini',
-    };
-    final time = DateTime.fromMillisecondsSinceEpoch(thread.lastTsMs);
-    return '$agent · ${time.month}/${time.day} ${time.hour}:${time.minute.toString().padLeft(2, '0')}';
-  }
-
   Color _agentColor(AgentName agent) {
     return switch (agent) {
       AgentName.codex => Colors.green,
@@ -366,6 +415,19 @@ class _ThreadChannelTile extends StatelessWidget {
       AgentName.gemini => Colors.blue,
     };
   }
+}
+
+String _threadTitle(ThreadSummary thread) {
+  if (thread.title != null && thread.title!.isNotEmpty) {
+    return thread.title!;
+  }
+  final agent = switch (thread.agent) {
+    AgentName.codex => 'Codex',
+    AgentName.claude => 'Claude',
+    AgentName.gemini => 'Gemini',
+  };
+  final time = DateTime.fromMillisecondsSinceEpoch(thread.lastTsMs);
+  return '$agent · ${time.month}/${time.day} ${time.hour}:${time.minute.toString().padLeft(2, '0')}';
 }
 
 // ─────────────────────────── Empty States ───────────────────────────

@@ -161,7 +161,7 @@ fn all_event_kind_variants_round_trip() {
                 reply_to: None,
                 recalled_at_ms: None,
                 mentioned_account_ids: vec!["acct-2".into()],
-                sender_type: SenderType::User
+                sender_type: SenderType::User,
             },
         },
         EventKind::IngestCheckpoint {

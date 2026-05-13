@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/domain/active_session.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Sticky bottom composer for the chat surface. Two visual states keyed
 /// off the [ActiveSession]:
@@ -45,14 +44,14 @@ class _InputBarState extends State<InputBar> {
   }
 
   bool get _isStreaming =>
-      widget.session is SessionStreaming || widget.session is SessionStarting;
+      widget.session is SessionStreaming || widget.session is SessionSending;
 
   bool get _canSend {
     final s = widget.session;
     final composable =
         s is SessionIdle ||
         s is SessionAwaitingInput ||
-        s is SessionStopped ||
+        s is SessionSuspended ||
         s is SessionError;
     if (!composable) return false;
     final trimmed = _ctl.text.trim();

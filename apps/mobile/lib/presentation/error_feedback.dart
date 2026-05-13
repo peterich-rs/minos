@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 void showLoggedErrorToast(
   BuildContext context, {

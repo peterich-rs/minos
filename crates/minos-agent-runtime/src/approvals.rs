@@ -88,28 +88,37 @@ pub(crate) fn validate_decision(
         ServerRequest::ExecCommandApproval(_) => {
             validate_typed::<ExecCommandApprovalResponse>(decision, "execCommandApproval")
         }
-        ServerRequest::CommandExecutionRequestApproval(_) => validate_typed::<
-            CommandExecutionRequestApprovalResponse,
-        >(decision, "item/commandExecution/requestApproval"),
+        ServerRequest::CommandExecutionRequestApproval(_) => {
+            validate_typed::<CommandExecutionRequestApprovalResponse>(
+                decision,
+                "item/commandExecution/requestApproval",
+            )
+        }
         ServerRequest::FileChangeRequestApproval(_) => {
             validate_typed::<FileChangeRequestApprovalResponse>(
                 decision,
                 "item/fileChange/requestApproval",
             )
         }
-        ServerRequest::PermissionsRequestApproval(_) => validate_typed::<
-            PermissionsRequestApprovalResponse,
-        >(decision, "item/permissions/requestApproval"),
+        ServerRequest::PermissionsRequestApproval(_) => {
+            validate_typed::<PermissionsRequestApprovalResponse>(
+                decision,
+                "item/permissions/requestApproval",
+            )
+        }
         ServerRequest::ToolRequestUserInput(_)
         | ServerRequest::McpServerElicitationRequest(_)
         | ServerRequest::ChatgptAuthTokensRefresh(_)
-        | ServerRequest::DynamicToolCall(_) => anyhow::bail!(
-            "server request does not accept an approval decision",
-        ),
+        | ServerRequest::DynamicToolCall(_) => {
+            anyhow::bail!("server request does not accept an approval decision",)
+        }
     }
 }
 
-fn validate_typed<T>(decision: &serde_json::Value, method: &str) -> anyhow::Result<serde_json::Value>
+fn validate_typed<T>(
+    decision: &serde_json::Value,
+    method: &str,
+) -> anyhow::Result<serde_json::Value>
 where
     T: DeserializeOwned + Serialize,
 {

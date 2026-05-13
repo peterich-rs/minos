@@ -85,6 +85,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentStatus dco_decode_agent_status(dynamic raw);
 
   @protected
+  AgentSummary dco_decode_agent_summary(dynamic raw);
+
+  @protected
   AuthStateFrame dco_decode_auth_state_frame(dynamic raw);
 
   @protected
@@ -166,6 +169,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ConnectionState dco_decode_connection_state(dynamic raw);
 
   @protected
+  ConversationAgentMembersResponse
+  dco_decode_conversation_agent_members_response(dynamic raw);
+
+  @protected
   ConversationKind dco_decode_conversation_kind(dynamic raw);
 
   @protected
@@ -238,6 +245,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AgentDescriptor> dco_decode_list_agent_descriptor(dynamic raw);
+
+  @protected
+  List<AgentSummary> dco_decode_list_agent_summary(dynamic raw);
 
   @protected
   List<ChatMessageSummary> dco_decode_list_chat_message_summary(dynamic raw);
@@ -383,9 +393,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SocialEventFrame dco_decode_social_event_frame(dynamic raw);
 
   @protected
-  StartAgentResponse dco_decode_start_agent_response(dynamic raw);
-
-  @protected
   ThreadEndReason dco_decode_thread_end_reason(dynamic raw);
 
   @protected
@@ -489,6 +496,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentStatus sse_decode_agent_status(SseDeserializer deserializer);
 
   @protected
+  AgentSummary sse_decode_agent_summary(SseDeserializer deserializer);
+
+  @protected
   AuthStateFrame sse_decode_auth_state_frame(SseDeserializer deserializer);
 
   @protected
@@ -578,6 +588,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ConnectionState sse_decode_connection_state(SseDeserializer deserializer);
+
+  @protected
+  ConversationAgentMembersResponse
+  sse_decode_conversation_agent_members_response(SseDeserializer deserializer);
 
   @protected
   ConversationKind sse_decode_conversation_kind(SseDeserializer deserializer);
@@ -672,6 +686,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AgentDescriptor> sse_decode_list_agent_descriptor(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<AgentSummary> sse_decode_list_agent_summary(
     SseDeserializer deserializer,
   );
 
@@ -873,11 +892,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SocialEventFrame sse_decode_social_event_frame(SseDeserializer deserializer);
 
   @protected
-  StartAgentResponse sse_decode_start_agent_response(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   ThreadEndReason sse_decode_thread_end_reason(SseDeserializer deserializer);
 
   @protected
@@ -999,6 +1013,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_agent_status(AgentStatus self, SseSerializer serializer);
 
   @protected
+  void sse_encode_agent_summary(AgentSummary self, SseSerializer serializer);
+
+  @protected
   void sse_encode_auth_state_frame(
     AuthStateFrame self,
     SseSerializer serializer,
@@ -1118,6 +1135,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_connection_state(
     ConnectionState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_agent_members_response(
+    ConversationAgentMembersResponse self,
     SseSerializer serializer,
   );
 
@@ -1244,6 +1267,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_agent_descriptor(
     List<AgentDescriptor> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agent_summary(
+    List<AgentSummary> self,
     SseSerializer serializer,
   );
 
@@ -1490,12 +1519,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_social_event_frame(
     SocialEventFrame self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_start_agent_response(
-    StartAgentResponse self,
     SseSerializer serializer,
   );
 

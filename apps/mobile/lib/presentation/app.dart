@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/project_providers.dart';
@@ -10,6 +8,7 @@ import 'package:minos/application/social_providers.dart';
 import 'package:minos/application/thread_events_provider.dart';
 import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/src/rust/api/minos.dart' as core;
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Root of the Minos app. Provides the Shad theme, uses [GoRouter] for
 /// declarative routing between splash / login / shell surfaces based on

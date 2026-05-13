@@ -237,9 +237,16 @@ pub async fn upgrade(
             push_ingest_checkpoint(&store, &handle, device_id).await;
         }
 
-        if let Err(e) =
-            run_session(socket, handle, outbox_rx, registry, store, translators, approval_relay)
-                .await
+        if let Err(e) = run_session(
+            socket,
+            handle,
+            outbox_rx,
+            registry,
+            store,
+            translators,
+            approval_relay,
+        )
+        .await
         {
             tracing::warn!(
                 target: "minos_backend::http",

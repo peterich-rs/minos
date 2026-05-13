@@ -6,15 +6,15 @@ import 'package:minos/src/rust/api/minos.dart' show AgentName, MinosError;
 ///
 /// State transitions (driven by [ActiveSessionController]):
 /// ```
-///   Idle ──start()──> Starting ──Rust ack──> Streaming
-///                          \                      │
-///                           \──error──> Error     │
-///                                                 ▼
-///                          Streaming ──MessageCompleted──> AwaitingInput
-///                                                 │
-///                                       send()────┴──> Streaming
-///                                                 │
-///                                  stop()/ThreadClosed──> Stopped
+///   Idle ──send()──> Sending ──first UI frame──> Streaming
+///                     │                                │
+///                     └────────error──────────────> Error
+///                                                      ▼
+///                         Streaming ──MessageCompleted──> AwaitingInput
+///                            │                                 │
+///                            ├──────────send()────────────────┘
+///                            │
+///                            └────stop()/ThreadClosed────> Suspended
 /// ```
 ///
 /// `threadId` is the daemon-issued `session_id` (per
@@ -24,10 +24,7 @@ sealed class ActiveSession {
   const ActiveSession();
 }
 
-/// No agent session is in flight on this device. The chat input gates on
-/// this state to mean "Send" should call `start_agent` only when the page
-/// has no existing thread id. Existing thread pages still call
-/// `send_user_message(session_id)` so the daemon can resume.
+/// No agent session is in flight on this device.
 class SessionIdle extends ActiveSession {
   const SessionIdle();
 
@@ -38,22 +35,20 @@ class SessionIdle extends ActiveSession {
   int get hashCode => (SessionIdle).hashCode;
 }
 
-/// We've called `start_agent` and are waiting for the daemon to mint a
-/// `session_id`. The prompt is held here so we can re-show it in the
-/// chat surface before the first `MessageStarted` echoes back.
-class SessionStarting extends ActiveSession {
+/// A message send has been accepted by the transport layer, but the page does
+/// not have a bound `thread_id` yet. We stay here until the first live UI
+/// frame arrives and lets the controller bind the session.
+class SessionSending extends ActiveSession {
   final AgentName agent;
-  final String prompt;
-  const SessionStarting({required this.agent, required this.prompt});
+  final String text;
+  const SessionSending({required this.agent, required this.text});
 
   @override
   bool operator ==(Object other) =>
-      other is SessionStarting &&
-      other.agent == agent &&
-      other.prompt == prompt;
+      other is SessionSending && other.agent == agent && other.text == text;
 
   @override
-  int get hashCode => Object.hash(agent, prompt);
+  int get hashCode => Object.hash(agent, text);
 }
 
 /// Agent is actively producing tokens; UI shows the streaming cursor.
@@ -89,24 +84,26 @@ class SessionAwaitingInput extends ActiveSession {
   int get hashCode => Object.hash(threadId, agent);
 }
 
-/// The thread has been stopped locally. The next "Send" tap on that same
-/// thread resumes via `send_user_message(session_id)` instead of starting a
-/// brand-new session.
-class SessionStopped extends ActiveSession {
+/// The thread has been interrupted locally or suspended by the runtime.
+/// Sending another message on the same conversation should resume it rather
+/// than creating a brand-new session.
+class SessionSuspended extends ActiveSession {
   final String threadId;
-  const SessionStopped(this.threadId);
+  final AgentName agent;
+  const SessionSuspended({required this.threadId, required this.agent});
 
   @override
   bool operator ==(Object other) =>
-      other is SessionStopped && other.threadId == threadId;
+      other is SessionSuspended &&
+      other.threadId == threadId &&
+      other.agent == agent;
 
   @override
-  int get hashCode => threadId.hashCode;
+  int get hashCode => Object.hash(threadId, agent);
 }
 
 /// Terminal failure on the dispatch path. `threadId` is null when the
-/// failure happened before the daemon assigned one (e.g. the
-/// `start_agent` RPC itself failed).
+/// failure happened before the runtime surfaced a thread id.
 class SessionError extends ActiveSession {
   final String? threadId;
   final MinosError error;

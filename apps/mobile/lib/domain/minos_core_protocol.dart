@@ -68,8 +68,27 @@ abstract class MinosCoreProtocol {
     required List<String> memberAccountIds,
   });
 
+  Future<void> addGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  });
+
   Future<ConversationMembersResponse> conversationMembers({
     required String conversationId,
+  });
+
+  Future<ConversationAgentMembersResponse> listConversationAgents({
+    required String conversationId,
+  });
+
+  Future<void> addAgentToConversation({
+    required String conversationId,
+    required String agentId,
+  });
+
+  Future<void> removeAgentFromConversation({
+    required String conversationId,
+    required String agentId,
   });
 
   Future<ConversationReadResponse> markConversationRead({
@@ -123,13 +142,6 @@ abstract class MinosCoreProtocol {
     int? beforeTsMs,
   });
 
-  /// Start an agent within a project context.
-  Future<StartAgentResponse> startAgentInProject({
-    required AgentName agent,
-    required String prompt,
-    required String projectId,
-  });
-
   /// Hot stream of [ConnectionState] transitions, starting with the current
   /// value.
   Stream<ConnectionState> get connectionStates;
@@ -168,22 +180,15 @@ abstract class MinosCoreProtocol {
 
   // ---- Agent dispatch (Phase 8) ----
 
-  /// Start a new agent session. `prompt` is retained so the UI can keep the
-  /// typed text visible during `SessionStarting`, but the first user message
-  /// must be sent separately via [sendUserMessage]. Returns the daemon-issued
-  /// `session_id` (a.k.a. `thread_id`) and the resolved workspace path.
-  Future<StartAgentResponse> startAgent({
-    required AgentName agent,
-    required String prompt,
-    String workspace = '',
-  });
-
   /// Send a follow-up user message to an existing agent session. The
-  /// `sessionId` is the same value returned by [startAgent].
+  /// `sessionId` is the session/thread identifier.
   Future<void> sendUserMessage({
     required String sessionId,
     required String text,
   });
+
+  /// Pause an in-flight turn while keeping the thread resumable.
+  Future<void> interruptThread({required String threadId});
 
   /// Close an agent thread by its `thread_id`. Replaces the pre-Phase-C
   /// `stop_agent()` surface — the multi-thread `AgentManager` keys lifecycle
@@ -191,6 +196,12 @@ abstract class MinosCoreProtocol {
   /// session. Idempotent on the daemon side; calling for an already-closed
   /// thread is a benign no-op.
   Future<void> closeThread({required String threadId});
+
+  /// Permanently delete a thread. Used exclusively for the swipe-to-delete
+  /// gesture in the thread list. Semantically identical to [closeThread] on
+  /// the wire, but named distinctly so call-sites express intent: interrupt
+  /// pauses a session for later resume, while delete is a permanent close.
+  Future<void> deleteThread({required String threadId});
 
   /// Detect CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
@@ -222,6 +233,18 @@ abstract class MinosCoreProtocol {
   /// cached frame immediately on subscribe (per Rust watch-channel
   /// semantics), then every subsequent change.
   Stream<AuthStateFrame> get authStates;
+
+  /// Send an approval decision (accept/decline) for a pending approval
+  /// request. The [requestId] must match the original request's id, and
+  /// [threadId] identifies the thread the approval belongs to. The
+  /// [decision] is a JSON-encodable value matching the expected response
+  /// shape for the approval variant (command execution, file change, or
+  /// permissions).
+  Future<void> sendApprovalDecision({
+    required String requestId,
+    required String threadId,
+    required Map<String, dynamic> decision,
+  });
 
   /// Re-open the WS using the durable pairing snapshot already loaded
   /// into the Rust core. Idempotent: a no-op when [currentConnectionState]

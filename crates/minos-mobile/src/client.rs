@@ -26,17 +26,18 @@ use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use futures_util::StreamExt;
 use http::{Method, Request};
-use minos_domain::{AgentName, ConnectionState, DeviceId, MinosError};
+use minos_domain::{ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
-    AuthSummary, ChatMessageSummary, ConversationMembersResponse, ConversationReadResponse,
-    ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
-    CreateGroupConversationRequest, EnsureDirectConversationRequest, Envelope, EventKind,
-    FriendRequestSummary, FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams,
-    GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse, ListClisResponse,
-    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
-    MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
-    SendChatMessageRequest, SendUserMessageRequest, SetMinosIdRequest, StartAgentRequest,
-    StartAgentResponse, UserSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    AddAgentToGroupRequest, AddGroupMemberRequest, ApprovalDecisionRequest, AuthSummary,
+    ChatMessageSummary, ConversationAgentMembersResponse, ConversationMembersResponse,
+    ConversationReadResponse, ConversationResponse, ConversationsResponse,
+    CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
+    Envelope, EventKind, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
+    GetThreadLastSeqParams, GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse,
+    ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
+    ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
+    RefreshResponse, RemoveAgentFromGroupRequest, SendChatMessageRequest, SendUserMessageRequest,
+    SetMinosIdRequest, UserSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -626,12 +627,63 @@ impl MobileClient {
         })
     }
 
+    pub async fn add_group_member(
+        &self,
+        conversation_id: String,
+        member_account_id: String,
+    ) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.add_group_member(
+                &access,
+                &conversation_id,
+                AddGroupMemberRequest { member_account_id },
+            )
+        })
+    }
+
     pub async fn conversation_members(
         &self,
         conversation_id: String,
     ) -> Result<ConversationMembersResponse, MinosError> {
         auth_http_call!(self, |http, access| {
             http.conversation_members(&access, &conversation_id)
+        })
+    }
+
+    pub async fn list_conversation_agents(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationAgentMembersResponse, MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.list_conversation_agents(&access, &conversation_id)
+        })
+    }
+
+    pub async fn add_agent_to_conversation(
+        &self,
+        conversation_id: String,
+        agent_id: String,
+    ) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.add_agent_to_group(
+                &access,
+                &conversation_id,
+                AddAgentToGroupRequest { agent_id },
+            )
+        })
+    }
+
+    pub async fn remove_agent_from_conversation(
+        &self,
+        conversation_id: String,
+        agent_id: String,
+    ) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.remove_agent_from_group(
+                &access,
+                &conversation_id,
+                RemoveAgentFromGroupRequest { agent_id },
+            )
         })
     }
 
@@ -851,50 +903,6 @@ impl MobileClient {
         Ok(resp)
     }
 
-    /// Start a fresh agent session. The caller supplies `prompt` so higher
-    /// layers can keep a single start() call shape during the transition to
-    /// explicit start-then-send orchestration, but this method only performs
-    /// the `minos_start_agent` RPC and returns as soon as the daemon mints the
-    /// session id.
-    ///
-    /// The first user message must be delivered separately via
-    /// [`send_user_message`]. This keeps UI session bootstrap from being held
-    /// hostage by the follow-up prompt delivery round-trip.
-    pub async fn start_agent(
-        &self,
-        agent: AgentName,
-        prompt: String,
-        workspace: String,
-    ) -> Result<StartAgentResponse, MinosError> {
-        let outbox = self
-            .outbox
-            .lock()
-            .await
-            .clone()
-            .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_host().await?;
-        let req = StartAgentRequest {
-            agent,
-            workspace,
-            mode: None,
-        };
-        let resp: StartAgentResponse = forward_rpc(
-            &self.pending,
-            &self.next_id,
-            &outbox,
-            target,
-            "minos_start_agent",
-            req,
-            Duration::from_secs(60),
-            Some(RpcTraceContext {
-                thread_id: None,
-                request_summary: Some(format!("agent={agent:?} prompt_len={}", prompt.len())),
-            }),
-        )
-        .await?;
-        Ok(resp)
-    }
-
     /// Send a user message into an existing agent session. Spec §6.2.
     pub async fn send_user_message(
         &self,
@@ -926,6 +934,25 @@ impl MobileClient {
         )
         .await?;
         Ok(())
+    }
+
+    /// Submit a user approval decision back to the backend relay.
+    pub async fn send_approval_decision(
+        &self,
+        request_id: String,
+        thread_id: String,
+        decision: serde_json::Value,
+    ) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.submit_approval_decision(
+                &access,
+                ApprovalDecisionRequest {
+                    request_id,
+                    thread_id,
+                    decision,
+                },
+            )
+        })
     }
 
     /// Pause an in-flight turn on the named thread. Best-effort. Replaces
@@ -1026,86 +1053,6 @@ impl MobileClient {
         auth_http_call!(self, |http, access| {
             http.list_project_threads(&access, req)
         })
-    }
-
-    /// Start an agent within a project context.
-    #[allow(clippy::items_after_statements)]
-    pub async fn start_agent_in_project(
-        &self,
-        agent: AgentName,
-        prompt: String,
-        project_id: String,
-    ) -> Result<StartAgentResponse, MinosError> {
-        let access = self.access_token_or_unauthorized().await?;
-        let http = self.http_client_no_secret()?;
-        let projects = self
-            .finish_authenticated_http_call(http.list_projects(&access).await)
-            .await?;
-        let project = projects
-            .projects
-            .into_iter()
-            .find(|project| project.project_id == project_id)
-            .ok_or_else(|| MinosError::CodexProtocolError {
-                method: "start_agent_in_project".into(),
-                message: format!("project not found: {project_id}"),
-            })?;
-        let workspace_slug = project.workspace_slug;
-
-        let outbox = self
-            .outbox
-            .lock()
-            .await
-            .clone()
-            .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_host().await?;
-        #[derive(serde::Serialize)]
-        struct StartInProjectReq {
-            agent: AgentName,
-            workspace: String,
-            project_id: String,
-            workspace_slug: String,
-        }
-        let req = StartInProjectReq {
-            agent,
-            workspace: String::new(),
-            project_id: project_id.clone(),
-            workspace_slug,
-        };
-        let response: StartAgentResponse = forward_rpc(
-            &self.pending,
-            &self.next_id,
-            &outbox,
-            target,
-            "minos_start_agent_in_project",
-            req,
-            Duration::from_secs(60),
-            Some(RpcTraceContext {
-                thread_id: None,
-                request_summary: Some(format!(
-                    "start_agent_in_project agent={agent:?} prompt_len={}",
-                    prompt.len()
-                )),
-            }),
-        )
-        .await?;
-
-        let assign_req = minos_protocol::AssignProjectThreadRequest {
-            project_id,
-            thread_id: response.session_id.clone(),
-        };
-        if let Err(error) = self
-            .finish_authenticated_http_call(http.assign_project_thread(&access, assign_req).await)
-            .await
-        {
-            tracing::warn!(
-                target: "minos_mobile::client",
-                %error,
-                thread_id = %response.session_id,
-                "failed to assign backend project thread",
-            );
-        }
-
-        Ok(response)
     }
 
     /// Subscribe to auth-state transitions. The first read on the receiver
@@ -1602,6 +1549,70 @@ fn handle_text_frame(
                 let _ = social_events_tx.send(SocialEventFrame {
                     conversation_id,
                     message,
+                });
+            }
+            EventKind::ApprovalRequest {
+                thread_id,
+                turn_id,
+                request_id,
+                method,
+                params,
+                timeout_ms,
+            } => {
+                let payload_json = serde_json::json!({
+                    "thread_id": thread_id,
+                    "turn_id": turn_id,
+                    "request_id": request_id,
+                    "method": method,
+                    "params": params,
+                    "timeout_ms": timeout_ms,
+                })
+                .to_string();
+                let _ = ui_events_tx.send(UiEventFrame {
+                    thread_id,
+                    seq: 0,
+                    ui: UiEventMessage::Raw {
+                        kind: "approval_request".into(),
+                        payload_json,
+                    },
+                    ts_ms: chrono::Utc::now().timestamp_millis(),
+                });
+            }
+            EventKind::ApprovalTimeout {
+                thread_id,
+                request_id,
+                reason,
+            } => {
+                let payload_json = serde_json::json!({
+                    "thread_id": thread_id,
+                    "request_id": request_id,
+                    "reason": reason,
+                })
+                .to_string();
+                let _ = ui_events_tx.send(UiEventFrame {
+                    thread_id,
+                    seq: 0,
+                    ui: UiEventMessage::Raw {
+                        kind: "approval_timeout".into(),
+                        payload_json,
+                    },
+                    ts_ms: chrono::Utc::now().timestamp_millis(),
+                });
+            }
+            EventKind::AgentError {
+                session_id: Some(thread_id),
+                code,
+                message,
+            } => {
+                let _ = ui_events_tx.send(UiEventFrame {
+                    thread_id,
+                    seq: 0,
+                    ui: UiEventMessage::Error {
+                        code,
+                        message,
+                        message_id: None,
+                    },
+                    ts_ms: chrono::Utc::now().timestamp_millis(),
                 });
             }
             EventKind::ServerShutdown => {
@@ -2419,15 +2430,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_agent_returns_not_connected_when_disconnected() {
-        let client = MobileClient::new_with_in_memory_store("iPhone".into());
-        let res = client
-            .start_agent(AgentName::Codex, "ping".into(), String::new())
-            .await;
-        assert!(matches!(res, Err(MinosError::NotConnected)));
-    }
-
-    #[tokio::test]
     async fn send_user_message_returns_not_connected_when_disconnected() {
         let client = MobileClient::new_with_in_memory_store("iPhone".into());
         let res = client
@@ -2441,6 +2443,85 @@ mod tests {
         let client = MobileClient::new_with_in_memory_store("iPhone".into());
         let res = client.close_thread("thr".into()).await;
         assert!(matches!(res, Err(MinosError::NotConnected)));
+    }
+
+    #[tokio::test]
+    async fn send_approval_decision_requires_authentication() {
+        let client = MobileClient::new_with_in_memory_store("iPhone".into());
+        let res = client
+            .send_approval_decision(
+                "req-1".into(),
+                "thr-1".into(),
+                serde_json::json!({ "decision": "accept" }),
+            )
+            .await;
+        assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
+    }
+
+    #[test]
+    fn handle_text_frame_converts_approval_request_to_raw_ui_event() {
+        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
+        let (ui_tx, mut ui_rx) = broadcast::channel(8);
+        let (social_tx, _social_rx) = broadcast::channel(8);
+        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
+
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::ApprovalRequest {
+                thread_id: "thr-approval".into(),
+                turn_id: "turn-7".into(),
+                request_id: "req-7".into(),
+                method: "execCommandApproval".into(),
+                params: serde_json::json!({ "command": "git status" }),
+                timeout_ms: 120_000,
+            },
+        };
+        let text = serde_json::to_string(&env).unwrap();
+        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
+
+        let frame = ui_rx.try_recv().expect("approval request should fan out");
+        assert_eq!(frame.thread_id, "thr-approval");
+        assert_eq!(frame.seq, 0);
+        match frame.ui {
+            UiEventMessage::Raw { kind, payload_json } => {
+                assert_eq!(kind, "approval_request");
+                let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+                assert_eq!(payload["request_id"], "req-7");
+                assert_eq!(payload["params"]["command"], "git status");
+            }
+            other => panic!("expected UiEventMessage::Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_text_frame_converts_approval_timeout_to_raw_ui_event() {
+        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
+        let (ui_tx, mut ui_rx) = broadcast::channel(8);
+        let (social_tx, _social_rx) = broadcast::channel(8);
+        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
+
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::ApprovalTimeout {
+                thread_id: "thr-timeout".into(),
+                request_id: "req-timeout".into(),
+                reason: "timeout".into(),
+            },
+        };
+        let text = serde_json::to_string(&env).unwrap();
+        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
+
+        let frame = ui_rx.try_recv().expect("approval timeout should fan out");
+        assert_eq!(frame.thread_id, "thr-timeout");
+        match frame.ui {
+            UiEventMessage::Raw { kind, payload_json } => {
+                assert_eq!(kind, "approval_timeout");
+                let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+                assert_eq!(payload["request_id"], "req-timeout");
+                assert_eq!(payload["reason"], "timeout");
+            }
+            other => panic!("expected UiEventMessage::Raw, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -128,10 +128,11 @@ impl AppServerInstance {
             summary: None,
             thread_id: thread_id.to_string(),
         };
-        let response: TurnStartResponse = tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
-            .await
-            .map_err(|_| anyhow::anyhow!("turn/start timeout"))?
-            .map_err(|e| anyhow::anyhow!("turn/start failed: {e}"))?;
+        let response: TurnStartResponse =
+            tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
+                .await
+                .map_err(|_| anyhow::anyhow!("turn/start timeout"))?
+                .map_err(|e| anyhow::anyhow!("turn/start failed: {e}"))?;
         Ok(response.turn.id)
     }
 
@@ -150,10 +151,11 @@ impl AppServerInstance {
             }],
             thread_id: thread_id.to_string(),
         };
-        let response: TurnSteerResponse = tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
-            .await
-            .map_err(|_| anyhow::anyhow!("turn/steer timeout"))?
-            .map_err(|e| anyhow::anyhow!("turn/steer failed: {e}"))?;
+        let response: TurnSteerResponse =
+            tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
+                .await
+                .map_err(|_| anyhow::anyhow!("turn/steer timeout"))?
+                .map_err(|e| anyhow::anyhow!("turn/steer failed: {e}"))?;
         Ok(response.turn_id)
     }
 

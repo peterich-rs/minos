@@ -10,9 +10,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use minos_protocol::{
-    ApprovalDecisionRequest,
-    GetThreadLastSeqParams, GetThreadLastSeqResponse, ListThreadsParams, ListThreadsResponse,
-    ReadThreadParams, ReadThreadResponse,
+    ApprovalDecisionRequest, GetThreadLastSeqParams, GetThreadLastSeqResponse, ListThreadsParams,
+    ListThreadsResponse, ReadThreadParams, ReadThreadResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -191,18 +190,15 @@ async fn get_thread_last_seq_inner(
 ) -> Result<Json<GetThreadLastSeqResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let (_caller, account_id) = require_authed_session(&state, &headers).await?;
     // Verify the thread belongs to a device owned by this account.
-    let thread_exists = crate::store::threads::exists_for_account(
-        &state.store,
-        &params.thread_id,
-        &account_id,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            err("internal", e.to_string()),
-        )
-    })?;
+    let thread_exists =
+        crate::store::threads::exists_for_account(&state.store, &params.thread_id, &account_id)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    err("internal", e.to_string()),
+                )
+            })?;
     if !thread_exists {
         return Err((
             StatusCode::NOT_FOUND,

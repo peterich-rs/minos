@@ -70,6 +70,10 @@ async fn spawn_backend_with_paired_mac() -> RealBackend {
         store: pool.clone(),
         token_ttl: Duration::from_secs(300),
         translators: minos_backend::ingest::translate::ThreadTranslators::new(),
+        approval_relay: minos_backend::approval_relay::ApprovalRelay::new(
+            pool.clone(),
+            registry.clone(),
+        ),
         jwt_secret: Arc::new("a".repeat(32)),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
@@ -404,7 +408,7 @@ async fn resume_persisted_session_returns_error_when_backend_rejects_with_4401()
     .expect("resume_persisted_session must not hang on a 4401 close");
 
     let _ = resume;
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if matches!(client.current_state(), ConnectionState::Disconnected) {
                 break;

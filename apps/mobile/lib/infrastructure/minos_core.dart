@@ -1,6 +1,6 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
-import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
-import 'package:meta/meta.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
 import 'package:minos/infrastructure/frb_external_library.dart';
 import 'package:minos/infrastructure/platform_int64.dart';
@@ -190,9 +190,41 @@ class MinosCore implements MinosCoreProtocol {
   );
 
   @override
+  Future<void> addGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  }) => _client.addGroupMember(
+    conversationId: conversationId,
+    memberAccountId: memberAccountId,
+  );
+
+  @override
   Future<ConversationMembersResponse> conversationMembers({
     required String conversationId,
   }) => _client.conversationMembers(conversationId: conversationId);
+
+  @override
+  Future<ConversationAgentMembersResponse> listConversationAgents({
+    required String conversationId,
+  }) => _client.listConversationAgents(conversationId: conversationId);
+
+  @override
+  Future<void> addAgentToConversation({
+    required String conversationId,
+    required String agentId,
+  }) => _client.addAgentToConversation(
+    conversationId: conversationId,
+    agentId: agentId,
+  );
+
+  @override
+  Future<void> removeAgentFromConversation({
+    required String conversationId,
+    required String agentId,
+  }) => _client.removeAgentFromConversation(
+    conversationId: conversationId,
+    agentId: agentId,
+  );
 
   @override
   Future<ConversationReadResponse> markConversationRead({
@@ -274,17 +306,6 @@ class MinosCore implements MinosCoreProtocol {
       limit: limit,
       beforeTsMs: beforeTsMs == null ? null : platformInt64FromInt(beforeTsMs),
     ),
-  );
-
-  @override
-  Future<StartAgentResponse> startAgentInProject({
-    required AgentName agent,
-    required String prompt,
-    required String projectId,
-  }) => _client.startAgentInProject(
-    agent: agent,
-    prompt: prompt,
-    projectId: projectId,
   );
 
   @override
@@ -377,13 +398,6 @@ class MinosCore implements MinosCoreProtocol {
   // ---- Agent dispatch forwarders ----
 
   @override
-  Future<StartAgentResponse> startAgent({
-    required AgentName agent,
-    required String prompt,
-    String workspace = '',
-  }) => _client.startAgent(agent: agent, prompt: prompt, workspace: workspace);
-
-  @override
   Future<List<AgentDescriptor>> listClis() => _client.listClis();
 
   @override
@@ -413,7 +427,15 @@ class MinosCore implements MinosCoreProtocol {
   }) => _client.sendUserMessage(sessionId: sessionId, text: text);
 
   @override
+  Future<void> interruptThread({required String threadId}) =>
+      _client.interruptThread(threadId: threadId);
+
+  @override
   Future<void> closeThread({required String threadId}) =>
+      _client.closeThread(threadId: threadId);
+
+  @override
+  Future<void> deleteThread({required String threadId}) =>
       _client.closeThread(threadId: threadId);
 
   // ---- Lifecycle forwarders ----
@@ -446,6 +468,17 @@ class MinosCore implements MinosCoreProtocol {
     await _client.resumePersistedSession();
     await _saveClientStateBestEffort(_secure, _client);
   }
+
+  @override
+  Future<void> sendApprovalDecision({
+    required String requestId,
+    required String threadId,
+    required Map<String, dynamic> decision,
+  }) => _client.sendApprovalDecision(
+    requestId: requestId,
+    threadId: threadId,
+    decisionJson: jsonEncode(decision),
+  );
 
   Future<void> _rollbackFailedPersistedPairSave() async {
     // ADR-0020: with bearer-only auth the server's `account_host_pairings`

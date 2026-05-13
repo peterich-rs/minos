@@ -118,10 +118,7 @@ GoRouter createAppRouter(Ref ref) {
         path: AppRoutes.newThread,
         builder: (context, state) {
           final extra = state.extra as ThreadRouteExtra?;
-          return ThreadViewPage(
-            agentProfileId: extra?.agentProfileId,
-            startupWorkspace: extra?.startupWorkspace,
-          );
+          return ThreadViewPage(agentProfileId: extra?.agentProfileId);
         },
       ),
 
@@ -203,15 +200,10 @@ GoRouter createAppRouter(Ref ref) {
 
 /// Extra data passed to the thread route.
 class ThreadRouteExtra {
-  const ThreadRouteExtra({
-    this.agent,
-    this.agentProfileId,
-    this.startupWorkspace,
-  });
+  const ThreadRouteExtra({this.agent, this.agentProfileId});
 
   final AgentName? agent;
   final String? agentProfileId;
-  final String? startupWorkspace;
 }
 
 /// Extra data passed to the social chat route.
@@ -241,9 +233,9 @@ class ProjectDetailRouteExtra {
 class _RouterRefreshNotifier extends ChangeNotifier {
   _RouterRefreshNotifier(this._ref) {
     _subscriptions = [
-      _ref.listen(authControllerProvider, (_, __) => notifyListeners()),
-      _ref.listen(connectionStateProvider, (_, __) => notifyListeners()),
-      _ref.listen(hasPersistedPairingProvider, (_, __) => notifyListeners()),
+      _ref.listen(authControllerProvider, (_, _) => notifyListeners()),
+      _ref.listen(connectionStateProvider, (_, _) => notifyListeners()),
+      _ref.listen(hasPersistedPairingProvider, (_, _) => notifyListeners()),
     ];
   }
 

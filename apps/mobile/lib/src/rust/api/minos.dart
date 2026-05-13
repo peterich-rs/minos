@@ -11,6 +11,7 @@ import '../frb_generated.dart';
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `parse_device_id`, `spawn_state_forwarder`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `StartAgentResponse`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
@@ -63,6 +64,16 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Read the current active Mac id, or `None` if no pair has been
   /// completed yet.
   Future<String?> activeHost();
+
+  Future<void> addAgentToConversation({
+    required String conversationId,
+    required String agentId,
+  });
+
+  Future<void> addGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  });
 
   /// Permanently close the given thread. Idempotent.
   Future<void> closeThread({required String threadId});
@@ -120,6 +131,10 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   /// Detect the CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
+
+  Future<ConversationAgentMembersResponse> listConversationAgents({
+    required String conversationId,
+  });
 
   /// Scan host-side skills for the selected runtime host.
   Future<ListHostSkillsResponse> listHostSkills({
@@ -209,11 +224,23 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
 
+  Future<void> removeAgentFromConversation({
+    required String conversationId,
+    required String agentId,
+  });
+
   /// Reconnect using the durable pairing snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession();
 
   Future<List<UserSummary>> searchUsers({required String minosId});
+
+  /// Submit a user approval decision for a pending host request.
+  Future<void> sendApprovalDecision({
+    required String requestId,
+    required String threadId,
+    required String decisionJson,
+  });
 
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
@@ -231,22 +258,6 @@ abstract class MobileClient implements RustOpaqueInterface {
   Future<void> setActiveHost({required String hostDeviceId});
 
   Future<MyProfileResponse> setMinosId({required String minosId});
-
-  /// Start a new agent session and return the daemon-issued `session_id`
-  /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
-  /// responsible for sending the first user message separately.
-  Future<StartAgentResponse> startAgent({
-    required AgentName agent,
-    required String prompt,
-    required String workspace,
-  });
-
-  /// Start an agent within a project context.
-  Future<StartAgentResponse> startAgentInProject({
-    required AgentName agent,
-    required String prompt,
-    required String projectId,
-  });
 
   /// Subscribe to auth-state transitions. Emits the current cached frame
   /// immediately, then every subsequent change. The spawned task exits
@@ -314,6 +325,53 @@ sealed class AgentStatus with _$AgentStatus {
   const factory AgentStatus.ok() = AgentStatus_Ok;
   const factory AgentStatus.missing() = AgentStatus_Missing;
   const factory AgentStatus.error({required String reason}) = AgentStatus_Error;
+}
+
+class AgentSummary {
+  final String agentId;
+  final String ownerAccountId;
+  final String name;
+  final String description;
+  final String runtimeAgent;
+  final String model;
+  final PlatformInt64 createdAtMs;
+  final PlatformInt64 updatedAtMs;
+
+  const AgentSummary({
+    required this.agentId,
+    required this.ownerAccountId,
+    required this.name,
+    required this.description,
+    required this.runtimeAgent,
+    required this.model,
+    required this.createdAtMs,
+    required this.updatedAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      agentId.hashCode ^
+      ownerAccountId.hashCode ^
+      name.hashCode ^
+      description.hashCode ^
+      runtimeAgent.hashCode ^
+      model.hashCode ^
+      createdAtMs.hashCode ^
+      updatedAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AgentSummary &&
+          runtimeType == other.runtimeType &&
+          agentId == other.agentId &&
+          ownerAccountId == other.ownerAccountId &&
+          name == other.name &&
+          description == other.description &&
+          runtimeAgent == other.runtimeAgent &&
+          model == other.model &&
+          createdAtMs == other.createdAtMs &&
+          updatedAtMs == other.updatedAtMs;
 }
 
 @freezed
@@ -438,6 +496,22 @@ sealed class ConnectionState with _$ConnectionState {
   const factory ConnectionState.connected() = ConnectionState_Connected;
   const factory ConnectionState.reconnecting({required int attempt}) =
       ConnectionState_Reconnecting;
+}
+
+class ConversationAgentMembersResponse {
+  final List<AgentSummary> agents;
+
+  const ConversationAgentMembersResponse({required this.agents});
+
+  @override
+  int get hashCode => agents.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationAgentMembersResponse &&
+          runtimeType == other.runtimeType &&
+          agents == other.agents;
 }
 
 enum ConversationKind { direct, group }
@@ -1403,24 +1477,6 @@ class SocialEventFrame {
           runtimeType == other.runtimeType &&
           conversationId == other.conversationId &&
           message == other.message;
-}
-
-class StartAgentResponse {
-  final String sessionId;
-  final String cwd;
-
-  const StartAgentResponse({required this.sessionId, required this.cwd});
-
-  @override
-  int get hashCode => sessionId.hashCode ^ cwd.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is StartAgentResponse &&
-          runtimeType == other.runtimeType &&
-          sessionId == other.sessionId &&
-          cwd == other.cwd;
 }
 
 @freezed

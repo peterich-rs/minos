@@ -4,6 +4,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/group_agent_provider.dart';
+import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/presentation/error_feedback.dart';
@@ -45,7 +46,7 @@ class GroupMembersPage extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
         children: <Widget>[
           // --- User members section ---
-          _SectionHeader(title: '成员'),
+          const _SectionHeader(title: '成员'),
           membersAsync.when(
             loading: () => const Padding(
               padding: EdgeInsets.all(16),
@@ -131,11 +132,12 @@ class GroupMembersPage extends ConsumerWidget {
                 onTap: () async {
                   Navigator.of(sheetContext).pop();
                   try {
-                    // TODO: Call backend API to add member to group
-                    // await ref.read(minosCoreProvider).addGroupMember(
-                    //   conversationId: conversationId,
-                    //   memberAccountId: friend.accountId,
-                    // );
+                    await ref
+                        .read(minosCoreProvider)
+                        .addGroupMember(
+                          conversationId: conversationId,
+                          memberAccountId: friend.accountId,
+                        );
                     ref.invalidate(conversationMembersProvider(conversationId));
                     if (context.mounted) {
                       ShadToaster.maybeOf(context)?.show(
@@ -216,16 +218,30 @@ class GroupMembersPage extends ConsumerWidget {
                 ),
                 onTap: () async {
                   Navigator.of(sheetContext).pop();
-                  await ref
-                      .read(groupAgentBindingsProvider.notifier)
-                      .addAgentToGroup(
-                        conversationId: conversationId,
-                        agentId: profile.agentId,
-                      );
-                  if (context.mounted) {
-                    ShadToaster.maybeOf(context)?.show(
-                      ShadToast(title: Text('已添加 Agent: ${profile.name}')),
+                  try {
+                    await ref
+                        .read(minosCoreProvider)
+                        .addAgentToConversation(
+                          conversationId: conversationId,
+                          agentId: profile.agentId,
+                        );
+                    ref.invalidate(
+                      conversationAgentMembersProvider(conversationId),
                     );
+                    if (context.mounted) {
+                      ShadToaster.maybeOf(context)?.show(
+                        ShadToast(title: Text('已添加 Agent: ${profile.name}')),
+                      );
+                    }
+                  } catch (error) {
+                    if (context.mounted) {
+                      showLoggedErrorToast(
+                        context,
+                        target: 'group_members',
+                        title: '添加 Agent 失败',
+                        error: error,
+                      );
+                    }
                   }
                 },
               ),
@@ -258,7 +274,7 @@ class _SectionHeader extends StatelessWidget {
               ),
             ),
           ),
-          if (trailing != null) trailing!,
+          ?trailing,
         ],
       ),
     );
@@ -336,12 +352,26 @@ class _AgentMembersList extends ConsumerWidget {
                   ),
                 );
                 if (confirmed == true) {
-                  await ref
-                      .read(groupAgentBindingsProvider.notifier)
-                      .removeAgentFromGroup(
-                        conversationId: conversationId,
-                        agentId: agent.agentId,
+                  try {
+                    await ref
+                        .read(minosCoreProvider)
+                        .removeAgentFromConversation(
+                          conversationId: conversationId,
+                          agentId: agent.agentId,
+                        );
+                    ref.invalidate(
+                      conversationAgentMembersProvider(conversationId),
+                    );
+                  } catch (error) {
+                    if (context.mounted) {
+                      showLoggedErrorToast(
+                        context,
+                        target: 'group_members',
+                        title: '移除 Agent 失败',
+                        error: error,
                       );
+                    }
+                  }
                 }
               },
             ),

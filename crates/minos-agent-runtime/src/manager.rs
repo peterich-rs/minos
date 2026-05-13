@@ -1026,12 +1026,7 @@ fn current_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-const VALID_APPROVAL_POLICIES: &[&str] = &[
-    "never",
-    "unless-allow-listed",
-    "on-failure",
-    "always",
-];
+const VALID_APPROVAL_POLICIES: &[&str] = &["never", "unless-allow-listed", "on-failure", "always"];
 const VALID_SANDBOX_POLICIES: &[&str] = &["none", "read-only", "full-access"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1868,7 +1863,10 @@ mod tests {
 
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                let ingest = ingest_rx.recv().await.expect("ingest broadcast should stay open");
+                let ingest = ingest_rx
+                    .recv()
+                    .await
+                    .expect("ingest broadcast should stay open");
                 if ingest.thread_id == thread_id
                     && ingest
                         .payload
@@ -2089,12 +2087,11 @@ mod tests {
 
         let ingest = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                let ingest = ingest_rx.recv().await.expect("ingest stream should stay open");
-                if ingest
-                    .payload
-                    .get("method")
-                    .and_then(Value::as_str)
-                    == Some("approval/request")
+                let ingest = ingest_rx
+                    .recv()
+                    .await
+                    .expect("ingest stream should stay open");
+                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/request")
                 {
                     break ingest;
                 }
@@ -2157,12 +2154,11 @@ mod tests {
 
         let timed_out = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                let ingest = ingest_rx.recv().await.expect("ingest stream should stay open");
-                if ingest
-                    .payload
-                    .get("method")
-                    .and_then(Value::as_str)
-                    == Some("approval/timeout")
+                let ingest = ingest_rx
+                    .recv()
+                    .await
+                    .expect("ingest stream should stay open");
+                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/timeout")
                 {
                     break ingest;
                 }
@@ -2217,12 +2213,11 @@ mod tests {
 
         let approval_request = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                let ingest = ingest_rx.recv().await.expect("ingest stream should stay open");
-                if ingest
-                    .payload
-                    .get("method")
-                    .and_then(Value::as_str)
-                    == Some("approval/request")
+                let ingest = ingest_rx
+                    .recv()
+                    .await
+                    .expect("ingest stream should stay open");
+                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/request")
                 {
                     break ingest;
                 }

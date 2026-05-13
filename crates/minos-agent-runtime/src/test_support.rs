@@ -306,7 +306,10 @@ async fn run_script(
                     parsed.get("method").is_none(),
                     "FakeCodexServer: response frames must not carry a method",
                 );
-                assert!(parsed.get("id").is_some(), "FakeCodexServer: response must carry an id");
+                assert!(
+                    parsed.get("id").is_some(),
+                    "FakeCodexServer: response must carry an id"
+                );
                 assert_eq!(parsed.get("result").cloned().unwrap_or_default(), result);
             }
             Step::Sleep { ms } => {

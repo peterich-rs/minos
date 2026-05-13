@@ -779,9 +779,7 @@ async fn route_event(event: EventKind, ctx: &DispatchCtx) {
             );
         }
         EventKind::AgentError {
-            session_id,
-            code,
-            ..
+            session_id, code, ..
         } => {
             tracing::debug!(
                 target: "minos_daemon::relay_client",

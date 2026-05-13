@@ -1,10 +1,9 @@
-import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart'
     show AsyncNotifier, AsyncNotifierProvider, FutureProvider;
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-
 import 'package:minos/domain/minos_core_protocol.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'minos_providers.g.dart';
 

@@ -1,10 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:minos/domain/agent_profile.dart';
-import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/infrastructure/agent_profile_store.dart';
+import 'package:minos/src/rust/api/minos.dart';
 
 final agentProfileStoreProvider = Provider<AgentProfileStore>((ref) {
   return const JsonFileAgentProfileStore();

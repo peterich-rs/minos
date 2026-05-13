@@ -15,15 +15,17 @@ use http::header::CONTENT_TYPE;
 use http::{Method, Request, Response, StatusCode};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::{
-    AssignProjectThreadRequest, AuthRequest, AuthResponse, ConversationMembersResponse,
-    ConversationReadResponse, ConversationResponse, ConversationsResponse,
-    CreateFriendRequestRequest, CreateGroupConversationRequest, CreateProjectRequest,
-    CreateProjectResponse, DeleteProjectRequest, EnsureDirectConversationRequest,
-    FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams, GetThreadLastSeqResponse,
-    ListChatMessagesRequest, ListChatMessagesResponse, ListProjectThreadsParams,
-    ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams, ListThreadsResponse,
-    LogoutRequest, MeHostsResponse, MyProfileResponse, PairConsumeRequest, PairResponse,
-    ReadThreadParams, ReadThreadResponse, RefreshRequest, RefreshResponse, SearchUsersRequest,
+    AddAgentToGroupRequest, AddGroupMemberRequest, ApprovalDecisionRequest,
+    AssignProjectThreadRequest, AuthRequest, AuthResponse, ConversationAgentMembersResponse,
+    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
+    ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
+    CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest,
+    EnsureDirectConversationRequest, FriendRequestsResponse, FriendsResponse,
+    GetThreadLastSeqParams, GetThreadLastSeqResponse, ListChatMessagesRequest,
+    ListChatMessagesResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
+    ListProjectsResponse, ListThreadsParams, ListThreadsResponse, LogoutRequest, MeHostsResponse,
+    MyProfileResponse, PairConsumeRequest, PairResponse, ReadThreadParams, ReadThreadResponse,
+    RefreshRequest, RefreshResponse, RemoveAgentFromGroupRequest, SearchUsersRequest,
     SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest, UpdateProjectRequest,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -286,6 +288,37 @@ impl MobileHttpClient {
                 Some(thread_id.into()),
             );
             Ok(last_seq)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn submit_approval_decision(
+        &self,
+        access_token: &str,
+        req: ApprovalDecisionRequest,
+    ) -> Result<(), MinosError> {
+        let path = "/v1/threads/approval-decision";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            Some(req.thread_id.clone()),
+            Some(format!("request_id={}", req.request_id)),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("approval decision forwarded".into()),
+                Some(req.thread_id),
+            );
+            Ok(())
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
@@ -786,6 +819,38 @@ impl MobileHttpClient {
         }
     }
 
+    pub async fn add_group_member(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+        req: AddGroupMemberRequest,
+    ) -> Result<(), MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/members/add");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some(req.member_account_id.clone()),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("member added".into()),
+                Some(conversation_id.into()),
+            );
+            Ok(())
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
     pub async fn conversation_members(
         &self,
         access_token: &str,
@@ -812,6 +877,103 @@ impl MobileHttpClient {
                 Some(conversation_id.into()),
             );
             Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn list_conversation_agents(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+    ) -> Result<ConversationAgentMembersResponse, MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/agents");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            None,
+        );
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ConversationAgentMembersResponse =
+                decode_success_json(resp, "ConversationAgentMembersResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("agents={}", body.agents.len())),
+                Some(conversation_id.into()),
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn add_agent_to_group(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+        req: AddAgentToGroupRequest,
+    ) -> Result<(), MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/agents/add");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some(req.agent_id.clone()),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("agent added".into()),
+                Some(conversation_id.into()),
+            );
+            Ok(())
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn remove_agent_from_group(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+        req: RemoveAgentFromGroupRequest,
+    ) -> Result<(), MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/agents/remove");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some(req.agent_id.clone()),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("agent removed".into()),
+                Some(conversation_id.into()),
+            );
+            Ok(())
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());

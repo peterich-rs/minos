@@ -56,10 +56,8 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
     let registry = Arc::new(SessionRegistry::new());
-    let approval_relay = minos_backend::approval_relay::ApprovalRelay::new(
-        pool.clone(),
-        Arc::clone(&registry),
-    );
+    let approval_relay =
+        minos_backend::approval_relay::ApprovalRelay::new(pool.clone(), Arc::clone(&registry));
 
     let state = BackendState {
         registry,

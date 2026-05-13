@@ -30,10 +30,11 @@ pub async fn insert(
     created_at_ms: i64,
     timeout_at_ms: i64,
 ) -> Result<(), BackendError> {
-    let params_json = serde_json::to_string(params_json).map_err(|error| BackendError::StoreQuery {
-        operation: "pending_approvals::insert.serialize".into(),
-        message: error.to_string(),
-    })?;
+    let params_json =
+        serde_json::to_string(params_json).map_err(|error| BackendError::StoreQuery {
+            operation: "pending_approvals::insert.serialize".into(),
+            message: error.to_string(),
+        })?;
 
     sqlx::query(
         "INSERT OR IGNORE INTO pending_approvals
@@ -137,7 +138,18 @@ pub async fn list_unresolved_for_hosts(
     builder.push(')');
 
     let rows = builder
-        .build_query_as::<(String, String, String, String, String, String, i64, i64, Option<i64>, Option<String>)>()
+        .build_query_as::<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            i64,
+            Option<i64>,
+            Option<String>,
+        )>()
         .fetch_all(pool)
         .await
         .map_err(store_err("pending_approvals::list_unresolved_for_hosts"))?;
@@ -146,9 +158,31 @@ pub async fn list_unresolved_for_hosts(
 }
 
 fn decode_row(
-    row: (String, String, String, String, String, String, i64, i64, Option<i64>, Option<String>),
+    row: (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        i64,
+        Option<i64>,
+        Option<String>,
+    ),
 ) -> Result<PendingApprovalRow, BackendError> {
-    let (request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution) = row;
+    let (
+        request_id,
+        thread_id,
+        turn_id,
+        host_device_id,
+        method,
+        params_json,
+        created_at_ms,
+        timeout_at_ms,
+        resolved_at_ms,
+        resolution,
+    ) = row;
     Ok(PendingApprovalRow {
         request_id,
         thread_id,
@@ -160,9 +194,11 @@ fn decode_row(
                 message: error.to_string(),
             })?,
         method,
-        params_json: serde_json::from_str(&params_json).map_err(|error| BackendError::StoreDecode {
-            column: "pending_approvals.params_json".into(),
-            message: error.to_string(),
+        params_json: serde_json::from_str(&params_json).map_err(|error| {
+            BackendError::StoreDecode {
+                column: "pending_approvals.params_json".into(),
+                message: error.to_string(),
+            }
         })?,
         created_at_ms,
         timeout_at_ms,

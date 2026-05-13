@@ -39,15 +39,16 @@ pub use minos_domain::{
     PairingState,
 };
 pub use minos_protocol::{
-    AuthSummary, ChatMessageReplySummary, ChatMessageSummary, ConversationKind,
-    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
-    ConversationSummary, ConversationsResponse, CreateProjectRequest, CreateProjectResponse,
-    DeleteProjectRequest, FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse,
-    FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, HostSummary,
-    ListChatMessagesResponse, ListHostSkillsResponse, ListProjectThreadsParams,
-    ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams, ListThreadsResponse,
-    MyProfileResponse, ProjectSummary, ReadThreadParams, ReadThreadResponse, SearchUsersResponse,
-    SenderType, StartAgentResponse, ThreadSummary, UpdateProjectRequest, UserSummary,
+    AgentSummary, AuthSummary, ChatMessageReplySummary, ChatMessageSummary,
+    ConversationAgentMembersResponse, ConversationKind, ConversationMembersResponse,
+    ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
+    CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
+    FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
+    HostSkillSummary, HostSkillsEntry, HostSummary, ListChatMessagesResponse,
+    ListHostSkillsResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
+    ListProjectsResponse, ListThreadsParams, ListThreadsResponse, MyProfileResponse,
+    ProjectSummary, ReadThreadParams, ReadThreadResponse, SearchUsersResponse, SenderType,
+    StartAgentResponse, ThreadSummary, UpdateProjectRequest, UserSummary,
     WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
@@ -335,11 +336,48 @@ impl MobileClient {
             .await
     }
 
+    pub async fn add_group_member(
+        &self,
+        conversation_id: String,
+        member_account_id: String,
+    ) -> Result<(), MinosError> {
+        self.0
+            .add_group_member(conversation_id, member_account_id)
+            .await
+    }
+
     pub async fn conversation_members(
         &self,
         conversation_id: String,
     ) -> Result<ConversationMembersResponse, MinosError> {
         self.0.conversation_members(conversation_id).await
+    }
+
+    pub async fn list_conversation_agents(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationAgentMembersResponse, MinosError> {
+        self.0.list_conversation_agents(conversation_id).await
+    }
+
+    pub async fn add_agent_to_conversation(
+        &self,
+        conversation_id: String,
+        agent_id: String,
+    ) -> Result<(), MinosError> {
+        self.0
+            .add_agent_to_conversation(conversation_id, agent_id)
+            .await
+    }
+
+    pub async fn remove_agent_from_conversation(
+        &self,
+        conversation_id: String,
+        agent_id: String,
+    ) -> Result<(), MinosError> {
+        self.0
+            .remove_agent_from_conversation(conversation_id, agent_id)
+            .await
     }
 
     pub async fn mark_conversation_read(
@@ -539,18 +577,6 @@ impl MobileClient {
             .await
     }
 
-    /// Start a new agent session and return the daemon-issued `session_id`
-    /// (a.k.a. `thread_id`) plus the resolved workspace path. The caller is
-    /// responsible for sending the first user message separately.
-    pub async fn start_agent(
-        &self,
-        agent: AgentName,
-        prompt: String,
-        workspace: String,
-    ) -> Result<StartAgentResponse, MinosError> {
-        self.0.start_agent(agent, prompt, workspace).await
-    }
-
     /// Send a follow-up user message to an existing agent session.
     pub async fn send_user_message(
         &self,
@@ -558,6 +584,23 @@ impl MobileClient {
         text: String,
     ) -> Result<(), MinosError> {
         self.0.send_user_message(session_id, text).await
+    }
+
+    /// Submit a user approval decision for a pending host request.
+    pub async fn send_approval_decision(
+        &self,
+        request_id: String,
+        thread_id: String,
+        decision_json: String,
+    ) -> Result<(), MinosError> {
+        let decision =
+            serde_json::from_str(&decision_json).map_err(|error| MinosError::RpcCallFailed {
+                method: "send_approval_decision".into(),
+                message: format!("invalid approval decision json: {error}"),
+            })?;
+        self.0
+            .send_approval_decision(request_id, thread_id, decision)
+            .await
     }
 
     /// Pause an in-flight turn on the given thread. Best-effort. The thread
@@ -603,18 +646,6 @@ impl MobileClient {
         req: ListProjectThreadsParams,
     ) -> Result<ListProjectThreadsResponse, MinosError> {
         self.0.list_project_threads(req).await
-    }
-
-    /// Start an agent within a project context.
-    pub async fn start_agent_in_project(
-        &self,
-        agent: AgentName,
-        prompt: String,
-        project_id: String,
-    ) -> Result<StartAgentResponse, MinosError> {
-        self.0
-            .start_agent_in_project(agent, prompt, project_id)
-            .await
     }
 
     // ─────────────────────────── lifecycle hooks ───────────────────────────
@@ -1255,6 +1286,25 @@ pub struct _ConversationResponse {
 #[frb(mirror(ConversationMembersResponse))]
 pub struct _ConversationMembersResponse {
     pub members: Vec<UserSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(AgentSummary))]
+pub struct _AgentSummary {
+    pub agent_id: String,
+    pub owner_account_id: String,
+    pub name: String,
+    pub description: String,
+    pub runtime_agent: String,
+    pub model: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationAgentMembersResponse))]
+pub struct _ConversationAgentMembersResponse {
+    pub agents: Vec<AgentSummary>,
 }
 
 #[allow(dead_code)]

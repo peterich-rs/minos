@@ -1496,9 +1496,17 @@ mod tests {
         let conversation = create_group_conversation(&pool, &alice, "Agent DM", &[], T0)
             .await
             .unwrap();
-        let message = insert_message(&pool, &conversation.conversation_id, &alice, "hello", T0, None, &[])
-            .await
-            .unwrap();
+        let message = insert_message(
+            &pool,
+            &conversation.conversation_id,
+            &alice,
+            "hello",
+            T0,
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
 
         bind_session_to_message(&pool, &message.message_id, "thr-direct-1")
             .await

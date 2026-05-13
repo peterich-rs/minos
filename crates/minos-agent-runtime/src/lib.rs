@@ -49,7 +49,7 @@ pub use config::{AgentLaunchMode, AgentRuntimeConfig, RawIngest};
 pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
 pub use manager::{
-	AgentManager, DispatchOutcome, InstanceCaps, SessionPolicies, StartAgentOutcome,
+    AgentManager, DispatchOutcome, InstanceCaps, SessionPolicies, StartAgentOutcome,
 };
 pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;

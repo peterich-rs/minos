@@ -1,10 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/domain/minos_error_display.dart';
 import 'package:minos/src/rust/api/minos.dart' show MinosError;
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Auto-dismissing destructive [ShadAlert] driven by an externally-owned
 /// auth error object. The 6-second timer matches the Remodex iOS clone — long

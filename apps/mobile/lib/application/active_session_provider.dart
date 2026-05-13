@@ -1,9 +1,6 @@
 import 'dart:async';
 
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-
 import 'package:minos/application/minos_providers.dart';
-import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/src/rust/api/minos.dart'
     show
@@ -13,16 +10,16 @@ import 'package:minos/src/rust/api/minos.dart'
         UiEventMessage_Error,
         UiEventMessage_MessageCompleted,
         UiEventMessage_ThreadClosed;
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'active_session_provider.g.dart';
 
 /// Drives the [ActiveSession] state machine off `core.uiEvents` and
-/// the explicit `start/send/stop` actions.
+/// the explicit `send/stop` actions.
 ///
-/// We intentionally only react to events whose `threadId` matches our
-/// current `SessionStreaming.threadId` — other threads' fan-out frames
-/// (e.g. a paired Mac running an unrelated session) must not poison the
-/// mobile-side machine.
+/// While in [SessionSending] we bind the in-flight conversation to the
+/// first UI frame that arrives, because the send path no longer returns a
+/// daemon-issued `session_id` synchronously.
 @Riverpod(keepAlive: true)
 class ActiveSessionController extends _$ActiveSessionController {
   StreamSubscription<UiEventFrame>? _eventsSub;
@@ -37,140 +34,111 @@ class ActiveSessionController extends _$ActiveSessionController {
 
   void _onUiEvent(UiEventFrame frame) {
     final s = state;
-    // Only the streaming-on-this-thread state reacts to incoming events;
-    // Idle / Starting / AwaitingInput / Stopped / Error all wait for the
-    // next explicit transition.
+    if (s is SessionSending) {
+      state = _nextStateForFrame(
+        frame,
+        threadId: frame.threadId,
+        agent: s.agent,
+      );
+      return;
+    }
     if (s is! SessionStreaming || s.threadId != frame.threadId) return;
 
+    state = _nextStateForFrame(frame, threadId: s.threadId, agent: s.agent);
+  }
+
+  ActiveSession _nextStateForFrame(
+    UiEventFrame frame, {
+    required String threadId,
+    required AgentName agent,
+  }) {
     switch (frame.ui) {
       case UiEventMessage_MessageCompleted():
-        state = SessionAwaitingInput(threadId: s.threadId, agent: s.agent);
+        return SessionAwaitingInput(threadId: threadId, agent: agent);
       case UiEventMessage_ThreadClosed():
-        state = SessionStopped(s.threadId);
+        return SessionSuspended(threadId: threadId, agent: agent);
       case UiEventMessage_Error(:final message):
-        state = SessionError(
-          threadId: s.threadId,
+        return SessionError(
+          threadId: threadId,
           error: MinosError.agentStartFailed(reason: message),
         );
       default:
-        break;
+        return SessionStreaming(threadId: threadId, agent: agent);
     }
   }
 
-  /// Kick off a brand-new agent session. Transitions through
-  /// [SessionStarting] before settling into [SessionStreaming] (success)
-  /// or [SessionError] (Rust-side dispatch failure). The initial user
-  /// message is sent separately after the session id is minted.
-  Future<MinosError?> start({
-    required AgentName agent,
-    required String prompt,
-    String workspace = '',
-  }) async {
-    state = SessionStarting(agent: agent, prompt: prompt);
-    try {
-      final resp = await ref
-          .read(minosCoreProvider)
-          .startAgent(agent: agent, prompt: prompt, workspace: workspace);
-      ref.invalidate(threadListProvider);
-      state = SessionStreaming(threadId: resp.sessionId, agent: agent);
-      return null;
-    } on MinosError catch (e) {
-      state = SessionError(error: e);
-      return e;
-    }
-  }
-
-  /// Start a fresh session and deliver its first user message before exposing
-  /// the thread id to the chat view. That keeps the initial history read from
-  /// racing ahead of the confirmed user-message event.
-  Future<MinosError?> startAndSend({
-    required AgentName agent,
-    required String prompt,
-    String workspace = '',
-  }) async {
-    state = SessionStarting(agent: agent, prompt: prompt);
-    String? startedThreadId;
-    try {
-      final resp = await ref
-          .read(minosCoreProvider)
-          .startAgent(agent: agent, prompt: prompt, workspace: workspace);
-      startedThreadId = resp.sessionId;
-      ref.invalidate(threadListProvider);
-      await ref
-          .read(minosCoreProvider)
-          .sendUserMessage(sessionId: resp.sessionId, text: prompt);
-      state = SessionStreaming(threadId: resp.sessionId, agent: agent);
-      return null;
-    } on MinosError catch (e) {
-      state = SessionError(threadId: startedThreadId, error: e);
-      return e;
-    }
-  }
-
-  /// Send a follow-up user message into the active session. No-op when
-  /// the machine isn't in [SessionStreaming] or [SessionAwaitingInput].
-  Future<MinosError?> send(String text) async {
-    final s = state;
-    final (String threadId, AgentName agent) = switch (s) {
-      SessionStreaming(threadId: final t, agent: final a) => (t, a),
-      SessionAwaitingInput(threadId: final t, agent: final a) => (t, a),
-      _ => ('', AgentName.codex),
-    };
-    if (threadId.isEmpty) return null;
-
-    state = SessionStreaming(threadId: threadId, agent: agent);
-    try {
-      await ref
-          .read(minosCoreProvider)
-          .sendUserMessage(sessionId: threadId, text: text);
-      return null;
-    } on MinosError catch (e) {
-      state = SessionAwaitingInput(threadId: threadId, agent: agent);
-      return e;
-    }
-  }
-
-  /// Send into a known thread id, regardless of the current global state.
+  /// Dispatch a user message.
   ///
-  /// Existing thread pages use this path for follow-ups after Stop/Error or
-  /// after app navigation. The daemon/runtime treats the `sessionId` as the
-  /// resume target, so the mobile UI does not start a new agent for an
-  /// already-minted session.
-  Future<MinosError?> sendToThread({
-    required String threadId,
+  /// When the current state already carries a `thread_id`, a successful send
+  /// immediately re-enters [SessionStreaming]. Brand-new conversations stay in
+  /// [SessionSending] until the first matching UI frame binds the thread id.
+  Future<MinosError?> send({
     required AgentName agent,
     required String text,
+    required Future<void> Function() dispatch,
   }) async {
-    state = SessionStreaming(threadId: threadId, agent: agent);
+    final previous = state;
+    state = SessionSending(agent: agent, text: text);
     try {
-      await ref
-          .read(minosCoreProvider)
-          .sendUserMessage(sessionId: threadId, text: text);
+      await dispatch();
+      final threadId = switch (previous) {
+        SessionStreaming(threadId: final t) => t,
+        SessionAwaitingInput(threadId: final t) => t,
+        SessionSuspended(threadId: final t) => t,
+        SessionError(threadId: final t?) => t,
+        _ => null,
+      };
+      if (threadId != null) {
+        state = SessionStreaming(threadId: threadId, agent: agent);
+      }
       return null;
     } on MinosError catch (e) {
-      state = SessionAwaitingInput(threadId: threadId, agent: agent);
+      state = _restoreAfterSendFailure(previous, e);
       return e;
     }
   }
 
-  /// Best-effort stop. Errors from the daemon are swallowed; the local
-  /// machine still transitions to [SessionStopped] so the UI doesn't
-  /// hang in a half-streaming state.
+  ActiveSession _restoreAfterSendFailure(
+    ActiveSession previous,
+    MinosError error,
+  ) {
+    return switch (previous) {
+      SessionStreaming(threadId: final t, agent: final a) => SessionStreaming(
+        threadId: t,
+        agent: a,
+      ),
+      SessionAwaitingInput(threadId: final t, agent: final a) =>
+        SessionAwaitingInput(threadId: t, agent: a),
+      SessionSuspended(threadId: final t, agent: final a) => SessionSuspended(
+        threadId: t,
+        agent: a,
+      ),
+      SessionError(threadId: final t?, :final error) => SessionError(
+        threadId: t,
+        error: error,
+      ),
+      _ => SessionError(error: error),
+    };
+  }
+
+  /// Best-effort interrupt. Failures preserve the current `thread_id` in a
+  /// [SessionError] so the UI can still recover.
   Future<void> stop() async {
     final s = state;
-    final String? threadId = switch (s) {
-      SessionStreaming(threadId: final t) => t,
-      SessionAwaitingInput(threadId: final t) => t,
-      _ => null,
+    final (String? threadId, AgentName? agent) = switch (s) {
+      SessionStreaming(threadId: final t, agent: final a) => (t, a),
+      SessionAwaitingInput(threadId: final t, agent: final a) => (t, a),
+      _ => (null, null),
     };
-    if (threadId == null) return;
+    if (threadId == null || agent == null) return;
 
     try {
-      await ref.read(minosCoreProvider).closeThread(threadId: threadId);
-    } on MinosError {
-      // best-effort
+      await ref.read(minosCoreProvider).interruptThread(threadId: threadId);
+      state = SessionSuspended(threadId: threadId, agent: agent);
+    } on MinosError catch (error) {
+      state = SessionError(threadId: threadId, error: error);
+      return;
     }
-    state = SessionStopped(threadId);
   }
 
   /// Clear any thread-bound session state before routing the user into a

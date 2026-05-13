@@ -2,20 +2,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use minos_agent_runtime::{
-    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest,
-    SessionPolicies, ThreadState,
+    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest, SessionPolicies,
+    ThreadState,
 };
 use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::MinosError;
 use minos_protocol::{
     AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
-    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest,
-    GetThreadParams, GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
-    InterruptThreadRequest, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, PauseReason as ProtoPauseReason, ReadThreadResponse,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
-    ThreadState as ProtoThreadState, ThreadSummary, WriteHostSkillConfigRequest,
-    WriteHostSkillConfigResponse,
+    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams,
+    GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
+    PauseReason as ProtoPauseReason, ReadThreadResponse, SendUserMessageRequest, StartAgentRequest,
+    StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{
     translate_claude, translate_codex, translate_gemini, CodexTranslatorState, ThreadEndReason,
@@ -168,10 +167,7 @@ impl AgentGlue {
             .map_err(map_anyhow)
     }
 
-    pub async fn resolve_approval(
-        &self,
-        req: ApprovalDecisionRequest,
-    ) -> Result<(), MinosError> {
+    pub async fn resolve_approval(&self, req: ApprovalDecisionRequest) -> Result<(), MinosError> {
         self.manager
             .resolve_approval(&req.request_id, &req.thread_id, req.decision)
             .await
@@ -243,7 +239,14 @@ impl AgentGlue {
         }
         if let Err(e) = self
             .store
-            .insert_thread(thread_id, cwd, agent_label(agent), Some(thread_id), "idle", now_ms)
+            .insert_thread(
+                thread_id,
+                cwd,
+                agent_label(agent),
+                Some(thread_id),
+                "idle",
+                now_ms,
+            )
             .await
         {
             tracing::warn!(

@@ -6,22 +6,22 @@ import 'package:minos/src/rust/api/minos.dart';
 void main() {
   group('AuthState equality', () {
     test('AuthAuthenticated equals by account_id, ignoring email', () {
-      final a1 = AuthAuthenticated(
-        const AuthSummary(accountId: 'a', email: 'a@b.test'),
+      final a1 = const AuthAuthenticated(
+        AuthSummary(accountId: 'a', email: 'a@b.test'),
       );
-      final a2 = AuthAuthenticated(
-        const AuthSummary(accountId: 'a', email: 'b@c.test'),
+      final a2 = const AuthAuthenticated(
+        AuthSummary(accountId: 'a', email: 'b@c.test'),
       );
       expect(a1, equals(a2));
       expect(a1.hashCode, a2.hashCode);
     });
 
     test('AuthAuthenticated differs when account_id differs', () {
-      final a1 = AuthAuthenticated(
-        const AuthSummary(accountId: 'a', email: 'shared@x.test'),
+      final a1 = const AuthAuthenticated(
+        AuthSummary(accountId: 'a', email: 'shared@x.test'),
       );
-      final a2 = AuthAuthenticated(
-        const AuthSummary(accountId: 'b', email: 'shared@x.test'),
+      final a2 = const AuthAuthenticated(
+        AuthSummary(accountId: 'b', email: 'shared@x.test'),
       );
       expect(a1, isNot(equals(a2)));
     });

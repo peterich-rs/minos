@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/application/log_records_provider.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 enum LogPanelFilter { all, debug, info, warn, error }
 

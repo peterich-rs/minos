@@ -76,7 +76,7 @@ void main() {
       kind: ErrorKind.pairingTokenInvalid,
     ),
     (
-      error: MinosError.pairingStateMismatch(actual: PairingState.unpaired),
+      error: const MinosError.pairingStateMismatch(actual: PairingState.unpaired),
       kind: ErrorKind.pairingStateMismatch,
     ),
     (

@@ -1,10 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
-
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:mocktail/mocktail.dart';
 
 class _FakeMinosCore extends Mock implements MinosCoreProtocol {}
 

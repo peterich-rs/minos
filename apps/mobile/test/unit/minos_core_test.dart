@@ -115,12 +115,12 @@ void main() {
       );
       final rehydrated = _MockMobileClient();
       when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
-      when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+      when(rehydrated.refreshSession).thenAnswer((_) async {});
       when(
-        () => rehydrated.persistedPairingState(),
+        rehydrated.persistedPairingState,
       ).thenAnswer((_) async => persisted);
       when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
-      when(() => rehydrated.resumePersistedSession()).thenAnswer((_) async {});
+      when(rehydrated.resumePersistedSession).thenAnswer((_) async {});
 
       final result = await MinosCore.resolveClient(
         secure: secureStore,
@@ -132,8 +132,8 @@ void main() {
       );
 
       expect(result, same(rehydrated));
-      verify(() => rehydrated.refreshSession()).called(1);
-      verify(() => rehydrated.resumePersistedSession()).called(1);
+      verify(rehydrated.refreshSession).called(1);
+      verify(rehydrated.resumePersistedSession).called(1);
       verify(() => secureStore.saveState(persisted)).called(2);
       verifyNever(() => secureStore.clearAll());
     });
@@ -147,9 +147,9 @@ void main() {
         const persisted = PersistedPairingState(deviceId: 'dev-paired');
         final rehydrated = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
-        when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+        when(rehydrated.refreshSession).thenAnswer((_) async {});
         when(
-          () => rehydrated.persistedPairingState(),
+          rehydrated.persistedPairingState,
         ).thenAnswer((_) async => persisted);
         when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
 
@@ -163,7 +163,7 @@ void main() {
         );
 
         expect(result, same(rehydrated));
-        verifyNever(() => rehydrated.resumePersistedSession());
+        verifyNever(rehydrated.resumePersistedSession);
         verifyNever(() => secureStore.clearAll());
       },
     );
@@ -182,12 +182,12 @@ void main() {
       );
       final rehydrated = _MockMobileClient();
       when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
-      when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+      when(rehydrated.refreshSession).thenAnswer((_) async {});
       when(
-        () => rehydrated.persistedPairingState(),
+        rehydrated.persistedPairingState,
       ).thenAnswer((_) async => persisted);
       when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
-      when(() => rehydrated.resumePersistedSession()).thenAnswer((_) async {});
+      when(rehydrated.resumePersistedSession).thenAnswer((_) async {});
 
       final result = await MinosCore.resolveClient(
         secure: secureStore,
@@ -199,8 +199,8 @@ void main() {
       );
 
       expect(result, same(rehydrated));
-      verify(() => rehydrated.refreshSession()).called(1);
-      verify(() => rehydrated.resumePersistedSession()).called(1);
+      verify(rehydrated.refreshSession).called(1);
+      verify(rehydrated.resumePersistedSession).called(1);
       verifyNever(() => secureStore.clearAll());
     });
 
@@ -216,7 +216,7 @@ void main() {
       final rehydrated = _MockMobileClient();
       when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
       when(() => secureStore.clearAuth()).thenAnswer((_) async {});
-      when(() => rehydrated.refreshSession()).thenThrow(
+      when(rehydrated.refreshSession).thenThrow(
         const MinosError.authRefreshFailed(message: 'invalid refresh'),
       );
 
@@ -230,9 +230,9 @@ void main() {
       );
 
       expect(result, same(rehydrated));
-      verify(() => rehydrated.refreshSession()).called(1);
+      verify(rehydrated.refreshSession).called(1);
       verify(() => secureStore.clearAuth()).called(1);
-      verifyNever(() => rehydrated.resumePersistedSession());
+      verifyNever(rehydrated.resumePersistedSession);
       verifyNever(() => secureStore.clearAll());
     });
 
@@ -250,13 +250,13 @@ void main() {
         final rehydrated = _MockMobileClient();
         final freshClient = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
-        when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+        when(rehydrated.refreshSession).thenAnswer((_) async {});
         when(
-          () => rehydrated.persistedPairingState(),
+          rehydrated.persistedPairingState,
         ).thenAnswer((_) async => persisted);
         when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
         when(() => secureStore.clearAll()).thenAnswer((_) async {});
-        when(() => rehydrated.resumePersistedSession()).thenAnswer(
+        when(rehydrated.resumePersistedSession).thenAnswer(
           (_) async =>
               throw const MinosError.deviceNotTrusted(deviceId: 'dev-stale'),
         );
@@ -275,8 +275,8 @@ void main() {
           same(freshClient),
           reason: 'returned client must come from buildFresh after recovery',
         );
-        verify(() => rehydrated.refreshSession()).called(1);
-        verify(() => rehydrated.resumePersistedSession()).called(1);
+        verify(rehydrated.refreshSession).called(1);
+        verify(rehydrated.resumePersistedSession).called(1);
         verify(() => secureStore.saveState(persisted)).called(1);
         verify(() => secureStore.clearAll()).called(1);
       },
@@ -295,12 +295,12 @@ void main() {
         );
         final rehydrated = _MockMobileClient();
         when(() => secureStore.loadState()).thenAnswer((_) async => persisted);
-        when(() => rehydrated.refreshSession()).thenAnswer((_) async {});
+        when(rehydrated.refreshSession).thenAnswer((_) async {});
         when(
-          () => rehydrated.persistedPairingState(),
+          rehydrated.persistedPairingState,
         ).thenAnswer((_) async => persisted);
         when(() => secureStore.saveState(persisted)).thenAnswer((_) async {});
-        when(() => rehydrated.resumePersistedSession()).thenAnswer(
+        when(rehydrated.resumePersistedSession).thenAnswer(
           (_) async => throw const MinosError.connectFailed(
             url: 'ws://127.0.0.1/devices',
             message: 'ConnectionRefused',
@@ -317,8 +317,8 @@ void main() {
         );
 
         expect(result, same(rehydrated));
-        verify(() => rehydrated.refreshSession()).called(1);
-        verify(() => rehydrated.resumePersistedSession()).called(1);
+        verify(rehydrated.refreshSession).called(1);
+        verify(rehydrated.resumePersistedSession).called(1);
         verify(() => secureStore.saveState(persisted)).called(1);
         verifyNever(() => secureStore.clearAll());
       },
@@ -539,6 +539,45 @@ void main() {
       );
 
       expect(await core.hasPersistedPairing(), isFalse);
+    });
+  });
+
+  group('agent control forwarders', () {
+    test('deleteThread delegates to closeThread', () async {
+      when(() => client.closeThread(threadId: 'thr-del')).thenAnswer((_) async {});
+
+      final core = MinosCore.forTesting(client: client, secureStore: secureStore);
+      await core.deleteThread(threadId: 'thr-del');
+
+      verify(() => client.closeThread(threadId: 'thr-del')).called(1);
+    });
+
+    test('sendApprovalDecision forwards serialized JSON to FRB client', () async {
+      when(
+        () => client.sendApprovalDecision(
+          requestId: 'req-42',
+          threadId: 'thr-42',
+          decisionJson: '{"decision":"accept","scope":"session"}',
+        ),
+      ).thenAnswer((_) async {});
+
+      final core = MinosCore.forTesting(client: client, secureStore: secureStore);
+      await core.sendApprovalDecision(
+        requestId: 'req-42',
+        threadId: 'thr-42',
+        decision: const <String, dynamic>{
+          'decision': 'accept',
+          'scope': 'session',
+        },
+      );
+
+      verify(
+        () => client.sendApprovalDecision(
+          requestId: 'req-42',
+          threadId: 'thr-42',
+          decisionJson: '{"decision":"accept","scope":"session"}',
+        ),
+      ).called(1);
     });
   });
 }

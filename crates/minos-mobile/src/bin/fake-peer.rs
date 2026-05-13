@@ -394,21 +394,15 @@ async fn run_smoke_session(
     eprintln!("← paired; current_state={:?}", client.current_state());
 
     // Wait for the WS to land in `Connected` so the outbox is registered
-    // before we call `start_agent` (which requires an outbox).
+    // before we call `send_user_message` (which requires an outbox).
     wait_for_connected(&client).await?;
 
-    eprintln!("→ start_agent agent={agent:?} prompt={prompt:?}");
-    let resp = client
-        .start_agent(agent, prompt.to_string(), String::new())
-        .await
-        .context("start_agent")?;
-    eprintln!("← session_id={} cwd={}", resp.session_id, resp.cwd);
-    eprintln!(
-        "→ send_user_message session_id={} text={prompt:?}",
-        resp.session_id
-    );
+    eprintln!("→ send_user_message agent={agent:?} prompt={prompt:?}");
+    // In the refactored architecture, mobile sends messages directly via
+    // send_user_message. The daemon/host auto-creates a session when
+    // session_id is empty.
     client
-        .send_user_message(resp.session_id.clone(), prompt.to_string())
+        .send_user_message(String::new(), prompt.to_string())
         .await
         .context("send_user_message")?;
     eprintln!("← send_user_message ok");

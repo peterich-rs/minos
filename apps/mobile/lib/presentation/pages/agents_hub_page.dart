@@ -3,6 +3,7 @@ import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:minos/application/active_session_provider.dart';
+import 'package:minos/application/agent_conversation_actions.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/auth_provider.dart';
 import 'package:minos/application/minos_providers.dart';
@@ -574,12 +575,29 @@ class AgentProfilePage extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: FilledButton.icon(
-              onPressed: () {
-                ref.read(activeSessionControllerProvider.notifier).reset();
-                context.push(
-                  AppRoutes.newThread,
-                  extra: ThreadRouteExtra(agentProfileId: profile.id),
-                );
+              onPressed: () async {
+                try {
+                  final conversation = await createAgentConversation(
+                    ref,
+                    profile: profile,
+                  );
+                  if (!context.mounted) return;
+                  context.push(
+                    '/social/chat/${conversation.conversationId}',
+                    extra: SocialChatRouteExtra(
+                      title: profile.name,
+                      kind: ConversationKind.group,
+                    ),
+                  );
+                } catch (error) {
+                  if (!context.mounted) return;
+                  showLoggedErrorToast(
+                    context,
+                    target: 'agents_hub',
+                    title: '创建对话失败',
+                    error: error,
+                  );
+                }
               },
               icon: const Icon(CupertinoIcons.bubble_left_bubble_right_fill),
               label: const Text('从这个 Agent 发起对话'),
@@ -899,7 +917,7 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
                     ),
                   ),
                   IconButton(
-                    onPressed: () => navigator.pop(),
+                    onPressed: navigator.pop,
                     icon: const Icon(CupertinoIcons.xmark),
                   ),
                 ],
@@ -1164,7 +1182,7 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
                 children: <Widget>[
                   Expanded(
                     child: ShadButton.outline(
-                      onPressed: () => navigator.pop(),
+                      onPressed: navigator.pop,
                       child: const Text('取消'),
                     ),
                   ),

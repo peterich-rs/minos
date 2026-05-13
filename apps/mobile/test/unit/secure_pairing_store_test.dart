@@ -90,7 +90,7 @@ void main() {
 
   test('saveState/loadState round-trips full auth tuple', () async {
     final store = SecurePairingStore(storage: storage);
-    final state = PersistedPairingState(
+    final state = const PersistedPairingState(
       deviceId: 'dev-1',
       accessToken: 'access-token-xyz',
       accessExpiresAtMs: 1700000000000,
@@ -112,7 +112,7 @@ void main() {
 
   test('loadState preserves authenticated pre-pair snapshots', () async {
     final store = SecurePairingStore(storage: storage);
-    final state = PersistedPairingState(
+    final state = const PersistedPairingState(
       deviceId: 'dev-1',
       accessToken: 'access-token-xyz',
       accessExpiresAtMs: 1700000000000,
@@ -142,7 +142,7 @@ void main() {
     'clearAuth wipes only the auth tuple, leaving device id intact',
     () async {
       final store = SecurePairingStore(storage: storage);
-      final state = PersistedPairingState(
+      final state = const PersistedPairingState(
         deviceId: 'dev-1',
         accessToken: 'access',
         accessExpiresAtMs: 1700000000000,

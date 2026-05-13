@@ -9,32 +9,29 @@ part of 'active_session_provider.dart';
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
 /// Drives the [ActiveSession] state machine off `core.uiEvents` and
-/// the explicit `start/send/stop` actions.
+/// the explicit `send/stop` actions.
 ///
-/// We intentionally only react to events whose `threadId` matches our
-/// current `SessionStreaming.threadId` — other threads' fan-out frames
-/// (e.g. a paired Mac running an unrelated session) must not poison the
-/// mobile-side machine.
+/// While in [SessionSending] we bind the in-flight conversation to the
+/// first UI frame that arrives, because the send path no longer returns a
+/// daemon-issued `session_id` synchronously.
 
 @ProviderFor(ActiveSessionController)
 final activeSessionControllerProvider = ActiveSessionControllerProvider._();
 
 /// Drives the [ActiveSession] state machine off `core.uiEvents` and
-/// the explicit `start/send/stop` actions.
+/// the explicit `send/stop` actions.
 ///
-/// We intentionally only react to events whose `threadId` matches our
-/// current `SessionStreaming.threadId` — other threads' fan-out frames
-/// (e.g. a paired Mac running an unrelated session) must not poison the
-/// mobile-side machine.
+/// While in [SessionSending] we bind the in-flight conversation to the
+/// first UI frame that arrives, because the send path no longer returns a
+/// daemon-issued `session_id` synchronously.
 final class ActiveSessionControllerProvider
     extends $NotifierProvider<ActiveSessionController, ActiveSession> {
   /// Drives the [ActiveSession] state machine off `core.uiEvents` and
-  /// the explicit `start/send/stop` actions.
+  /// the explicit `send/stop` actions.
   ///
-  /// We intentionally only react to events whose `threadId` matches our
-  /// current `SessionStreaming.threadId` — other threads' fan-out frames
-  /// (e.g. a paired Mac running an unrelated session) must not poison the
-  /// mobile-side machine.
+  /// While in [SessionSending] we bind the in-flight conversation to the
+  /// first UI frame that arrives, because the send path no longer returns a
+  /// daemon-issued `session_id` synchronously.
   ActiveSessionControllerProvider._()
     : super(
         from: null,
@@ -63,15 +60,14 @@ final class ActiveSessionControllerProvider
 }
 
 String _$activeSessionControllerHash() =>
-    r'9c3935383833ff57d8ee838a12d7d5fb75114d2d';
+    r'9b56fb51c3db5bb2768d545eeb1cf6825f20bccf';
 
 /// Drives the [ActiveSession] state machine off `core.uiEvents` and
-/// the explicit `start/send/stop` actions.
+/// the explicit `send/stop` actions.
 ///
-/// We intentionally only react to events whose `threadId` matches our
-/// current `SessionStreaming.threadId` — other threads' fan-out frames
-/// (e.g. a paired Mac running an unrelated session) must not poison the
-/// mobile-side machine.
+/// While in [SessionSending] we bind the in-flight conversation to the
+/// first UI frame that arrives, because the send path no longer returns a
+/// daemon-issued `session_id` synchronously.
 
 abstract class _$ActiveSessionController extends $Notifier<ActiveSession> {
   ActiveSession build();

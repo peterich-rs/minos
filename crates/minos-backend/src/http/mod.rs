@@ -105,10 +105,8 @@ impl BackendState {
         jwt_secret: String,
         cors_origins: Option<Vec<HeaderValue>>,
     ) -> Self {
-        let approval_relay = crate::approval_relay::ApprovalRelay::new(
-            store.clone(),
-            Arc::clone(&registry),
-        );
+        let approval_relay =
+            crate::approval_relay::ApprovalRelay::new(store.clone(), Arc::clone(&registry));
         Self {
             registry,
             pairing,
@@ -235,10 +233,8 @@ pub mod test_support {
         let pool = memory_pool().await;
         let registry = Arc::new(SessionRegistry::new());
         let pairing = Arc::new(PairingService::new(pool.clone()));
-        let approval_relay = crate::approval_relay::ApprovalRelay::new(
-            pool.clone(),
-            Arc::clone(&registry),
-        );
+        let approval_relay =
+            crate::approval_relay::ApprovalRelay::new(pool.clone(), Arc::clone(&registry));
         BackendState {
             registry,
             pairing,

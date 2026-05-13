@@ -2309,6 +2309,7 @@ dependencies = [
  "minos-mobile",
  "minos-protocol",
  "minos-ui-protocol",
+ "serde_json",
  "tokio",
  "tracing",
  "uuid",

@@ -15,7 +15,6 @@
 library;
 
 export 'package:minos/application/agent_profiles_provider.dart';
-export 'package:minos/application/group_agent_dispatcher.dart';
 export 'package:minos/application/group_agent_provider.dart';
 export 'package:minos/application/preferred_agent_provider.dart';
 export 'package:minos/presentation/pages/agents_hub_page.dart';

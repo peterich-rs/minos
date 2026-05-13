@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +12,7 @@ import 'package:minos/application/preferred_agent_provider.dart';
 import 'package:minos/application/thread_events_provider.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/active_session.dart';
+import 'package:minos/presentation/widgets/approval_sheet.dart';
 import 'package:minos/presentation/widgets/chat/input_bar.dart';
 import 'package:minos/presentation/widgets/chat/message_bubble.dart';
 import 'package:minos/presentation/widgets/chat/reasoning_section.dart';
@@ -30,16 +32,15 @@ import 'package:minos/src/rust/api/minos.dart';
 ///     compose, must wait, or should see a Stop button instead.
 ///
 /// `threadId == null` means the user just landed on a "new chat" — the
-/// list renders empty and the first `onSend` calls `start_agent`. Once
-/// the controller transitions to `SessionStreaming` we follow that
-/// thread id for events.
+/// list renders empty and the first `onSend` dispatches via
+/// `sendUserMessage`. Once the controller transitions to
+/// `SessionStreaming` we follow that thread id for events.
 class ThreadViewPage extends ConsumerStatefulWidget {
   const ThreadViewPage({
     super.key,
     this.threadId,
     this.agent,
     this.agentProfileId,
-    this.startupWorkspace,
   });
 
   /// Pre-existing thread to load. Null = new chat.
@@ -52,7 +53,6 @@ class ThreadViewPage extends ConsumerStatefulWidget {
   /// agent.
   final AgentName? agent;
   final String? agentProfileId;
-  final String? startupWorkspace;
 
   @override
   ConsumerState<ThreadViewPage> createState() => _ThreadViewPageState();
@@ -71,15 +71,19 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   int _lastEventCount = 0;
   int _nextOptimisticMessageId = 0;
   String? _trackedThreadId;
+  StreamSubscription<UiEventFrame>? _approvalSub;
+  bool _approvalSheetVisible = false;
 
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    _listenForApprovalEvents();
   }
 
   @override
   void dispose() {
+    _approvalSub?.cancel();
     for (final timer in _optimisticTimers.values) {
       timer.cancel();
     }
@@ -87,6 +91,117 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
       ..removeListener(_onScroll)
       ..dispose();
     super.dispose();
+  }
+
+  /// Subscribe to the live UI event stream and intercept approval-related
+  /// events for the current thread. Approval requests trigger the bottom
+  /// sheet; approval timeouts dismiss it and show a toast.
+  void _listenForApprovalEvents() {
+    final core = ref.read(minosCoreProvider);
+    _approvalSub = core.uiEvents.listen((frame) {
+      if (!mounted) return;
+      final session = ref.read(activeSessionControllerProvider);
+      final threadId = _resolvedThreadId(session);
+      if (threadId == null || frame.threadId != threadId) return;
+
+      final event = frame.ui;
+      if (event is UiEventMessage_Raw) {
+        _handleRawApprovalEvent(event, threadId);
+      }
+    });
+  }
+
+  void _handleRawApprovalEvent(UiEventMessage_Raw event, String threadId) {
+    if (event.kind == 'approval_request') {
+      _onApprovalRequest(event.payloadJson, threadId);
+    } else if (event.kind == 'approval_timeout') {
+      _onApprovalTimeout(event.payloadJson);
+    }
+  }
+
+  Future<void> _onApprovalRequest(String payloadJson, String threadId) async {
+    if (_approvalSheetVisible) return;
+
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(payloadJson) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+
+    final request = ApprovalRequestData.fromJson(json);
+    _approvalSheetVisible = true;
+
+    final decision = await showApprovalSheet(context, request: request);
+    _approvalSheetVisible = false;
+
+    if (decision == null) {
+      // Timeout or dismissed without decision — host auto-declines
+      return;
+    }
+
+    final core = ref.read(minosCoreProvider);
+    final decisionPayload = _buildDecisionPayload(request.method, decision);
+
+    try {
+      await core.sendApprovalDecision(
+        requestId: request.requestId,
+        threadId: request.threadId,
+        decision: decisionPayload,
+      );
+    } catch (e) {
+      if (mounted) {
+        _showThreadInfo(context, '发送审批决定失败');
+      }
+    }
+  }
+
+  void _onApprovalTimeout(String payloadJson) {
+    // Dismiss the approval sheet if it's currently showing
+    if (_approvalSheetVisible && mounted) {
+      Navigator.of(context).pop(null);
+      _approvalSheetVisible = false;
+    }
+
+    // Show a toast indicating the approval timed out
+    if (mounted) {
+      final Map<String, dynamic> json;
+      try {
+        json = jsonDecode(payloadJson) as Map<String, dynamic>;
+      } catch (_) {
+        _showThreadInfo(context, '审批已超时，自动拒绝');
+        return;
+      }
+      final reason = json['reason'] as String? ?? 'timeout';
+      final message = reason == 'disconnected' ? '连接断开，审批已自动拒绝' : '审批已超时，自动拒绝';
+      _showThreadInfo(context, message);
+    }
+  }
+
+  Map<String, dynamic> _buildDecisionPayload(
+    String method,
+    ApprovalDecision decision,
+  ) {
+    final accept = decision == ApprovalDecision.accept;
+    if (method.contains('command_execution') ||
+        method.contains('exec_command')) {
+      return {'decision': accept ? 'accept' : 'decline'};
+    } else if (method.contains('file_change') ||
+        method.contains('apply_patch')) {
+      return {'decision': accept ? 'accept' : 'decline'};
+    } else if (method.contains('permissions')) {
+      if (accept) {
+        return <String, dynamic>{
+          'granted': <String, dynamic>{
+            'profile': 'default',
+            'scope': 'session',
+          },
+        };
+      } else {
+        return <String, dynamic>{'denied': <String, dynamic>{}};
+      }
+    }
+    return {'decision': accept ? 'accept' : 'decline'};
   }
 
   void _onScroll() {
@@ -121,7 +236,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     // otherwise tapping an older thread would show the most-recently-started
     // session's events because the active-session controller is global.
     // The session-derived branch is only meant for the "new chat" path,
-    // where widget.threadId is null and we need start_agent to mint one.
+    // where widget.threadId is null and we need sendUserMessage to mint one.
     if (widget.threadId != null) return widget.threadId;
     return _sessionThreadId(session);
   }
@@ -130,7 +245,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     return switch (session) {
       SessionStreaming(threadId: final t) => t,
       SessionAwaitingInput(threadId: final t) => t,
-      SessionStopped(threadId: final t) => t,
+      SessionSuspended(threadId: final t) => t,
       SessionError(threadId: final t?) => t,
       _ => null,
     };
@@ -275,17 +390,19 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
       await ref.read(activeMacProvider.notifier).setActive(hostId);
     }
     MinosError? error;
+    final core = ref.read(minosCoreProvider);
     if (targetThreadId == null) {
-      error = await controller.startAndSend(
-        agent: dispatchAgent,
-        prompt: text,
-        workspace: widget.startupWorkspace ?? '',
-      );
-    } else {
-      error = await controller.sendToThread(
-        threadId: targetThreadId,
+      error = await controller.send(
         agent: dispatchAgent,
         text: text,
+        dispatch: () => core.sendUserMessage(sessionId: '', text: text),
+      );
+    } else {
+      error = await controller.send(
+        agent: dispatchAgent,
+        text: text,
+        dispatch: () =>
+            core.sendUserMessage(sessionId: targetThreadId, text: text),
       );
     }
 
@@ -350,7 +467,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
             stickToBottom: _stickToBottom,
             showLiveAssistantState:
                 viewSession is SessionStreaming ||
-                viewSession is SessionStarting,
+                viewSession is SessionSending,
             onMetricsChanged: (eventCount, userMessages) =>
                 _handleThreadMetrics(threadId, eventCount, userMessages),
             unreadBelow: _unreadBelow,
@@ -428,9 +545,10 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
 
 AgentName? _sessionAgent(ActiveSession session) {
   return switch (session) {
-    SessionStarting(:final agent) => agent,
+    SessionSending(:final agent) => agent,
     SessionStreaming(:final agent) => agent,
     SessionAwaitingInput(:final agent) => agent,
+    SessionSuspended(:final agent) => agent,
     _ => null,
   };
 }
@@ -444,13 +562,13 @@ String? _sessionSubtitle(
       : '${selectedProfile.model} · ${_reasoningLabel(selectedProfile.reasoningEffort)}';
   return switch (session) {
     SessionIdle() => profileLabel,
-    SessionStarting(:final agent) =>
-      '${profileLabel ?? _agentLabel(agent)} 启动中…',
+    SessionSending(:final agent) =>
+      '${profileLabel ?? _agentLabel(agent)} 发送中…',
     SessionStreaming(:final agent) =>
       '${profileLabel ?? _agentLabel(agent)} 回复中',
     SessionAwaitingInput(:final agent) =>
       '${profileLabel ?? _agentLabel(agent)} 等待输入',
-    SessionStopped() => '已停止',
+    SessionSuspended() => '已暂停',
     SessionError() => '出错',
   };
 }
@@ -585,7 +703,7 @@ class _ThreadEventStream extends ConsumerWidget {
 }
 
 /// Quiet placeholder shown while the initial `readThread` future resolves
-/// or while a brand-new chat is waiting for `start_agent` to mint a thread
+/// or while a brand-new chat is waiting for `sendUserMessage` to mint a thread
 /// id. Optimistic bubbles render in their natural top-to-bottom order; we
 /// deliberately drop the centered `CircularProgressIndicator` because the
 /// thread provider is now `keepAlive: true` and re-entry usually returns a
@@ -664,16 +782,14 @@ class _GroupedEvents {
         case UiEventMessage_MessageStarted(:final messageId, :final role):
           messageStartIndex.putIfAbsent(messageId, () => eventIndex);
           roleByMsg[messageId] = role;
-          textByMsg.putIfAbsent(messageId, () => StringBuffer());
+          textByMsg.putIfAbsent(messageId, StringBuffer.new);
           if (role == MessageRole.assistant) {
             lastAssistantMessageId = messageId;
           }
         case UiEventMessage_TextDelta(:final messageId, :final text):
-          textByMsg.putIfAbsent(messageId, () => StringBuffer()).write(text);
+          textByMsg.putIfAbsent(messageId, StringBuffer.new).write(text);
         case UiEventMessage_ReasoningDelta(:final messageId, :final text):
-          reasoningByMsg
-              .putIfAbsent(messageId, () => StringBuffer())
-              .write(text);
+          reasoningByMsg.putIfAbsent(messageId, StringBuffer.new).write(text);
           final preview = _statusPreview(text);
           if (preview != null) {
             reasoningStatusByMsg[messageId] = MessageBubbleStatusLine(
@@ -926,9 +1042,9 @@ List<_UserMessageEcho> _extractUserMessageEchoes(
         case UiEventMessage_MessageStarted(:final messageId, :final role):
           starts.putIfAbsent(messageId, () => i);
           roles[messageId] = role;
-          texts.putIfAbsent(messageId, () => StringBuffer());
+          texts.putIfAbsent(messageId, StringBuffer.new);
         case UiEventMessage_TextDelta(:final messageId, :final text):
-          texts.putIfAbsent(messageId, () => StringBuffer()).write(text);
+          texts.putIfAbsent(messageId, StringBuffer.new).write(text);
         default:
           break;
       }

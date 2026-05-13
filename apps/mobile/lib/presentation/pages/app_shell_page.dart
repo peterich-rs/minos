@@ -308,18 +308,15 @@ class _DiscordProjectsPaneState extends ConsumerState<_DiscordProjectsPane> {
 
     final core = ref.read(minosCoreProvider);
     try {
-      final response = await core.startAgentInProject(
-        agent: agentName,
-        prompt: prompt,
-        projectId: project.projectId,
-      );
-      await core.sendUserMessage(sessionId: response.sessionId, text: prompt);
+      // In the refactored architecture, mobile sends messages directly.
+      // The host auto-creates a session when session_id is empty.
+      await core.sendUserMessage(sessionId: '', text: prompt);
       ref.read(selectedProjectProvider.notifier).select(project.projectId);
       ref.invalidate(projectListProvider);
       ref.invalidate(projectThreadsProvider(project.projectId));
       if (!context.mounted) return;
       context.push(
-        '/thread/${response.sessionId}',
+        AppRoutes.newThread,
         extra: ThreadRouteExtra(agent: agentName),
       );
     } catch (error) {
@@ -2273,9 +2270,10 @@ String _agentDescriptorLine(AgentDescriptor descriptor) {
 
 AgentName? _sessionAgent(ActiveSession session) {
   return switch (session) {
-    SessionStarting(:final agent) => agent,
+    SessionSending(:final agent) => agent,
     SessionStreaming(:final agent) => agent,
     SessionAwaitingInput(:final agent) => agent,
+    SessionSuspended(:final agent) => agent,
     _ => null,
   };
 }

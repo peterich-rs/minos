@@ -63,14 +63,9 @@ pub async fn dispatch(
         return Ok(());
     };
 
-    if let Some(event) = special_event_from_payload(
-        approval_relay,
-        thread_id,
-        payload,
-        ts_ms,
-        owner_device_id,
-    )
-    .await?
+    if let Some(event) =
+        special_event_from_payload(approval_relay, thread_id, payload, ts_ms, owner_device_id)
+            .await?
     {
         let env = Envelope::Event { version: 1, event };
         broadcast_to_peers_of(pool, registry, owner_device_id, &env).await;
@@ -114,18 +109,19 @@ pub async fn dispatch(
     }
 
     // 4. Fan out each UI event to every live peer paired with owner_device_id.
-    let suppress_social_fanout = match crate::store::social::suppress_live_ui_fanout_for_session(pool, thread_id).await {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::warn!(
-                target: "minos_backend::ingest",
-                error = %error,
-                thread_id,
-                "failed to probe social fan-out mode; defaulting to regular fan-out"
-            );
-            false
-        }
-    };
+    let suppress_social_fanout =
+        match crate::store::social::suppress_live_ui_fanout_for_session(pool, thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::ingest",
+                    error = %error,
+                    thread_id,
+                    "failed to probe social fan-out mode; defaulting to regular fan-out"
+                );
+                false
+            }
+        };
     for ui in translated {
         // Side effects on DB when the UI event implies a thread mutation.
         match &ui {

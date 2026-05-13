@@ -24,18 +24,23 @@ where
     R: DeserializeOwned,
 {
     let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let (requester, mut requester_rx) = SessionHandle::new(DeviceId::new(), DeviceRole::MobileClient);
-    if let Some(account_id) = registry.get(target_device_id).and_then(|handle| handle.account_id()) {
+    let (requester, mut requester_rx) =
+        SessionHandle::new(DeviceId::new(), DeviceRole::MobileClient);
+    if let Some(account_id) = registry
+        .get(target_device_id)
+        .and_then(|handle| handle.account_id())
+    {
         requester.set_account_id(account_id);
     }
     let requester_id = requester.device_id;
     registry.insert(requester.clone());
 
     let result = async {
-        let params_value = serde_json::to_value(params).map_err(|error| BackendError::ForwardRpc {
-            method: method.to_string(),
-            message: format!("failed to serialize params: {error}"),
-        })?;
+        let params_value =
+            serde_json::to_value(params).map_err(|error| BackendError::ForwardRpc {
+                method: method.to_string(),
+                message: format!("failed to serialize params: {error}"),
+            })?;
         let payload = json!({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -43,7 +48,9 @@ where
             "params": params_value,
         });
 
-        registry.route(requester_id, target_device_id, payload).await?;
+        registry
+            .route(requester_id, target_device_id, payload)
+            .await?;
 
         let response_payload = tokio::time::timeout(timeout, async {
             loop {
@@ -82,7 +89,10 @@ where
     R: DeserializeOwned,
 {
     if let Some(error) = response_payload.get("error") {
-        let code = error.get("code").and_then(Value::as_i64).unwrap_or_default();
+        let code = error
+            .get("code")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
         let message = error
             .get("message")
             .and_then(Value::as_str)
@@ -93,7 +103,10 @@ where
         });
     }
 
-    let result = response_payload.get("result").cloned().unwrap_or(Value::Null);
+    let result = response_payload
+        .get("result")
+        .cloned()
+        .unwrap_or(Value::Null);
     serde_json::from_value(result).map_err(|error| BackendError::ForwardRpc {
         method: method.to_string(),
         message: format!("invalid forwarded rpc response: {error}"),

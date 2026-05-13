@@ -76,9 +76,7 @@ impl RateLimiter {
             let victim = map
                 .iter()
                 .filter(|(k, _)| k.as_str() != key) // don't evict the one we just inserted
-                .min_by_key(|(_, timestamps)| {
-                    timestamps.last().copied().unwrap_or(now)
-                })
+                .min_by_key(|(_, timestamps)| timestamps.last().copied().unwrap_or(now))
                 .map(|(k, _)| k.clone());
             if let Some(victim_key) = victim {
                 map.remove(&victim_key);

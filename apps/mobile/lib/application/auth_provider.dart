@@ -1,7 +1,5 @@
 import 'dart:async';
 
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/auth_state.dart';
 import 'package:minos/src/rust/api/minos.dart'
@@ -11,6 +9,7 @@ import 'package:minos/src/rust/api/minos.dart'
         AuthStateFrame_RefreshFailed,
         AuthStateFrame_Refreshing,
         AuthStateFrame_Unauthenticated;
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'auth_provider.g.dart';
 

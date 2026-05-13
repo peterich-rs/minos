@@ -213,7 +213,10 @@ pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Va
                 Ok(r) => r,
                 Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
             };
-            into_jsonrpc(id, server.agent.dispatch_message(req).await.map_err(rpc_err))
+            into_jsonrpc(
+                id,
+                server.agent.dispatch_message(req).await.map_err(rpc_err),
+            )
         }
         "minos_interrupt_thread" => {
             let req: InterruptThreadRequest = match parse_params(&params) {
@@ -644,12 +647,11 @@ mod tests {
 
         let approval_request = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                let ingest = ingest_rx.recv().await.expect("ingest stream should stay open");
-                if ingest
-                    .payload
-                    .get("method")
-                    .and_then(Value::as_str)
-                    == Some("approval/request")
+                let ingest = ingest_rx
+                    .recv()
+                    .await
+                    .expect("ingest stream should stay open");
+                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/request")
                 {
                     break ingest;
                 }

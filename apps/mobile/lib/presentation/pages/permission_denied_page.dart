@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/application/minos_providers.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Shown when the OS reports [PermissionStatus.permanentlyDenied] — the only
 /// recourse is to deep-link the user to the Settings app.

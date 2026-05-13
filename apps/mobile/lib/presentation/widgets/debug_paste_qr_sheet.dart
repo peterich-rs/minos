@@ -1,8 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/application/minos_providers.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Debug-only bottom sheet that lets a developer paste a QR JSON payload
 /// directly (bypassing the camera). Gated behind [kDebugMode] at the caller

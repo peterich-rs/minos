@@ -1,7 +1,6 @@
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'thread_list_provider.g.dart';
 

@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// One row in the thread list. iOS-flat: circular gradient avatar on the
 /// left, two-line title/preview in the middle, right-rail timestamp +
@@ -13,6 +12,7 @@ class ThreadListTile extends ConsumerWidget {
     super.key,
     required ThreadSummary this.summary,
     this.onTap,
+    this.onDelete,
   }) : _socialTitle = null,
        _socialPreview = null,
        _socialTimestampMs = null,
@@ -32,6 +32,7 @@ class ThreadListTile extends ConsumerWidget {
     bool hasUnreadMention = false,
     this.onTap,
   }) : summary = null,
+       onDelete = null,
        _socialTitle = title,
        _socialPreview = preview,
        _socialTimestampMs = timestampMs,
@@ -42,6 +43,7 @@ class ThreadListTile extends ConsumerWidget {
 
   final ThreadSummary? summary;
   final VoidCallback? onTap;
+  final VoidCallback? onDelete;
   final String? _socialTitle;
   final String? _socialPreview;
   final int? _socialTimestampMs;
@@ -76,7 +78,7 @@ class ThreadListTile extends ConsumerWidget {
     final preview = '$previewSource · ${summary!.messageCount} 条消息';
     final ended = summary!.endedAtMs != null;
 
-    return Padding(
+    final tileContent = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
       child: Material(
         color: shadTheme.colorScheme.card,
@@ -155,6 +157,30 @@ class ThreadListTile extends ConsumerWidget {
           ),
         ),
       ),
+    );
+
+    if (onDelete == null) return tileContent;
+
+    return Dismissible(
+      key: ValueKey(summary!.threadId),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) async => true,
+      onDismissed: (_) => onDelete!(),
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 24),
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: shadTheme.colorScheme.destructive,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(
+          LucideIcons.trash2,
+          color: shadTheme.colorScheme.destructiveForeground,
+          size: 20,
+        ),
+      ),
+      child: tileContent,
     );
   }
 }
