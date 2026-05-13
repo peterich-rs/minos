@@ -28,6 +28,7 @@ use minos_protocol::{Envelope, EventKind};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
+use crate::approval_relay::ApprovalRelay;
 use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
 use crate::session::SessionRegistry;
@@ -39,6 +40,7 @@ pub async fn dispatch(
     pool: &SqlitePool,
     registry: &SessionRegistry,
     translators: &ThreadTranslators,
+    approval_relay: &ApprovalRelay,
     agent: AgentName,
     thread_id: &str,
     seq: u64,
@@ -60,6 +62,20 @@ pub async fn dispatch(
         );
         return Ok(());
     };
+
+    if let Some(event) = special_event_from_payload(
+        approval_relay,
+        thread_id,
+        payload,
+        ts_ms,
+        owner_device_id,
+    )
+    .await?
+    {
+        let env = Envelope::Event { version: 1, event };
+        broadcast_to_peers_of(pool, registry, owner_device_id, &env).await;
+        return Ok(());
+    }
 
     // 3. Translate. Translator failures are non-fatal: we emit a synthetic
     // Error UI event so mobile sees a deterministic surface.
@@ -98,6 +114,18 @@ pub async fn dispatch(
     }
 
     // 4. Fan out each UI event to every live peer paired with owner_device_id.
+    let suppress_social_fanout = match crate::store::social::suppress_live_ui_fanout_for_session(pool, thread_id).await {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::ingest",
+                error = %error,
+                thread_id,
+                "failed to probe social fan-out mode; defaulting to regular fan-out"
+            );
+            false
+        }
+    };
     for ui in translated {
         // Side effects on DB when the UI event implies a thread mutation.
         match &ui {
@@ -114,6 +142,10 @@ pub async fn dispatch(
             _ => {}
         }
 
+        if suppress_social_fanout {
+            continue;
+        }
+
         let env = Envelope::Event {
             version: 1,
             event: EventKind::UiEventMessage {
@@ -127,6 +159,89 @@ pub async fn dispatch(
     }
 
     Ok(())
+}
+
+async fn special_event_from_payload(
+    approval_relay: &ApprovalRelay,
+    thread_id: &str,
+    payload: &Value,
+    ts_ms: i64,
+    owner_device_id: minos_domain::DeviceId,
+) -> Result<Option<EventKind>, BackendError> {
+    let Some(method) = payload.get("method").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let params = payload.get("params").cloned().unwrap_or(Value::Null);
+
+    match method {
+        "approval/request" => {
+            let request_id = params
+                .get("request_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let turn_id = params
+                .get("turn_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let approval_method = params
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let approval_params = params.get("params").cloned().unwrap_or(Value::Null);
+            let timeout_ms = params
+                .get("timeout_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+
+            approval_relay
+                .record_request(
+                    owner_device_id,
+                    &request_id,
+                    thread_id,
+                    &turn_id,
+                    &approval_method,
+                    &approval_params,
+                    ts_ms,
+                    timeout_ms,
+                )
+                .await?;
+
+            Ok(Some(EventKind::ApprovalRequest {
+                thread_id: thread_id.to_string(),
+                turn_id,
+                request_id,
+                method: approval_method,
+                params: approval_params,
+                timeout_ms,
+            }))
+        }
+        "approval/timeout" => {
+            let request_id = params
+                .get("request_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let reason = params
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("timeout")
+                .to_string();
+
+            approval_relay
+                .handle_host_timeout(thread_id, &request_id, &reason, ts_ms)
+                .await?;
+
+            Ok(Some(EventKind::ApprovalTimeout {
+                thread_id: thread_id.to_string(),
+                request_id,
+                reason,
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 async fn thread_title_is_missing(pool: &SqlitePool, thread_id: &str) -> bool {

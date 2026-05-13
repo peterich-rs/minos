@@ -66,6 +66,8 @@ pub struct BackendState {
     pub token_ttl: Duration,
     /// Per-thread translator-state cache for the live ingest path.
     pub translators: Arc<ThreadTranslators>,
+    /// Approval relay state: server-side tracking plus timeout/disconnect cleanup.
+    pub approval_relay: Arc<crate::approval_relay::ApprovalRelay>,
     /// HS256 secret used by the bearer-token rail (`crate::auth::jwt`).
     /// `Arc<String>` because every signed/verified bearer borrows the
     /// bytes — sharing one heap copy across the request lifecycle keeps
@@ -103,12 +105,17 @@ impl BackendState {
         jwt_secret: String,
         cors_origins: Option<Vec<HeaderValue>>,
     ) -> Self {
+        let approval_relay = crate::approval_relay::ApprovalRelay::new(
+            store.clone(),
+            Arc::clone(&registry),
+        );
         Self {
             registry,
             pairing,
             store,
             token_ttl,
             translators: ThreadTranslators::new(),
+            approval_relay,
             jwt_secret: Arc::new(jwt_secret),
             auth_login_per_email: default_login_per_email(),
             auth_login_per_ip: default_login_per_ip(),
@@ -228,12 +235,17 @@ pub mod test_support {
         let pool = memory_pool().await;
         let registry = Arc::new(SessionRegistry::new());
         let pairing = Arc::new(PairingService::new(pool.clone()));
+        let approval_relay = crate::approval_relay::ApprovalRelay::new(
+            pool.clone(),
+            Arc::clone(&registry),
+        );
         BackendState {
             registry,
             pairing,
             store: pool,
             token_ttl: Duration::from_mins(5),
             translators: crate::ingest::translate::ThreadTranslators::new(),
+            approval_relay,
             jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
             auth_login_per_email: super::default_login_per_email(),
             auth_login_per_ip: super::default_login_per_ip(),

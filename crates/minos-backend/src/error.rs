@@ -114,4 +114,10 @@ pub enum BackendError {
     /// sender rather than hanging until timeout.
     #[error("peer backpressure: {peer_device_id}")]
     PeerBackpressure { peer_device_id: String },
+
+    #[error("forwarded rpc `{method}` failed: {message}")]
+    ForwardRpc { method: String, message: String },
+
+    #[error("forwarded rpc `{method}` timed out after {timeout_ms}ms")]
+    ForwardRpcTimeout { method: String, timeout_ms: u64 },
 }

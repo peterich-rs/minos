@@ -106,6 +106,7 @@ pub async fn run_session(
     registry: Arc<SessionRegistry>,
     store: SqlitePool,
     translators: Arc<ThreadTranslators>,
+    approval_relay: Arc<crate::approval_relay::ApprovalRelay>,
 ) -> Result<(), BackendError> {
     let result = run_session_inner(
         &mut ws,
@@ -114,6 +115,7 @@ pub async fn run_session(
         &registry,
         &store,
         &translators,
+        approval_relay.as_ref(),
     )
     .await;
 
@@ -124,6 +126,22 @@ pub async fn run_session(
     // disconnect is deferred to Phase M. We previously notified the single
     // `paired_with` peer here; that field no longer exists.
     let _ = registry.remove_current(&session);
+
+    if session.role.is_account_client() {
+        if let Some(account_id) = session.account_id() {
+            if let Err(error) = approval_relay
+                .resolve_disconnected_for_account(&account_id)
+                .await
+            {
+                tracing::warn!(
+                    target: "minos_backend::envelope",
+                    error = %error,
+                    account_id,
+                    "failed to resolve pending approvals after mobile disconnect"
+                );
+            }
+        }
+    }
 
     // Drain remaining outbox so the sender does not block; the receiver
     // goes out of scope right after anyway, but this keeps `Err` paths
@@ -144,6 +162,7 @@ async fn run_session_inner(
     registry: &SessionRegistry,
     store: &SqlitePool,
     translators: &ThreadTranslators,
+    approval_relay: &crate::approval_relay::ApprovalRelay,
 ) -> Result<(), BackendError> {
     let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
     let mut revocation_rx = session.subscribe_revocation();
@@ -195,7 +214,13 @@ async fn run_session_inner(
                         match serde_json::from_str::<Envelope>(&text) {
                             Ok(env) => {
                                 if !dispatch_envelope(
-                                    ws, session, registry, store, translators, env,
+                                    ws,
+                                    session,
+                                    registry,
+                                    store,
+                                    translators,
+                                    approval_relay,
+                                    env,
                                 )
                                 .await
                                 {
@@ -299,6 +324,7 @@ async fn dispatch_envelope(
     registry: &SessionRegistry,
     store: &SqlitePool,
     translators: &ThreadTranslators,
+    approval_relay: &crate::approval_relay::ApprovalRelay,
     env: Envelope,
 ) -> bool {
     match env {
@@ -360,6 +386,7 @@ async fn dispatch_envelope(
                 store,
                 registry,
                 translators,
+                approval_relay,
                 agent,
                 &thread_id,
                 seq,

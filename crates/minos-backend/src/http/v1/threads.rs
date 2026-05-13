@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use minos_protocol::{
+    ApprovalDecisionRequest,
     GetThreadLastSeqParams, GetThreadLastSeqResponse, ListThreadsParams, ListThreadsResponse,
     ReadThreadParams, ReadThreadResponse,
 };
@@ -23,6 +24,7 @@ pub fn router() -> Router<BackendState> {
     Router::new()
         .route("/threads", post(list_threads_query))
         .route("/threads/query", post(list_threads_query))
+        .route("/threads/approval-decision", post(submit_approval_decision))
         .route("/threads/:thread_id/events", post(read_thread_path))
         .route("/threads/read", post(read_thread_query))
         .route(
@@ -219,4 +221,28 @@ async fn get_thread_last_seq_inner(
             )
         })?;
     Ok(Json(GetThreadLastSeqResponse { last_seq }))
+}
+
+async fn submit_approval_decision(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Json(req): Json<ApprovalDecisionRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
+    let (_caller, account_id) = require_authed_session(&state, &headers).await?;
+    match state.approval_relay.submit_decision(&account_id, req).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            err("approval_not_found", "pending approval not found"),
+        )),
+        Err(crate::error::BackendError::ForwardRpc { message, .. })
+            if message.contains("invalid decision") =>
+        {
+            Err((StatusCode::BAD_REQUEST, err("bad_request", message)))
+        }
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err("internal", error.to_string()),
+        )),
+    }
 }

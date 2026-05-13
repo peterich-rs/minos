@@ -18,10 +18,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod approval_relay;
 pub mod auth;
 pub mod config;
 pub mod envelope;
 pub mod error;
+mod forward_rpc;
 pub mod http;
 pub mod ingest;
 pub mod pairing;

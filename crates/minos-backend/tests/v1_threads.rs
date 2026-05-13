@@ -3,9 +3,12 @@ use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
-use minos_backend::store::{account_host_pairings, devices::insert_device};
+use minos_backend::session::SessionHandle;
+use minos_backend::store::{account_host_pairings, devices::insert_device, pending_approvals};
 use minos_domain::{AgentName, DeviceId, DeviceRole};
-use minos_protocol::ListThreadsResponse;
+use minos_protocol::{ApprovalDecisionRequest, Envelope, EventKind, ListThreadsResponse};
+use std::sync::Arc;
+use std::time::Duration;
 
 mod common;
 
@@ -90,6 +93,51 @@ fn authed_post(
         .header("authorization", auth_hdr)
         .body(Body::from(body.to_string()))
         .unwrap()
+}
+
+fn seed_live_bound_session(
+    state: &minos_backend::http::BackendState,
+    device_id: DeviceId,
+    role: DeviceRole,
+    account_id: &str,
+) -> tokio::sync::mpsc::Receiver<Envelope> {
+    let (handle, outbox_rx) = SessionHandle::new(device_id, role);
+    handle.set_account_id(account_id.to_string());
+    state.registry.insert(handle);
+    outbox_rx
+}
+
+fn spawn_approval_decision_responder(
+    registry: Arc<minos_backend::session::SessionRegistry>,
+    host_device_id: DeviceId,
+    mut host_rx: tokio::sync::mpsc::Receiver<Envelope>,
+) -> tokio::task::JoinHandle<ApprovalDecisionRequest> {
+    tokio::spawn(async move {
+        let frame = tokio::time::timeout(Duration::from_secs(2), host_rx.recv())
+            .await
+            .expect("approval decision should reach the host before timeout")
+            .expect("host should receive approval decision rpc");
+        let Envelope::Forwarded { from, payload, .. } = frame else {
+            panic!("expected forwarded rpc envelope");
+        };
+        assert_eq!(payload["method"], "minos_approval_decision");
+        let request: ApprovalDecisionRequest = serde_json::from_value(payload["params"].clone())
+            .expect("approval decision params decode");
+
+        registry
+            .route(
+                host_device_id,
+                from,
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": payload["id"].clone(),
+                    "result": null,
+                }),
+            )
+            .await
+            .expect("approval decision response routes back to requester");
+        request
+    })
 }
 
 #[tokio::test]
@@ -371,4 +419,213 @@ async fn get_threads_without_bearer_returns_401() {
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[tokio::test]
+async fn approval_request_timeout_broadcasts_timeout_and_auto_rejects() {
+    let state = backend_state().await;
+    let (mac_id, ios_id, _secret, account_id) = paired_pair(&state).await;
+    let mut mobile_rx =
+        seed_live_bound_session(&state, ios_id, DeviceRole::MobileClient, &account_id);
+    let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
+    let responder = spawn_approval_decision_responder(Arc::clone(&state.registry), mac_id, host_rx);
+
+    let ts_ms = chrono::Utc::now().timestamp_millis();
+    minos_backend::ingest::dispatch(
+        &state.store,
+        &state.registry,
+        state.translators.as_ref(),
+        state.approval_relay.as_ref(),
+        AgentName::Codex,
+        "thr-approval-timeout",
+        1,
+        &serde_json::json!({
+            "method": "approval/request",
+            "params": {
+                "request_id": "req-timeout",
+                "thread_id": "thr-approval-timeout",
+                "turn_id": "turn-1",
+                "method": "item/commandExecution/requestApproval",
+                "params": { "command": "rm -rf /tmp/demo" },
+                "timeout_ms": 1
+            }
+        }),
+        ts_ms,
+        mac_id,
+    )
+    .await
+    .unwrap();
+
+    let first = tokio::time::timeout(Duration::from_secs(1), mobile_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match first {
+        Envelope::Event {
+            event:
+                EventKind::ApprovalRequest {
+                    thread_id,
+                    request_id,
+                    method,
+                    timeout_ms,
+                    ..
+                },
+            ..
+        } => {
+            assert_eq!(thread_id, "thr-approval-timeout");
+            assert_eq!(request_id, "req-timeout");
+            assert_eq!(method, "item/commandExecution/requestApproval");
+            assert_eq!(timeout_ms, 1);
+        }
+        other => panic!("expected approval request event, got {other:?}"),
+    }
+
+    let second = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match mobile_rx.recv().await {
+                Some(
+                    frame @ Envelope::Event {
+                        event: EventKind::ApprovalTimeout { .. },
+                        ..
+                    },
+                ) => return frame,
+                Some(_) => {}
+                None => panic!("mobile session closed before timeout event"),
+            }
+        }
+    })
+    .await
+    .expect("approval timeout should be broadcast");
+
+    match second {
+        Envelope::Event {
+            event:
+                EventKind::ApprovalTimeout {
+                    thread_id,
+                    request_id,
+                    reason,
+                },
+            ..
+        } => {
+            assert_eq!(thread_id, "thr-approval-timeout");
+            assert_eq!(request_id, "req-timeout");
+            assert_eq!(reason, "timeout");
+        }
+        other => panic!("expected approval timeout event, got {other:?}"),
+    }
+
+    let decision = responder.await.unwrap();
+    assert_eq!(decision.request_id, "req-timeout");
+    assert_eq!(decision.thread_id, "thr-approval-timeout");
+    assert_eq!(
+        decision.decision,
+        serde_json::json!({ "decision": "decline" })
+    );
+
+    let row = pending_approvals::get(&state.store, "req-timeout")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.resolution.as_deref(), Some("timeout"));
+    assert!(row.resolved_at_ms.is_some());
+}
+
+#[tokio::test]
+async fn approval_decision_endpoint_forwards_to_host_and_resolves_row() {
+    let state = backend_state().await;
+    let (mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
+    let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
+    let responder = spawn_approval_decision_responder(Arc::clone(&state.registry), mac_id, host_rx);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    pending_approvals::insert(
+        &state.store,
+        "req-user-decision",
+        "thr-user-decision",
+        "turn-1",
+        mac_id,
+        "item/commandExecution/requestApproval",
+        &serde_json::json!({ "command": "echo hi" }),
+        now_ms,
+        now_ms + 10_000,
+    )
+    .await
+    .unwrap();
+
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
+    let mut app = router(state.clone());
+    let req = authed_post(
+        "/v1/threads/approval-decision",
+        ios_id,
+        &secret,
+        &auth_hdr,
+        serde_json::json!({
+            "request_id": "req-user-decision",
+            "thread_id": "thr-user-decision",
+            "decision": { "decision": "approve" }
+        }),
+    );
+    let (status, body) = common::send(&mut app, req).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(body, serde_json::Value::Null);
+
+    let forwarded = responder.await.unwrap();
+    assert_eq!(forwarded.request_id, "req-user-decision");
+    assert_eq!(forwarded.thread_id, "thr-user-decision");
+    assert_eq!(
+        forwarded.decision,
+        serde_json::json!({ "decision": "approve" })
+    );
+
+    let row = pending_approvals::get(&state.store, "req-user-decision")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.resolution.as_deref(), Some("user_decision"));
+    assert!(row.resolved_at_ms.is_some());
+}
+
+#[tokio::test]
+async fn disconnect_resolution_auto_rejects_pending_approval() {
+    let state = backend_state().await;
+    let (mac_id, _ios_id, _secret, account_id) = paired_pair(&state).await;
+    let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
+    let responder = spawn_approval_decision_responder(Arc::clone(&state.registry), mac_id, host_rx);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    pending_approvals::insert(
+        &state.store,
+        "req-disconnect",
+        "thr-disconnect",
+        "turn-1",
+        mac_id,
+        "item/commandExecution/requestApproval",
+        &serde_json::json!({ "command": "echo bye" }),
+        now_ms,
+        now_ms + 10_000,
+    )
+    .await
+    .unwrap();
+
+    state
+        .approval_relay
+        .resolve_disconnected_for_account(&account_id)
+        .await
+        .unwrap();
+
+    let forwarded = responder.await.unwrap();
+    assert_eq!(forwarded.request_id, "req-disconnect");
+    assert_eq!(forwarded.thread_id, "thr-disconnect");
+    assert_eq!(
+        forwarded.decision,
+        serde_json::json!({ "decision": "decline" })
+    );
+
+    let row = pending_approvals::get(&state.store, "req-disconnect")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.resolution.as_deref(), Some("disconnected"));
+    assert!(row.resolved_at_ms.is_some());
 }

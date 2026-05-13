@@ -179,6 +179,7 @@ pub async fn upgrade(
     let registry = Arc::clone(&state.registry);
     let store = state.store.clone();
     let translators = Arc::clone(&state.translators);
+    let approval_relay = Arc::clone(&state.approval_relay);
     Ok(ws.on_upgrade(move |mut socket| async move {
         let revalidate = match &identity.auth {
             UpgradeAuth::Headers {
@@ -236,7 +237,10 @@ pub async fn upgrade(
             push_ingest_checkpoint(&store, &handle, device_id).await;
         }
 
-        if let Err(e) = run_session(socket, handle, outbox_rx, registry, store, translators).await {
+        if let Err(e) =
+            run_session(socket, handle, outbox_rx, registry, store, translators, approval_relay)
+                .await
+        {
             tracing::warn!(
                 target: "minos_backend::http",
                 error = %e,

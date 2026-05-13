@@ -340,6 +340,19 @@ impl SessionRegistry {
         closed
     }
 
+    /// Count currently-live account-client sessions bound to `account_id`.
+    #[must_use]
+    pub fn mobile_account_session_count(&self, account_id: &str) -> usize {
+        self.0
+            .iter()
+            .filter(|entry| {
+                let handle = entry.value();
+                handle.role.is_account_client()
+                    && handle.account_id().as_deref() == Some(account_id)
+            })
+            .count()
+    }
+
     /// Current number of live sessions. Useful for metrics and tests;
     /// O(#shards) under the hood.
     #[must_use]

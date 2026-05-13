@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -14,11 +15,15 @@ const RECALLED_MESSAGE_TEXT: &str = "[message recalled]";
 
 /// Default title for unnamed group conversations.
 const DEFAULT_GROUP_TITLE: &str = "Group Chat";
+const AGENT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(5);
+const GROUP_COMPLETION_TIMEOUT: Duration = Duration::from_secs(300);
+const GROUP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 use axum::{Json, Router};
+use minos_domain::AgentName;
 use minos_protocol::{
-    AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, ChatMessageReplySummary,
-    ChatMessageSummary, ConversationAgentMembersResponse, ConversationKind,
-    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
+    AddAgentToGroupRequest, AddGroupMemberRequest, AgentDispatchRequest, AgentDispatchResponse,
+    AgentSummary, ChatMessageReplySummary, ChatMessageSummary, ConversationAgentMembersResponse,
+    ConversationKind, ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
     ConversationSummary, ConversationsResponse, CreateFriendRequestRequest,
     CreateGroupConversationRequest, EnsureDirectConversationRequest, Envelope, EventKind,
     FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse, FriendSummary,
@@ -658,7 +663,7 @@ async fn send_message(
     {
         return Err(err("not_found", "conversation not found"));
     }
-    let reply_to_message_id = match req.reply_to_message_id.as_deref() {
+    let reply_target = match req.reply_to_message_id.as_deref() {
         Some(message_id) => {
             let Some(reply_target) = crate::store::social::get_message(&state.store, message_id)
                 .await
@@ -669,10 +674,11 @@ async fn send_message(
             if reply_target.conversation_id != conversation_id {
                 return Err(err("bad_request", "reply target not in conversation"));
             }
-            Some(reply_target.message_id)
+            Some(reply_target)
         }
         None => None,
     };
+    let reply_to_message_id = reply_target.as_ref().map(|row| row.message_id.clone());
     let members =
         crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
             .await
@@ -691,7 +697,64 @@ async fn send_message(
     .map_err(|e| err("internal", e.to_string()))?;
     let mut hydrated = hydrate_messages(&state, vec![row]).await?;
     let message = hydrated.remove(0);
+
+    let sender_minos_id = members
+        .iter()
+        .find(|member| member.account_id == account_id)
+        .map(|member| member.minos_id.clone())
+        .unwrap_or_default();
+    let dispatch_plan =
+        build_agent_dispatch_plan(&state, &conversation_id, &trimmed, reply_target.as_ref())
+            .await?;
+
     fan_out_social_message(&state, &message).await;
+
+    if let Some(plan) = dispatch_plan {
+        match forward_agent_dispatch(
+            &state,
+            &plan.agent,
+            plan.session_id.clone(),
+            &plan.forwarded_text,
+            &conversation_id,
+            &message.message_id,
+        )
+        .await
+        {
+            Ok(response) => {
+                crate::store::social::bind_session_to_message(
+                    &state.store,
+                    &message.message_id,
+                    &response.session_id,
+                )
+                .await
+                .map_err(|e| err("internal", e.to_string()))?;
+
+                spawn_group_completion_watcher(
+                    state.clone(),
+                    conversation_id.clone(),
+                    message.message_id.clone(),
+                    response.session_id,
+                    plan.agent,
+                    plan.watcher_from_seq,
+                    if plan.mention_sender {
+                        Some(account_id.clone())
+                    } else {
+                        None
+                    },
+                    if plan.mention_sender {
+                        Some(sender_minos_id.clone())
+                    } else {
+                        None
+                    },
+                );
+            }
+            Err(error) => {
+                let (code, detail) = agent_error_from_backend_error(&error);
+                fan_out_agent_error(&state, &account_id, plan.session_id, code, detail);
+            }
+        }
+    }
+
     Ok(Json(message))
 }
 
@@ -783,6 +846,382 @@ async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSumma
     }
 }
 
+#[derive(Clone)]
+struct AgentDispatchPlan {
+    agent: crate::store::social::AgentRow,
+    session_id: Option<String>,
+    forwarded_text: String,
+    watcher_from_seq: u64,
+    mention_sender: bool,
+}
+
+async fn build_agent_dispatch_plan(
+    state: &BackendState,
+    conversation_id: &str,
+    text: &str,
+    reply_target: Option<&crate::store::social::ChatMessageRow>,
+) -> Result<Option<AgentDispatchPlan>, (StatusCode, Json<ErrorEnvelope>)> {
+    let conversation = crate::store::social::get_conversation(&state.store, conversation_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+        .ok_or_else(|| err("not_found", "conversation not found"))?;
+    let agents = crate::store::social::list_conversation_agents(&state.store, conversation_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
+    if agents.is_empty() {
+        return Ok(None);
+    }
+    let human_members =
+        crate::store::social::list_conversation_members(&state.store, conversation_id)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+    let mention_sender = human_members.len() > 1;
+
+    if let Some(reply_target) = reply_target {
+        if reply_target.sender_type == "agent" {
+            if let Some(session_id) = crate::store::social::lookup_session_id_for_message(
+                &state.store,
+                &reply_target.message_id,
+            )
+            .await
+            .map_err(|e| err("internal", e.to_string()))?
+            {
+                if let Some(agent) =
+                    crate::store::social::get_agent(&state.store, &reply_target.sender_account_id)
+                        .await
+                        .map_err(|e| err("internal", e.to_string()))?
+                {
+                    let watcher_from_seq =
+                        crate::store::raw_events::last_seq(&state.store, &session_id)
+                            .await
+                            .map_err(|e| err("internal", e.to_string()))?;
+                    return Ok(Some(AgentDispatchPlan {
+                        agent,
+                        session_id: Some(session_id),
+                        forwarded_text: text.to_string(),
+                        watcher_from_seq,
+                        mention_sender,
+                    }));
+                }
+            }
+        }
+    }
+
+    if conversation.kind == "group" && human_members.len() == 1 && agents.len() == 1 {
+        let session_id = crate::store::social::lookup_latest_session_id_for_conversation(
+            &state.store,
+            conversation_id,
+        )
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
+        let watcher_from_seq = if let Some(ref session_id) = session_id {
+            crate::store::raw_events::last_seq(&state.store, session_id)
+                .await
+                .map_err(|e| err("internal", e.to_string()))?
+        } else {
+            0
+        };
+        return Ok(Some(AgentDispatchPlan {
+            agent: agents[0].clone(),
+            session_id,
+            forwarded_text: text.to_string(),
+            watcher_from_seq,
+            mention_sender: false,
+        }));
+    }
+
+    if conversation.kind == "group" {
+        if let Some(agent) = first_mentioned_agent(text, &agents) {
+            return Ok(Some(AgentDispatchPlan {
+                agent: agent.clone(),
+                session_id: None,
+                forwarded_text: strip_agent_mention_once(text, &agent.agent_id),
+                watcher_from_seq: 0,
+                mention_sender: true,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn forward_agent_dispatch(
+    state: &BackendState,
+    agent: &crate::store::social::AgentRow,
+    session_id: Option<String>,
+    text: &str,
+    conversation_id: &str,
+    origin_message_id: &str,
+) -> Result<AgentDispatchResponse, crate::error::BackendError> {
+    let host_device_id = select_live_host_for_account(state, &agent.owner_account_id).await?;
+    let request = AgentDispatchRequest {
+        agent: parse_runtime_agent_name(&agent.runtime_agent)?,
+        session_id,
+        text: text.to_string(),
+        workspace: String::new(),
+        approval_policy: None,
+        sandbox_policy: None,
+        conversation_id: Some(conversation_id.to_string()),
+        origin_message_id: Some(origin_message_id.to_string()),
+    };
+    crate::forward_rpc::call_host(
+        &state.registry,
+        host_device_id,
+        "minos_agent_dispatch",
+        &request,
+        AGENT_DISPATCH_TIMEOUT,
+    )
+    .await
+}
+
+async fn select_live_host_for_account(
+    state: &BackendState,
+    account_id: &str,
+) -> Result<minos_domain::DeviceId, crate::error::BackendError> {
+    let hosts =
+        crate::store::account_host_pairings::list_hosts_for_account(&state.store, account_id)
+            .await?;
+    for host in hosts {
+        if state.registry.get(host.host_device_id).is_some() {
+            return Ok(host.host_device_id);
+        }
+    }
+    Err(crate::error::BackendError::ForwardRpc {
+        method: "minos_agent_dispatch".into(),
+        message: format!("no live host paired to account {account_id}"),
+    })
+}
+
+fn parse_runtime_agent_name(runtime_agent: &str) -> Result<AgentName, crate::error::BackendError> {
+    match runtime_agent {
+        "codex" => Ok(AgentName::Codex),
+        "claude" => Ok(AgentName::Claude),
+        "gemini" => Ok(AgentName::Gemini),
+        other => Err(crate::error::BackendError::ForwardRpc {
+            method: "minos_agent_dispatch".into(),
+            message: format!("unsupported runtime agent `{other}`"),
+        }),
+    }
+}
+
+fn first_mentioned_agent(
+    text: &str,
+    agents: &[crate::store::social::AgentRow],
+) -> Option<crate::store::social::AgentRow> {
+    let by_id = agents
+        .iter()
+        .map(|agent| (agent.agent_id.as_str(), agent))
+        .collect::<HashMap<_, _>>();
+    collect_mention_tokens(text)
+        .into_iter()
+        .find_map(|token| by_id.get(token).cloned().cloned())
+}
+
+fn strip_agent_mention_once(text: &str, agent_id: &str) -> String {
+    let stripped = text.replacen(&format!("@{agent_id}"), "", 1);
+    let normalised = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalised.is_empty() {
+        text.to_string()
+    } else {
+        normalised
+    }
+}
+
+fn agent_error_from_backend_error(error: &crate::error::BackendError) -> (&'static str, String) {
+    match error {
+        crate::error::BackendError::PeerOffline { .. } => {
+            ("peer_offline", "agent host is offline".to_string())
+        }
+        crate::error::BackendError::PeerBackpressure { .. } => {
+            ("peer_backpressure", "agent host is busy".to_string())
+        }
+        crate::error::BackendError::ForwardRpcTimeout { .. } => (
+            "dispatch_timeout",
+            "agent host did not reply in time".to_string(),
+        ),
+        crate::error::BackendError::ForwardRpc { message, .. } => {
+            ("dispatch_failed", message.clone())
+        }
+        other => ("dispatch_failed", other.to_string()),
+    }
+}
+
+fn fan_out_agent_error(
+    state: &BackendState,
+    account_id: &str,
+    session_id: Option<String>,
+    code: &str,
+    message: String,
+) {
+    let frame = Envelope::Event {
+        version: 1,
+        event: EventKind::AgentError {
+            session_id,
+            code: code.to_string(),
+            message,
+        },
+    };
+    let _ = state.registry.broadcast_mobile_account(account_id, frame);
+}
+
+fn spawn_group_completion_watcher(
+    state: BackendState,
+    conversation_id: String,
+    reply_to_message_id: String,
+    session_id: String,
+    agent: crate::store::social::AgentRow,
+    trigger_seq: u64,
+    mention_account_id: Option<String>,
+    mention_minos_id: Option<String>,
+) {
+    tokio::spawn(async move {
+        let deadline = tokio::time::Instant::now() + GROUP_COMPLETION_TIMEOUT;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                let timeout_text = mention_minos_id.as_deref().map_or_else(
+                    || "Sorry, I timed out waiting for a response.".to_string(),
+                    |minos_id| format!("@{minos_id} Sorry, I timed out waiting for a response."),
+                );
+                let mentions = mention_account_id.iter().cloned().collect::<Vec<_>>();
+                let _ = post_agent_social_message(
+                    &state,
+                    &conversation_id,
+                    &agent,
+                    &session_id,
+                    &reply_to_message_id,
+                    &timeout_text,
+                    &mentions,
+                )
+                .await;
+                return;
+            }
+
+            match find_completed_agent_reply(
+                &state.store,
+                &session_id,
+                agent_name_for_row(&agent),
+                trigger_seq,
+            )
+            .await
+            {
+                Ok(Some(text)) => {
+                    let final_text = mention_minos_id
+                        .as_deref()
+                        .map_or(text.clone(), |minos_id| format!("@{minos_id} {text}"));
+                    let mentions = mention_account_id.iter().cloned().collect::<Vec<_>>();
+                    let _ = post_agent_social_message(
+                        &state,
+                        &conversation_id,
+                        &agent,
+                        &session_id,
+                        &reply_to_message_id,
+                        &final_text,
+                        &mentions,
+                    )
+                    .await;
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::social",
+                        error = %error,
+                        conversation_id = %conversation_id,
+                        session_id = %session_id,
+                        "group completion watcher failed to translate thread state"
+                    );
+                }
+            }
+
+            tokio::time::sleep(GROUP_COMPLETION_POLL_INTERVAL).await;
+        }
+    });
+}
+
+async fn find_completed_agent_reply(
+    pool: &sqlx::SqlitePool,
+    thread_id: &str,
+    agent_name: AgentName,
+    trigger_seq: u64,
+) -> Result<Option<String>, crate::error::BackendError> {
+    let rows = crate::store::raw_events::read_range(pool, thread_id, 1, 10_000).await?;
+
+    match agent_name {
+        AgentName::Codex => {
+            let mut translator =
+                minos_ui_protocol::CodexTranslatorState::new(thread_id.to_string());
+            let mut message_texts = HashMap::<String, String>::new();
+            for row in rows {
+                let events = minos_ui_protocol::translate_codex(&mut translator, &row.payload)
+                    .map_err(|error| crate::error::BackendError::ForwardRpc {
+                        method: "group_completion_watcher".into(),
+                        message: error.to_string(),
+                    })?;
+                for event in events {
+                    match event {
+                        minos_ui_protocol::UiEventMessage::MessageStarted {
+                            role: minos_ui_protocol::MessageRole::Assistant,
+                            message_id,
+                            ..
+                        } => {
+                            message_texts.entry(message_id).or_default();
+                        }
+                        minos_ui_protocol::UiEventMessage::TextDelta { message_id, text } => {
+                            message_texts.entry(message_id).or_default().push_str(&text);
+                        }
+                        minos_ui_protocol::UiEventMessage::MessageCompleted {
+                            message_id, ..
+                        } if u64::try_from(row.seq).unwrap_or_default() > trigger_seq => {
+                            let text = message_texts.remove(&message_id).unwrap_or_default();
+                            return Ok(Some(text.trim().to_string()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(None)
+        }
+        AgentName::Claude | AgentName::Gemini => Ok(None),
+    }
+}
+
+fn agent_name_for_row(agent: &crate::store::social::AgentRow) -> AgentName {
+    match agent.runtime_agent.as_str() {
+        "claude" => AgentName::Claude,
+        "gemini" => AgentName::Gemini,
+        _ => AgentName::Codex,
+    }
+}
+
+async fn post_agent_social_message(
+    state: &BackendState,
+    conversation_id: &str,
+    agent: &crate::store::social::AgentRow,
+    session_id: &str,
+    reply_to_message_id: &str,
+    text: &str,
+    mentioned_account_ids: &[String],
+) -> Result<(), (StatusCode, Json<ErrorEnvelope>)> {
+    let row = crate::store::social::insert_agent_message(
+        &state.store,
+        conversation_id,
+        &agent.agent_id,
+        text,
+        chrono::Utc::now().timestamp_millis(),
+        Some(reply_to_message_id),
+        mentioned_account_ids,
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?;
+    crate::store::social::bind_session_to_message(&state.store, &row.message_id, session_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
+    let mut hydrated = hydrate_messages(state, vec![row]).await?;
+    let message = hydrated.remove(0);
+    fan_out_social_message(state, &message).await;
+    Ok(())
+}
+
 async fn hydrate_friend_requests(
     state: &BackendState,
     rows: Vec<crate::store::social::FriendRequestRow>,
@@ -794,19 +1233,24 @@ async fn hydrate_friend_requests(
         .collect();
     account_ids.sort();
     account_ids.dedup();
-    let profiles =
-        crate::store::social::profiles_by_accounts(&state.store, &account_ids)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
+    let profiles = crate::store::social::profiles_by_accounts(&state.store, &account_ids)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
 
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
-        let from = profiles
-            .get(&row.from_account_id)
-            .ok_or_else(|| err("internal", format!("profile not found: {}", row.from_account_id)))?;
-        let to = profiles
-            .get(&row.to_account_id)
-            .ok_or_else(|| err("internal", format!("profile not found: {}", row.to_account_id)))?;
+        let from = profiles.get(&row.from_account_id).ok_or_else(|| {
+            err(
+                "internal",
+                format!("profile not found: {}", row.from_account_id),
+            )
+        })?;
+        let to = profiles.get(&row.to_account_id).ok_or_else(|| {
+            err(
+                "internal",
+                format!("profile not found: {}", row.to_account_id),
+            )
+        })?;
         output.push(FriendRequestSummary {
             request_id: row.request_id,
             from: to_user_summary(from),
@@ -882,6 +1326,13 @@ async fn hydrate_messages(
         .into_iter()
         .map(|row| (row.message_id.clone(), row))
         .collect::<HashMap<_, _>>();
+
+    let agent_sender_summary = |agent: crate::store::social::AgentRow| UserSummary {
+        account_id: agent.agent_id.clone(),
+        minos_id: agent.agent_id,
+        display_name: format!("🤖 {}", agent.name),
+    };
+
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
         let mentioned_account_ids = mentions_by_message
@@ -889,10 +1340,28 @@ async fn hydrate_messages(
             .unwrap_or_default();
         let reply_to = if let Some(reply_id) = row.reply_to_message_id.as_ref() {
             if let Some(reply_row) = reply_rows.get(reply_id).cloned() {
-                let reply_sender = load_profile(state, &reply_row.sender_account_id).await?;
+                let reply_sender = if reply_row.sender_type == "agent" {
+                    let agent_id = reply_row
+                        .sender_agent_id
+                        .as_deref()
+                        .unwrap_or(&reply_row.sender_account_id);
+                    let agent = crate::store::social::get_agent(&state.store, agent_id)
+                        .await
+                        .map_err(|e| err("internal", e.to_string()))?;
+                    agent.map_or(
+                        UserSummary {
+                            account_id: agent_id.to_string(),
+                            minos_id: agent_id.to_string(),
+                            display_name: "🤖 Unknown Agent".to_string(),
+                        },
+                        agent_sender_summary,
+                    )
+                } else {
+                    to_user_summary(&load_profile(state, &reply_row.sender_account_id).await?)
+                };
                 Some(ChatMessageReplySummary {
                     message_id: reply_row.message_id,
-                    sender: to_user_summary(&reply_sender),
+                    sender: reply_sender,
                     text: reply_row.text,
                     recalled_at_ms: reply_row.recalled_at_ms,
                 })
@@ -904,22 +1373,19 @@ async fn hydrate_messages(
         };
         let (sender, sender_type) = if row.sender_type == "agent" {
             // Agent message: load agent info for sender display
-            let agent = crate::store::social::get_agent(&state.store, &row.sender_account_id)
+            let agent_id = row
+                .sender_agent_id
+                .as_deref()
+                .unwrap_or(&row.sender_account_id);
+            let agent = crate::store::social::get_agent(&state.store, agent_id)
                 .await
                 .map_err(|e| err("internal", e.to_string()))?;
             match agent {
-                Some(agent) => (
-                    UserSummary {
-                        account_id: agent.agent_id.clone(),
-                        minos_id: agent.agent_id,
-                        display_name: format!("🤖 {}", agent.name),
-                    },
-                    SenderType::Agent,
-                ),
+                Some(agent) => (agent_sender_summary(agent), SenderType::Agent),
                 None => (
                     UserSummary {
-                        account_id: row.sender_account_id.clone(),
-                        minos_id: row.sender_account_id.clone(),
+                        account_id: agent_id.to_string(),
+                        minos_id: agent_id.to_string(),
                         display_name: "🤖 Unknown Agent".to_string(),
                     },
                     SenderType::Agent,
@@ -985,7 +1451,7 @@ fn collect_mention_tokens(text: &str) -> Vec<&str> {
 
         let start = index + 1;
         let mut end = start;
-        while end < bytes.len() && bytes[end].is_ascii_alphanumeric() {
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
             end += 1;
         }
         if end > start {

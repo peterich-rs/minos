@@ -66,6 +66,7 @@ pub struct ChatMessageRow {
     pub message_id: String,
     pub conversation_id: String,
     pub sender_account_id: String,
+    pub sender_agent_id: Option<String>,
     pub text: String,
     pub created_at_ms: i64,
     pub reply_to_message_id: Option<String>,
@@ -457,7 +458,9 @@ pub async fn ensure_direct_conversation(
                     message: "conversation missing after unique violation".into(),
                 })
         }
-        Err(e) => Err(store_err("social::ensure_direct_conversation.insert_conversation")(e)),
+        Err(e) => Err(store_err(
+            "social::ensure_direct_conversation.insert_conversation",
+        )(e)),
     }
 }
 
@@ -640,7 +643,7 @@ pub async fn get_message(
     message_id: &str,
 ) -> Result<Option<ChatMessageRow>, BackendError> {
     sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+        "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
            FROM chat_messages
           WHERE message_id = ?",
     )
@@ -659,7 +662,7 @@ pub async fn list_messages(
     let effective_limit = i64::from(limit.min(200));
     let before = before_ts_ms.unwrap_or(i64::MAX);
     sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+        "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
            FROM chat_messages
           WHERE conversation_id = ? AND created_at_ms < ?
           ORDER BY created_at_ms DESC
@@ -682,7 +685,7 @@ pub async fn list_messages_by_ids(
     }
 
     let mut builder = QueryBuilder::<Sqlite>::new(
-        "SELECT message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
+        "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
     );
     {
         let mut separated = builder.separated(", ");
@@ -840,12 +843,105 @@ pub async fn insert_message(
         message_id,
         conversation_id: conversation_id.to_string(),
         sender_account_id: sender_account_id.to_string(),
+        sender_agent_id: None,
         text: text.to_string(),
         created_at_ms,
         reply_to_message_id: reply_to_message_id.map(ToOwned::to_owned),
         recalled_at_ms: None,
         sender_type: "user".to_string(),
     })
+}
+
+pub async fn bind_session_to_message(
+    pool: &SqlitePool,
+    message_id: &str,
+    session_id: &str,
+) -> Result<(), BackendError> {
+    sqlx::query(
+        "UPDATE chat_messages
+            SET agent_session_id = ?
+          WHERE message_id = ?",
+    )
+    .bind(session_id)
+    .bind(message_id)
+    .execute(pool)
+    .await
+    .map_err(store_err("social::bind_session_to_message"))?;
+    Ok(())
+}
+
+pub async fn lookup_session_id_for_message(
+    pool: &SqlitePool,
+    message_id: &str,
+) -> Result<Option<String>, BackendError> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT agent_session_id
+           FROM chat_messages
+          WHERE message_id = ?",
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await
+    .map(|value| value.flatten())
+    .map_err(store_err("social::lookup_session_id_for_message"))
+}
+
+pub async fn lookup_latest_session_id_for_conversation(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> Result<Option<String>, BackendError> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT agent_session_id
+           FROM chat_messages
+          WHERE conversation_id = ?
+            AND agent_session_id IS NOT NULL
+          ORDER BY created_at_ms DESC
+          LIMIT 1",
+    )
+    .bind(conversation_id)
+    .fetch_optional(pool)
+    .await
+    .map(|value| value.flatten())
+    .map_err(store_err(
+        "social::lookup_latest_session_id_for_conversation",
+    ))
+}
+
+pub async fn has_bound_message_for_session(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<bool, BackendError> {
+    let row = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+           FROM chat_messages
+          WHERE agent_session_id = ?",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .map_err(store_err("social::has_bound_message_for_session"))?;
+    Ok(row > 0)
+}
+
+pub async fn suppress_live_ui_fanout_for_session(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<bool, BackendError> {
+    let row = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(
+             SELECT 1
+               FROM chat_messages m
+               JOIN conversation_members cm ON cm.conversation_id = m.conversation_id
+              WHERE m.agent_session_id = ?
+              GROUP BY m.conversation_id
+             HAVING COUNT(DISTINCT cm.account_id) > 1
+         )",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .map_err(store_err("social::suppress_live_ui_fanout_for_session"))?;
+    Ok(row > 0)
 }
 
 pub async fn recall_message(
@@ -1112,6 +1208,12 @@ pub async fn insert_agent_message(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
+    let agent = get_agent(pool, agent_id)
+        .await?
+        .ok_or_else(|| BackendError::StoreQuery {
+            operation: "social::insert_agent_message.load_agent".into(),
+            message: format!("agent not found: {agent_id}"),
+        })?;
     let message_id = Uuid::new_v4().to_string();
     let mut tx = pool
         .begin()
@@ -1119,12 +1221,21 @@ pub async fn insert_agent_message(
         .map_err(store_err("social::insert_agent_message.begin"))?;
 
     sqlx::query(
-        "INSERT INTO chat_messages (message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id, sender_type)
-         VALUES (?, ?, ?, ?, ?, ?, 'agent')",
+        "INSERT INTO chat_messages (
+            message_id,
+            conversation_id,
+            sender_account_id,
+            sender_agent_id,
+            text,
+            created_at_ms,
+            reply_to_message_id,
+            sender_type
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'agent')",
     )
     .bind(&message_id)
     .bind(conversation_id)
-    .bind(agent_id)
+    .bind(&agent.owner_account_id)
+    .bind(&agent.agent_id)
     .bind(text)
     .bind(now_ms)
     .bind(reply_to_message_id)
@@ -1335,5 +1446,66 @@ mod tests {
             alice_rows[0].last_message_preview.as_deref(),
             Some("[message recalled]")
         );
+    }
+
+    #[tokio::test]
+    async fn bind_and_lookup_session_for_message_round_trip() {
+        let pool = memory_pool().await;
+        let (conversation_id, alice, _bob, _carol) = seed_group(&pool).await;
+
+        let message = insert_message(&pool, &conversation_id, &alice, "ping", T0 + 10, None, &[])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            lookup_session_id_for_message(&pool, &message.message_id)
+                .await
+                .unwrap(),
+            None
+        );
+
+        bind_session_to_message(&pool, &message.message_id, "thr-social-1")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            lookup_session_id_for_message(&pool, &message.message_id)
+                .await
+                .unwrap(),
+            Some("thr-social-1".to_string())
+        );
+
+        assert_eq!(
+            lookup_latest_session_id_for_conversation(&pool, &conversation_id)
+                .await
+                .unwrap(),
+            Some("thr-social-1".to_string())
+        );
+        assert!(has_bound_message_for_session(&pool, "thr-social-1")
+            .await
+            .unwrap());
+        assert!(suppress_live_ui_fanout_for_session(&pool, "thr-social-1")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn one_human_plus_agent_session_keeps_live_ui_fanout_enabled() {
+        let pool = memory_pool().await;
+        let alice = insert_account(&pool, "alice@example.com").await;
+        let conversation = create_group_conversation(&pool, &alice, "Agent DM", &[], T0)
+            .await
+            .unwrap();
+        let message = insert_message(&pool, &conversation.conversation_id, &alice, "hello", T0, None, &[])
+            .await
+            .unwrap();
+
+        bind_session_to_message(&pool, &message.message_id, "thr-direct-1")
+            .await
+            .unwrap();
+
+        assert!(!suppress_live_ui_fanout_for_session(&pool, "thr-direct-1")
+            .await
+            .unwrap());
     }
 }
