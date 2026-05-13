@@ -882,7 +882,7 @@ pub async fn lookup_session_id_for_message(
     .bind(message_id)
     .fetch_optional(pool)
     .await
-    .map(|value| value.flatten())
+    .map(Option::flatten)
     .map_err(store_err("social::lookup_session_id_for_message"))
 }
 
@@ -901,7 +901,7 @@ pub async fn lookup_latest_session_id_for_conversation(
     .bind(conversation_id)
     .fetch_optional(pool)
     .await
-    .map(|value| value.flatten())
+    .map(Option::flatten)
     .map_err(store_err(
         "social::lookup_latest_session_id_for_conversation",
     ))

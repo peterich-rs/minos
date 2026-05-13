@@ -949,6 +949,24 @@ fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState 
     }
 }
 
+fn pause_to_proto(r: &minos_agent_runtime::PauseReason) -> ProtoPauseReason {
+    use minos_agent_runtime::PauseReason as Rt;
+    match r {
+        Rt::UserInterrupt => ProtoPauseReason::UserInterrupt,
+        Rt::CodexCrashed => ProtoPauseReason::CodexCrashed,
+        Rt::DaemonRestart => ProtoPauseReason::DaemonRestart,
+        Rt::InstanceReaped => ProtoPauseReason::InstanceReaped,
+    }
+}
+
+fn close_to_proto(r: &minos_agent_runtime::CloseReason) -> ProtoCloseReason {
+    use minos_agent_runtime::CloseReason as Rt;
+    match r {
+        Rt::UserClose => ProtoCloseReason::UserClose,
+        Rt::TerminalError => ProtoCloseReason::TerminalError,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1099,6 +1117,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::cast_possible_wrap)]
     async fn read_thread_history_translates_local_events() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-h", "codex", 10, 20).await;
@@ -1161,6 +1180,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::cast_possible_wrap)]
     async fn hydrate_codex_translator_restores_open_message_state() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-open", "codex", 10, 20).await;
@@ -1213,23 +1233,5 @@ mod tests {
             UiEventMessage::TextDelta { message_id, text }
                 if message_id == "a1" && text == "world"
         )));
-    }
-}
-
-fn pause_to_proto(r: &minos_agent_runtime::PauseReason) -> ProtoPauseReason {
-    use minos_agent_runtime::PauseReason as Rt;
-    match r {
-        Rt::UserInterrupt => ProtoPauseReason::UserInterrupt,
-        Rt::CodexCrashed => ProtoPauseReason::CodexCrashed,
-        Rt::DaemonRestart => ProtoPauseReason::DaemonRestart,
-        Rt::InstanceReaped => ProtoPauseReason::InstanceReaped,
-    }
-}
-
-fn close_to_proto(r: &minos_agent_runtime::CloseReason) -> ProtoCloseReason {
-    use minos_agent_runtime::CloseReason as Rt;
-    match r {
-        Rt::UserClose => ProtoCloseReason::UserClose,
-        Rt::TerminalError => ProtoCloseReason::TerminalError,
     }
 }

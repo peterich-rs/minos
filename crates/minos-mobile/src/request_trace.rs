@@ -227,8 +227,8 @@ mod tests {
 
     #[test]
     fn ring_is_bounded() {
-        clear();
         const PREFIX: &str = "bounded_thr_";
+        clear();
         for i in 0..(RING_CAPACITY + 5) {
             let id = start(
                 RequestTransport::Rpc,

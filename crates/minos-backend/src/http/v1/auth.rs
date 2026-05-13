@@ -402,12 +402,9 @@ pub async fn post_logout(
         Ok(Some(row)) if row.account_id == bearer_outcome.account_id => {
             // Token belongs to this account — proceed with revocation.
         }
-        Ok(Some(_)) => {
-            // Token belongs to a different account — reject silently.
-            return StatusCode::NO_CONTENT.into_response();
-        }
-        Ok(None) => {
-            // Token not found or already revoked — idempotent success.
+        Ok(Some(_) | None) => {
+            // Token belongs to a different account or not found/already
+            // revoked — idempotent success either way.
             return StatusCode::NO_CONTENT.into_response();
         }
         Err(_) => {

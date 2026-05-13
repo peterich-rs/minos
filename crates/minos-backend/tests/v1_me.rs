@@ -250,7 +250,7 @@ async fn delete_me_peer_removes_only_targeted_mobile_row() {
 
     let req = Request::builder()
         .method(Method::DELETE)
-        .uri(format!("/v1/me/peers/{}", mobile_a))
+        .uri(format!("/v1/me/peers/{mobile_a}"))
         .header("x-device-id", host.to_string())
         .header("x-device-role", "agent-host")
         .header("x-device-secret", secret.as_str())

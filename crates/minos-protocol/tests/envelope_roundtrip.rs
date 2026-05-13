@@ -200,7 +200,7 @@ fn forward_with_arbitrary_nested_json_params() {
                 "unicode": "日本語テスト 🎉",
                 "empty_obj": {},
                 "empty_arr": [],
-                "number": 3.14159
+                "number": 3.14160
             }
         }),
     };

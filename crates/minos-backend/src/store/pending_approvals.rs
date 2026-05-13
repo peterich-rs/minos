@@ -19,6 +19,7 @@ pub struct PendingApprovalRow {
     pub resolution: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert(
     pool: &SqlitePool,
     request_id: &str,
@@ -157,6 +158,7 @@ pub async fn list_unresolved_for_hosts(
     rows.into_iter().map(decode_row).collect()
 }
 
+#[allow(clippy::type_complexity)]
 fn decode_row(
     row: (
         String,

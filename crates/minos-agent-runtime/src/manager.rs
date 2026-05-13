@@ -231,7 +231,7 @@ impl AgentManager {
                     ThreadState::Idle => self.send_user_message(&session_id, text).await?,
                     ThreadState::Running { .. } => self.steer_turn(&session_id, text).await?,
                     ThreadState::Suspended { .. } => {
-                        self.send_user_message(&session_id, text).await?
+                        self.send_user_message(&session_id, text).await?;
                     }
                     other => anyhow::bail!("dispatch_message rejected: state={other:?}"),
                 }
@@ -1320,7 +1320,7 @@ fn spawn_approval_timeout(
 /// Long-running event-pump task per instance: drains every inbound frame from
 /// the codex WS and forwards `Notification` payloads as `RawIngest` records
 /// keyed by the notification's `params.threadId`.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn event_pump_loop(
     client: Arc<CodexClient>,
     events_tx: broadcast::Sender<RawIngest>,
@@ -1781,6 +1781,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::too_many_lines)]
     async fn turn_notifications_update_active_turn_id_lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
         let thread_id = "thr-turn-lifecycle";

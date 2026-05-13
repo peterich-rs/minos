@@ -33,6 +33,7 @@ impl ApprovalRelay {
         relay
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_request(
         &self,
         host_device_id: DeviceId,

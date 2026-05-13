@@ -376,7 +376,7 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
         // reads this to show a spinner and surface the retry count.
         let _ = ctx.link_tx.send(RelayLinkState::Connecting { attempt });
 
-        let outcome = run_once(&mut ctx, &mut shutdown_rx).await;
+        let outcome = Box::pin(run_once(&mut ctx, &mut shutdown_rx)).await;
 
         match outcome {
             CycleOutcome::Shutdown | CycleOutcome::AuthFailed => {
@@ -471,7 +471,7 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
     tracing::info!(target: "minos_daemon::relay_client", "relay link up");
     refresh_peers_from_backend(ctx, secret.as_ref()).await;
 
-    dispatch_loop(ws, ctx, shutdown_rx).await
+    Box::pin(dispatch_loop(ws, ctx, shutdown_rx)).await
 }
 
 async fn refresh_peers_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSecret>) {
@@ -530,6 +530,7 @@ fn peer_record_from_summary(summary: &HostPeerSummary) -> PeerRecord {
 
 /// Inbound + outbound dispatch pump over an upgraded WebSocket. Returns
 /// when the stream ends, errors, or `shutdown_rx` fires.
+#[allow(clippy::too_many_lines)]
 async fn dispatch_loop(
     ws: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -700,6 +701,7 @@ async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn route_event(event: EventKind, ctx: &DispatchCtx) {
     let mut should_refresh = false;
 
@@ -731,7 +733,7 @@ async fn route_event(event: EventKind, ctx: &DispatchCtx) {
             );
         }
         EventKind::PeerOnline { .. } | EventKind::PeerOffline { .. } | EventKind::Unpaired => {
-            should_refresh = true
+            should_refresh = true;
         }
         EventKind::ServerShutdown => {
             // The dispatch loop will observe the socket closing next and

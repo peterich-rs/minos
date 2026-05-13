@@ -116,29 +116,46 @@ async fn which_returns_none_when_path_missing() {
 
 #[tokio::test]
 async fn run_subprocess_sees_only_injected_env() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
     let dir = TempDir::new().expect("temp dir");
     let script = make_test_script(dir.path(), "minos-test-env", ScriptMode::DumpEnv);
-    std::env::set_var("MINOS_PARENT_ONLY", "from-parent");
 
-    let mut env = HashMap::new();
-    env.insert(
-        "PATH".to_owned(),
-        format!(
-            "{}{}{}",
-            dir.path().display(),
-            path_sep(),
-            std::env::var("PATH").unwrap_or_default()
-        ),
-    );
-    env.insert("MINOS_TEST_SENTINEL".to_owned(), "snowflake".to_owned());
-    let runner = RealCommandRunner::new(Arc::new(env));
+    let runner = {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        // SAFETY: this test is serialised via ENV_LOCK and only modifies a
+        // test-specific variable that no production code reads.
+        unsafe {
+            std::env::set_var("MINOS_PARENT_ONLY", "from-parent");
+        }
+
+        let mut env = HashMap::new();
+        env.insert(
+            "PATH".to_owned(),
+            format!(
+                "{}{}{}",
+                dir.path().display(),
+                path_sep(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+        env.insert("MINOS_TEST_SENTINEL".to_owned(), "snowflake".to_owned());
+        RealCommandRunner::new(Arc::new(env))
+        // _guard dropped here — before any .await
+    };
 
     let outcome = runner
         .run(&script.display().to_string(), &[], Duration::from_secs(5))
         .await
         .expect("script must succeed");
-    std::env::remove_var("MINOS_PARENT_ONLY");
+
+    // Clean up env var while holding the lock again
+    {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        // SAFETY: same as above — serialised access to test-only env var.
+        unsafe {
+            std::env::remove_var("MINOS_PARENT_ONLY");
+        }
+    }
+
     assert_eq!(outcome.exit_code, 0);
     assert!(
         outcome.stdout.contains("MINOS_TEST_SENTINEL=snowflake"),

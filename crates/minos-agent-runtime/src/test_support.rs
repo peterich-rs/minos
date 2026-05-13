@@ -192,6 +192,7 @@ impl FakeCodexServer {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_script(
     ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     script: Vec<Step>,

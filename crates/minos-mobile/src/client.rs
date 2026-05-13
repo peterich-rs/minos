@@ -1513,6 +1513,7 @@ async fn recv_loop<S>(
     drain_pending(&pending);
 }
 
+#[allow(clippy::too_many_lines)]
 fn handle_text_frame(
     text: &str,
     ui_events_tx: &broadcast::Sender<UiEventFrame>,

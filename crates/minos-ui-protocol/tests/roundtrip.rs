@@ -14,9 +14,8 @@ fn assert_round_trip(msg: &UiEventMessage) {
     assert_eq!(*msg, back, "round-trip failed for: {json}");
 }
 
-#[test]
-fn all_ui_event_message_variants_round_trip() {
-    let messages: Vec<UiEventMessage> = vec![
+fn thread_variants() -> Vec<UiEventMessage> {
+    vec![
         UiEventMessage::ThreadOpened {
             thread_id: "thr-1".into(),
             agent: AgentName::Codex,
@@ -32,7 +31,7 @@ fn all_ui_event_message_variants_round_trip() {
         UiEventMessage::ThreadOpened {
             thread_id: "thr-3".into(),
             agent: AgentName::Gemini,
-            title: Some("".into()),
+            title: Some(String::new()),
             opened_at_ms: 0,
         },
         UiEventMessage::ThreadTitleUpdated {
@@ -66,6 +65,11 @@ fn all_ui_event_message_variants_round_trip() {
             reason: ThreadEndReason::HostDisconnected,
             closed_at_ms: 1_714_000_001_000,
         },
+    ]
+}
+
+fn message_variants() -> Vec<UiEventMessage> {
+    vec![
         UiEventMessage::MessageStarted {
             message_id: "msg-1".into(),
             role: MessageRole::User,
@@ -91,7 +95,7 @@ fn all_ui_event_message_variants_round_trip() {
         },
         UiEventMessage::TextDelta {
             message_id: "msg-2".into(),
-            text: "".into(),
+            text: String::new(),
         },
         UiEventMessage::ReasoningDelta {
             message_id: "msg-2".into(),
@@ -123,7 +127,11 @@ fn all_ui_event_message_variants_round_trip() {
             message: "Unexpected error".into(),
             message_id: None,
         },
-        // The Raw variant — forward-compat escape hatch
+    ]
+}
+
+fn raw_variants() -> Vec<UiEventMessage> {
+    vec![
         UiEventMessage::Raw {
             kind: "stdout".into(),
             payload_json: r#""hello from claude""#.into(),
@@ -137,10 +145,18 @@ fn all_ui_event_message_variants_round_trip() {
             payload_json: r#"{"step":"compile","progress":0.5}"#.into(),
         },
         UiEventMessage::Raw {
-            kind: "".into(),
+            kind: String::new(),
             payload_json: "null".into(),
         },
-    ];
+    ]
+}
+
+#[test]
+fn all_ui_event_message_variants_round_trip() {
+    let messages: Vec<UiEventMessage> = [thread_variants(), message_variants(), raw_variants()]
+        .into_iter()
+        .flatten()
+        .collect();
 
     for msg in &messages {
         assert_round_trip(msg);

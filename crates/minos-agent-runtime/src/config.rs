@@ -30,7 +30,7 @@ pub struct AgentRuntimeConfig {
 }
 
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_APPROVAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_APPROVAL_REQUEST_TIMEOUT: Duration = Duration::from_mins(2);
 const DEFAULT_EVENT_BUFFER: usize = 256;
 
 impl AgentRuntimeConfig {

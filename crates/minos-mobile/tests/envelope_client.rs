@@ -323,7 +323,7 @@ async fn fake_backend_resume_handshake(
             );
             let header_names: Vec<_> = headers
                 .keys()
-                .map(|name| name.as_str())
+                .map(axum::http::HeaderName::as_str)
                 .filter(|name| name.starts_with("x-") || *name == "authorization")
                 .collect();
             assert_eq!(

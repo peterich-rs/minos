@@ -110,7 +110,7 @@ pub(crate) fn validate_decision(
         | ServerRequest::McpServerElicitationRequest(_)
         | ServerRequest::ChatgptAuthTokensRefresh(_)
         | ServerRequest::DynamicToolCall(_) => {
-            anyhow::bail!("server request does not accept an approval decision",)
+            anyhow::bail!("server request does not accept an approval decision")
         }
     }
 }

@@ -16,7 +16,7 @@ const RECALLED_MESSAGE_TEXT: &str = "[message recalled]";
 /// Default title for unnamed group conversations.
 const DEFAULT_GROUP_TITLE: &str = "Group Chat";
 const AGENT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(5);
-const GROUP_COMPLETION_TIMEOUT: Duration = Duration::from_secs(300);
+const GROUP_COMPLETION_TIMEOUT: Duration = Duration::from_mins(5);
 const GROUP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 use axum::{Json, Router};
 use minos_domain::AgentName;
@@ -646,6 +646,7 @@ async fn list_messages_inner(
     }))
 }
 
+#[allow(clippy::too_many_lines)]
 async fn send_message(
     State(state): State<BackendState>,
     headers: HeaderMap,
@@ -886,10 +887,13 @@ async fn build_agent_dispatch_plan(
             .await
             .map_err(|e| err("internal", e.to_string()))?
             {
-                if let Some(agent) =
-                    crate::store::social::get_agent(&state.store, &reply_target.sender_account_id)
-                        .await
-                        .map_err(|e| err("internal", e.to_string()))?
+                let agent_id = reply_target
+                    .sender_agent_id
+                    .as_deref()
+                    .unwrap_or(&reply_target.sender_account_id);
+                if let Some(agent) = crate::store::social::get_agent(&state.store, agent_id)
+                    .await
+                    .map_err(|e| err("internal", e.to_string()))?
                 {
                     let watcher_from_seq =
                         crate::store::raw_events::last_seq(&state.store, &session_id)
@@ -1014,7 +1018,7 @@ fn first_mentioned_agent(
         .collect::<HashMap<_, _>>();
     collect_mention_tokens(text)
         .into_iter()
-        .find_map(|token| by_id.get(token).cloned().cloned())
+        .find_map(|token| by_id.get(token).copied().cloned())
 }
 
 fn strip_agent_mention_once(text: &str, agent_id: &str) -> String {
@@ -1064,6 +1068,7 @@ fn fan_out_agent_error(
     let _ = state.registry.broadcast_mobile_account(account_id, frame);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_group_completion_watcher(
     state: BackendState,
     conversation_id: String,

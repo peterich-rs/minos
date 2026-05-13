@@ -144,6 +144,7 @@ async fn wait_for_message_count(
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn social_friend_and_chat_flow_round_trips() {
     let state = backend_state().await;
     let mut app = router(state.clone());
@@ -317,6 +318,7 @@ async fn social_friend_and_chat_flow_round_trips() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     let state = backend_state().await;
     let mut app = router(state.clone());
@@ -489,6 +491,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
     let state = backend_state().await;
     let mut app = router(state.clone());
@@ -642,5 +645,181 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
     assert_eq!(
         requests[1].origin_message_id.as_deref(),
         Some(second_user_message_id.as_str())
+    );
+}
+
+/// Tests group chat reply session reuse: when a user replies to an agent's
+/// reply message in a group conversation, the server looks up the session_id
+/// bound to the replied-to message and forwards the new message using that
+/// existing session (no new session creation).
+///
+/// Validates: Requirements 11.3 (reply to agent message reuses session),
+///            11.5 (session binding persists across messages)
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn group_reply_to_agent_message_reuses_session() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    // Setup: alice owns the host, bob is a group member
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+    let host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
+
+    // Create group conversation with an agent
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Project Group",
+        &[bob.account_id.clone()],
+        100,
+    )
+    .await
+    .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    // Step 1: Send initial @mention to create a session
+    let dispatch = spawn_agent_dispatch_responder(
+        Arc::clone(&state.registry),
+        host_device_id,
+        host_rx,
+        "sess-group-reply-1",
+    );
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": format!("@{} summarize the PR", agent.agent_id)
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_message_id = body["message_id"].as_str().unwrap().to_string();
+
+    // Wait for dispatch to complete
+    let initial_dispatch = dispatch.await.unwrap();
+    assert_eq!(initial_dispatch.agent, AgentName::Codex);
+    assert_eq!(initial_dispatch.session_id, None);
+    assert_eq!(initial_dispatch.text, "summarize the PR");
+
+    // Verify session binding on user message
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &user_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("sess-group-reply-1")
+    );
+
+    // Step 2: Simulate agent completing and posting a reply message
+    // (In production, the completion watcher does this; here we insert directly)
+    let agent_reply = social::insert_agent_message(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &format!("@{} Here is the PR summary: ...", alice.minos_id),
+        200,
+        Some(&user_message_id),
+        &[],
+    )
+    .await
+    .unwrap();
+    // Bind the same session to the agent's reply (as the completion watcher would)
+    social::bind_session_to_message(&state.store, &agent_reply.message_id, "sess-group-reply-1")
+        .await
+        .unwrap();
+
+    // Step 3: User replies to the agent's reply message — should reuse session
+    // Need a fresh host session receiver for the second dispatch
+    let host_rx2 = seed_live_host_session(&state, host_device_id, &alice.account_id);
+    let dispatch2 = spawn_agent_dispatch_responder(
+        Arc::clone(&state.registry),
+        host_device_id,
+        host_rx2,
+        "sess-group-reply-1",
+    );
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": "can you also include the test coverage?",
+                    "reply_to_message_id": agent_reply.message_id,
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let followup_message_id = body["message_id"].as_str().unwrap().to_string();
+
+    // Verify the follow-up dispatch reuses the existing session
+    let reuse_dispatch = dispatch2.await.unwrap();
+    assert_eq!(
+        reuse_dispatch.session_id.as_deref(),
+        Some("sess-group-reply-1")
+    );
+    assert_eq!(
+        reuse_dispatch.text,
+        "can you also include the test coverage?"
+    );
+    assert_eq!(
+        reuse_dispatch.origin_message_id.as_deref(),
+        Some(followup_message_id.as_str())
+    );
+
+    // Verify session binding on the follow-up message
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &followup_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("sess-group-reply-1")
     );
 }
