@@ -231,12 +231,18 @@ impl SessionRegistry {
     /// caller should typically drop the returned handle to close the old
     /// outbox and shut the prior writer task.
     pub fn insert(&self, handle: SessionHandle) -> Option<SessionHandle> {
-        self.0.insert(handle.device_id, handle)
+        let previous = self.0.insert(handle.device_id, handle);
+        crate::telemetry::set_session_registry_size(self.len());
+        previous
     }
 
     /// Remove and return the handle for `id`, or `None` if none was live.
     pub fn remove(&self, id: DeviceId) -> Option<SessionHandle> {
-        self.0.remove(&id).map(|(_k, v)| v)
+        let removed = self.0.remove(&id).map(|(_k, v)| v);
+        if removed.is_some() {
+            crate::telemetry::set_session_registry_size(self.len());
+        }
+        removed
     }
 
     /// Remove and return `current` only if it is still the live entry.
@@ -246,9 +252,14 @@ impl SessionRegistry {
     /// `DeviceId`, and in that case cleanup must leave the fresh entry in
     /// place.
     pub fn remove_current(&self, current: &SessionHandle) -> Option<SessionHandle> {
-        self.0
+        let removed = self
+            .0
             .remove_if(&current.device_id, |_, live| live.same_session(current))
-            .map(|(_k, v)| v)
+            .map(|(_k, v)| v);
+        if removed.is_some() {
+            crate::telemetry::set_session_registry_size(self.len());
+        }
+        removed
     }
 
     /// Clone the handle for `id` if a session is live.
@@ -337,6 +348,7 @@ impl SessionRegistry {
                 closed += 1;
             }
         }
+        crate::telemetry::set_session_registry_size(self.len());
         closed
     }
 

@@ -17,6 +17,7 @@ use super::BackendState;
 struct HealthResponse {
     status: &'static str,
     version: String,
+    instance_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
 }
@@ -33,6 +34,7 @@ pub async fn get(State(state): State<BackendState>) -> impl IntoResponse {
             Json(HealthResponse {
                 status: "ok",
                 version: format!("minos-backend v{}", state.version),
+                instance_id: state.instance_id.clone(),
                 reason: None,
             }),
         )
@@ -43,6 +45,7 @@ pub async fn get(State(state): State<BackendState>) -> impl IntoResponse {
             Json(HealthResponse {
                 status: "degraded",
                 version: format!("minos-backend v{}", state.version),
+                instance_id: state.instance_id.clone(),
                 reason: Some("db"),
             }),
         )

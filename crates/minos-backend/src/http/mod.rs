@@ -31,13 +31,20 @@
 
 use std::{sync::Arc, time::Duration};
 
+use axum::extract::MatchedPath;
 use axum::http::{
     header::{AUTHORIZATION, CONTENT_TYPE},
-    HeaderName, HeaderValue, Method,
+    HeaderName, HeaderValue, Method, Request,
 };
+use axum::middleware::{from_fn, Next};
+use axum::response::Response;
 use axum::Router;
 use sqlx::SqlitePool;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::request_id::{
+    MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
+use tower_http::trace::TraceLayer;
 
 use crate::{
     auth::rate_limit::RateLimiter, ingest::translate::ThreadTranslators, pairing::PairingService,
@@ -47,8 +54,27 @@ use crate::{
 pub mod auth;
 pub mod error_response;
 pub mod health;
+pub mod metrics;
 pub mod v1;
 pub mod ws_devices;
+
+fn x_request_id_header() -> HeaderName {
+    HeaderName::from_static("x-request-id")
+}
+
+#[derive(Clone, Default)]
+struct MakeRequestUuid;
+
+impl MakeRequestId for MakeRequestUuid {
+    fn make_request_id<B>(&mut self, request: &Request<B>) -> Option<RequestId> {
+        request
+            .headers()
+            .get(x_request_id_header())
+            .cloned()
+            .or_else(|| HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).ok())
+            .map(RequestId::new)
+    }
+}
 
 /// Shared state for every HTTP handler.
 ///
@@ -83,6 +109,8 @@ pub struct BackendState {
     pub auth_refresh_per_acc: Arc<RateLimiter>,
     /// Parsed CORS origins from config. `None` means allow-all (dev mode).
     pub cors_origins: Option<Vec<HeaderValue>>,
+    /// Per-process identifier surfaced in health checks and startup logs.
+    pub instance_id: String,
     /// Crate version string; exposed via `/health`.
     ///
     /// Stored here rather than read from `env!("CARGO_PKG_VERSION")` at the
@@ -104,6 +132,7 @@ impl BackendState {
         token_ttl: Duration,
         jwt_secret: String,
         cors_origins: Option<Vec<HeaderValue>>,
+        instance_id: String,
     ) -> Self {
         let approval_relay =
             crate::approval_relay::ApprovalRelay::new(store.clone(), Arc::clone(&registry));
@@ -120,6 +149,7 @@ impl BackendState {
             auth_register_per_ip: default_register_per_ip(),
             auth_refresh_per_acc: default_refresh_per_acc(),
             cors_origins,
+            instance_id,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -177,16 +207,64 @@ pub fn default_refresh_per_acc() -> Arc<RateLimiter> {
 
 /// Build the backend's top-level axum `Router`.
 ///
-/// Two routes (see module docs). Logs are wired via `tracing` rather than
-/// `tower-http::trace` in this MVP.
+/// Includes request-id propagation, tracing, and Prometheus metrics.
 pub fn router(state: BackendState) -> Router {
+    crate::telemetry::init();
+    crate::telemetry::set_session_registry_size(state.registry.len());
+
     let cors = cors_layer(state.cors_origins.clone());
     Router::new()
         .route("/health", axum::routing::get(health::get))
+        .route("/metrics", axum::routing::get(metrics::get))
         .route("/devices", axum::routing::get(ws_devices::upgrade))
         .nest("/v1", v1::router())
         .layer(cors)
+        .layer(from_fn(record_http_metrics))
+        .layer(PropagateRequestIdLayer::new(x_request_id_header()))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
+                let matched_path = request
+                    .extensions()
+                    .get::<MatchedPath>()
+                    .map(MatchedPath::as_str)
+                    .unwrap_or_else(|| request.uri().path());
+                let request_id = request
+                    .headers()
+                    .get(x_request_id_header())
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("");
+                tracing::info_span!(
+                    "http_request",
+                    method = %request.method(),
+                    path = %matched_path,
+                    request_id = %request_id,
+                )
+            }),
+        )
+        .layer(SetRequestIdLayer::new(
+            x_request_id_header(),
+            MakeRequestUuid,
+        ))
         .with_state(state)
+}
+
+async fn record_http_metrics(request: Request<axum::body::Body>, next: Next) -> Response {
+    let started_at = std::time::Instant::now();
+    let method = request.method().clone();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| request.uri().path())
+        .to_string();
+    let response = next.run(request).await;
+    crate::telemetry::record_http_request(
+        &route,
+        method.as_str(),
+        response.status().as_u16(),
+        started_at.elapsed().as_secs_f64(),
+    );
+    response
 }
 
 fn cors_layer(origins: Option<Vec<HeaderValue>>) -> CorsLayer {
@@ -199,10 +277,15 @@ fn cors_layer(origins: Option<Vec<HeaderValue>>) -> CorsLayer {
             HeaderName::from_static(auth::HDR_DEVICE_ROLE),
             HeaderName::from_static(auth::HDR_DEVICE_SECRET),
             HeaderName::from_static(auth::HDR_DEVICE_NAME),
+            x_request_id_header(),
         ]);
     match origins {
-        None => layer.allow_origin(Any),
-        Some(list) => layer.allow_origin(AllowOrigin::list(list)),
+        None => layer
+            .allow_origin(Any)
+            .expose_headers([x_request_id_header()]),
+        Some(list) => layer
+            .allow_origin(AllowOrigin::list(list))
+            .expose_headers([x_request_id_header()]),
     }
 }
 
@@ -248,6 +331,7 @@ pub mod test_support {
             auth_register_per_ip: super::default_register_per_ip(),
             auth_refresh_per_acc: super::default_refresh_per_acc(),
             cors_origins: None,
+            instance_id: "test-instance".to_string(),
             version: env!("CARGO_PKG_VERSION"),
         }
     }

@@ -9,10 +9,10 @@ use minos_protocol::{
     ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse,
     UpdateProjectRequest,
 };
-use serde::Serialize;
 
 use crate::auth::bearer;
 use crate::http::auth;
+use crate::http::error_response::{err_json as err, ErrorEnvelope};
 use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
@@ -24,26 +24,6 @@ pub fn router() -> Router<BackendState> {
         .route("/projects/:project_id", delete(delete_project_path))
         .route("/projects/threads/assign", post(assign_project_thread))
         .route("/projects/threads/query", post(list_project_threads))
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorEnvelope {
-    error: ErrorBody,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: String,
-}
-
-fn err(code: &'static str, message: impl Into<String>) -> Json<ErrorEnvelope> {
-    Json(ErrorEnvelope {
-        error: ErrorBody {
-            code,
-            message: message.into(),
-        },
-    })
 }
 
 async fn require_account(

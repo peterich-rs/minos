@@ -57,10 +57,11 @@ impl RateLimiter {
         entries.retain(|t| now.duration_since(*t) < self.window);
         if entries.len() >= self.permits {
             let oldest = entries[0];
-            let retry_secs = self
-                .window
-                .saturating_sub(now.duration_since(oldest))
-                .as_secs();
+            let remaining = self.window.saturating_sub(now.duration_since(oldest));
+            let retry_secs = remaining
+                .as_millis()
+                .saturating_add(999)
+                .saturating_div(1_000);
             let retry = u32::try_from(retry_secs).unwrap_or(u32::MAX);
             return Err(retry.max(1));
         }
@@ -117,5 +118,17 @@ mod tests {
         assert!(rl.check("k1").is_err());
         std::thread::sleep(Duration::from_millis(80));
         assert!(rl.check("k1").is_ok(), "expired entries must drop out");
+    }
+
+    #[test]
+    fn check_rounds_retry_after_up_for_partial_seconds() {
+        let rl = RateLimiter::new(1, Duration::from_millis(1_500));
+        assert!(rl.check("k1").is_ok());
+
+        let retry = rl.check("k1").unwrap_err();
+        assert_eq!(
+            retry, 2,
+            "retry-after must not under-report remaining wait time"
+        );
     }
 }

@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
 
     let db_url = format!("sqlite://{}?mode=rwc", cfg.db.display());
     tracing::info!(db_url = %db_url, "connecting to sqlite");
-    let pool = store::connect(&db_url)
+    let pool = store::connect_with_options(&db_url, cfg.db_max_connections)
         .await
         .with_context(|| format!("store::connect {}", cfg.db.display()))?;
     tracing::info!("migrations applied");
@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
 
     let registry = Arc::new(SessionRegistry::new());
     let pairing = Arc::new(PairingService::new(pool.clone()));
+    let instance_id = uuid::Uuid::new_v4().to_string();
     // `cfg.validate()` already enforced presence + length above. Unwrap is
     // load-bearing here: a missing secret should never reach BackendState
     // construction, and panicking surfaces the bug loudly in dev runs that
@@ -99,6 +100,7 @@ async fn main() -> Result<()> {
         cfg.token_ttl(),
         jwt_secret,
         http::parse_cors_origins(&cfg.cors_origins),
+        instance_id.clone(),
     );
 
     let gc_task = spawn_token_gc(pool.clone());
@@ -107,7 +109,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("bind {}", cfg.listen))?;
     let local_addr = listener.local_addr().context("local_addr")?;
-    tracing::info!(addr = %local_addr, version = %state.version, "listening");
+    tracing::info!(addr = %local_addr, version = %state.version, instance_id = %instance_id, "listening");
 
     let router = http::router(state);
 

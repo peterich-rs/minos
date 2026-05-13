@@ -116,6 +116,19 @@ pub async fn list_expired_unresolved(
     rows.into_iter().map(decode_row).collect()
 }
 
+pub async fn next_unresolved_timeout_at_ms(
+    pool: &SqlitePool,
+) -> Result<Option<i64>, BackendError> {
+    sqlx::query_scalar(
+        "SELECT MIN(timeout_at_ms)
+           FROM pending_approvals
+          WHERE resolved_at_ms IS NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(store_err("pending_approvals::next_unresolved_timeout_at_ms"))
+}
+
 pub async fn list_unresolved_for_hosts(
     pool: &SqlitePool,
     host_device_ids: &[DeviceId],
@@ -256,5 +269,44 @@ mod tests {
         let row = get(&pool, "req-1").await.unwrap().unwrap();
         assert_eq!(row.resolution.as_deref(), Some("user_decision"));
         assert_eq!(row.resolved_at_ms, Some(T0 + 1));
+    }
+
+    #[tokio::test]
+    async fn next_unresolved_timeout_at_ms_returns_earliest_open_deadline() {
+        let pool = memory_pool().await;
+        let host = DeviceId::new();
+        insert_device(&pool, host, "mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+
+        insert(
+            &pool,
+            "req-late",
+            "thr-1",
+            "turn-1",
+            host,
+            "applyPatchApproval",
+            &serde_json::json!({}),
+            T0,
+            T0 + 5_000,
+        )
+        .await
+        .unwrap();
+        insert(
+            &pool,
+            "req-early",
+            "thr-1",
+            "turn-2",
+            host,
+            "applyPatchApproval",
+            &serde_json::json!({}),
+            T0,
+            T0 + 500,
+        )
+        .await
+        .unwrap();
+        assert!(resolve(&pool, "req-late", "timeout", T0 + 1).await.unwrap());
+
+        assert_eq!(next_unresolved_timeout_at_ms(&pool).await.unwrap(), Some(T0 + 500));
     }
 }

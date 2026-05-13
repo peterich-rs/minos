@@ -174,7 +174,7 @@ async fn auth_register_weak_password_returns_400() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["kind"], "weak_password");
+    assert_eq!(body["error"]["code"], "weak_password");
 }
 
 #[tokio::test]
@@ -198,7 +198,7 @@ async fn auth_register_duplicate_email_returns_409() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["kind"], "email_taken");
+    assert_eq!(body["error"]["code"], "email_taken");
 }
 
 #[tokio::test]
@@ -221,7 +221,7 @@ async fn auth_login_wrong_password_returns_401() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["kind"], "invalid_credentials");
+    assert_eq!(body["error"]["code"], "invalid_credentials");
 }
 
 #[tokio::test]
@@ -237,7 +237,7 @@ async fn auth_login_unknown_email_returns_401() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["kind"], "invalid_credentials");
+    assert_eq!(body["error"]["code"], "invalid_credentials");
 }
 
 #[tokio::test]
@@ -270,7 +270,7 @@ async fn auth_login_revokes_existing_refresh_tokens() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["kind"], "invalid_refresh");
+    assert_eq!(body["error"]["code"], "invalid_refresh");
 }
 
 #[tokio::test]
@@ -382,7 +382,7 @@ async fn auth_refresh_with_revoked_token_returns_401() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["kind"], "invalid_refresh");
+    assert_eq!(body["error"]["code"], "invalid_refresh");
 }
 
 #[tokio::test]
@@ -419,7 +419,7 @@ async fn auth_refresh_rotation_old_token_invalidated() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["kind"], "invalid_refresh");
+    assert_eq!(body["error"]["code"], "invalid_refresh");
 }
 
 #[tokio::test]
@@ -481,7 +481,7 @@ async fn auth_logout_revokes_only_current_refresh_token() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["kind"], "invalid_refresh");
+    assert_eq!(body["error"]["code"], "invalid_refresh");
 }
 
 #[tokio::test]
@@ -497,7 +497,7 @@ async fn auth_logout_without_bearer_returns_401() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["kind"], "unauthorized");
+    assert_eq!(body["error"]["code"], "unauthorized");
 }
 
 #[tokio::test]

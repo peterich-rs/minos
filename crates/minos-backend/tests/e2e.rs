@@ -91,6 +91,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
         auth_register_per_ip: minos_backend::http::default_register_per_ip(),
         auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
         cors_origins: None,
+        instance_id: "e2e-instance".to_string(),
         version: "e2e-test",
     };
     let app = router(state);

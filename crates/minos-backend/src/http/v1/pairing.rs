@@ -9,11 +9,11 @@ use minos_protocol::{
     Envelope, EventKind, PairConsumeRequest, PairResponse, PairingQrPayload,
     RequestPairingQrParams, RequestPairingQrResponse,
 };
-use serde::Serialize;
 
 use crate::auth::bearer;
 use crate::error::BackendError;
 use crate::http::auth;
+use crate::http::error_response::{err_json as err_body, ErrorEnvelope};
 use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
@@ -22,26 +22,6 @@ pub fn router() -> Router<BackendState> {
         .route("/pairing/consume", post(post_consume))
         .route("/pairing", delete(delete_pairing_legacy))
         .route("/pairings/:host_device_id", delete(delete_pair_for_host))
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ErrorEnvelope {
-    error: ErrorBody,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: String,
-}
-
-pub(crate) fn err_body(code: &'static str, message: impl Into<String>) -> Json<ErrorEnvelope> {
-    Json(ErrorEnvelope {
-        error: ErrorBody {
-            code,
-            message: message.into(),
-        },
-    })
 }
 
 async fn post_tokens(
@@ -184,6 +164,7 @@ async fn post_consume(
             err_body("internal", e.to_string()),
         ));
     }
+    crate::ingest::invalidate_peer_targets_for_host(issuer_id);
 
     // Phase 2 Task 2.3: copy the bearer's account onto BOTH device rows.
     // - iOS: re-write in case the prior account changed (login swap).
@@ -257,6 +238,7 @@ async fn post_consume(
                 &account_id,
             )
             .await;
+            crate::ingest::invalidate_peer_targets_for_host(issuer_id);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 err_body(
@@ -275,6 +257,7 @@ async fn post_consume(
         let _ =
             crate::store::account_host_pairings::delete_pair(&state.store, issuer_id, &account_id)
                 .await;
+        crate::ingest::invalidate_peer_targets_for_host(issuer_id);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             err_body("internal", "issuer is offline; pairing rolled back"),
@@ -331,6 +314,7 @@ async fn delete_pair_for_host(
             err_body("internal", e.to_string()),
         )
     })?;
+    crate::ingest::invalidate_peer_targets_for_host(host_id);
 
     if n == 0 {
         return Err((

@@ -109,6 +109,7 @@ fn seed_live_bound_session(
 
 fn spawn_approval_decision_responder(
     registry: Arc<minos_backend::session::SessionRegistry>,
+    store: sqlx::SqlitePool,
     host_device_id: DeviceId,
     mut host_rx: tokio::sync::mpsc::Receiver<Envelope>,
 ) -> tokio::task::JoinHandle<ApprovalDecisionRequest> {
@@ -124,18 +125,23 @@ fn spawn_approval_decision_responder(
         let request: ApprovalDecisionRequest = serde_json::from_value(payload["params"].clone())
             .expect("approval decision params decode");
 
-        registry
-            .route(
-                host_device_id,
-                from,
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": payload["id"].clone(),
-                    "result": null,
-                }),
-            )
-            .await
-            .expect("approval decision response routes back to requester");
+        let (host_session, _unused_rx) = SessionHandle::new(host_device_id, DeviceRole::AgentHost);
+        let handled = minos_backend::envelope::handle_forward(
+            &host_session,
+            registry.as_ref(),
+            &store,
+            from,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": payload["id"].clone(),
+                "result": null,
+            }),
+        )
+        .await;
+        assert!(
+            handled.is_none(),
+            "approval decision response should be consumed server-side"
+        );
         request
     })
 }
@@ -428,7 +434,12 @@ async fn approval_request_timeout_broadcasts_timeout_and_auto_rejects() {
     let mut mobile_rx =
         seed_live_bound_session(&state, ios_id, DeviceRole::MobileClient, &account_id);
     let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
-    let responder = spawn_approval_decision_responder(Arc::clone(&state.registry), mac_id, host_rx);
+    let responder = spawn_approval_decision_responder(
+        Arc::clone(&state.registry),
+        state.store.clone(),
+        mac_id,
+        host_rx,
+    );
 
     let ts_ms = chrono::Utc::now().timestamp_millis();
     minos_backend::ingest::dispatch(
@@ -535,7 +546,12 @@ async fn approval_decision_endpoint_forwards_to_host_and_resolves_row() {
     let state = backend_state().await;
     let (mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
     let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
-    let responder = spawn_approval_decision_responder(Arc::clone(&state.registry), mac_id, host_rx);
+    let responder = spawn_approval_decision_responder(
+        Arc::clone(&state.registry),
+        state.store.clone(),
+        mac_id,
+        host_rx,
+    );
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     pending_approvals::insert(
@@ -591,7 +607,12 @@ async fn disconnect_resolution_auto_rejects_pending_approval() {
     let state = backend_state().await;
     let (mac_id, _ios_id, _secret, account_id) = paired_pair(&state).await;
     let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
-    let responder = spawn_approval_decision_responder(Arc::clone(&state.registry), mac_id, host_rx);
+    let responder = spawn_approval_decision_responder(
+        Arc::clone(&state.registry),
+        state.store.clone(),
+        mac_id,
+        host_rx,
+    );
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     pending_approvals::insert(
@@ -628,4 +649,64 @@ async fn disconnect_resolution_auto_rejects_pending_approval() {
         .unwrap();
     assert_eq!(row.resolution.as_deref(), Some("disconnected"));
     assert!(row.resolved_at_ms.is_some());
+}
+
+#[tokio::test]
+async fn disconnect_resolution_skips_hosts_with_another_online_paired_account() {
+    let state = backend_state().await;
+    let (mac_id, _ios_a, _secret, account_a) =
+        paired_pair_with_account(&state, "threads-a@example.com").await;
+
+    let ios_b = DeviceId::new();
+    insert_device(&state.store, ios_b, "iPhone B", DeviceRole::MobileClient, 0)
+        .await
+        .unwrap();
+    let account_b =
+        minos_backend::store::accounts::create(&state.store, "threads-b@example.com", "phc")
+            .await
+            .unwrap();
+    minos_backend::store::devices::set_account_id(&state.store, &ios_b, &account_b.account_id)
+        .await
+        .unwrap();
+    account_host_pairings::insert_pair(&state.store, mac_id, &account_b.account_id, ios_b, 1)
+        .await
+        .unwrap();
+
+    let _online_mobile_b = seed_live_bound_session(
+        &state,
+        ios_b,
+        DeviceRole::MobileClient,
+        &account_b.account_id,
+    );
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    pending_approvals::insert(
+        &state.store,
+        "req-disconnect-shared-host",
+        "thr-disconnect-shared-host",
+        "turn-1",
+        mac_id,
+        "item/commandExecution/requestApproval",
+        &serde_json::json!({ "command": "echo still-online" }),
+        now_ms,
+        now_ms + 10_000,
+    )
+    .await
+    .unwrap();
+
+    state
+        .approval_relay
+        .resolve_disconnected_for_account(&account_a)
+        .await
+        .unwrap();
+
+    let row = pending_approvals::get(&state.store, "req-disconnect-shared-host")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        row.resolution.is_none(),
+        "pending approval must remain unresolved while another paired account stays online"
+    );
+    assert!(row.resolved_at_ms.is_none());
 }

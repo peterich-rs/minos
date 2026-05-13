@@ -43,9 +43,20 @@ pub fn status_for_code(code: &str) -> StatusCode {
     match code {
         "unauthorized" => StatusCode::UNAUTHORIZED,
         "not_found" | "thread_not_found" => StatusCode::NOT_FOUND,
+        "forbidden" => StatusCode::FORBIDDEN,
         "conflict" => StatusCode::CONFLICT,
         "bad_request" | "weak_password" => StatusCode::BAD_REQUEST,
         "rate_limited" => StatusCode::TOO_MANY_REQUESTS,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_for_code_maps_forbidden_to_403() {
+        assert_eq!(status_for_code("forbidden"), StatusCode::FORBIDDEN);
     }
 }

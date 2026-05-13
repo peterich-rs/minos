@@ -23,6 +23,10 @@
 pub mod history;
 pub mod translate;
 
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+use dashmap::DashMap;
 use minos_domain::AgentName;
 use minos_protocol::{Envelope, EventKind};
 use serde_json::Value;
@@ -33,6 +37,64 @@ use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
 use crate::session::SessionRegistry;
 use crate::store::{raw_events, threads};
+
+const PEER_TARGET_CACHE_TTL: Duration = Duration::from_secs(5);
+
+fn peer_target_cache(
+) -> &'static DashMap<minos_domain::DeviceId, (Vec<minos_domain::DeviceId>, Instant)> {
+    static CACHE: OnceLock<
+        DashMap<minos_domain::DeviceId, (Vec<minos_domain::DeviceId>, Instant)>,
+    > = OnceLock::new();
+    CACHE.get_or_init(DashMap::new)
+}
+
+pub fn invalidate_peer_targets_for_host(host_device_id: minos_domain::DeviceId) {
+    let _ = peer_target_cache().remove(&host_device_id);
+}
+
+pub async fn invalidate_peer_targets_for_account(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<(), BackendError> {
+    let pairs =
+        crate::store::account_host_pairings::list_hosts_for_account(pool, account_id).await?;
+    for pair in pairs {
+        invalidate_peer_targets_for_host(pair.host_device_id);
+    }
+    Ok(())
+}
+
+async fn peer_targets_for_host(
+    pool: &SqlitePool,
+    host_device_id: minos_domain::DeviceId,
+) -> Result<Vec<minos_domain::DeviceId>, BackendError> {
+    let now = Instant::now();
+    if let Some(entry) = peer_target_cache().get(&host_device_id) {
+        let (device_ids, cached_at) = entry.value();
+        if now.duration_since(*cached_at) < PEER_TARGET_CACHE_TTL {
+            return Ok(device_ids.clone());
+        }
+        drop(entry);
+        let _ = peer_target_cache().remove(&host_device_id);
+    }
+
+    let pairs =
+        crate::store::account_host_pairings::list_accounts_for_host(pool, host_device_id).await?;
+    let mut targets = Vec::new();
+    for pair in pairs {
+        let devices = crate::store::devices::list_by_account(pool, &pair.mobile_account_id).await?;
+        targets.extend(
+            devices
+                .into_iter()
+                .filter(|device| device.role.is_account_client())
+                .map(|device| device.device_id),
+        );
+    }
+    targets.sort_unstable_by_key(|device_id| device_id.to_string());
+    targets.dedup();
+    peer_target_cache().insert(host_device_id, (targets.clone(), now));
+    Ok(targets)
+}
 
 /// Process one `Envelope::Ingest` frame.
 #[allow(clippy::too_many_arguments)] // Single-site dispatcher; splitting obscures the 4-step pipeline.
@@ -341,69 +403,149 @@ async fn broadcast_to_peers_of(
     host_device_id: minos_domain::DeviceId,
     env: &Envelope,
 ) {
-    // Find every account paired to this Mac. If there are none, the Mac
-    // is unpaired — drop the event.
-    let pairs =
-        match crate::store::account_host_pairings::list_accounts_for_host(pool, host_device_id)
-            .await
-        {
-            Ok(v) if !v.is_empty() => v,
-            Ok(_) => {
-                tracing::debug!(
-                    target: "minos_backend::ingest",
-                    mac = %host_device_id,
-                    "no accounts paired; dropping ui event"
-                );
-                return;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "minos_backend::ingest",
-                    error = ?e,
-                    "failed to list accounts paired to mac"
-                );
-                return;
-            }
+    let targets = match peer_targets_for_host(pool, host_device_id).await {
+        Ok(v) if !v.is_empty() => v,
+        Ok(_) => {
+            tracing::debug!(
+                target: "minos_backend::ingest",
+                mac = %host_device_id,
+                "no accounts paired; dropping ui event"
+            );
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::ingest",
+                error = %error,
+                mac = %host_device_id,
+                "failed to resolve peer targets for host"
+            );
+            return;
+        }
+    };
+
+    for device_id in targets {
+        let Some(handle) = registry.get(device_id) else {
+            tracing::debug!(
+                target: "minos_backend::ingest",
+                peer = %device_id,
+                "peer not live; dropping ui event"
+            );
+            continue;
         };
 
-    for pair in pairs {
-        let devices =
-            match crate::store::devices::list_by_account(pool, &pair.mobile_account_id).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(
-                        target: "minos_backend::ingest",
-                        error = ?e,
-                        account = %pair.mobile_account_id,
-                        "failed to list devices for account"
-                    );
-                    continue;
-                }
-            };
-
-        for device in devices.iter().filter(|d| d.role.is_account_client()) {
-            let Some(handle) = registry.get(device.device_id) else {
-                tracing::debug!(
-                    target: "minos_backend::ingest",
-                    peer = %device.device_id,
-                    "peer not live; dropping ui event"
-                );
-                continue;
-            };
-
-            // Route through `try_send_current` so a reconnect race
-            // (peer reconnects between `get` and the send) cannot let a
-            // superseded socket consume the live UI event. The
-            // replacement session will catch up via list/read_thread on
-            // its own (re)attach.
-            if let Err(e) = registry.try_send_current(&handle, env.clone()) {
-                tracing::warn!(
-                    target: "minos_backend::ingest",
-                    peer = %device.device_id,
-                    error = ?e,
-                    "peer outbox full or superseded; dropping ui event"
-                );
-            }
+        // Route through `try_send_current` so a reconnect race
+        // (peer reconnects between `get` and the send) cannot let a
+        // superseded socket consume the live UI event. The
+        // replacement session will catch up via list/read_thread on
+        // its own (re)attach.
+        if let Err(e) = registry.try_send_current(&handle, env.clone()) {
+            crate::telemetry::increment_ingest_outbox_dropped();
+            tracing::warn!(
+                target: "minos_backend::ingest",
+                peer = %device_id,
+                error = ?e,
+                "peer outbox full or superseded; dropping ui event"
+            );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::account_host_pairings;
+    use crate::store::devices::{insert_device, set_account_id};
+    use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
+    use minos_domain::{DeviceId, DeviceRole};
+
+    #[tokio::test]
+    async fn peer_targets_cache_refreshes_after_explicit_invalidation() {
+        let pool = memory_pool().await;
+        let host = DeviceId::new();
+        insert_device(&pool, host, "mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+
+        let account_a = insert_account(&pool, "a@example.com").await;
+        let ios_a = insert_ios_device(&pool, &account_a).await;
+        account_host_pairings::insert_pair(&pool, host, &account_a, ios_a, T0)
+            .await
+            .unwrap();
+
+        let initial = peer_targets_for_host(&pool, host).await.unwrap();
+        assert_eq!(initial, vec![ios_a]);
+
+        let account_b = insert_account(&pool, "b@example.com").await;
+        let ios_b = insert_ios_device(&pool, &account_b).await;
+        account_host_pairings::insert_pair(&pool, host, &account_b, ios_b, T0 + 1)
+            .await
+            .unwrap();
+
+        let cached = peer_targets_for_host(&pool, host).await.unwrap();
+        assert_eq!(
+            cached,
+            vec![ios_a],
+            "cached peer targets should remain stable until invalidated"
+        );
+
+        invalidate_peer_targets_for_host(host);
+        let refreshed = peer_targets_for_host(&pool, host).await.unwrap();
+        assert_eq!(refreshed.len(), 2);
+        assert!(refreshed.contains(&ios_a));
+        assert!(refreshed.contains(&ios_b));
+    }
+
+    #[tokio::test]
+    async fn account_invalidation_refreshes_hosts_after_device_moves_accounts() {
+        let pool = memory_pool().await;
+        let host_a = DeviceId::new();
+        let host_b = DeviceId::new();
+        insert_device(&pool, host_a, "mac-a", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        insert_device(&pool, host_b, "mac-b", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+
+        let account_a = insert_account(&pool, "a@example.com").await;
+        let account_b = insert_account(&pool, "b@example.com").await;
+        let ios_a = insert_ios_device(&pool, &account_a).await;
+        let ios_b = insert_ios_device(&pool, &account_b).await;
+
+        account_host_pairings::insert_pair(&pool, host_a, &account_a, ios_a, T0)
+            .await
+            .unwrap();
+        account_host_pairings::insert_pair(&pool, host_b, &account_b, ios_b, T0 + 1)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            peer_targets_for_host(&pool, host_a).await.unwrap(),
+            vec![ios_a]
+        );
+        assert_eq!(
+            peer_targets_for_host(&pool, host_b).await.unwrap(),
+            vec![ios_b]
+        );
+
+        set_account_id(&pool, &ios_a, &account_b).await.unwrap();
+
+        invalidate_peer_targets_for_account(&pool, &account_a)
+            .await
+            .unwrap();
+        invalidate_peer_targets_for_account(&pool, &account_b)
+            .await
+            .unwrap();
+
+        assert!(peer_targets_for_host(&pool, host_a)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let refreshed_b = peer_targets_for_host(&pool, host_b).await.unwrap();
+        assert_eq!(refreshed_b.len(), 2);
+        assert!(refreshed_b.contains(&ios_a));
+        assert!(refreshed_b.contains(&ios_b));
     }
 }

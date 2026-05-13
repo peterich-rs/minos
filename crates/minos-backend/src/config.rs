@@ -26,6 +26,7 @@ use clap::Parser;
 
 /// Default pairing-token TTL (5 minutes) per plan §10.
 const DEFAULT_TOKEN_TTL_SECS: u64 = 300;
+const DEFAULT_DB_MAX_CONNECTIONS: u32 = 32;
 
 /// Minos backend: axum WebSocket hub with SQLite state.
 #[derive(Debug, Clone, Parser)]
@@ -45,6 +46,15 @@ pub struct Config {
     /// `create_if_missing(true)`.
     #[arg(long, env = "MINOS_BACKEND_DB", default_value = "./minos-backend.db")]
     pub db: PathBuf,
+
+    /// Maximum number of SQLite pool connections.
+    #[arg(
+        long,
+        env = "MINOS_BACKEND_DB_MAX_CONNECTIONS",
+        default_value_t = DEFAULT_DB_MAX_CONNECTIONS,
+        value_parser = clap::value_parser!(u32).range(1..),
+    )]
+    pub db_max_connections: u32,
 
     /// Directory for xlog files. Defaults to `~/Library/Logs/Minos/` on
     /// macOS and `$TMPDIR/minos` elsewhere (resolved at runtime; not shown
@@ -161,6 +171,7 @@ mod tests {
         for key in [
             "MINOS_BACKEND_LISTEN",
             "MINOS_BACKEND_DB",
+            "MINOS_BACKEND_DB_MAX_CONNECTIONS",
             "MINOS_BACKEND_LOG_DIR",
             "MINOS_BACKEND_TOKEN_TTL",
             "MINOS_JWT_SECRET",
@@ -191,6 +202,7 @@ mod tests {
             "default --listen must match plan §10"
         );
         assert_eq!(cfg.db, PathBuf::from("./minos-backend.db"));
+        assert_eq!(cfg.db_max_connections, 32);
         assert_eq!(cfg.log_level, "info");
         assert_eq!(cfg.token_ttl_secs, DEFAULT_TOKEN_TTL_SECS);
         assert!(!cfg.exit_after_migrate);
@@ -226,6 +238,8 @@ mod tests {
             "minos-backend",
             "--db",
             "/tmp/test.db",
+            "--db-max-connections",
+            "64",
             "--log-dir",
             "/tmp/logs",
             "--log-level",
@@ -233,6 +247,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cfg.db, PathBuf::from("/tmp/test.db"));
+        assert_eq!(cfg.db_max_connections, 64);
         assert_eq!(cfg.log_dir, Some(PathBuf::from("/tmp/logs")));
         assert_eq!(cfg.log_level, "debug");
     }
@@ -294,6 +309,15 @@ mod tests {
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         assert_eq!(cfg.token_ttl_secs, 600);
         assert_eq!(cfg.token_ttl(), Duration::from_mins(10));
+    }
+
+    #[test]
+    fn env_var_overrides_db_max_connections_default() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_BACKEND_DB_MAX_CONNECTIONS", "48");
+
+        let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
+        assert_eq!(cfg.db_max_connections, 48);
     }
 
     // ── JWT-secret validation ─────────────────────────────────────────

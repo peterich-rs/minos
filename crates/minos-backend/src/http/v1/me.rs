@@ -16,7 +16,7 @@ use minos_protocol::{HostPeerSummary, HostSummary, MeHostsResponse, MePeersRespo
 
 use crate::auth::bearer;
 use crate::http::auth;
-use crate::http::v1::pairing::{err_body, ErrorEnvelope};
+use crate::http::error_response::{err_json as err_body, ErrorEnvelope};
 use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
@@ -253,6 +253,7 @@ async fn delete_me_peer(
             err_body("internal", e.to_string()),
         )
     })?;
+    crate::ingest::invalidate_peer_targets_for_host(outcome.device_id);
 
     if let Some(host_handle) = state.registry.get(outcome.device_id) {
         let _ = state.registry.try_send_current(

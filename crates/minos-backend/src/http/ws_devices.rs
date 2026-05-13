@@ -61,6 +61,7 @@ use axum::{
 use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::{Envelope, EventKind};
 use serde::Deserialize;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use super::BackendState;
@@ -180,81 +181,85 @@ pub async fn upgrade(
     let store = state.store.clone();
     let translators = Arc::clone(&state.translators);
     let approval_relay = Arc::clone(&state.approval_relay);
-    Ok(ws.on_upgrade(move |mut socket| async move {
-        let revalidate = match &identity.auth {
-            UpgradeAuth::Headers {
-                requested_role,
-                device_secret,
-            } => {
-                revalidate_live_session_auth(
-                    &store,
-                    device_id,
-                    role,
-                    *requested_role,
-                    device_secret.as_deref(),
-                )
-                .await
+    let request_span = tracing::Span::current();
+    Ok(ws.on_upgrade(move |mut socket| {
+        async move {
+            let revalidate = match &identity.auth {
+                UpgradeAuth::Headers {
+                    requested_role,
+                    device_secret,
+                } => {
+                    revalidate_live_session_auth(
+                        &store,
+                        device_id,
+                        role,
+                        *requested_role,
+                        device_secret.as_deref(),
+                    )
+                    .await
+                }
+                UpgradeAuth::WsTicket { claims } => revalidate_ws_ticket_auth(&store, claims).await,
+            };
+            match revalidate {
+                Ok(()) => {}
+                Err(ActivationAuthError::Unauthorized(message)) => {
+                    tracing::info!(
+                        target: "minos_backend::http",
+                        device_id = %device_id,
+                        reason = %message,
+                        "device auth changed before websocket activation; closing 4401"
+                    );
+                    close_socket(&mut socket, CLOSE_CODE_AUTH_FAILURE, "auth_revoked").await;
+                    return;
+                }
+                Err(ActivationAuthError::Internal(message)) => {
+                    tracing::warn!(
+                        target: "minos_backend::http",
+                        device_id = %device_id,
+                        error = %message,
+                        "failed to revalidate websocket auth during activation"
+                    );
+                    close_socket(
+                        &mut socket,
+                        CLOSE_CODE_INTERNAL_ERROR,
+                        "activation_revalidate_failed",
+                    )
+                    .await;
+                    return;
+                }
             }
-            UpgradeAuth::WsTicket { claims } => revalidate_ws_ticket_auth(&store, claims).await,
-        };
-        match revalidate {
-            Ok(()) => {}
-            Err(ActivationAuthError::Unauthorized(message)) => {
-                tracing::info!(
-                    target: "minos_backend::http",
-                    device_id = %device_id,
-                    reason = %message,
-                    "device auth changed before websocket activation; closing 4401"
-                );
-                close_socket(&mut socket, CLOSE_CODE_AUTH_FAILURE, "auth_revoked").await;
-                return;
+
+            activate_live_session(registry.as_ref(), &handle);
+
+            // Phase D / spec §9: emit `IngestCheckpoint` as the next frame
+            // after the initial `Unpaired` for agent-hosts so the daemon can
+            // reconcile its local DB watermark against what the backend has
+            // durably persisted. Mobile clients ingest no events and skip
+            // this frame.
+            if role == DeviceRole::AgentHost {
+                push_ingest_checkpoint(&store, &handle, device_id).await;
             }
-            Err(ActivationAuthError::Internal(message)) => {
+
+            if let Err(e) = run_session(
+                socket,
+                handle,
+                outbox_rx,
+                registry,
+                store,
+                translators,
+                approval_relay,
+            )
+            .await
+            {
                 tracing::warn!(
                     target: "minos_backend::http",
+                    error = %e,
                     device_id = %device_id,
-                    error = %message,
-                    "failed to revalidate websocket auth during activation"
+                    "run_session exited with error"
                 );
-                close_socket(
-                    &mut socket,
-                    CLOSE_CODE_INTERNAL_ERROR,
-                    "activation_revalidate_failed",
-                )
-                .await;
-                return;
             }
         }
-
-        activate_live_session(registry.as_ref(), &handle);
-
-        // Phase D / spec §9: emit `IngestCheckpoint` as the next frame
-        // after the initial `Unpaired` for agent-hosts so the daemon can
-        // reconcile its local DB watermark against what the backend has
-        // durably persisted. Mobile clients ingest no events and skip
-        // this frame.
-        if role == DeviceRole::AgentHost {
-            push_ingest_checkpoint(&store, &handle, device_id).await;
-        }
-
-        if let Err(e) = run_session(
-            socket,
-            handle,
-            outbox_rx,
-            registry,
-            store,
-            translators,
-            approval_relay,
-        )
-        .await
-        {
-            tracing::warn!(
-                target: "minos_backend::http",
-                error = %e,
-                device_id = %device_id,
-                "run_session exited with error"
-            );
-        }
+        .instrument(request_span)
     }))
 }
 

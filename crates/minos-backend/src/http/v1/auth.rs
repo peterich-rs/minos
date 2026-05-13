@@ -25,6 +25,7 @@ use crate::auth::rate_limit::RateLimiter;
 use crate::auth::{bearer, jwt, passwords};
 use crate::error::BackendError;
 use crate::http::auth::authenticate;
+use crate::http::error_response::{err_json, ErrorEnvelope};
 use crate::http::BackendState;
 use crate::store::{accounts, refresh_tokens};
 use minos_protocol::WsTicketResponse;
@@ -107,13 +108,30 @@ pub struct RefreshResp {
     pub expires_in: i64,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ErrorBody {
-    pub kind: &'static str,
+fn err(code: &'static str) -> Json<ErrorEnvelope> {
+    err_json(code, code)
 }
 
-const fn err(kind: &'static str) -> Json<ErrorBody> {
-    Json(ErrorBody { kind })
+async fn bind_device_to_account(
+    state: &BackendState,
+    device_id: minos_domain::DeviceId,
+    account_id: &str,
+) -> Result<(), BackendError> {
+    let previous_account_id = crate::store::devices::get_device(&state.store, device_id)
+        .await?
+        .and_then(|device| device.account_id);
+
+    crate::store::devices::set_account_id(&state.store, &device_id, account_id).await?;
+
+    if let Some(previous_account_id) = previous_account_id.as_deref() {
+        crate::ingest::invalidate_peer_targets_for_account(&state.store, previous_account_id)
+            .await?;
+    }
+    if previous_account_id.as_deref() != Some(account_id) {
+        crate::ingest::invalidate_peer_targets_for_account(&state.store, account_id).await?;
+    }
+
+    Ok(())
 }
 
 /// Pull the client IP from `X-Forwarded-For`. We trust the upstream
@@ -181,7 +199,7 @@ pub async fn post_register(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
     };
 
-    if crate::store::devices::set_account_id(&state.store, &device_id, &account.account_id)
+    if bind_device_to_account(&state, device_id, &account.account_id)
         .await
         .is_err()
     {
@@ -275,7 +293,7 @@ pub async fn post_login(
     {
         return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
     }
-    if crate::store::devices::set_account_id(&state.store, &device_id, &account.account_id)
+    if bind_device_to_account(&state, device_id, &account.account_id)
         .await
         .is_err()
     {
@@ -431,12 +449,7 @@ pub async fn post_ws_ticket(State(state): State<BackendState>, headers: HeaderMa
     let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
-    let _ = crate::store::devices::set_account_id(
-        &state.store,
-        &outcome.device_id,
-        &bearer_outcome.account_id,
-    )
-    .await;
+    let _ = bind_device_to_account(&state, outcome.device_id, &bearer_outcome.account_id).await;
 
     let Ok(ticket) = jwt::sign_ws_ticket(
         state.jwt_secret.as_bytes(),

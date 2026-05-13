@@ -5,25 +5,31 @@ use minos_domain::DeviceId;
 use minos_protocol::{ApprovalDecisionRequest, Envelope, EventKind};
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
+use tokio::sync::Notify;
 
 use crate::error::BackendError;
 use crate::forward_rpc;
 use crate::session::SessionRegistry;
 use crate::store::{account_host_pairings, pending_approvals};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
 const EXPIRED_BATCH_SIZE: u32 = 32;
+const POLLER_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 pub struct ApprovalRelay {
     store: SqlitePool,
     registry: Arc<SessionRegistry>,
+    notify: Notify,
 }
 
 impl ApprovalRelay {
     pub fn new(store: SqlitePool, registry: Arc<SessionRegistry>) -> Arc<Self> {
-        let relay = Arc::new(Self { store, registry });
+        let relay = Arc::new(Self {
+            store,
+            registry,
+            notify: Notify::new(),
+        });
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let weak = Arc::downgrade(&relay);
             runtime.spawn(async move {
@@ -58,7 +64,9 @@ impl ApprovalRelay {
             created_at_ms,
             timeout_at_ms,
         )
-        .await
+        .await?;
+        self.notify.notify_one();
+        Ok(())
     }
 
     pub async fn handle_host_timeout(
@@ -114,12 +122,37 @@ impl ApprovalRelay {
             return Ok(());
         }
 
-        let hosts = account_host_pairings::list_hosts_for_account(&self.store, account_id)
+        let mut hosts = account_host_pairings::list_hosts_for_account(&self.store, account_id)
             .await?
             .into_iter()
             .map(|row| row.host_device_id)
             .collect::<Vec<_>>();
-        let rows = pending_approvals::list_unresolved_for_hosts(&self.store, &hosts).await?;
+        hosts.sort_unstable_by_key(|host| host.to_string());
+        hosts.dedup();
+
+        let mut fully_disconnected_hosts = Vec::with_capacity(hosts.len());
+        for host_device_id in hosts {
+            let still_online =
+                account_host_pairings::list_accounts_for_host(&self.store, host_device_id)
+                    .await?
+                    .into_iter()
+                    .any(|row| {
+                        self.registry
+                            .mobile_account_session_count(&row.mobile_account_id)
+                            > 0
+                    });
+            if !still_online {
+                fully_disconnected_hosts.push(host_device_id);
+            }
+        }
+
+        if fully_disconnected_hosts.is_empty() {
+            return Ok(());
+        }
+
+        let rows =
+            pending_approvals::list_unresolved_for_hosts(&self.store, &fully_disconnected_hosts)
+                .await?;
         for row in rows {
             self.resolve_automatically(row, "disconnected").await;
         }
@@ -234,20 +267,55 @@ impl ApprovalRelay {
 }
 
 async fn timeout_poller(relay: Weak<ApprovalRelay>) {
-    let mut interval = tokio::time::interval(POLL_INTERVAL);
-    interval.tick().await;
-
     loop {
-        interval.tick().await;
         let Some(relay) = relay.upgrade() else {
             break;
         };
-        if let Err(error) = relay.poll_expired().await {
-            tracing::warn!(
-                target: "minos_backend::approval_relay",
-                error = %error,
-                "approval timeout poller iteration failed"
-            );
+        let next_timeout_at_ms =
+            match pending_approvals::next_unresolved_timeout_at_ms(&relay.store).await {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::approval_relay",
+                        error = %error,
+                        "approval timeout poller failed to query next deadline"
+                    );
+                    tokio::time::sleep(POLLER_RETRY_DELAY).await;
+                    continue;
+                }
+            };
+
+        let Some(timeout_at_ms) = next_timeout_at_ms else {
+            relay.notify.notified().await;
+            continue;
+        };
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if timeout_at_ms <= now_ms {
+            if let Err(error) = relay.poll_expired().await {
+                tracing::warn!(
+                    target: "minos_backend::approval_relay",
+                    error = %error,
+                    "approval timeout poller iteration failed"
+                );
+            }
+            continue;
+        }
+
+        let sleep_for = Duration::from_millis(
+            u64::try_from(timeout_at_ms.saturating_sub(now_ms)).unwrap_or(u64::MAX),
+        );
+        tokio::select! {
+            _ = tokio::time::sleep(sleep_for) => {
+                if let Err(error) = relay.poll_expired().await {
+                    tracing::warn!(
+                        target: "minos_backend::approval_relay",
+                        error = %error,
+                        "approval timeout poller iteration failed"
+                    );
+                }
+            }
+            _ = relay.notify.notified() => {}
         }
     }
 }

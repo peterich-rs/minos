@@ -23,6 +23,16 @@ use uuid::Uuid;
 
 use crate::error::BackendError;
 
+type DeviceRowTuple = (
+    String,
+    String,
+    String,
+    Option<String>,
+    i64,
+    i64,
+    Option<String>,
+);
+
 /// A single row of the `devices` table after decoding into domain types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRow {
@@ -72,17 +82,17 @@ where
     let id_str = id.to_string();
     let role_str = role.to_string();
 
-    sqlx::query!(
+    sqlx::query(
         r#"
         INSERT INTO devices (device_id, display_name, role, secret_hash, created_at, last_seen_at)
         VALUES (?, ?, ?, NULL, ?, ?)
         "#,
-        id_str,
-        name,
-        role_str,
-        now,
-        now,
     )
+    .bind(&id_str)
+    .bind(name)
+    .bind(&role_str)
+    .bind(now)
+    .bind(now)
     .execute(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -114,17 +124,15 @@ where
 {
     let id_str = id.to_string();
 
-    let result = sqlx::query!(
-        r#"UPDATE devices SET secret_hash = ? WHERE device_id = ?"#,
-        hash,
-        id_str,
-    )
-    .execute(executor)
-    .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "upsert_secret_hash".to_string(),
-        message: e.to_string(),
-    })?;
+    let result = sqlx::query(r#"UPDATE devices SET secret_hash = ? WHERE device_id = ?"#)
+        .bind(hash)
+        .bind(&id_str)
+        .execute(executor)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: "upsert_secret_hash".to_string(),
+            message: e.to_string(),
+        })?;
 
     if result.rows_affected() == 0 {
         return Err(BackendError::DeviceNotFound { device_id: id_str });
@@ -226,14 +234,14 @@ where
 {
     let id_str = id.to_string();
 
-    let row = sqlx::query!(
+    let row = sqlx::query_as::<_, DeviceRowTuple>(
         r#"
         SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id
         FROM devices
         WHERE device_id = ?
         "#,
-        id_str,
     )
+    .bind(&id_str)
     .fetch_optional(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -241,31 +249,11 @@ where
         message: e.to_string(),
     })?;
 
-    let Some(r) = row else {
+    let Some(row) = row else {
         return Ok(None);
     };
 
-    let device_id =
-        Uuid::parse_str(&r.device_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "device_id".to_string(),
-                message: e.to_string(),
-            })?;
-    let role = DeviceRole::from_str(&r.role).map_err(|e| BackendError::StoreDecode {
-        column: "role".to_string(),
-        message: e,
-    })?;
-
-    Ok(Some(DeviceRow {
-        device_id,
-        display_name: r.display_name,
-        role,
-        secret_hash: r.secret_hash,
-        created_at: r.created_at,
-        last_seen_at: r.last_seen_at,
-        account_id: r.account_id,
-    }))
+    decode_device_row(row).map(Some)
 }
 
 /// List all device rows owned by `account_id`.
@@ -279,44 +267,22 @@ pub async fn list_by_account(
     pool: &SqlitePool,
     account_id: &str,
 ) -> Result<Vec<DeviceRow>, BackendError> {
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as::<_, DeviceRowTuple>(
         r#"
         SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id
         FROM devices
         WHERE account_id = ?
         ORDER BY created_at ASC
         "#,
-        account_id,
     )
+    .bind(account_id)
     .fetch_all(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "list_by_account".to_string(),
         message: e.to_string(),
     })?;
-    rows.into_iter()
-        .map(|r| {
-            let device_id = Uuid::parse_str(&r.device_id).map(DeviceId).map_err(|e| {
-                BackendError::StoreDecode {
-                    column: "devices.device_id".to_string(),
-                    message: e.to_string(),
-                }
-            })?;
-            let role = DeviceRole::from_str(&r.role).map_err(|e| BackendError::StoreDecode {
-                column: "devices.role".to_string(),
-                message: e,
-            })?;
-            Ok(DeviceRow {
-                device_id,
-                display_name: r.display_name,
-                role,
-                secret_hash: r.secret_hash,
-                created_at: r.created_at,
-                last_seen_at: r.last_seen_at,
-                account_id: r.account_id,
-            })
-        })
-        .collect()
+    rows.into_iter().map(decode_device_row).collect()
 }
 
 /// Return the argon2id `secret_hash` for a device, or `None` if the device
@@ -332,22 +298,46 @@ pub async fn get_secret_hash(
 ) -> Result<Option<String>, BackendError> {
     let id_str = id.to_string();
 
-    // query_scalar! returns Option<Option<String>> for a nullable column on
+    // query_scalar returns Option<Option<String>> for a nullable column on
     // fetch_optional: outer Option = row-present, inner = NULL-vs-set. We
     // flatten since we don't distinguish "no row" from "row with NULL hash"
     // at this API surface.
-    let hash: Option<Option<String>> = sqlx::query_scalar!(
-        r#"SELECT secret_hash FROM devices WHERE device_id = ?"#,
-        id_str,
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "get_secret_hash".to_string(),
-        message: e.to_string(),
-    })?;
+    let hash: Option<Option<String>> =
+        sqlx::query_scalar(r#"SELECT secret_hash FROM devices WHERE device_id = ?"#)
+            .bind(&id_str)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| BackendError::StoreQuery {
+                operation: "get_secret_hash".to_string(),
+                message: e.to_string(),
+            })?;
 
     Ok(hash.flatten())
+}
+
+fn decode_device_row(row: DeviceRowTuple) -> Result<DeviceRow, BackendError> {
+    let (device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id) = row;
+    let device_id =
+        Uuid::parse_str(&device_id)
+            .map(DeviceId)
+            .map_err(|e| BackendError::StoreDecode {
+                column: "devices.device_id".to_string(),
+                message: e.to_string(),
+            })?;
+    let role = DeviceRole::from_str(&role).map_err(|e| BackendError::StoreDecode {
+        column: "devices.role".to_string(),
+        message: e,
+    })?;
+
+    Ok(DeviceRow {
+        device_id,
+        display_name,
+        role,
+        secret_hash,
+        created_at,
+        last_seen_at,
+        account_id,
+    })
 }
 
 #[cfg(test)]
@@ -495,11 +485,11 @@ mod tests {
             .unwrap();
 
         let id_str = id.to_string();
-        let raw_role: String =
-            sqlx::query_scalar!("SELECT role FROM devices WHERE device_id = ?", id_str)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let raw_role: String = sqlx::query_scalar("SELECT role FROM devices WHERE device_id = ?")
+            .bind(&id_str)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(raw_role, "browser-admin");
     }
 

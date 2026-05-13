@@ -32,9 +32,8 @@ use minos_protocol::{
     SearchUsersResponse, SendAgentMessageRequest, SendChatMessageRequest, SenderType,
     SetDisplayNameRequest, SetMinosIdRequest, UserSummary,
 };
-use serde::Serialize;
-
 use crate::auth::bearer;
+use crate::http::error_response::{err_response, ErrorBody, ErrorEnvelope};
 use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
@@ -103,37 +102,8 @@ pub fn router() -> Router<BackendState> {
         )
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorEnvelope {
-    error: ErrorBody,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: String,
-}
-
 fn err(code: &'static str, message: impl Into<String>) -> (StatusCode, Json<ErrorEnvelope>) {
-    (
-        status_for(code),
-        Json(ErrorEnvelope {
-            error: ErrorBody {
-                code,
-                message: message.into(),
-            },
-        }),
-    )
-}
-
-fn status_for(code: &str) -> StatusCode {
-    match code {
-        "unauthorized" => StatusCode::UNAUTHORIZED,
-        "not_found" => StatusCode::NOT_FOUND,
-        "conflict" => StatusCode::CONFLICT,
-        "bad_request" => StatusCode::BAD_REQUEST,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
+    err_response(code, message)
 }
 
 fn validate_minos_id(minos_id: &str) -> bool {

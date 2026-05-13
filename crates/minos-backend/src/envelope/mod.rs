@@ -432,6 +432,9 @@ pub async fn handle_forward(
 ) -> Option<Envelope> {
     if session.role == minos_domain::DeviceRole::AgentHost {
         if let Some(reply_id) = json_rpc_id(&payload) {
+            if crate::forward_rpc::resolve_pending_forward_rpc(session.device_id, reply_id, payload.clone()) {
+                return None;
+            }
             // Try the reply-target mapping first; if found, prefer it
             // over the wire-stamped target so legacy reply-only flows
             // still work and so daemons that don't yet stamp

@@ -13,10 +13,11 @@ use minos_protocol::{
     ApprovalDecisionRequest, GetThreadLastSeqParams, GetThreadLastSeqResponse, ListThreadsParams,
     ListThreadsResponse, ReadThreadParams, ReadThreadResponse,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::auth::bearer;
 use crate::http::auth;
+use crate::http::error_response::{err_json as err, ErrorEnvelope};
 use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
@@ -31,26 +32,6 @@ pub fn router() -> Router<BackendState> {
             post(get_thread_last_seq_path),
         )
         .route("/threads/last-seq", post(get_thread_last_seq_query))
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorEnvelope {
-    error: ErrorBody,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: &'static str,
-    message: String,
-}
-
-fn err(code: &'static str, message: impl Into<String>) -> Json<ErrorEnvelope> {
-    Json(ErrorEnvelope {
-        error: ErrorBody {
-            code,
-            message: message.into(),
-        },
-    })
 }
 
 /// Resolve the caller's authenticated session. Returns the caller's

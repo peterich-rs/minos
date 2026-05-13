@@ -5,7 +5,7 @@
 //! (step 12) will do, but with a focused coverage of the handshake path
 //! added in step 9.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use minos_backend::{
     auth::jwt,
@@ -48,6 +48,7 @@ async fn spawn_relay() -> (String, tokio::task::JoinHandle<()>, sqlx::SqlitePool
         auth_register_per_ip: minos_backend::http::default_register_per_ip(),
         auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
         cors_origins: None,
+        instance_id: "test-instance".to_string(),
         version: "test",
     };
     let app = router(state);
@@ -84,6 +85,33 @@ async fn health_returns_ok_with_name_and_version() {
         "body missing version: {:?}",
         resp.body
     );
+}
+
+#[tokio::test]
+async fn health_includes_instance_id_and_request_id_header() {
+    let (base, _task, _pool) = spawn_relay().await;
+    let resp = reqwest_style_get(&format!("{base}/health")).await;
+    assert_eq!(resp.status, 200);
+
+    let body: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+    assert_eq!(body["instance_id"], "test-instance");
+
+    let request_id = resp.headers.get("x-request-id").cloned().unwrap_or_default();
+    assert!(
+        !request_id.is_empty(),
+        "health response should propagate x-request-id"
+    );
+}
+
+#[tokio::test]
+async fn metrics_endpoint_exposes_prometheus_text() {
+    let (base, _task, _pool) = spawn_relay().await;
+    let _ = reqwest_style_get(&format!("{base}/health")).await;
+
+    let resp = reqwest_style_get(&format!("{base}/metrics")).await;
+    assert_eq!(resp.status, 200);
+    assert!(resp.body.contains("minos_backend_session_registry_size"));
+    assert!(resp.body.contains("minos_backend_http_request_duration_seconds"));
 }
 
 // ── /devices: missing X-Device-Id → 401 ─────────────────────────────────
@@ -346,6 +374,7 @@ async fn devices_missing_secret_on_authed_device_rejects_with_401() {
 /// fresh TCP connection.
 struct Response {
     status: u16,
+    headers: HashMap<String, String>,
     body: String,
 }
 
@@ -372,10 +401,21 @@ async fn reqwest_style_get(url: &str) -> Response {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
+    let mut headers = HashMap::new();
+    for line in lines.by_ref() {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+
     // Body after first blank line.
     let body = text.split_once("\r\n\r\n").map_or("", |(_, b)| b);
     Response {
         status,
+        headers,
         body: body.to_string(),
     }
 }

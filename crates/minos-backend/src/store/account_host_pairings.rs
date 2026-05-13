@@ -19,6 +19,8 @@ use uuid::Uuid;
 
 use crate::error::BackendError;
 
+type PairRowTuple = (String, String, String, String, i64);
+
 /// A single row of the `account_host_pairings` table after decoding the
 /// stringly-typed columns back into the domain `DeviceId` newtypes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,19 +52,19 @@ pub async fn insert_pair(
     let pair_id = Uuid::new_v4().to_string();
     let host_s = host_device_id.to_string();
     let via_s = paired_via_device_id.to_string();
-    let res = sqlx::query!(
+    let res = sqlx::query(
         r#"
         INSERT INTO account_host_pairings
             (pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms)
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (host_device_id, mobile_account_id) DO NOTHING
         "#,
-        pair_id,
-        host_s,
-        mobile_account_id,
-        via_s,
-        now_ms,
     )
+    .bind(&pair_id)
+    .bind(&host_s)
+    .bind(mobile_account_id)
+    .bind(&via_s)
+    .bind(now_ms)
     .execute(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -78,35 +80,22 @@ pub async fn list_hosts_for_account(
     pool: &SqlitePool,
     mobile_account_id: &str,
 ) -> Result<Vec<PairRow>, BackendError> {
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as::<_, PairRowTuple>(
         r#"
         SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
         FROM account_host_pairings
         WHERE mobile_account_id = ?
         ORDER BY paired_at_ms DESC
         "#,
-        mobile_account_id,
     )
+    .bind(mobile_account_id)
     .fetch_all(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "account_host_pairings::list_hosts_for_account".into(),
         message: e.to_string(),
     })?;
-    rows.into_iter()
-        .map(|r| {
-            Ok(PairRow {
-                pair_id: r.pair_id,
-                host_device_id: parse_device_id(&r.host_device_id, "host_device_id")?,
-                mobile_account_id: r.mobile_account_id,
-                paired_via_device_id: parse_device_id(
-                    &r.paired_via_device_id,
-                    "paired_via_device_id",
-                )?,
-                paired_at_ms: r.paired_at_ms,
-            })
-        })
-        .collect()
+    rows.into_iter().map(decode_pair_row).collect()
 }
 
 /// Return every account paired to the given Mac, ordered most-recent
@@ -116,35 +105,22 @@ pub async fn list_accounts_for_host(
     host_device_id: DeviceId,
 ) -> Result<Vec<PairRow>, BackendError> {
     let host_s = host_device_id.to_string();
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as::<_, PairRowTuple>(
         r#"
         SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
         FROM account_host_pairings
         WHERE host_device_id = ?
         ORDER BY paired_at_ms DESC
         "#,
-        host_s,
     )
+    .bind(&host_s)
     .fetch_all(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "account_host_pairings::list_accounts_for_host".into(),
         message: e.to_string(),
     })?;
-    rows.into_iter()
-        .map(|r| {
-            Ok(PairRow {
-                pair_id: r.pair_id,
-                host_device_id: parse_device_id(&r.host_device_id, "host_device_id")?,
-                mobile_account_id: r.mobile_account_id,
-                paired_via_device_id: parse_device_id(
-                    &r.paired_via_device_id,
-                    "paired_via_device_id",
-                )?,
-                paired_at_ms: r.paired_at_ms,
-            })
-        })
-        .collect()
+    rows.into_iter().map(decode_pair_row).collect()
 }
 
 /// Does the (host, account) pair exist?
@@ -154,20 +130,16 @@ pub async fn exists(
     mobile_account_id: &str,
 ) -> Result<bool, BackendError> {
     let host_s = host_device_id.to_string();
-    // `SELECT 1` would type-infer to `()` under the `sqlx::query!` macro
-    // because sqlite reports `INTEGER` literals as untyped. Selecting
-    // `pair_id` instead picks up the column's `TEXT NOT NULL` annotation
-    // and gives the macro an `Option<String>` row to work with.
-    let row = sqlx::query!(
+    let row = sqlx::query_scalar::<_, String>(
         r#"
         SELECT pair_id
         FROM account_host_pairings
         WHERE host_device_id = ? AND mobile_account_id = ?
         LIMIT 1
         "#,
-        host_s,
-        mobile_account_id,
     )
+    .bind(&host_s)
+    .bind(mobile_account_id)
     .fetch_optional(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -184,14 +156,14 @@ pub async fn delete_pair(
     mobile_account_id: &str,
 ) -> Result<u64, BackendError> {
     let host_s = host_device_id.to_string();
-    let res = sqlx::query!(
+    let res = sqlx::query(
         r#"
         DELETE FROM account_host_pairings
         WHERE host_device_id = ? AND mobile_account_id = ?
         "#,
-        host_s,
-        mobile_account_id,
     )
+    .bind(&host_s)
+    .bind(mobile_account_id)
     .execute(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -199,6 +171,17 @@ pub async fn delete_pair(
         message: e.to_string(),
     })?;
     Ok(res.rows_affected())
+}
+
+fn decode_pair_row(row: PairRowTuple) -> Result<PairRow, BackendError> {
+    let (pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms) = row;
+    Ok(PairRow {
+        pair_id,
+        host_device_id: parse_device_id(&host_device_id, "host_device_id")?,
+        mobile_account_id,
+        paired_via_device_id: parse_device_id(&paired_via_device_id, "paired_via_device_id")?,
+        paired_at_ms,
+    })
 }
 
 fn parse_device_id(raw: &str, column: &str) -> Result<DeviceId, BackendError> {

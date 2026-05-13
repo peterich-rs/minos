@@ -43,3 +43,36 @@ async fn connect_creates_tables_and_migrates() {
         "idx_account_host_pairings_account missing after migrate"
     );
 }
+
+#[tokio::test]
+async fn connect_enables_sqlite_write_contention_pragmas() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join("pragmas.db");
+    let url = format!("sqlite://{}", db.display());
+
+    let pool = minos_backend::store::connect(&url).await.unwrap();
+
+    let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+
+    let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(busy_timeout, 5_000);
+
+    let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(synchronous, 1, "NORMAL synchronous expected");
+
+    let temp_store: i64 = sqlx::query_scalar("PRAGMA temp_store")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(temp_store, 2, "MEMORY temp_store expected");
+}

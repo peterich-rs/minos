@@ -6,10 +6,15 @@
 //!   Replaces the legacy device-keyed `pairings` module.
 //! - [`tokens`] — one-shot pairing tokens with atomic consume + GC.
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::time::Duration;
+
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
 
 use crate::error::BackendError;
+
+const DEFAULT_MAX_CONNECTIONS: u32 = 32;
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub mod account_host_pairings;
 pub mod accounts;
@@ -31,6 +36,14 @@ pub use tokens::{consume_token, gc_expired, issue_token, ConsumedToken};
 /// or `sqlite::memory:` for tests. Missing files are created on connect
 /// via `SqliteConnectOptions::create_if_missing(true)`.
 pub async fn connect(db_url: &str) -> Result<SqlitePool, BackendError> {
+    connect_with_options(db_url, DEFAULT_MAX_CONNECTIONS).await
+}
+
+/// Open the SQLite pool with explicit pool sizing and production-tuned pragmas.
+pub async fn connect_with_options(
+    db_url: &str,
+    max_connections: u32,
+) -> Result<SqlitePool, BackendError> {
     let opts = db_url
         .parse::<SqliteConnectOptions>()
         .map_err(|e| BackendError::StoreConnect {
@@ -38,10 +51,14 @@ pub async fn connect(db_url: &str) -> Result<SqlitePool, BackendError> {
             message: e.to_string(),
         })?
         .create_if_missing(true)
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .busy_timeout(SQLITE_BUSY_TIMEOUT)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .pragma("temp_store", "MEMORY");
 
     let pool = SqlitePoolOptions::new()
-        .max_connections(8)
+        .max_connections(max_connections)
         .connect_with(opts)
         .await
         .map_err(|e| BackendError::StoreConnect {
@@ -70,7 +87,10 @@ pub async fn connect(db_url: &str) -> Result<SqlitePool, BackendError> {
 /// duplicating the boilerplate.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support {
-    use super::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    use super::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+        SQLITE_BUSY_TIMEOUT,
+    };
     use minos_domain::{DeviceId, DeviceRole};
 
     /// Fixed unix-epoch ms used as `now` in tests.
@@ -82,7 +102,13 @@ pub mod test_support {
     /// The pool is capped at 1 so all queries see a consistent store.
     pub async fn memory_pool() -> SqlitePool {
         let opts: SqliteConnectOptions = "sqlite::memory:".parse().unwrap();
-        let opts = opts.create_if_missing(true).foreign_keys(true);
+        let opts = opts
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .busy_timeout(SQLITE_BUSY_TIMEOUT)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .pragma("temp_store", "MEMORY");
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(opts)
