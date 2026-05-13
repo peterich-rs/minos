@@ -20,6 +20,7 @@ pub struct AgentRuntimeConfig {
     pub ws_port_range: std::ops::RangeInclusive<u16>,
     pub event_buffer: usize,
     pub handshake_call_timeout: Duration,
+    pub approval_request_timeout: Duration,
     pub subprocess_env: Arc<std::collections::HashMap<String, String>>,
     /// Test-only seam: when `Some`, the manager skips port-probing + codex
     /// spawn + workspace creation and connects directly to this URL.
@@ -29,6 +30,7 @@ pub struct AgentRuntimeConfig {
 }
 
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_APPROVAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_EVENT_BUFFER: usize = 256;
 
 impl AgentRuntimeConfig {
@@ -43,6 +45,7 @@ impl AgentRuntimeConfig {
             ws_port_range: 7879..=7883,
             event_buffer: DEFAULT_EVENT_BUFFER,
             handshake_call_timeout: DEFAULT_HANDSHAKE_CALL_TIMEOUT,
+            approval_request_timeout: DEFAULT_APPROVAL_REQUEST_TIMEOUT,
             subprocess_env: Arc::new(std::collections::HashMap::new()),
             #[cfg(feature = "test-support")]
             test_ws_url: None,

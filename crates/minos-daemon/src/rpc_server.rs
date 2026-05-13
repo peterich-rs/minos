@@ -18,12 +18,11 @@ use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::envelope::Envelope;
 use minos_protocol::{
-    AgentDispatchRequest, CloseThreadRequest, GetThreadParams, GetThreadResponse,
-    HealthResponse, InterruptThreadRequest, ListClisResponse, ListHostSkillsRequest,
-    ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse, MinosRpcServer, PairRequest,
-    PairResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
-    WriteHostSkillConfigRequest,
-    WriteHostSkillConfigResponse,
+    AgentDispatchRequest, ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams,
+    GetThreadResponse, HealthResponse, InterruptThreadRequest, ListClisResponse,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
+    MinosRpcServer, PairRequest, PairResponse, SendUserMessageRequest, StartAgentRequest,
+    StartAgentResponse, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -89,6 +88,13 @@ impl MinosRpcServer for RpcServerImpl {
         req: SendUserMessageRequest,
     ) -> jsonrpsee::core::RpcResult<()> {
         self.agent.send_user_message(req).await.map_err(rpc_err)
+    }
+
+    async fn approval_decision(
+        &self,
+        req: ApprovalDecisionRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.resolve_approval(req).await.map_err(rpc_err)
     }
 
     async fn interrupt_thread(
@@ -194,6 +200,13 @@ pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Va
                 Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
             };
             into_jsonrpc(id, server.send_user_message(req).await)
+        }
+        "minos_approval_decision" => {
+            let req: ApprovalDecisionRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.approval_decision(req).await)
         }
         "minos_agent_dispatch" => {
             let req: AgentDispatchRequest = match parse_params(&params) {
@@ -375,7 +388,7 @@ pub fn wrap_response_envelope(response: Value, target_device_id: DeviceId) -> En
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minos_agent_runtime::test_support::FakeCodexBackend;
+    use minos_agent_runtime::test_support::{FakeCodexBackend, FakeCodexServer, Step};
     use minos_agent_runtime::{AgentManager, AgentRuntimeConfig, InstanceCaps};
     use minos_cli_detect::CommandOutcome;
     use std::time::Duration;
@@ -421,6 +434,39 @@ mod tests {
                 store,
                 out_tx,
             )),
+        })
+    }
+
+    fn fake_thread_start_reply(thread_id: &str) -> serde_json::Value {
+        json!({
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "cwd": "/tmp",
+            "instructionSources": [],
+            "model": "fake",
+            "modelProvider": "fake",
+            "sandbox": { "type": "dangerFullAccess" },
+            "thread": {
+                "id": thread_id,
+                "cliVersion": "0.0.0-fake",
+                "createdAt": 0,
+                "cwd": "/tmp",
+                "ephemeral": true,
+                "modelProvider": "fake",
+                "preview": "",
+                "source": "appServer",
+                "status": { "type": "idle" },
+                "turns": [],
+                "updatedAt": 0
+            }
+        })
+    }
+
+    fn command_approval_params(thread_id: &str, turn_id: &str) -> serde_json::Value {
+        json!({
+            "itemId": "item-1",
+            "threadId": thread_id,
+            "turnId": turn_id,
         })
     }
 
@@ -533,6 +579,104 @@ mod tests {
             .as_str()
             .expect("session_id should be present");
         assert!(!session_id.is_empty());
+
+        fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn invoke_forwarded_approval_decision_replies_to_codex() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-rpc-approval";
+        let turn_id = "turn-rpc-approval";
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: fake_thread_start_reply(thread_id),
+            },
+            Step::EmitServerRequest {
+                method: "item/commandExecution/requestApproval".into(),
+                params: command_approval_params(thread_id, turn_id),
+            },
+            Step::ExpectResponse {
+                result: json!({ "decision": "decline" }),
+            },
+            Step::Sleep { ms: 20 },
+        ];
+        let (fake, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        cfg.approval_request_timeout = Duration::from_secs(5);
+        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("test.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let (out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
+        let writer = Arc::new(crate::store::event_writer::EventWriter::spawn(
+            store.clone(),
+            out_tx,
+        ));
+        let server = Arc::new(RpcServerImpl {
+            started_at: Instant::now(),
+            runner: Arc::new(NoopRunner),
+            agent: Arc::new(AgentGlue::wire_with(
+                manager,
+                writer,
+                store,
+                tmp.path().to_path_buf(),
+            )),
+        });
+        let mut ingest_rx = server.agent.ingest_stream();
+
+        server
+            .agent
+            .start_agent(StartAgentRequest {
+                agent: minos_domain::AgentName::Codex,
+                workspace: "/w-rpc-approval".into(),
+                mode: None,
+            })
+            .await
+            .unwrap();
+
+        let approval_request = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ingest = ingest_rx.recv().await.expect("ingest stream should stay open");
+                if ingest
+                    .payload
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("approval/request")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("approval/request ingest should arrive");
+        let request_id = approval_request.payload["params"]["request_id"]
+            .as_str()
+            .expect("approval/request ingest should carry request_id");
+
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "minos_approval_decision",
+            "params": {
+                "request_id": request_id,
+                "thread_id": thread_id,
+                "decision": {
+                    "decision": "decline"
+                }
+            },
+        });
+        let resp = invoke_forwarded(req, &server).await;
+
+        assert_eq!(resp["id"], 12);
+        assert_eq!(resp["result"], Value::Null);
 
         fake.stop().await;
     }

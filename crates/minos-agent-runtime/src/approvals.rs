@@ -1,11 +1,9 @@
-//! Auto-reject builder for codex `ServerRequest` approval prompts.
+//! Approval helpers for codex `ServerRequest` prompts.
 //!
-//! codex is started with `approval_policy=never`, so any approval server
-//! request that still lands on our pump is unexpected. Rather than crash, we
-//! reply with the schema-correct typed reject (`decline` / `denied` /
-//! empty-grant per variant), and forward the original payload as a synthetic
-//! `server_request/<name>` `RawIngest` (unchanged from before — see
-//! `runtime.rs::event_pump_loop`).
+//! The runtime forwards approval-shaped server requests to the backend/mobile
+//! path and keeps the original typed request around so it can either validate
+//! an explicit user decision or synthesize the schema-correct timeout reject
+//! (`decline` / `denied` / empty-grant per variant).
 //!
 //! This module is `pub(crate)` — it is exhaustively dispatched against the
 //! typed `ServerRequest` enum from `minos-codex-protocol`. New schema variants
@@ -17,6 +15,19 @@ use minos_codex_protocol::{
     FileChangeApprovalDecision, FileChangeRequestApprovalResponse, GrantedPermissionProfile,
     PermissionGrantScope, PermissionsRequestApprovalResponse, ReviewDecision, ServerRequest,
 };
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
+pub(crate) fn is_approval_request(req: &ServerRequest) -> bool {
+    matches!(
+        req,
+        ServerRequest::ApplyPatchApproval(_)
+            | ServerRequest::ExecCommandApproval(_)
+            | ServerRequest::CommandExecutionRequestApproval(_)
+            | ServerRequest::FileChangeRequestApproval(_)
+            | ServerRequest::PermissionsRequestApproval(_)
+    )
+}
 
 /// Build the typed reply payload to auto-reject an approval `ServerRequest`.
 ///
@@ -64,6 +75,48 @@ pub(crate) fn auto_reject(req: &ServerRequest) -> Option<serde_json::Value> {
         | ServerRequest::DynamicToolCall(_) => return None,
     };
     Some(value.expect("typed approval response serialisation is infallible"))
+}
+
+pub(crate) fn validate_decision(
+    req: &ServerRequest,
+    decision: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    match req {
+        ServerRequest::ApplyPatchApproval(_) => {
+            validate_typed::<ApplyPatchApprovalResponse>(decision, "applyPatchApproval")
+        }
+        ServerRequest::ExecCommandApproval(_) => {
+            validate_typed::<ExecCommandApprovalResponse>(decision, "execCommandApproval")
+        }
+        ServerRequest::CommandExecutionRequestApproval(_) => validate_typed::<
+            CommandExecutionRequestApprovalResponse,
+        >(decision, "item/commandExecution/requestApproval"),
+        ServerRequest::FileChangeRequestApproval(_) => {
+            validate_typed::<FileChangeRequestApprovalResponse>(
+                decision,
+                "item/fileChange/requestApproval",
+            )
+        }
+        ServerRequest::PermissionsRequestApproval(_) => validate_typed::<
+            PermissionsRequestApprovalResponse,
+        >(decision, "item/permissions/requestApproval"),
+        ServerRequest::ToolRequestUserInput(_)
+        | ServerRequest::McpServerElicitationRequest(_)
+        | ServerRequest::ChatgptAuthTokensRefresh(_)
+        | ServerRequest::DynamicToolCall(_) => anyhow::bail!(
+            "server request does not accept an approval decision",
+        ),
+    }
+}
+
+fn validate_typed<T>(decision: &serde_json::Value, method: &str) -> anyhow::Result<serde_json::Value>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let typed: T = serde_json::from_value(decision.clone())
+        .map_err(|error| anyhow::anyhow!("invalid decision for {method}: {error}"))?;
+    serde_json::to_value(typed)
+        .map_err(|error| anyhow::anyhow!("failed to serialize decision for {method}: {error}"))
 }
 
 #[cfg(test)]
@@ -182,5 +235,12 @@ mod tests {
             auto_reject(&req).is_none(),
             "non-approval requests must not auto-reject",
         );
+    }
+
+    #[test]
+    fn validate_decision_rejects_wrong_shape() {
+        let req = ServerRequest::CommandExecutionRequestApproval(dummy_command_exec_params());
+        let err = validate_decision(&req, &json!({ "permissions": {} })).unwrap_err();
+        assert!(err.to_string().contains("invalid decision"));
     }
 }

@@ -9,12 +9,13 @@ use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::MinosError;
 use minos_protocol::{
     AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
-    CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams, GetThreadResponse,
-    HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
-    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
-    PauseReason as ProtoPauseReason, ReadThreadResponse, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest,
+    GetThreadParams, GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
+    InterruptThreadRequest, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
+    ListThreadsResponse, PauseReason as ProtoPauseReason, ReadThreadResponse,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    ThreadState as ProtoThreadState, ThreadSummary, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{
     translate_claude, translate_codex, translate_gemini, CodexTranslatorState, ThreadEndReason,
@@ -163,6 +164,16 @@ impl AgentGlue {
     pub async fn send_user_message(&self, req: SendUserMessageRequest) -> Result<(), MinosError> {
         self.manager
             .send_user_message(&req.session_id, req.text)
+            .await
+            .map_err(map_anyhow)
+    }
+
+    pub async fn resolve_approval(
+        &self,
+        req: ApprovalDecisionRequest,
+    ) -> Result<(), MinosError> {
+        self.manager
+            .resolve_approval(&req.request_id, &req.thread_id, req.decision)
             .await
             .map_err(map_anyhow)
     }

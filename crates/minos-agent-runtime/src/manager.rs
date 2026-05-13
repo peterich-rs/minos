@@ -10,17 +10,18 @@ use crate::process::CodexProcess;
 use crate::state_machine::{PauseReason, ThreadState};
 use crate::thread_handle::ThreadHandle;
 use crate::{AgentKind, AgentRuntimeConfig, RawIngest};
+use dashmap::DashMap;
 use minos_codex_protocol::{
     ClientInfo, InitializeCapabilities, InitializeParams, InitializeResponse,
-    InitializedNotification, SkillsConfigWriteResponse, SkillsListResponse, ThreadStartParams,
-    ThreadStartResponse,
+    InitializedNotification, ServerRequest, SkillsConfigWriteResponse, SkillsListResponse,
+    ThreadStartParams, ThreadStartResponse,
 };
 use minos_domain::AgentName;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch, Mutex};
 use tracing::{info, warn};
 use url::Url;
@@ -30,6 +31,17 @@ pub struct InstanceCaps {
     pub max_instances: usize,
     pub idle_timeout: std::time::Duration,
 }
+
+#[derive(Clone, Debug)]
+pub(crate) struct PendingApproval {
+    pub thread_id: String,
+    pub codex_request_id: Value,
+    pub request: ServerRequest,
+    pub client: Arc<CodexClient>,
+    pub created_at: Instant,
+}
+
+pub(crate) type PendingApprovals = Arc<DashMap<String, PendingApproval>>;
 
 impl Default for InstanceCaps {
     fn default() -> Self {
@@ -45,6 +57,7 @@ pub struct AgentManager {
     pub caps: InstanceCaps,
     pub(crate) instances: Arc<Mutex<HashMap<PathBuf, Arc<AppServerInstance>>>>,
     pub(crate) threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    pub(crate) pending_approvals: PendingApprovals,
     pub(crate) events_tx: broadcast::Sender<RawIngest>,
     pub(crate) manager_tx: broadcast::Sender<ManagerEvent>,
 }
@@ -58,6 +71,7 @@ impl AgentManager {
             caps,
             instances: Arc::new(Mutex::new(HashMap::new())),
             threads: Arc::new(Mutex::new(HashMap::new())),
+            pending_approvals: Arc::new(DashMap::new()),
             events_tx,
             manager_tx,
         };
@@ -192,11 +206,13 @@ impl AgentManager {
         workspace: PathBuf,
         session_id: Option<String>,
         text: String,
-        _policies: Option<SessionPolicies>,
+        policies: Option<SessionPolicies>,
     ) -> anyhow::Result<DispatchOutcome> {
         match session_id {
             None => {
-                let outcome = self.start_agent(agent, workspace).await?;
+                let outcome = self
+                    .start_agent_with_policies(agent, workspace, policies)
+                    .await?;
                 self.send_user_message(&outcome.thread_id, text).await?;
                 Ok(DispatchOutcome {
                     session_id: outcome.thread_id,
@@ -232,8 +248,17 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
     ) -> anyhow::Result<StartAgentOutcome> {
+        self.start_agent_with_policies(agent, workspace, None).await
+    }
+
+    pub async fn start_agent_with_policies(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        policies: Option<SessionPolicies>,
+    ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
-        let instance = self.ensure_instance(&canon).await?;
+        let instance = self.ensure_instance(&canon, policies.as_ref()).await?;
 
         // Allocate a fresh thread on the codex app-server. The
         // `thread/started` notification arrives later via the event pump and
@@ -281,7 +306,11 @@ impl AgentManager {
         })
     }
 
-    async fn ensure_instance(&self, workspace: &Path) -> anyhow::Result<Arc<AppServerInstance>> {
+    async fn ensure_instance(
+        &self,
+        workspace: &Path,
+        policies: Option<&SessionPolicies>,
+    ) -> anyhow::Result<Arc<AppServerInstance>> {
         let mut guard = self.instances.lock().await;
         if let Some(existing) = guard.get(workspace) {
             return Ok(existing.clone());
@@ -289,13 +318,17 @@ impl AgentManager {
         if guard.len() >= self.caps.max_instances {
             self.lru_evict(&mut guard).await?;
         }
-        let inst = self.spawn_instance(workspace).await?;
+        let inst = self.spawn_instance(workspace, policies).await?;
         guard.insert(workspace.to_path_buf(), inst.clone());
         Ok(inst)
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn spawn_instance(&self, workspace: &Path) -> anyhow::Result<Arc<AppServerInstance>> {
+    async fn spawn_instance(
+        &self,
+        workspace: &Path,
+        policies: Option<&SessionPolicies>,
+    ) -> anyhow::Result<Arc<AppServerInstance>> {
         let workspace_buf = workspace.to_path_buf();
         let workspace_display = workspace_buf.display().to_string();
 
@@ -323,8 +356,10 @@ impl AgentManager {
                 pump_client,
                 pump_events,
                 pump_threads,
+                self.pending_approvals.clone(),
                 self.manager_tx.clone(),
                 pump_workspace,
+                self.config.approval_request_timeout,
                 pump_crash,
             ));
 
@@ -362,23 +397,12 @@ impl AgentManager {
             .clone()
             .unwrap_or_else(|| PathBuf::from(AgentName::Codex.bin_name()));
 
-        let sandbox_arg = format!(
-            "sandbox_permissions=['disk-full-read-access','disk-write-folder={workspace_display}']"
-        );
         let listen_arg = format!("ws://127.0.0.1:{port}");
-        let args: Vec<&str> = vec![
-            "app-server",
-            "--listen",
-            &listen_arg,
-            "-c",
-            "approval_policy=never",
-            "-c",
-            &sandbox_arg,
-            "-c",
-            "shell_environment_policy.inherit=all",
-        ];
+        let spawn_policies = resolve_session_policies(policies, &self.config.subprocess_env);
+        let args = build_codex_spawn_args(&listen_arg, &workspace_display, &spawn_policies);
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
         let env = self.config.subprocess_env.clone();
-        let mut process = CodexProcess::spawn(&bin, &args, &env)
+        let mut process = CodexProcess::spawn(&bin, &arg_refs, &env)
             .map_err(|e| anyhow::anyhow!("codex spawn failed: {e}"))?;
         process.stderr_drain();
         info!(
@@ -446,8 +470,10 @@ impl AgentManager {
             pump_client,
             pump_events,
             pump_threads,
+            self.pending_approvals.clone(),
             self.manager_tx.clone(),
             pump_workspace,
+            self.config.approval_request_timeout,
             pump_crash,
         ));
 
@@ -714,7 +740,7 @@ impl AgentManager {
         let workspace = handle.workspace.clone();
         let codex_session_id = handle.codex_session_id.clone();
 
-        let inst = self.ensure_instance(&workspace).await?;
+        let inst = self.ensure_instance(&workspace, None).await?;
         if let Some(sid) = codex_session_id {
             inst.add_thread(thread_id.to_string()).await;
             inst.start_thread_resume(thread_id, &sid).await?;
@@ -786,7 +812,7 @@ impl AgentManager {
         force_reload: bool,
     ) -> anyhow::Result<SkillsListResponse> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or(workspace);
-        let inst = self.ensure_instance(&canon).await?;
+        let inst = self.ensure_instance(&canon, None).await?;
         inst.touch().await;
         inst.list_host_skills(&canon, force_reload).await
     }
@@ -798,7 +824,7 @@ impl AgentManager {
         enabled: bool,
     ) -> anyhow::Result<SkillsConfigWriteResponse> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or(workspace);
-        let inst = self.ensure_instance(&canon).await?;
+        let inst = self.ensure_instance(&canon, None).await?;
         inst.touch().await;
         inst.write_host_skill_config(&path, enabled).await
     }
@@ -826,6 +852,38 @@ impl AgentManager {
             reason: crate::state_machine::CloseReason::UserClose,
         });
         Ok(())
+    }
+
+    pub async fn resolve_approval(
+        &self,
+        request_id: &str,
+        thread_id: &str,
+        decision: Value,
+    ) -> anyhow::Result<()> {
+        let Some(pending) = self
+            .pending_approvals
+            .get(request_id)
+            .map(|entry| entry.value().clone())
+        else {
+            return Ok(());
+        };
+
+        if pending.thread_id != thread_id {
+            anyhow::bail!(
+                "approval request thread mismatch: expected {}, got {thread_id}",
+                pending.thread_id,
+            );
+        }
+
+        let reply = crate::approvals::validate_decision(&pending.request, &decision)?;
+        let Some((_, pending)) = self.pending_approvals.remove(request_id) else {
+            return Ok(());
+        };
+        pending
+            .client
+            .reply(pending.codex_request_id, reply)
+            .await
+            .map_err(|error| anyhow::anyhow!("approval reply failed: {error}"))
     }
 
     /// Shut every codex instance down with a polite SIGTERM to its process
@@ -968,6 +1026,302 @@ fn current_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+const VALID_APPROVAL_POLICIES: &[&str] = &[
+    "never",
+    "unless-allow-listed",
+    "on-failure",
+    "always",
+];
+const VALID_SANDBOX_POLICIES: &[&str] = &["none", "read-only", "full-access"];
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ResolvedSessionPolicies {
+    approval_policy: Option<String>,
+    sandbox_policy: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct CodexConfigPolicies {
+    #[serde(default)]
+    approval_policy: Option<String>,
+    #[serde(default)]
+    sandbox_policy: Option<String>,
+}
+
+fn env_value(env: &HashMap<String, String>, key: &str) -> Option<String> {
+    env.get(key)
+        .cloned()
+        .or_else(|| std::env::var(key).ok())
+        .filter(|value| !value.is_empty())
+}
+
+fn codex_config_path(env: &HashMap<String, String>) -> Option<PathBuf> {
+    if let Some(codex_home) = env_value(env, "CODEX_HOME") {
+        return Some(PathBuf::from(codex_home).join("config.toml"));
+    }
+    if let Some(home) = env_value(env, "HOME").or_else(|| env_value(env, "USERPROFILE")) {
+        return Some(PathBuf::from(home).join(".codex").join("config.toml"));
+    }
+    let home_drive = env_value(env, "HOMEDRIVE");
+    let home_path = env_value(env, "HOMEPATH");
+    if let (Some(home_drive), Some(home_path)) = (home_drive, home_path) {
+        let mut home = PathBuf::from(home_drive);
+        home.push(home_path);
+        return Some(home.join(".codex").join("config.toml"));
+    }
+    None
+}
+
+fn validate_policy(
+    value: Option<&str>,
+    allowed: &[&str],
+    policy_name: &str,
+    source: &str,
+) -> Option<String> {
+    let value = value?;
+    if allowed.contains(&value) {
+        Some(value.to_string())
+    } else {
+        warn!(
+            target: "minos_agent_runtime::manager",
+            policy_name,
+            policy_value = value,
+            source,
+            "ignoring invalid policy value",
+        );
+        None
+    }
+}
+
+fn load_codex_config_policies(env: &HashMap<String, String>) -> ResolvedSessionPolicies {
+    let Some(path) = codex_config_path(env) else {
+        return ResolvedSessionPolicies::default();
+    };
+    if !path.is_file() {
+        return ResolvedSessionPolicies::default();
+    }
+
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            warn!(
+                target: "minos_agent_runtime::manager",
+                error = %error,
+                path = %path.display(),
+                "failed to read codex config.toml; ignoring policy defaults",
+            );
+            return ResolvedSessionPolicies::default();
+        }
+    };
+
+    let parsed: CodexConfigPolicies = match toml::from_str(&contents) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            warn!(
+                target: "minos_agent_runtime::manager",
+                error = %error,
+                path = %path.display(),
+                "failed to parse codex config.toml; ignoring policy defaults",
+            );
+            return ResolvedSessionPolicies::default();
+        }
+    };
+
+    let source = format!("config.toml ({})", path.display());
+    ResolvedSessionPolicies {
+        approval_policy: validate_policy(
+            parsed.approval_policy.as_deref(),
+            VALID_APPROVAL_POLICIES,
+            "approval_policy",
+            &source,
+        ),
+        sandbox_policy: validate_policy(
+            parsed.sandbox_policy.as_deref(),
+            VALID_SANDBOX_POLICIES,
+            "sandbox_policy",
+            &source,
+        ),
+    }
+}
+
+fn resolve_session_policies(
+    overrides: Option<&SessionPolicies>,
+    env: &HashMap<String, String>,
+) -> ResolvedSessionPolicies {
+    let defaults = load_codex_config_policies(env);
+    let Some(overrides) = overrides else {
+        return defaults;
+    };
+
+    ResolvedSessionPolicies {
+        approval_policy: validate_policy(
+            overrides.approval_policy.as_deref(),
+            VALID_APPROVAL_POLICIES,
+            "approval_policy",
+            "session override",
+        )
+        .or(defaults.approval_policy),
+        sandbox_policy: validate_policy(
+            overrides.sandbox_policy.as_deref(),
+            VALID_SANDBOX_POLICIES,
+            "sandbox_policy",
+            "session override",
+        )
+        .or(defaults.sandbox_policy),
+    }
+}
+
+fn build_codex_spawn_args(
+    listen_arg: &str,
+    workspace_display: &str,
+    policies: &ResolvedSessionPolicies,
+) -> Vec<String> {
+    let mut args = vec![
+        "app-server".to_string(),
+        "--listen".to_string(),
+        listen_arg.to_string(),
+    ];
+
+    if let Some(approval_policy) = &policies.approval_policy {
+        args.push("-c".to_string());
+        args.push(format!("approval_policy={approval_policy}"));
+    }
+    if let Some(sandbox_policy) = &policies.sandbox_policy {
+        args.push("-c".to_string());
+        args.push(format!("sandbox_policy={sandbox_policy}"));
+    }
+
+    let sandbox_arg = format!(
+        "sandbox_permissions=['disk-full-read-access','disk-write-folder={workspace_display}']"
+    );
+    args.push("-c".to_string());
+    args.push(sandbox_arg);
+    args.push("-c".to_string());
+    args.push("shell_environment_policy.inherit=all".to_string());
+    args
+}
+
+fn jsonrpc_id_key(id: &Value) -> String {
+    match id {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn request_thread_id(params: &Value) -> Option<String> {
+    params
+        .get("threadId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn request_turn_id(params: &Value) -> String {
+    params
+        .get("turnId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn broadcast_ingest(events_tx: &broadcast::Sender<RawIngest>, ingest: RawIngest) {
+    if let Err(error) = events_tx.send(ingest) {
+        tracing::debug!(
+            target: "minos_agent_runtime::manager",
+            error = %error,
+            "events_tx broadcast send failed (no subscribers)",
+        );
+    }
+}
+
+fn approval_request_ingest(
+    agent: AgentName,
+    thread_id: String,
+    request_id: String,
+    turn_id: String,
+    method: String,
+    params: Value,
+    timeout: Duration,
+) -> RawIngest {
+    let payload_thread_id = thread_id.clone();
+    RawIngest {
+        agent,
+        thread_id,
+        payload: serde_json::json!({
+            "method": "approval/request",
+            "params": {
+                "request_id": request_id,
+                "thread_id": payload_thread_id,
+                "turn_id": turn_id,
+                "method": method,
+                "params": params,
+                "timeout_ms": u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+            }
+        }),
+        ts_ms: current_unix_ms(),
+    }
+}
+
+fn approval_timeout_ingest(agent: AgentName, thread_id: String, request_id: String) -> RawIngest {
+    let payload_thread_id = thread_id.clone();
+    RawIngest {
+        agent,
+        thread_id,
+        payload: serde_json::json!({
+            "method": "approval/timeout",
+            "params": {
+                "thread_id": payload_thread_id,
+                "request_id": request_id,
+                "reason": "timeout",
+            }
+        }),
+        ts_ms: current_unix_ms(),
+    }
+}
+
+fn spawn_approval_timeout(
+    pending_approvals: PendingApprovals,
+    events_tx: broadcast::Sender<RawIngest>,
+    timeout: Duration,
+    request_id: String,
+    thread_id: String,
+    agent: AgentName,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(timeout).await;
+        let Some((_, pending)) = pending_approvals.remove(&request_id) else {
+            return;
+        };
+
+        let elapsed_ms = pending.created_at.elapsed().as_millis();
+        if let Some(reply) = crate::approvals::auto_reject(&pending.request) {
+            if let Err(error) = pending.client.reply(pending.codex_request_id, reply).await {
+                warn!(
+                    target: "minos_agent_runtime::manager",
+                    error = %error,
+                    request_id,
+                    thread_id,
+                    elapsed_ms,
+                    "approval timeout reply failed",
+                );
+            }
+        } else {
+            warn!(
+                target: "minos_agent_runtime::manager",
+                request_id,
+                thread_id,
+                elapsed_ms,
+                "approval timeout fired for non-approval request",
+            );
+        }
+
+        broadcast_ingest(
+            &events_tx,
+            approval_timeout_ingest(agent, thread_id, request_id),
+        );
+    });
+}
+
 /// Long-running event-pump task per instance: drains every inbound frame from
 /// the codex WS and forwards `Notification` payloads as `RawIngest` records
 /// keyed by the notification's `params.threadId`.
@@ -976,8 +1330,10 @@ async fn event_pump_loop(
     client: Arc<CodexClient>,
     events_tx: broadcast::Sender<RawIngest>,
     threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    pending_approvals: PendingApprovals,
     manager_tx: broadcast::Sender<ManagerEvent>,
     _workspace: PathBuf,
+    approval_request_timeout: Duration,
     crash_tx: tokio::sync::mpsc::Sender<()>,
 ) {
     while let Some(inbound) = client.next_inbound().await {
@@ -1041,30 +1397,97 @@ async fn event_pump_loop(
                     payload,
                     ts_ms: current_unix_ms(),
                 };
-                if let Err(e) = events_tx.send(ingest) {
-                    tracing::debug!(
-                        target: "minos_agent_runtime::manager",
-                        error = %e,
-                        "events_tx broadcast send failed (no subscribers)",
-                    );
-                }
+                broadcast_ingest(&events_tx, ingest);
             }
             Inbound::ServerRequest { id, method, params } => {
-                // Best-effort approval auto-reject: re-use the existing approval
-                // surface; unknown server requests are warn-logged and forwarded
-                // as a synthetic notification so ingest subscribers see them.
                 let envelope = serde_json::json!({ "method": method, "params": params });
                 match serde_json::from_value::<minos_codex_protocol::ServerRequest>(envelope) {
-                    Ok(req) => {
-                        if let Some(reply) = crate::approvals::auto_reject(&req) {
-                            if let Err(e) = client.reply(id.clone(), reply).await {
-                                warn!(
-                                    target: "minos_agent_runtime::manager",
-                                    error = %e,
-                                    method = %method,
-                                    "auto-reject reply failed",
-                                );
+                    Ok(req) if crate::approvals::is_approval_request(&req) => {
+                        let Some(thread_id) = request_thread_id(&params) else {
+                            warn!(
+                                target: "minos_agent_runtime::manager",
+                                method = %method,
+                                "approval request missing threadId; falling back to immediate reject",
+                            );
+                            if let Some(reply) = crate::approvals::auto_reject(&req) {
+                                if let Err(error) = client.reply(id.clone(), reply).await {
+                                    warn!(
+                                        target: "minos_agent_runtime::manager",
+                                        error = %error,
+                                        method = %method,
+                                        "fallback approval reject reply failed",
+                                    );
+                                }
                             }
+                            continue;
+                        };
+
+                        let agent = threads
+                            .lock()
+                            .await
+                            .get(&thread_id)
+                            .map_or(AgentName::Codex, |h| h.agent);
+                        let request_id = jsonrpc_id_key(&id);
+                        let turn_id = request_turn_id(&params);
+
+                        pending_approvals.insert(
+                            request_id.clone(),
+                            PendingApproval {
+                                thread_id: thread_id.clone(),
+                                codex_request_id: id.clone(),
+                                request: req,
+                                client: client.clone(),
+                                created_at: Instant::now(),
+                            },
+                        );
+
+                        broadcast_ingest(
+                            &events_tx,
+                            approval_request_ingest(
+                                agent,
+                                thread_id.clone(),
+                                request_id.clone(),
+                                turn_id,
+                                method.clone(),
+                                params.clone(),
+                                approval_request_timeout,
+                            ),
+                        );
+                        spawn_approval_timeout(
+                            pending_approvals.clone(),
+                            events_tx.clone(),
+                            approval_request_timeout,
+                            request_id,
+                            thread_id,
+                            agent,
+                        );
+                    }
+                    Ok(_req) => {
+                        warn!(
+                            target: "minos_agent_runtime::manager",
+                            method = %method,
+                            "non-approval server request received; forwarding as synthetic notification",
+                        );
+                        if let Some(thread_id) = request_thread_id(&params) {
+                            let agent = threads
+                                .lock()
+                                .await
+                                .get(&thread_id)
+                                .map_or(AgentName::Codex, |h| h.agent);
+                            let synthetic_method = format!("server_request/{method}");
+                            let payload = serde_json::json!({
+                                "method": synthetic_method,
+                                "params": params,
+                            });
+                            broadcast_ingest(
+                                &events_tx,
+                                RawIngest {
+                                    agent,
+                                    thread_id,
+                                    payload,
+                                    ts_ms: current_unix_ms(),
+                                },
+                            );
                         }
                     }
                     Err(e) => {
@@ -1074,27 +1497,28 @@ async fn event_pump_loop(
                             error = %e,
                             "unknown server request method; not replying",
                         );
+                        if let Some(thread_id) = request_thread_id(&params) {
+                            let agent = threads
+                                .lock()
+                                .await
+                                .get(&thread_id)
+                                .map_or(AgentName::Codex, |h| h.agent);
+                            let synthetic_method = format!("server_request/{method}");
+                            let payload = serde_json::json!({
+                                "method": synthetic_method,
+                                "params": params,
+                            });
+                            broadcast_ingest(
+                                &events_tx,
+                                RawIngest {
+                                    agent,
+                                    thread_id,
+                                    payload,
+                                    ts_ms: current_unix_ms(),
+                                },
+                            );
+                        }
                     }
-                }
-                let thread_id = params
-                    .get("threadId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                if let Some(thread_id) = thread_id {
-                    let agent = threads
-                        .lock()
-                        .await
-                        .get(&thread_id)
-                        .map_or(AgentName::Codex, |h| h.agent);
-                    let synthetic_method = format!("server_request/{method}");
-                    let payload =
-                        serde_json::json!({ "method": synthetic_method, "params": params });
-                    let _ = events_tx.send(RawIngest {
-                        agent,
-                        thread_id,
-                        payload,
-                        ts_ms: current_unix_ms(),
-                    });
                 }
             }
             Inbound::Closed => break,
@@ -1144,7 +1568,124 @@ mod tests {
     use crate::state_machine::PauseReason;
     use crate::test_support::{FakeCodexBackend, FakeCodexServer, Step};
     use serde_json::json;
+    use std::collections::HashMap;
     use std::time::Duration;
+
+    fn write_codex_config(dir: &std::path::Path, contents: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("config.toml"), contents).unwrap();
+    }
+
+    fn has_arg(args: &[String], expected: &str) -> bool {
+        args.iter().any(|arg| arg == expected)
+    }
+
+    fn fake_thread_start_reply(thread_id: &str) -> serde_json::Value {
+        json!({
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "cwd": "/tmp",
+            "instructionSources": [],
+            "model": "fake",
+            "modelProvider": "fake",
+            "sandbox": { "type": "dangerFullAccess" },
+            "thread": {
+                "id": thread_id,
+                "cliVersion": "0.0.0-fake",
+                "createdAt": 0,
+                "cwd": "/tmp",
+                "ephemeral": true,
+                "modelProvider": "fake",
+                "preview": "",
+                "source": "appServer",
+                "status": { "type": "idle" },
+                "turns": [],
+                "updatedAt": 0
+            }
+        })
+    }
+
+    fn command_approval_params(thread_id: &str, turn_id: &str) -> serde_json::Value {
+        json!({
+            "itemId": "item-1",
+            "threadId": thread_id,
+            "turnId": turn_id,
+        })
+    }
+
+    #[test]
+    fn resolve_session_policies_uses_config_defaults_when_overrides_missing() {
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_config(
+            codex_home.path(),
+            "approval_policy = \"on-failure\"\nsandbox_policy = \"read-only\"\n",
+        );
+        let env = HashMap::from([(
+            "CODEX_HOME".to_string(),
+            codex_home.path().display().to_string(),
+        )]);
+
+        let resolved = resolve_session_policies(None, &env);
+
+        assert_eq!(
+            resolved,
+            ResolvedSessionPolicies {
+                approval_policy: Some("on-failure".into()),
+                sandbox_policy: Some("read-only".into()),
+            }
+        );
+
+        let args = build_codex_spawn_args("ws://127.0.0.1:9999", "/tmp/ws", &resolved);
+        assert!(has_arg(&args, "approval_policy=on-failure"));
+        assert!(has_arg(&args, "sandbox_policy=read-only"));
+    }
+
+    #[test]
+    fn resolve_session_policies_prefers_valid_overrides_and_falls_back_for_invalid_values() {
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_config(
+            codex_home.path(),
+            "approval_policy = \"never\"\nsandbox_policy = \"full-access\"\n",
+        );
+        let env = HashMap::from([(
+            "CODEX_HOME".to_string(),
+            codex_home.path().display().to_string(),
+        )]);
+        let overrides = SessionPolicies {
+            approval_policy: Some("unless-allow-listed".into()),
+            sandbox_policy: Some("workspace_write".into()),
+        };
+
+        let resolved = resolve_session_policies(Some(&overrides), &env);
+
+        assert_eq!(
+            resolved,
+            ResolvedSessionPolicies {
+                approval_policy: Some("unless-allow-listed".into()),
+                sandbox_policy: Some("full-access".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_session_policies_ignores_invalid_config_defaults() {
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_config(
+            codex_home.path(),
+            "approval_policy = \"on_request\"\nsandbox_policy = \"workspace_write\"\n",
+        );
+        let env = HashMap::from([(
+            "CODEX_HOME".to_string(),
+            codex_home.path().display().to_string(),
+        )]);
+
+        let resolved = resolve_session_policies(None, &env);
+        let args = build_codex_spawn_args("ws://127.0.0.1:9999", "/tmp/ws", &resolved);
+
+        assert_eq!(resolved, ResolvedSessionPolicies::default());
+        assert!(!has_arg(&args, "approval_policy=on_request"));
+        assert!(!has_arg(&args, "sandbox_policy=workspace_write"));
+    }
 
     #[tokio::test]
     async fn start_agent_creates_instance_and_thread() {
@@ -1512,5 +2053,193 @@ mod tests {
         ));
 
         fake.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn approval_requests_are_forwarded_as_ingest_and_tracked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-approval-forward";
+        let turn_id = "turn-approval-forward";
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: fake_thread_start_reply(thread_id),
+            },
+            Step::EmitServerRequest {
+                method: "item/commandExecution/requestApproval".into(),
+                params: command_approval_params(thread_id, turn_id),
+            },
+            Step::Sleep { ms: 100 },
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        cfg.approval_request_timeout = Duration::from_secs(5);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let mut ingest_rx = mgr.ingest_stream();
+
+        let started = mgr
+            .start_agent(AgentKind::Codex, "/w-approval-forward".into())
+            .await
+            .unwrap();
+        assert_eq!(started.thread_id, thread_id);
+
+        let ingest = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ingest = ingest_rx.recv().await.expect("ingest stream should stay open");
+                if ingest
+                    .payload
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("approval/request")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("approval/request ingest should arrive");
+
+        let request_id = server
+            .server_request_ids()
+            .await
+            .into_iter()
+            .next()
+            .expect("server request id should be recorded");
+        assert_eq!(ingest.thread_id, thread_id);
+        assert_eq!(ingest.payload["params"]["request_id"], json!(request_id));
+        assert_eq!(ingest.payload["params"]["thread_id"], json!(thread_id));
+        assert_eq!(ingest.payload["params"]["turn_id"], json!(turn_id));
+        assert_eq!(
+            ingest.payload["params"]["method"],
+            json!("item/commandExecution/requestApproval")
+        );
+        assert!(mgr.pending_approvals.contains_key(&request_id));
+
+        server.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn approval_requests_time_out_and_send_typed_reject() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-approval-timeout";
+        let turn_id = "turn-approval-timeout";
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: fake_thread_start_reply(thread_id),
+            },
+            Step::EmitServerRequest {
+                method: "item/commandExecution/requestApproval".into(),
+                params: command_approval_params(thread_id, turn_id),
+            },
+            Step::ExpectResponse {
+                result: json!({ "decision": "decline" }),
+            },
+            Step::Sleep { ms: 20 },
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        cfg.approval_request_timeout = Duration::from_millis(50);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let mut ingest_rx = mgr.ingest_stream();
+
+        mgr.start_agent(AgentKind::Codex, "/w-approval-timeout".into())
+            .await
+            .unwrap();
+
+        let timed_out = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ingest = ingest_rx.recv().await.expect("ingest stream should stay open");
+                if ingest
+                    .payload
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("approval/timeout")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("approval/timeout ingest should arrive");
+
+        let request_id = timed_out.payload["params"]["request_id"]
+            .as_str()
+            .expect("timeout ingest should carry request_id")
+            .to_string();
+        assert_eq!(timed_out.thread_id, thread_id);
+        assert_eq!(timed_out.payload["params"]["reason"], json!("timeout"));
+        assert!(!mgr.pending_approvals.contains_key(&request_id));
+
+        server.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_approval_replies_to_codex_and_clears_pending_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-approval-decision";
+        let turn_id = "turn-approval-decision";
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: fake_thread_start_reply(thread_id),
+            },
+            Step::EmitServerRequest {
+                method: "item/commandExecution/requestApproval".into(),
+                params: command_approval_params(thread_id, turn_id),
+            },
+            Step::ExpectResponse {
+                result: json!({ "decision": "decline" }),
+            },
+            Step::Sleep { ms: 20 },
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        cfg.approval_request_timeout = Duration::from_secs(5);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let mut ingest_rx = mgr.ingest_stream();
+
+        mgr.start_agent(AgentKind::Codex, "/w-approval-decision".into())
+            .await
+            .unwrap();
+
+        let approval_request = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ingest = ingest_rx.recv().await.expect("ingest stream should stay open");
+                if ingest
+                    .payload
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("approval/request")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("approval/request ingest should arrive");
+        let request_id = approval_request.payload["params"]["request_id"]
+            .as_str()
+            .expect("approval/request ingest should carry request_id")
+            .to_string();
+
+        mgr.resolve_approval(&request_id, thread_id, json!({ "decision": "decline" }))
+            .await
+            .unwrap();
+        assert!(!mgr.pending_approvals.contains_key(&request_id));
+
+        server.stop().await;
     }
 }

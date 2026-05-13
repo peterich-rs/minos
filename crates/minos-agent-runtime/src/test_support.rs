@@ -68,6 +68,8 @@ pub enum Step {
         method: String,
         params: serde_json::Value,
     },
+    /// Read one client reply frame and assert its `result` payload.
+    ExpectResponse { result: serde_json::Value },
     /// Keep the WebSocket open for a short interval without sending frames.
     Sleep { ms: u64 },
     /// Close the WS abruptly without a close frame.
@@ -285,6 +287,27 @@ async fn run_script(
                     tracing::warn!(error = %e, "FakeCodexServer: send server request failed");
                     return;
                 }
+            }
+            Step::ExpectResponse { result } => {
+                let frame = match rx.next().await {
+                    Some(Ok(Message::Text(t))) => t.to_string(),
+                    Some(Ok(Message::Binary(b))) => {
+                        String::from_utf8(b.to_vec()).unwrap_or_default()
+                    }
+                    Some(Ok(other)) => {
+                        panic!("FakeCodexServer: expected text/binary frame, got {other:?}");
+                    }
+                    Some(Err(e)) => panic!("FakeCodexServer: WS read error: {e}"),
+                    None => panic!("FakeCodexServer: WS closed before ExpectResponse"),
+                };
+                let parsed: serde_json::Value = serde_json::from_str(&frame)
+                    .unwrap_or_else(|e| panic!("FakeCodexServer: bad JSON from client: {e}"));
+                assert!(
+                    parsed.get("method").is_none(),
+                    "FakeCodexServer: response frames must not carry a method",
+                );
+                assert!(parsed.get("id").is_some(), "FakeCodexServer: response must carry an id");
+                assert_eq!(parsed.get("result").cloned().unwrap_or_default(), result);
             }
             Step::Sleep { ms } => {
                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;

@@ -3,10 +3,11 @@
 //! callers and tests; `minos-mobile` now uses the envelope/local-RPC path.
 
 use crate::{
-    CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse, InterruptThreadRequest,
-    ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, PairRequest, PairResponse, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams, GetThreadResponse,
+    HealthResponse, InterruptThreadRequest, ListClisResponse, ListHostSkillsRequest,
+    ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
 use jsonrpsee::proc_macros::rpc;
 
@@ -57,6 +58,13 @@ pub trait MinosRpc {
     async fn send_user_message(
         &self,
         req: SendUserMessageRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    /// Resolve one pending approval request by its original `request_id`.
+    #[method(name = "approval_decision")]
+    async fn approval_decision(
+        &self,
+        req: ApprovalDecisionRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
     /// Pause an in-flight turn on the named thread. Best-effort: the codex
