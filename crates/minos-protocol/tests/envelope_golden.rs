@@ -196,3 +196,69 @@ fn event_ui_event_message() {
     assert_eq!(message_id, "msg_def");
     assert_eq!(text, "Hi");
 }
+
+#[test]
+fn event_approval_request() {
+    let env = round_trip("event_approval_request.json");
+    let Envelope::Event { version, event } = env else {
+        panic!("expected Event");
+    };
+    assert_eq!(version, 1);
+    let EventKind::ApprovalRequest {
+        thread_id,
+        turn_id,
+        request_id,
+        method,
+        params,
+        timeout_ms,
+    } = event
+    else {
+        panic!("expected ApprovalRequest");
+    };
+    assert_eq!(thread_id, "thr_approval");
+    assert_eq!(turn_id, "turn_123");
+    assert_eq!(request_id, "req_123");
+    assert_eq!(method, "exec_command");
+    assert_eq!(params["command"][0], "cargo");
+    assert_eq!(timeout_ms, 120_000);
+}
+
+#[test]
+fn event_approval_timeout() {
+    let env = round_trip("event_approval_timeout.json");
+    let Envelope::Event { version, event } = env else {
+        panic!("expected Event");
+    };
+    assert_eq!(version, 1);
+    let EventKind::ApprovalTimeout {
+        thread_id,
+        request_id,
+        reason,
+    } = event
+    else {
+        panic!("expected ApprovalTimeout");
+    };
+    assert_eq!(thread_id, "thr_approval");
+    assert_eq!(request_id, "req_123");
+    assert_eq!(reason, "timeout");
+}
+
+#[test]
+fn event_agent_error() {
+    let env = round_trip("event_agent_error.json");
+    let Envelope::Event { version, event } = env else {
+        panic!("expected Event");
+    };
+    assert_eq!(version, 1);
+    let EventKind::AgentError {
+        session_id,
+        code,
+        message,
+    } = event
+    else {
+        panic!("expected AgentError");
+    };
+    assert_eq!(session_id.as_deref(), Some("thread-abc12"));
+    assert_eq!(code, "peer_offline");
+    assert_eq!(message, "host is offline");
+}

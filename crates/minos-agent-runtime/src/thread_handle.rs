@@ -2,7 +2,7 @@ use crate::state_machine::ThreadState;
 use crate::AgentKind;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
 #[derive(Clone)]
@@ -11,6 +11,7 @@ pub struct ThreadHandle {
     pub workspace: PathBuf,
     pub agent: AgentKind,
     pub codex_session_id: Option<String>,
+    pub active_turn_id: Arc<Mutex<Option<String>>>,
     pub state_tx: Arc<watch::Sender<ThreadState>>,
     pub state_rx: watch::Receiver<ThreadState>,
     pub last_seq: Arc<AtomicU64>,
@@ -30,6 +31,7 @@ impl ThreadHandle {
             workspace,
             agent,
             codex_session_id: None,
+            active_turn_id: Arc::new(Mutex::new(None)),
             state_tx: Arc::new(tx),
             state_rx: rx,
             last_seq: Arc::new(AtomicU64::new(last_seq)),
@@ -48,6 +50,21 @@ impl ThreadHandle {
         crate::state_machine::validate_transition(&from, &new)?;
         let _ = self.state_tx.send(new);
         Ok(())
+    }
+
+    pub fn active_turn_id(&self) -> Option<String> {
+        self.active_turn_id.lock().unwrap().clone()
+    }
+
+    pub fn set_active_turn_id(&self, turn_id: Option<String>) {
+        *self.active_turn_id.lock().unwrap() = turn_id;
+    }
+
+    pub fn set_active_turn_id_if_absent(&self, turn_id: String) {
+        let mut guard = self.active_turn_id.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(turn_id);
+        }
     }
 }
 
@@ -84,5 +101,21 @@ mod tests {
         })
         .unwrap();
         assert!(matches!(h.current_state(), ThreadState::Running { .. }));
+    }
+
+    #[test]
+    fn active_turn_id_is_shared_across_clones() {
+        let h = ThreadHandle::new(
+            "t".into(),
+            "/w".into(),
+            AgentKind::Codex,
+            ThreadState::Idle,
+            0,
+        );
+        let clone = h.clone();
+        h.set_active_turn_id(Some("turn-1".into()));
+        assert_eq!(clone.active_turn_id().as_deref(), Some("turn-1"));
+        clone.set_active_turn_id(None);
+        assert_eq!(h.active_turn_id(), None);
     }
 }

@@ -134,6 +134,32 @@ pub enum EventKind {
         ui: minos_ui_protocol::UiEventMessage,
         ts_ms: i64,
     },
+    /// Backend → Mobile. Approval request forwarded from the host for an
+    /// in-flight turn and awaiting explicit user action.
+    ApprovalRequest {
+        thread_id: String,
+        turn_id: String,
+        request_id: String,
+        method: String,
+        params: serde_json::Value,
+        timeout_ms: u64,
+    },
+    /// Backend → Mobile. A pending approval auto-expired or was declined due
+    /// to disconnect before the user responded.
+    ApprovalTimeout {
+        thread_id: String,
+        request_id: String,
+        reason: String,
+    },
+    /// Backend → Mobile. Structured error associated with sending into an
+    /// agent session. `session_id` is omitted when the failure happened before
+    /// a session existed.
+    AgentError {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        code: String,
+        message: String,
+    },
     /// Backend → Mobile. One realtime social-chat message fan-out.
     ///
     /// Emitted to every live mobile session whose account is a member of
@@ -333,6 +359,62 @@ mod tests {
         round_trip(&env);
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["type"], "server_shutdown");
+    }
+
+    #[test]
+    fn approval_request_event_round_trips() {
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::ApprovalRequest {
+                thread_id: "thr-approval".into(),
+                turn_id: "turn-123".into(),
+                request_id: "req-123".into(),
+                method: "exec_command".into(),
+                params: serde_json::json!({
+                    "command": ["cargo", "test"],
+                    "cwd": "/Users/fan/dev/minos",
+                }),
+                timeout_ms: 120_000,
+            },
+        };
+        round_trip(&env);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["type"], "approval_request");
+        assert_eq!(v["request_id"], "req-123");
+        assert_eq!(v["params"]["command"][0], "cargo");
+    }
+
+    #[test]
+    fn approval_timeout_event_round_trips() {
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::ApprovalTimeout {
+                thread_id: "thr-approval".into(),
+                request_id: "req-123".into(),
+                reason: "timeout".into(),
+            },
+        };
+        round_trip(&env);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["type"], "approval_timeout");
+        assert_eq!(v["reason"], "timeout");
+    }
+
+    #[test]
+    fn agent_error_event_round_trips_without_session_id() {
+        let env = Envelope::Event {
+            version: 1,
+            event: EventKind::AgentError {
+                session_id: None,
+                code: "peer_offline".into(),
+                message: "host is offline".into(),
+            },
+        };
+        round_trip(&env);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["type"], "agent_error");
+        assert_eq!(v["code"], "peer_offline");
+        assert!(v.get("session_id").is_none());
     }
 
     #[test]

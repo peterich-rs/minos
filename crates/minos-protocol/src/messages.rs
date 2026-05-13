@@ -513,6 +513,41 @@ pub struct SendUserMessageRequest {
     pub text: String,
 }
 
+/// Server → Host. Unified dispatch payload for agent-bound chat messages.
+/// `session_id = None` instructs the host to auto-create a session before
+/// sending `text`; otherwise the existing session should receive the message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDispatchRequest {
+    pub agent: AgentName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub text: String,
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_message_id: Option<String>,
+}
+
+/// Host → Server response for [`AgentDispatchRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDispatchResponse {
+    pub session_id: String,
+}
+
+/// Mobile → Server → Host. User resolution for a pending approval request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalDecisionRequest {
+    pub request_id: String,
+    pub thread_id: String,
+    pub decision: serde_json::Value,
+}
+
 /// Parameters for the `interrupt_thread` RPC. See spec §5.2.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -911,6 +946,71 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: SendUserMessageRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn agent_dispatch_request_round_trip() {
+        let req = AgentDispatchRequest {
+            agent: AgentName::Codex,
+            session_id: Some("thread-abc12".into()),
+            text: "continue with tests".into(),
+            workspace: "/Users/fan/dev/minos".into(),
+            approval_policy: Some("on_request".into()),
+            sandbox_policy: Some("workspace_write".into()),
+            conversation_id: Some("conv-123".into()),
+            origin_message_id: Some("msg-456".into()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: AgentDispatchRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn agent_dispatch_request_omits_none_fields() {
+        let req = AgentDispatchRequest {
+            agent: AgentName::Claude,
+            session_id: None,
+            text: "start a new session".into(),
+            workspace: String::new(),
+            approval_policy: None,
+            sandbox_policy: None,
+            conversation_id: None,
+            origin_message_id: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["agent"], serde_json::json!("claude"));
+        assert_eq!(value["workspace"], serde_json::json!(""));
+        assert!(value.get("session_id").is_none());
+        assert!(value.get("approval_policy").is_none());
+        assert!(value.get("sandbox_policy").is_none());
+        assert!(value.get("conversation_id").is_none());
+        assert!(value.get("origin_message_id").is_none());
+    }
+
+    #[test]
+    fn agent_dispatch_response_round_trip() {
+        let resp = AgentDispatchResponse {
+            session_id: "thread-abc12".into(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: AgentDispatchResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(resp, back);
+    }
+
+    #[test]
+    fn approval_decision_request_round_trip() {
+        let req = ApprovalDecisionRequest {
+            request_id: "req-123".into(),
+            thread_id: "thread-abc12".into(),
+            decision: serde_json::json!({
+                "decision": "approve",
+                "scope": "once",
+            }),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ApprovalDecisionRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
     }
 }

@@ -186,6 +186,47 @@ impl AgentManager {
         Ok(())
     }
 
+    pub async fn dispatch_message(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        session_id: Option<String>,
+        text: String,
+        _policies: Option<SessionPolicies>,
+    ) -> anyhow::Result<DispatchOutcome> {
+        match session_id {
+            None => {
+                let outcome = self.start_agent(agent, workspace).await?;
+                self.send_user_message(&outcome.thread_id, text).await?;
+                Ok(DispatchOutcome {
+                    session_id: outcome.thread_id,
+                    cwd: outcome.cwd,
+                })
+            }
+            Some(session_id) => {
+                let handle = self
+                    .threads
+                    .lock()
+                    .await
+                    .get(&session_id)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("thread not found: {session_id}"))?;
+                match handle.current_state() {
+                    ThreadState::Idle => self.send_user_message(&session_id, text).await?,
+                    ThreadState::Running { .. } => self.steer_turn(&session_id, text).await?,
+                    ThreadState::Suspended { .. } => {
+                        self.send_user_message(&session_id, text).await?
+                    }
+                    other => anyhow::bail!("dispatch_message rejected: state={other:?}"),
+                }
+                Ok(DispatchOutcome {
+                    session_id,
+                    cwd: handle.workspace.clone(),
+                })
+            }
+        }
+    }
+
     pub async fn start_agent(
         &self,
         agent: AgentKind,
@@ -571,12 +612,44 @@ impl AgentManager {
                 // semantics — the user always sees their bubble after a
                 // crash, never an empty timeline.
                 self.synth_user_message_ingest(thread_id, &text, handle.agent);
-                inst.send_user_message(thread_id, &text).await?;
+                let turn_id = inst.send_user_message(thread_id, &text).await?;
+                handle.set_active_turn_id_if_absent(turn_id);
                 Ok(())
             }
+            ThreadState::Running { .. } => self.steer_turn(thread_id, text).await,
             ThreadState::Suspended { .. } => self.implicit_resume(thread_id, text).await,
             other => anyhow::bail!("send_user_message rejected: state={other:?}"),
         }
+    }
+
+    pub async fn steer_turn(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
+        let handle = self
+            .threads
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("thread not found: {thread_id}"))?;
+        if !matches!(handle.current_state(), ThreadState::Running { .. }) {
+            let state = handle.current_state();
+            anyhow::bail!("steer_turn rejected: state={state:?}");
+        }
+        let expected_turn_id = handle
+            .active_turn_id()
+            .ok_or_else(|| anyhow::anyhow!("steer_turn rejected: missing active turn id"))?;
+        let workspace = handle.workspace.clone();
+        let inst = self
+            .instances
+            .lock()
+            .await
+            .get(&workspace)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
+        inst.touch().await;
+        self.synth_user_message_ingest(thread_id, &text, handle.agent);
+        let turn_id = inst.steer_turn(thread_id, &expected_turn_id, &text).await?;
+        handle.set_active_turn_id(Some(turn_id));
+        Ok(())
     }
 
     /// Build and broadcast a synthetic codex `item/started{userMessage}`
@@ -667,7 +740,8 @@ impl AgentManager {
         // Same synth-then-forward pattern as the Idle path; resume races
         // shouldn't change persistence semantics.
         self.synth_user_message_ingest(thread_id, &text, handle.agent);
-        inst.send_user_message(thread_id, &text).await?;
+        let turn_id = inst.send_user_message(thread_id, &text).await?;
+        handle.set_active_turn_id_if_absent(turn_id);
         Ok(())
     }
 
@@ -691,6 +765,7 @@ impl AgentManager {
             let _ = inst.interrupt_turn(thread_id).await;
         }
         let from_state = handle.current_state();
+        handle.set_active_turn_id(None);
         handle.transition(ThreadState::Suspended {
             reason: PauseReason::UserInterrupt,
         })?;
@@ -839,6 +914,18 @@ pub struct StartAgentOutcome {
     pub cwd: PathBuf,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionPolicies {
+    pub approval_policy: Option<String>,
+    pub sandbox_policy: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DispatchOutcome {
+    pub session_id: String,
+    pub cwd: PathBuf,
+}
+
 #[cfg(feature = "test-support")]
 fn build_fake_instance(
     workspace: PathBuf,
@@ -903,10 +990,25 @@ async fn event_pump_loop(
                 let Some(thread_id) = thread_id else {
                     continue;
                 };
+                if method == "turn/started" {
+                    let turn_id = params
+                        .get("turn")
+                        .and_then(|turn| turn.get("id"))
+                        .or_else(|| params.get("turnId"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    if let Some(turn_id) = turn_id {
+                        let tg = threads.lock().await;
+                        if let Some(handle) = tg.get(&thread_id) {
+                            handle.set_active_turn_id(Some(turn_id));
+                        }
+                    }
+                }
                 if method == "turn/completed" {
                     let maybe_transition = {
                         let tg = threads.lock().await;
                         tg.get(&thread_id).and_then(|handle| {
+                            handle.set_active_turn_id(None);
                             let old = handle.current_state();
                             if matches!(old, ThreadState::Running { .. } | ThreadState::Resuming) {
                                 handle.transition(ThreadState::Idle).ok()?;
@@ -1040,7 +1142,9 @@ mod tests {
     use super::*;
     use crate::config::AgentRuntimeConfig;
     use crate::state_machine::PauseReason;
-    use crate::test_support::FakeCodexBackend;
+    use crate::test_support::{FakeCodexBackend, FakeCodexServer, Step};
+    use serde_json::json;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn start_agent_creates_instance_and_thread() {
@@ -1093,6 +1197,320 @@ mod tests {
             mgr.thread_state(&started.thread_id).await,
             Some(ThreadState::Running { .. })
         ));
+        fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn send_user_message_steers_when_thread_is_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let started = mgr
+            .start_agent(AgentKind::Codex, "/w-steer".into())
+            .await
+            .unwrap();
+
+        mgr.send_user_message(&started.thread_id, "first".into())
+            .await
+            .unwrap();
+        let first_turn_id = mgr
+            .threads
+            .lock()
+            .await
+            .get(&started.thread_id)
+            .and_then(ThreadHandle::active_turn_id)
+            .expect("turn/start should record an active turn id");
+
+        mgr.send_user_message(&started.thread_id, "second".into())
+            .await
+            .unwrap();
+
+        let second_turn_id = mgr
+            .threads
+            .lock()
+            .await
+            .get(&started.thread_id)
+            .and_then(ThreadHandle::active_turn_id)
+            .expect("turn/steer should preserve an active turn id");
+        assert_eq!(second_turn_id, first_turn_id);
+        assert!(matches!(
+            mgr.thread_state(&started.thread_id).await,
+            Some(ThreadState::Running { .. })
+        ));
+
+        fake.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn turn_notifications_update_active_turn_id_lifecycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-turn-lifecycle";
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: serde_json::json!({
+                    "approvalPolicy": "never",
+                    "approvalsReviewer": "user",
+                    "cwd": "/tmp",
+                    "instructionSources": [],
+                    "model": "fake",
+                    "modelProvider": "fake",
+                    "sandbox": { "type": "dangerFullAccess" },
+                    "thread": {
+                        "id": thread_id,
+                        "cliVersion": "0.0.0-fake",
+                        "createdAt": 0,
+                        "cwd": "/tmp",
+                        "ephemeral": true,
+                        "modelProvider": "fake",
+                        "preview": "",
+                        "source": "appServer",
+                        "status": { "type": "idle" },
+                        "turns": [],
+                        "updatedAt": 0
+                    }
+                }),
+            },
+            Step::ExpectRequest {
+                method: "turn/start".into(),
+                reply: json!({
+                    "turn": {
+                        "id": "turn-from-response",
+                        "items": [],
+                        "status": "inProgress"
+                    }
+                }),
+            },
+            Step::EmitNotification {
+                method: "turn/started".into(),
+                params: json!({
+                    "threadId": thread_id,
+                    "turn": {
+                        "id": "turn-from-notification",
+                        "items": [],
+                        "status": "inProgress"
+                    }
+                }),
+            },
+            Step::Sleep { ms: 750 },
+            Step::EmitNotification {
+                method: "turn/completed".into(),
+                params: json!({
+                    "threadId": thread_id,
+                    "finishedAtMs": 123
+                }),
+            },
+            Step::Sleep { ms: 100 },
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let started = mgr
+            .start_agent(AgentKind::Codex, "/w-turn-lifecycle".into())
+            .await
+            .unwrap();
+        assert_eq!(started.thread_id, thread_id);
+
+        let mut ingest_rx = mgr.ingest_stream();
+
+        mgr.send_user_message(thread_id, "hello".into())
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = ingest_rx.recv().await.expect("ingest broadcast should stay open");
+                if ingest.thread_id == thread_id
+                    && ingest
+                        .payload
+                        .get("method")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("turn/started")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("turn/started ingest should arrive");
+
+        let turn_id = mgr
+            .threads
+            .lock()
+            .await
+            .get(thread_id)
+            .and_then(ThreadHandle::active_turn_id);
+        assert_eq!(turn_id.as_deref(), Some("turn-from-notification"));
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let state = mgr.thread_state(thread_id).await;
+                let turn_id = mgr
+                    .threads
+                    .lock()
+                    .await
+                    .get(thread_id)
+                    .and_then(ThreadHandle::active_turn_id);
+                if matches!(state, Some(ThreadState::Idle)) && turn_id.is_none() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("turn/completed should clear the active turn id and return to idle");
+
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_message_creates_session_when_missing_session_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let outcome = mgr
+            .dispatch_message(
+                AgentKind::Codex,
+                "/w-dispatch-new".into(),
+                None,
+                "hello".into(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.cwd, std::path::PathBuf::from("/w-dispatch-new"));
+        assert!(mgr.has_thread(&outcome.session_id).await);
+        assert!(matches!(
+            mgr.thread_state(&outcome.session_id).await,
+            Some(ThreadState::Running { .. })
+        ));
+
+        fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_message_sends_on_idle_thread() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let started = mgr
+            .start_agent(AgentKind::Codex, "/w-dispatch-idle".into())
+            .await
+            .unwrap();
+
+        let outcome = mgr
+            .dispatch_message(
+                AgentKind::Codex,
+                "/unused".into(),
+                Some(started.thread_id.clone()),
+                "hello".into(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.session_id, started.thread_id);
+        assert!(matches!(
+            mgr.thread_state(&outcome.session_id).await,
+            Some(ThreadState::Running { .. })
+        ));
+
+        fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_message_steers_running_thread() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let started = mgr
+            .start_agent(AgentKind::Codex, "/w-dispatch-running".into())
+            .await
+            .unwrap();
+        mgr.send_user_message(&started.thread_id, "first".into())
+            .await
+            .unwrap();
+        let first_turn_id = mgr
+            .threads
+            .lock()
+            .await
+            .get(&started.thread_id)
+            .and_then(ThreadHandle::active_turn_id)
+            .expect("turn/start should record turn id before steer");
+
+        let outcome = mgr
+            .dispatch_message(
+                AgentKind::Codex,
+                "/unused".into(),
+                Some(started.thread_id.clone()),
+                "second".into(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let second_turn_id = mgr
+            .threads
+            .lock()
+            .await
+            .get(&started.thread_id)
+            .and_then(ThreadHandle::active_turn_id)
+            .expect("turn/steer should preserve turn id");
+        assert_eq!(outcome.session_id, started.thread_id);
+        assert_eq!(second_turn_id, first_turn_id);
+
+        fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_message_resumes_suspended_thread() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let started = mgr
+            .start_agent(AgentKind::Codex, "/w-dispatch-suspended".into())
+            .await
+            .unwrap();
+        mgr.interrupt_thread(&started.thread_id).await.unwrap();
+
+        let outcome = mgr
+            .dispatch_message(
+                AgentKind::Codex,
+                "/unused".into(),
+                Some(started.thread_id.clone()),
+                "resume".into(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.session_id, started.thread_id);
+        assert!(matches!(
+            mgr.thread_state(&outcome.session_id).await,
+            Some(ThreadState::Running { .. })
+        ));
+
         fake.stop().await;
     }
 }

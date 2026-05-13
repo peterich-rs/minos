@@ -18,10 +18,11 @@ use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::envelope::Envelope;
 use minos_protocol::{
-    CloseThreadRequest, GetThreadParams, GetThreadResponse, HealthResponse, InterruptThreadRequest,
-    ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, MinosRpcServer, PairRequest, PairResponse, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    AgentDispatchRequest, CloseThreadRequest, GetThreadParams, GetThreadResponse,
+    HealthResponse, InterruptThreadRequest, ListClisResponse, ListHostSkillsRequest,
+    ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse, MinosRpcServer, PairRequest,
+    PairResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    WriteHostSkillConfigRequest,
     WriteHostSkillConfigResponse,
 };
 use serde_json::{json, Map, Value};
@@ -193,6 +194,13 @@ pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Va
                 Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
             };
             into_jsonrpc(id, server.send_user_message(req).await)
+        }
+        "minos_agent_dispatch" => {
+            let req: AgentDispatchRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.agent.dispatch_message(req).await.map_err(rpc_err))
         }
         "minos_interrupt_thread" => {
             let req: InterruptThreadRequest = match parse_params(&params) {
@@ -367,6 +375,8 @@ pub fn wrap_response_envelope(response: Value, target_device_id: DeviceId) -> En
 #[cfg(test)]
 mod tests {
     use super::*;
+    use minos_agent_runtime::test_support::FakeCodexBackend;
+    use minos_agent_runtime::{AgentManager, AgentRuntimeConfig, InstanceCaps};
     use minos_cli_detect::CommandOutcome;
     use std::time::Duration;
 
@@ -476,6 +486,55 @@ mod tests {
         let resp = invoke_forwarded(req, &server).await;
         assert_eq!(resp["id"], 5);
         assert_eq!(resp["error"]["code"], RPC_PARSE_ERROR);
+    }
+
+    #[tokio::test]
+    async fn invoke_forwarded_agent_dispatch_returns_session_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("test.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let (out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
+        let writer = Arc::new(crate::store::event_writer::EventWriter::spawn(
+            store.clone(),
+            out_tx,
+        ));
+        let server = Arc::new(RpcServerImpl {
+            started_at: Instant::now(),
+            runner: Arc::new(NoopRunner),
+            agent: Arc::new(AgentGlue::wire_with(
+                manager,
+                writer,
+                store,
+                tmp.path().to_path_buf(),
+            )),
+        });
+
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "minos_agent_dispatch",
+            "params": {
+                "agent": "codex",
+                "text": "hello from forwarded dispatch",
+                "workspace": "/w-rpc-dispatch"
+            },
+        });
+        let resp = invoke_forwarded(req, &server).await;
+
+        assert_eq!(resp["id"], 11);
+        let session_id = resp["result"]["session_id"]
+            .as_str()
+            .expect("session_id should be present");
+        assert!(!session_id.is_empty());
+
+        fake.stop().await;
     }
 
     #[test]

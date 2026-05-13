@@ -48,7 +48,9 @@ pub mod test_support;
 pub use config::{AgentLaunchMode, AgentRuntimeConfig, RawIngest};
 pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
-pub use manager::{AgentManager, InstanceCaps, StartAgentOutcome};
+pub use manager::{
+	AgentManager, DispatchOutcome, InstanceCaps, SessionPolicies, StartAgentOutcome,
+};
 pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;
 pub use pty_agent::PtyAgent;

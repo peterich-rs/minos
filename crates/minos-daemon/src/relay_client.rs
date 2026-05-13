@@ -754,6 +754,42 @@ async fn route_event(event: EventKind, ctx: &DispatchCtx) {
                 "ignoring UiEventMessage on the host side"
             );
         }
+        EventKind::ApprovalRequest {
+            thread_id,
+            request_id,
+            ..
+        } => {
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                thread_id = %thread_id,
+                request_id = %request_id,
+                "ignoring ApprovalRequest on the host side"
+            );
+        }
+        EventKind::ApprovalTimeout {
+            thread_id,
+            request_id,
+            ..
+        } => {
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                thread_id = %thread_id,
+                request_id = %request_id,
+                "ignoring ApprovalTimeout on the host side"
+            );
+        }
+        EventKind::AgentError {
+            session_id,
+            code,
+            ..
+        } => {
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                session_id = ?session_id,
+                code = %code,
+                "ignoring AgentError on the host side"
+            );
+        }
         EventKind::SocialMessage {
             conversation_id, ..
         } => {

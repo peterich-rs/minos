@@ -2,17 +2,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use minos_agent_runtime::{
-    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest, ThreadState,
+    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest,
+    SessionPolicies, ThreadState,
 };
 use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::MinosError;
 use minos_protocol::{
-    AgentLaunchMode as ProtoAgentLaunchMode, CloseReason as ProtoCloseReason, CloseThreadRequest,
-    GetThreadParams, GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
-    InterruptThreadRequest, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, PauseReason as ProtoPauseReason, ReadThreadResponse,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState,
-    ThreadSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
+    CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams, GetThreadResponse,
+    HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
+    PauseReason as ProtoPauseReason, ReadThreadResponse, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{
     translate_claude, translate_codex, translate_gemini, CodexTranslatorState, ThreadEndReason,
@@ -137,60 +139,15 @@ impl AgentGlue {
         // An empty `workspace` falls back to the daemon's default workspace
         // dir for clients (mobile pre-Phase-D) that have not been updated to
         // pick a directory yet.
-        let workspace = if req.workspace.is_empty() {
-            self.default_workspace.clone()
-        } else {
-            PathBuf::from(&req.workspace)
-        };
+        let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
         let outcome = self
             .manager
             .start_agent(req.agent, workspace)
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
-
-        // Persist the parent rows the events FK depends on. The codex
-        // session id doubles as the thread id (manager.rs `rpc_start_thread`),
-        // so the same value lands in both columns. `INSERT OR IGNORE` makes
-        // both calls safe to repeat for the same workspace / thread (e.g.
-        // a UI retry after a transient error). Failure here is logged but
-        // not fatal — start_agent has already spawned codex and the manager
-        // has the thread in memory; surfacing a hard error to the caller
-        // would leave us with a live codex thread the user can never
-        // interact with again.
-        let now_ms = current_unix_ms();
-        let agent_label = match req.agent {
-            minos_domain::AgentName::Codex => "codex",
-            minos_domain::AgentName::Claude => "claude",
-            minos_domain::AgentName::Gemini => "gemini",
-        };
-        if let Err(e) = self.store.upsert_workspace(&cwd, now_ms).await {
-            tracing::warn!(
-                target: "minos_daemon::agent",
-                error = %e,
-                workspace = %cwd,
-                "store.upsert_workspace failed; events FK may reject ingest",
-            );
-        }
-        if let Err(e) = self
-            .store
-            .insert_thread(
-                &outcome.thread_id,
-                &cwd,
-                agent_label,
-                Some(&outcome.thread_id),
-                "idle",
-                now_ms,
-            )
-            .await
-        {
-            tracing::warn!(
-                target: "minos_daemon::agent",
-                error = %e,
-                thread_id = %outcome.thread_id,
-                "store.insert_thread failed; events FK may reject ingest",
-            );
-        }
+        self.persist_thread_parent_rows(&outcome.thread_id, &cwd, req.agent)
+            .await;
 
         // Legacy single-state mirror: emit Idle (not Running) because the
         // multi-thread manager keeps per-thread state internally; the
@@ -208,6 +165,83 @@ impl AgentGlue {
             .send_user_message(&req.session_id, req.text)
             .await
             .map_err(map_anyhow)
+    }
+
+    pub async fn dispatch_message(
+        &self,
+        req: AgentDispatchRequest,
+    ) -> Result<AgentDispatchResponse, MinosError> {
+        let AgentDispatchRequest {
+            agent,
+            session_id,
+            text,
+            workspace,
+            approval_policy,
+            sandbox_policy,
+            conversation_id: _,
+            origin_message_id: _,
+        } = req;
+
+        if let Some(existing_session_id) = session_id.as_deref() {
+            self.ensure_thread_registered(existing_session_id).await?;
+        }
+
+        let policies = if approval_policy.is_none() && sandbox_policy.is_none() {
+            None
+        } else {
+            Some(SessionPolicies {
+                approval_policy,
+                sandbox_policy,
+            })
+        };
+
+        let outcome = self
+            .manager
+            .dispatch_message(
+                agent,
+                resolve_workspace(&self.default_workspace, &workspace),
+                session_id,
+                text,
+                policies,
+            )
+            .await
+            .map_err(map_anyhow)?;
+        let cwd = outcome.cwd.display().to_string();
+        self.persist_thread_parent_rows(&outcome.session_id, &cwd, agent)
+            .await;
+
+        Ok(AgentDispatchResponse {
+            session_id: outcome.session_id,
+        })
+    }
+
+    async fn persist_thread_parent_rows(
+        &self,
+        thread_id: &str,
+        cwd: &str,
+        agent: minos_domain::AgentName,
+    ) {
+        let now_ms = current_unix_ms();
+        if let Err(e) = self.store.upsert_workspace(cwd, now_ms).await {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                workspace = %cwd,
+                "store.upsert_workspace failed; events FK may reject ingest",
+            );
+        }
+        if let Err(e) = self
+            .store
+            .insert_thread(thread_id, cwd, agent_label(agent), Some(thread_id), "idle", now_ms)
+            .await
+        {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                thread_id = %thread_id,
+                "store.insert_thread failed; events FK may reject ingest",
+            );
+        }
     }
 
     pub async fn ensure_thread_registered(&self, thread_id: &str) -> Result<(), MinosError> {

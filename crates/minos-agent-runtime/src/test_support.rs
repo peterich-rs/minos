@@ -355,6 +355,13 @@ async fn auto_respond(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStre
                     "status": "inProgress"
                 }
             }),
+            "turn/steer" => serde_json::json!({
+                "turnId": parsed
+                    .get("params")
+                    .and_then(|p| p.get("expectedTurnId"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("turn-steer-fallback")
+            }),
             // "turn/interrupt" and any unknown method get an empty `{}` ack.
             _ => serde_json::json!({}),
         };

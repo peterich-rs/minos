@@ -125,6 +125,27 @@ fn all_event_kind_variants_round_trip() {
             },
             ts_ms: 1_714_000_000_001,
         },
+        EventKind::ApprovalRequest {
+            thread_id: "thr-approval".into(),
+            turn_id: "turn-123".into(),
+            request_id: "req-123".into(),
+            method: "exec_command".into(),
+            params: serde_json::json!({
+                "command": ["cargo", "test", "-p", "minos-protocol"],
+                "cwd": "/Users/test/project",
+            }),
+            timeout_ms: 120_000,
+        },
+        EventKind::ApprovalTimeout {
+            thread_id: "thr-approval".into(),
+            request_id: "req-123".into(),
+            reason: "timeout".into(),
+        },
+        EventKind::AgentError {
+            session_id: None,
+            code: "peer_offline".into(),
+            message: "host is offline".into(),
+        },
         EventKind::SocialMessage {
             conversation_id: "conv-1".into(),
             message: ChatMessageSummary {

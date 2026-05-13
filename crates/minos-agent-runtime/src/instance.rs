@@ -1,7 +1,8 @@
 use crate::codex_client::CodexClient;
 use minos_codex_protocol::{
     AbsolutePathBuf, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
-    SkillsListResponse, ThreadResumeParams, TurnInterruptParams, TurnStartParams, UserInput,
+    SkillsListResponse, ThreadResumeParams, TurnInterruptParams, TurnStartParams,
+    TurnStartResponse, TurnSteerParams, TurnSteerResponse, UserInput,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -108,7 +109,7 @@ impl AppServerInstance {
         &self,
         thread_id: &str,
         text: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<String> {
         let params = TurnStartParams {
             approval_policy: None,
             approvals_reviewer: None,
@@ -127,11 +128,33 @@ impl AppServerInstance {
             summary: None,
             thread_id: thread_id.to_string(),
         };
-        tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
+        let response: TurnStartResponse = tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
             .await
             .map_err(|_| anyhow::anyhow!("turn/start timeout"))?
             .map_err(|e| anyhow::anyhow!("turn/start failed: {e}"))?;
-        Ok(())
+        Ok(response.turn.id)
+    }
+
+    /// Forward user text into an already-running turn via `turn/steer`.
+    pub(crate) async fn steer_turn(
+        &self,
+        thread_id: &str,
+        expected_turn_id: &str,
+        text: &str,
+    ) -> anyhow::Result<String> {
+        let params = TurnSteerParams {
+            expected_turn_id: expected_turn_id.to_string(),
+            input: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            thread_id: thread_id.to_string(),
+        };
+        let response: TurnSteerResponse = tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
+            .await
+            .map_err(|_| anyhow::anyhow!("turn/steer timeout"))?
+            .map_err(|e| anyhow::anyhow!("turn/steer failed: {e}"))?;
+        Ok(response.turn_id)
     }
 
     pub(crate) async fn list_host_skills(
