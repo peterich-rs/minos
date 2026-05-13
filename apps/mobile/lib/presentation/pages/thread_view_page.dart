@@ -33,7 +33,7 @@ import 'package:minos/src/rust/api/minos.dart';
 ///
 /// `threadId == null` means the user just landed on a "new chat" — the
 /// list renders empty and the first `onSend` dispatches via
-/// `sendUserMessage`. Once the controller transitions to
+/// `sendChatMessage`. Once the controller transitions to
 /// `SessionStreaming` we follow that thread id for events.
 class ThreadViewPage extends ConsumerStatefulWidget {
   const ThreadViewPage({
@@ -236,7 +236,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     // otherwise tapping an older thread would show the most-recently-started
     // session's events because the active-session controller is global.
     // The session-derived branch is only meant for the "new chat" path,
-    // where widget.threadId is null and we need sendUserMessage to mint one.
+    // where widget.threadId is null and we need sendChatMessage to mint one.
     if (widget.threadId != null) return widget.threadId;
     return _sessionThreadId(session);
   }
@@ -374,12 +374,14 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     final controller = ref.read(activeSessionControllerProvider.notifier);
     final targetThreadId = widget.threadId ?? _sessionThreadId(viewSession);
     final selectedProfile = _dispatchProfile(targetThreadId);
-    final dispatchAgent = targetThreadId == null
-        ? selectedProfile?.runtimeAgent ?? ref.read(preferredAgentProvider)
-        : selectedProfile?.runtimeAgent ??
-              widget.agent ??
-              _sessionAgent(viewSession) ??
-              ref.read(preferredAgentProvider);
+    // AgentProfile selection: for new chats (no thread yet), use the
+    // preferred agent from the profile or global preference. For existing
+    // threads, fall back through profile → widget.agent → session agent →
+    // global preference.
+    final dispatchAgent = selectedProfile?.runtimeAgent ??
+        widget.agent ??
+        _sessionAgent(viewSession) ??
+        ref.read(preferredAgentProvider);
     if (dispatchAgent == null) {
       _showThreadInfo(context, '请先选择一个 Agent');
       return;
@@ -389,22 +391,18 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     if (selectedProfile?.hostDeviceId case final hostId?) {
       await ref.read(activeMacProvider.notifier).setActive(hostId);
     }
-    MinosError? error;
+
+    // Unified send path: all messages go through sendChatMessage (via
+    // sendUserMessage on the wire). The server handles session creation
+    // when sessionId is empty and state-based dispatch (turn/start vs
+    // turn/steer) when a session already exists.
     final core = ref.read(minosCoreProvider);
-    if (targetThreadId == null) {
-      error = await controller.send(
-        agent: dispatchAgent,
-        text: text,
-        dispatch: () => core.sendUserMessage(sessionId: '', text: text),
-      );
-    } else {
-      error = await controller.send(
-        agent: dispatchAgent,
-        text: text,
-        dispatch: () =>
-            core.sendUserMessage(sessionId: targetThreadId, text: text),
-      );
-    }
+    final sessionId = targetThreadId ?? '';
+    final error = await controller.send(
+      agent: dispatchAgent,
+      text: text,
+      dispatch: () => core.sendUserMessage(sessionId: sessionId, text: text),
+    );
 
     if (!mounted) return;
     if (error != null) {
@@ -426,15 +424,15 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   }
 
   AgentProfile? _dispatchProfile(String? threadId) {
-    final workspace = ref.read(agentProfilesControllerProvider).asData?.value;
-    if (workspace == null) return null;
+    final profiles = ref.read(agentProfilesControllerProvider).asData?.value;
+    if (profiles == null) return null;
     if (widget.agentProfileId != null) {
-      return workspace.profileById(widget.agentProfileId!);
+      return profiles.profileById(widget.agentProfileId!);
     }
     if (threadId != null) {
-      return workspace.profileForThread(threadId);
+      return profiles.profileForThread(threadId);
     }
-    return workspace.preferredProfile;
+    return profiles.preferredProfile;
   }
 
   void _onSend(String text, ActiveSession viewSession) {
@@ -703,7 +701,7 @@ class _ThreadEventStream extends ConsumerWidget {
 }
 
 /// Quiet placeholder shown while the initial `readThread` future resolves
-/// or while a brand-new chat is waiting for `sendUserMessage` to mint a thread
+/// or while a brand-new chat is waiting for `sendChatMessage` to mint a thread
 /// id. Optimistic bubbles render in their natural top-to-bottom order; we
 /// deliberately drop the centered `CircularProgressIndicator` because the
 /// thread provider is now `keepAlive: true` and re-entry usually returns a

@@ -71,12 +71,17 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
+    let registry = Arc::new(SessionRegistry::new());
     let state = BackendState {
-        registry: Arc::new(SessionRegistry::new()),
+        registry: registry.clone(),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
         token_ttl: TOKEN_TTL,
         translators: ThreadTranslators::new(),
+        approval_relay: minos_backend::approval_relay::ApprovalRelay::new(
+            pool.clone(),
+            registry.clone(),
+        ),
         version: "daemon-smoke-test",
         jwt_secret: Arc::new("daemon-smoke-test-jwt-secret-32b".to_string()),
         auth_login_per_email: minos_backend::http::default_login_per_email(),

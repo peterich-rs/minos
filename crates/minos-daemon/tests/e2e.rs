@@ -84,12 +84,17 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
 
+    let registry = Arc::new(SessionRegistry::new());
     let state = BackendState {
-        registry: Arc::new(SessionRegistry::new()),
+        registry: registry.clone(),
         pairing: Arc::new(PairingService::new(pool.clone())),
         store: pool.clone(),
         token_ttl: Duration::from_mins(5),
         translators: ThreadTranslators::new(),
+        approval_relay: minos_backend::approval_relay::ApprovalRelay::new(
+            pool.clone(),
+            registry.clone(),
+        ),
         jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
         auth_login_per_email: minos_backend::http::default_login_per_email(),
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
