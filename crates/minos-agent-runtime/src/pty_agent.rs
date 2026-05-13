@@ -170,6 +170,7 @@ impl PtyAgent {
                 let pid = child.id();
                 if let Some(pid) = pid {
                     // SAFETY: kill(2) is async-signal-safe.
+                    #[allow(clippy::cast_possible_wrap)]
                     unsafe {
                         libc::kill(pid as i32, libc::SIGTERM);
                     }

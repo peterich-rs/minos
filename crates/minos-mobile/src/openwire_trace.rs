@@ -11,14 +11,12 @@ use openwire::{
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OpenwireTraceFactory {
-    _component: &'static str,
+    component: &'static str,
 }
 
 impl OpenwireTraceFactory {
     pub(crate) const fn new(component: &'static str) -> Self {
-        Self {
-            _component: component,
-        }
+        Self { component }
     }
 }
 
@@ -43,6 +41,7 @@ fn error_source_chain(error: &WireError) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_wire_error(
     _component: &'static str,
     ctx: &CallContext,
@@ -83,7 +82,7 @@ fn log_wire_error(
 impl EventListenerFactory for OpenwireTraceFactory {
     fn create(&self, request: &Request<RequestBody>) -> Arc<dyn EventListener> {
         Arc::new(OpenwireTraceListener {
-            _component: self._component,
+            component: self.component,
             method: request.method().clone(),
             uri: request.uri().to_string(),
             dial_attempt: AtomicU32::new(0),
@@ -95,7 +94,7 @@ impl EventListenerFactory for OpenwireTraceFactory {
 
 #[derive(Debug)]
 struct OpenwireTraceListener {
-    _component: &'static str,
+    component: &'static str,
     method: Method,
     uri: String,
     dial_attempt: AtomicU32,
@@ -150,7 +149,7 @@ impl EventListener for OpenwireTraceListener {
 
     fn call_failed(&self, ctx: &CallContext, error: &WireError) {
         log_wire_error(
-            self._component,
+            self.component,
             ctx,
             &self.method,
             &self.uri,
@@ -200,7 +199,7 @@ impl EventListener for OpenwireTraceListener {
 
     fn dns_failed(&self, ctx: &CallContext, host: &str, error: &WireError) {
         log_wire_error(
-            self._component,
+            self.component,
             ctx,
             &self.method,
             &self.uri,
@@ -258,7 +257,7 @@ impl EventListener for OpenwireTraceListener {
 
     fn connect_failed(&self, ctx: &CallContext, addr: SocketAddr, error: &WireError) {
         log_wire_error(
-            self._component,
+            self.component,
             ctx,
             &self.method,
             &self.uri,
@@ -300,7 +299,7 @@ impl EventListener for OpenwireTraceListener {
 
     fn tls_failed(&self, ctx: &CallContext, server_name: &str, error: &WireError) {
         log_wire_error(
-            self._component,
+            self.component,
             ctx,
             &self.method,
             &self.uri,

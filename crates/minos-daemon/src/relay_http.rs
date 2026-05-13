@@ -237,6 +237,7 @@ impl RelayHttpClient {
         req
     }
 
+    #[allow(clippy::unused_self)]
     fn finish_request(
         &self,
         req: http::request::Builder,

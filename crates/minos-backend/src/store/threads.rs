@@ -96,6 +96,35 @@ pub async fn update_title(
     Ok(())
 }
 
+/// Check whether a thread exists and belongs to a device owned by the
+/// given `account_id`. Used for authorization checks on thread-scoped
+/// endpoints.
+pub async fn exists_for_account(
+    pool: &SqlitePool,
+    thread_id: &str,
+    account_id: &str,
+) -> Result<bool, BackendError> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+           FROM threads t
+          WHERE t.thread_id = ?
+            AND EXISTS (
+                SELECT 1 FROM devices d
+                 WHERE d.device_id = t.owner_device_id
+                   AND d.account_id = ?
+            )",
+    )
+    .bind(thread_id)
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "threads.exists_for_account".into(),
+        message: e.to_string(),
+    })?;
+    Ok(count > 0)
+}
+
 /// List thread summaries for the `GET /v1/threads` HTTP response.
 ///
 /// Filters (all optional):
@@ -157,6 +186,99 @@ pub async fn list(
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "threads.list".into(),
+        message: e.to_string(),
+    })?;
+
+    rows.into_iter()
+        .map(
+            |(
+                thread_id,
+                agent_s,
+                title,
+                first_ts_ms,
+                last_ts_ms,
+                message_count,
+                ended_at_ms,
+                end_reason_json,
+            )| {
+                let agent = match agent_s.as_str() {
+                    "codex" => AgentName::Codex,
+                    "claude" => AgentName::Claude,
+                    "gemini" => AgentName::Gemini,
+                    other => {
+                        return Err(BackendError::StoreDecode {
+                            column: "threads.agent".into(),
+                            message: other.to_string(),
+                        })
+                    }
+                };
+                let end_reason = end_reason_json
+                    .as_ref()
+                    .map(|s| serde_json::from_str::<ThreadEndReason>(s))
+                    .transpose()
+                    .map_err(|e| BackendError::StoreDecode {
+                        column: "threads.end_reason".into(),
+                        message: e.to_string(),
+                    })?;
+                Ok(minos_protocol::ThreadSummary {
+                    thread_id,
+                    agent,
+                    title,
+                    first_ts_ms,
+                    last_ts_ms,
+                    message_count: u32::try_from(message_count).unwrap_or(u32::MAX),
+                    ended_at_ms,
+                    end_reason,
+                })
+            },
+        )
+        .collect()
+}
+
+/// List threads that belong to one account-scoped project.
+pub async fn list_by_project(
+    pool: &SqlitePool,
+    account_id: &str,
+    project_id: &str,
+    before_ts_ms: Option<i64>,
+    limit: u32,
+) -> Result<Vec<minos_protocol::ThreadSummary>, BackendError> {
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            i64,
+            i64,
+            i64,
+            Option<i64>,
+            Option<String>,
+        ),
+    >(
+        r"SELECT t.thread_id, t.agent, t.title, t.first_ts_ms, t.last_ts_ms, t.message_count, t.ended_at_ms, t.end_reason
+           FROM project_threads pt
+           INNER JOIN projects p
+             ON p.project_id = pt.project_id
+            AND p.account_id = pt.account_id
+           INNER JOIN threads t ON t.thread_id = pt.thread_id
+           INNER JOIN devices d
+             ON d.device_id = t.owner_device_id
+            AND d.account_id = pt.account_id
+           WHERE pt.account_id = ?1
+             AND pt.project_id = ?2
+             AND (?3 IS NULL OR t.last_ts_ms < ?3)
+           ORDER BY t.last_ts_ms DESC
+           LIMIT ?4",
+    )
+    .bind(account_id)
+    .bind(project_id)
+    .bind(before_ts_ms)
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "threads.list_by_project".into(),
         message: e.to_string(),
     })?;
 

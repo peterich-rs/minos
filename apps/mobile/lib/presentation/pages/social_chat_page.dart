@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_list_view/flutter_list_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/presentation/error_feedback.dart';
-import 'package:minos/presentation/pages/group_members_page.dart';
+import 'package:minos/presentation/router.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
@@ -194,13 +195,9 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
             IconButton(
               icon: const Icon(LucideIcons.users),
               tooltip: '群成员',
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => GroupMembersPage(
-                    conversationId: widget.conversationId,
-                    title: widget.title,
-                  ),
-                ),
+              onPressed: () => context.push(
+                '/social/chat/${widget.conversationId}/members',
+                extra: GroupMembersRouteExtra(title: widget.title),
               ),
             ),
         ],

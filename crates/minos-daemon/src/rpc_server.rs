@@ -147,6 +147,7 @@ const RPC_PARSE_ERROR: i32 = -32700;
 /// method, `-32602` for invalid params, `-32700` for malformed envelope).
 /// Method-level errors flow through [`rpc_err`] and surface with the
 /// existing `-3200x` codes.
+#[allow(clippy::too_many_lines)]
 pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Value {
     let id = payload.get("id").cloned().unwrap_or(Value::Null);
 
@@ -220,6 +221,79 @@ pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Va
                 Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
             };
             into_jsonrpc(id, server.get_thread(req).await)
+        }
+        "minos_create_project" => {
+            let req: minos_protocol::CreateProjectRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.agent.create_project(req).await.map_err(rpc_err))
+        }
+        "minos_list_projects" => {
+            into_jsonrpc(id, server.agent.list_projects().await.map_err(rpc_err))
+        }
+        "minos_update_project" => {
+            let req: minos_protocol::UpdateProjectRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.agent.update_project(req).await.map_err(rpc_err))
+        }
+        "minos_delete_project" => {
+            let req: minos_protocol::DeleteProjectRequest = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(id, server.agent.delete_project(req).await.map_err(rpc_err))
+        }
+        "minos_list_project_threads" => {
+            let req: minos_protocol::ListProjectThreadsParams = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            into_jsonrpc(
+                id,
+                server
+                    .agent
+                    .list_project_threads(req)
+                    .await
+                    .map_err(rpc_err),
+            )
+        }
+        "minos_start_agent_in_project" => {
+            // Expects { agent, workspace, project_id, workspace_slug? }
+            #[derive(serde::Deserialize)]
+            struct StartInProjectParams {
+                agent: minos_domain::AgentName,
+                #[serde(default)]
+                workspace: String,
+                project_id: String,
+                #[serde(default)]
+                workspace_slug: Option<String>,
+                #[serde(default)]
+                mode: Option<minos_protocol::AgentLaunchMode>,
+            }
+            let req: StartInProjectParams = match parse_params(&params) {
+                Ok(r) => r,
+                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            };
+            let start_req = minos_protocol::StartAgentRequest {
+                agent: req.agent,
+                workspace: req.workspace,
+                mode: req.mode,
+            };
+            into_jsonrpc(
+                id,
+                server
+                    .agent
+                    .start_agent_in_project(
+                        start_req,
+                        &req.project_id,
+                        req.workspace_slug.as_deref(),
+                    )
+                    .await
+                    .map_err(rpc_err),
+            )
         }
         // `subscribe_events` cannot meaningfully cross a forwarded RPC
         // boundary — the peer would need a streaming subscription which

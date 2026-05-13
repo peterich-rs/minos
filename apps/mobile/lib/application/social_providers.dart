@@ -144,7 +144,12 @@ class SocialConversation extends _$SocialConversation {
     _eventsSub = ref
         .read(minosCoreProvider)
         .socialEvents
-        .listen(_onSocialEvent);
+        .listen(
+          _onSocialEvent,
+          onError: (Object error, StackTrace stackTrace) =>
+              ref.invalidateSelf(),
+          onDone: ref.invalidateSelf,
+        );
     ref.onDispose(() => _eventsSub?.cancel());
     unawaited(_load(seedState: initialState));
     return initialState;
@@ -437,9 +442,17 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
 
   @override
   Future<ConversationsResponse> build() async {
-    _eventsSub ??= ref.read(minosCoreProvider).socialEvents.listen((_) {
-      ref.invalidateSelf();
-    });
+    _eventsSub ??= ref
+        .read(minosCoreProvider)
+        .socialEvents
+        .listen(
+          (_) {
+            ref.invalidateSelf();
+          },
+          onError: (Object error, StackTrace stackTrace) =>
+              ref.invalidateSelf(),
+          onDone: ref.invalidateSelf,
+        );
     ref.onDispose(() => _eventsSub?.cancel());
 
     final cache = ref.read(socialCacheStoreProvider);

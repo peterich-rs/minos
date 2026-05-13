@@ -141,6 +141,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
         auth_register_per_ip: minos_backend::http::default_register_per_ip(),
         auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
+        cors_origins: None,
         version: "daemon-agent-e2e",
     };
     let app = router(state.clone());
@@ -181,7 +182,11 @@ async fn send_http(
     (status, body)
 }
 
-async fn connect_mobile(relay: &Relay, device_id: DeviceId, bearer: &str) -> anyhow::Result<WsClient> {
+async fn connect_mobile(
+    relay: &Relay,
+    device_id: DeviceId,
+    bearer: &str,
+) -> anyhow::Result<WsClient> {
     let url: Uri = relay_ws_url(relay).parse().unwrap();
     let builder = ClientRequestBuilder::new(url)
         .with_header("X-Device-Id", device_id.to_string())
@@ -262,11 +267,7 @@ async fn recv_forwarded_result(
     }
 }
 
-fn record_ui_event(
-    ui: UiEventMessage,
-    saw_user_text: &mut bool,
-    saw_assistant_started: &mut bool,
-) {
+fn record_ui_event(ui: UiEventMessage, saw_user_text: &mut bool, saw_assistant_started: &mut bool) {
     match ui {
         UiEventMessage::MessageStarted {
             role: MessageRole::Assistant,
@@ -350,8 +351,8 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
 
     let qr = handle.pairing_qr().await?;
     let mobile_id = DeviceId::new();
-    let account = store::accounts::create(&relay.state.store, "agent-e2e@example.com", "phc")
-        .await?;
+    let account =
+        store::accounts::create(&relay.state.store, "agent-e2e@example.com", "phc").await?;
     let bearer = jwt::sign(
         TEST_JWT_SECRET.as_bytes(),
         &account.account_id,
@@ -436,10 +437,7 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
                     saw_send_ack = true;
                 }
                 Envelope::Event {
-                    event:
-                        EventKind::UiEventMessage {
-                            thread_id, ui, ..
-                        },
+                    event: EventKind::UiEventMessage { thread_id, ui, .. },
                     ..
                 } => {
                     assert_eq!(thread_id, THREAD_ID);

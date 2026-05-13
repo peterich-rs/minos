@@ -325,8 +325,7 @@ async fn host_skills(
     .await;
     let shutdown = shutdown_local_agent(local).await;
     match (result, shutdown) {
-        (Err(err), _) => Err(err),
-        (Ok(()), Err(err)) => Err(err),
+        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
@@ -367,8 +366,7 @@ async fn set_host_skill(
     .await;
     let shutdown = shutdown_local_agent(local).await;
     match (result, shutdown) {
-        (Err(err), _) => Err(err),
-        (Ok(()), Err(err)) => Err(err),
+        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
@@ -381,8 +379,7 @@ async fn run_prompt(
     let result = run_prompt_inner(&args, &local).await;
     let shutdown = shutdown_local_agent(local).await;
     match (result, shutdown) {
-        (Err(err), _) => Err(err),
-        (Ok(()), Err(err)) => Err(err),
+        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
@@ -394,8 +391,7 @@ async fn run_prompt_inner(
     let agent = parse_agent_name(&args.agent)?;
     if agent != AgentName::Codex {
         return Err(Box::new(std::io::Error::other(format!(
-            "local run currently supports codex only; got {:?}",
-            agent
+            "local run currently supports codex only; got {agent:?}"
         ))));
     }
     let workspace = resolve_workspace_arg(args.workspace.as_ref())?;
@@ -452,12 +448,12 @@ async fn chat_session(
     let result = chat_session_inner(&args, &local).await;
     let shutdown = shutdown_local_agent(local).await;
     match (result, shutdown) {
-        (Err(err), _) => Err(err),
-        (Ok(()), Err(err)) => Err(err),
+        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn chat_session_inner(
     args: &ChatArgs,
     local: &LocalAgentContext,
@@ -465,8 +461,7 @@ async fn chat_session_inner(
     let agent = parse_agent_name(&args.agent)?;
     if agent != AgentName::Codex {
         return Err(Box::new(std::io::Error::other(format!(
-            "local chat currently supports codex only; got {:?}",
-            agent
+            "local chat currently supports codex only; got {agent:?}"
         ))));
     }
     let workspace = resolve_workspace_arg(args.workspace.as_ref())?;
@@ -664,8 +659,7 @@ async fn execute_local_turn(
                     Ok(raw) if raw.thread_id == session_id => {
                         renderer.handle_raw_ingest(&raw, translator, json_mode)?;
                     }
-                    Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         reached_terminal_state = true;
                     }
@@ -686,7 +680,7 @@ async fn execute_local_turn(
                     }
                 }
             }
-            _ = tokio::time::sleep(remaining) => {
+            () = tokio::time::sleep(remaining) => {
                 return Err(Box::new(MinosError::Timeout));
             }
         }
@@ -1010,8 +1004,7 @@ async fn history(
     .await;
     let shutdown = shutdown_local_agent(local).await;
     match (result, shutdown) {
-        (Err(err), _) => Err(err),
-        (Ok(()), Err(err)) => Err(err),
+        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
@@ -1252,9 +1245,9 @@ impl RunRenderer {
 
     fn is_assistant_message(&self, event: &UiEventMessage) -> bool {
         let message_id = match event {
-            UiEventMessage::TextDelta { message_id, .. } => Some(message_id),
-            UiEventMessage::ReasoningDelta { message_id, .. } => Some(message_id),
-            UiEventMessage::ToolCallPlaced { message_id, .. } => Some(message_id),
+            UiEventMessage::TextDelta { message_id, .. }
+            | UiEventMessage::ReasoningDelta { message_id, .. }
+            | UiEventMessage::ToolCallPlaced { message_id, .. } => Some(message_id),
             UiEventMessage::Error { message_id, .. } => message_id.as_ref(),
             _ => None,
         };
@@ -1537,13 +1530,14 @@ fn print_thread_snapshot(thread: &minos_protocol::GetThreadResponse) {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn relay_config_from_env() -> Result<RelayConfig, MinosError> {
-    relay_config_from_values(env::var("MINOS_BACKEND_URL").ok())
+    Ok(relay_config_from_values(env::var("MINOS_BACKEND_URL").ok()))
 }
 
-fn relay_config_from_values(backend_url: Option<String>) -> Result<RelayConfig, MinosError> {
+fn relay_config_from_values(backend_url: Option<String>) -> RelayConfig {
     let backend_url = blank_to_none(backend_url).unwrap_or_default();
-    Ok(RelayConfig::new(backend_url))
+    RelayConfig::new(backend_url)
 }
 
 fn blank_to_none(value: Option<String>) -> Option<String> {
@@ -1639,14 +1633,13 @@ mod tests {
 
     #[test]
     fn relay_config_from_values_defaults_to_blank_backend() {
-        let config = relay_config_from_values(None).expect("blank config");
+        let config = relay_config_from_values(None);
         assert!(config.backend_url.is_empty());
     }
 
     #[test]
     fn relay_config_from_values_trims_backend_url() {
-        let config =
-            relay_config_from_values(Some(" wss://relay.example/devices ".into())).expect("cfg");
+        let config = relay_config_from_values(Some(" wss://relay.example/devices ".into()));
         assert_eq!(config.backend_url, "wss://relay.example/devices");
     }
 

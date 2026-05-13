@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/agent_profiles_provider.dart';
@@ -7,7 +8,7 @@ import 'package:minos/application/minos_providers.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/presentation/pages/agents_hub_page.dart'
     show AgentEditorSheet;
-import 'package:minos/presentation/pages/thread_view_page.dart';
+import 'package:minos/presentation/router.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 class AgentStartPage extends ConsumerStatefulWidget {
@@ -199,14 +200,13 @@ class _AgentStartPageState extends ConsumerState<AgentStartPage> {
                   onPressed: selectedProfile == null
                       ? null
                       : () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => ThreadViewPage(
-                                agentProfileId: selectedProfile.id,
-                                startupWorkspace: selectedWorkspace.isEmpty
-                                    ? null
-                                    : selectedWorkspace,
-                              ),
+                          context.push(
+                            AppRoutes.newThread,
+                            extra: ThreadRouteExtra(
+                              agentProfileId: selectedProfile.id,
+                              startupWorkspace: selectedWorkspace.isEmpty
+                                  ? null
+                                  : selectedWorkspace,
                             ),
                           );
                         },

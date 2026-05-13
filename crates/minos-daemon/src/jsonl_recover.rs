@@ -56,14 +56,7 @@ pub async fn recover(
         );
         return Ok(());
     };
-    recover_with_root(
-        thread_id,
-        missing_seqs,
-        codex_session_id,
-        &home,
-        writer,
-    )
-    .await
+    recover_with_root(thread_id, missing_seqs, codex_session_id, &home, writer).await
 }
 
 /// Test-injectable entrypoint: caller passes the directory that should

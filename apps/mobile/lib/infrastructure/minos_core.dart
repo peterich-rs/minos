@@ -238,6 +238,55 @@ class MinosCore implements MinosCoreProtocol {
   Future<ReadThreadResponse> readThread(ReadThreadParams params) =>
       _client.readThread(req: params);
 
+  // ---- Project forwarders ----
+
+  @override
+  Future<CreateProjectResponse> createProject({
+    required String name,
+    required String workspaceSlug,
+  }) => _client.createProject(
+    req: CreateProjectRequest(name: name, workspaceSlug: workspaceSlug),
+  );
+
+  @override
+  Future<ListProjectsResponse> listProjects() => _client.listProjects();
+
+  @override
+  Future<void> updateProject({
+    required String projectId,
+    required String name,
+  }) => _client.updateProject(
+    req: UpdateProjectRequest(projectId: projectId, name: name),
+  );
+
+  @override
+  Future<void> deleteProject({required String projectId}) =>
+      _client.deleteProject(req: DeleteProjectRequest(projectId: projectId));
+
+  @override
+  Future<ListProjectThreadsResponse> listProjectThreads({
+    required String projectId,
+    int limit = 50,
+    int? beforeTsMs,
+  }) => _client.listProjectThreads(
+    req: ListProjectThreadsParams(
+      projectId: projectId,
+      limit: limit,
+      beforeTsMs: beforeTsMs == null ? null : platformInt64FromInt(beforeTsMs),
+    ),
+  );
+
+  @override
+  Future<StartAgentResponse> startAgentInProject({
+    required AgentName agent,
+    required String prompt,
+    required String projectId,
+  }) => _client.startAgentInProject(
+    agent: agent,
+    prompt: prompt,
+    projectId: projectId,
+  );
+
   @override
   Stream<ConnectionState> get connectionStates => _client.subscribeState();
 

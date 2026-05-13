@@ -17,7 +17,11 @@ use std::os::unix::fs::PermissionsExt;
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn path_sep() -> &'static str {
-    if cfg!(windows) { ";" } else { ":" }
+    if cfg!(windows) {
+        ";"
+    } else {
+        ":"
+    }
 }
 
 #[cfg(unix)]
@@ -120,7 +124,12 @@ async fn run_subprocess_sees_only_injected_env() {
     let mut env = HashMap::new();
     env.insert(
         "PATH".to_owned(),
-        format!("{}{}{}", dir.path().display(), path_sep(), std::env::var("PATH").unwrap_or_default()),
+        format!(
+            "{}{}{}",
+            dir.path().display(),
+            path_sep(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
     );
     env.insert("MINOS_TEST_SENTINEL".to_owned(), "snowflake".to_owned());
     let runner = RealCommandRunner::new(Arc::new(env));

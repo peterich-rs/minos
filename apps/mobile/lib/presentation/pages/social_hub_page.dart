@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/presentation/error_feedback.dart';
-import 'package:minos/presentation/pages/social_chat_page.dart';
+import 'package:minos/presentation/router.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 class SocialHubPage extends ConsumerStatefulWidget {
@@ -40,13 +41,11 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
           .ensureDirectConversation(friendAccountId: friend.accountId);
       if (!mounted) return;
       ref.invalidate(conversationsProvider);
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => SocialChatPage(
-            conversationId: response.conversationId,
-            title: friend.displayName,
-            kind: ConversationKind.direct,
-          ),
+      context.push(
+        '/social/chat/${response.conversationId}',
+        extra: SocialChatRouteExtra(
+          title: friend.displayName,
+          kind: ConversationKind.direct,
         ),
       );
     } catch (error) {
@@ -176,15 +175,13 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
                               ref.invalidate(conversationsProvider);
                               Navigator.of(context).pop();
                               if (!mounted) return;
-                              await Navigator.of(rootContext).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) => SocialChatPage(
-                                    conversationId: response.conversationId,
-                                    title: titleController.text.trim().isEmpty
-                                        ? '群聊'
-                                        : titleController.text.trim(),
-                                    kind: ConversationKind.group,
-                                  ),
+                              rootContext.push(
+                                '/social/chat/${response.conversationId}',
+                                extra: SocialChatRouteExtra(
+                                  title: titleController.text.trim().isEmpty
+                                      ? '群聊'
+                                      : titleController.text.trim(),
+                                  kind: ConversationKind.group,
                                 ),
                               );
                             } catch (error) {
@@ -255,9 +252,9 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
             _FriendSearchSection(controller: _searchController),
             const SizedBox(height: 16),
             friendsAsync.when(
-              loading: () => _SocialSection(
+              loading: () => const _SocialSection(
                 title: '群聊',
-                child: const Padding(
+                child: Padding(
                   padding: EdgeInsets.all(16),
                   child: Center(child: ShadProgress()),
                 ),
@@ -283,9 +280,9 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
             ),
             const SizedBox(height: 16),
             requestsAsync.when(
-              loading: () => _SocialSection(
+              loading: () => const _SocialSection(
                 title: '好友请求',
-                child: const Padding(
+                child: Padding(
                   padding: EdgeInsets.all(16),
                   child: Center(child: ShadProgress()),
                 ),
@@ -362,9 +359,9 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
             ),
             const SizedBox(height: 16),
             friendsAsync.when(
-              loading: () => _SocialSection(
+              loading: () => const _SocialSection(
                 title: '好友',
-                child: const Padding(
+                child: Padding(
                   padding: EdgeInsets.all(16),
                   child: Center(child: ShadProgress()),
                 ),

@@ -15,14 +15,16 @@ use http::header::CONTENT_TYPE;
 use http::{Method, Request, Response, StatusCode};
 use minos_domain::{DeviceId, MinosError};
 use minos_protocol::{
-    AuthRequest, AuthResponse, ConversationMembersResponse, ConversationReadResponse,
-    ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
-    CreateGroupConversationRequest, EnsureDirectConversationRequest, FriendRequestsResponse,
-    FriendsResponse, GetThreadLastSeqParams, GetThreadLastSeqResponse, ListChatMessagesRequest,
-    ListChatMessagesResponse, ListThreadsParams, ListThreadsResponse, LogoutRequest,
-    MeHostsResponse, MyProfileResponse, PairConsumeRequest, PairResponse, ReadThreadParams,
-    ReadThreadResponse, RefreshRequest, RefreshResponse, SearchUsersRequest, SearchUsersResponse,
-    SendChatMessageRequest, SetMinosIdRequest,
+    AssignProjectThreadRequest, AuthRequest, AuthResponse, ConversationMembersResponse,
+    ConversationReadResponse, ConversationResponse, ConversationsResponse,
+    CreateFriendRequestRequest, CreateGroupConversationRequest, CreateProjectRequest,
+    CreateProjectResponse, DeleteProjectRequest, EnsureDirectConversationRequest,
+    FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams, GetThreadLastSeqResponse,
+    ListChatMessagesRequest, ListChatMessagesResponse, ListProjectThreadsParams,
+    ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams, ListThreadsResponse,
+    LogoutRequest, MeHostsResponse, MyProfileResponse, PairConsumeRequest, PairResponse,
+    ReadThreadParams, ReadThreadResponse, RefreshRequest, RefreshResponse, SearchUsersRequest,
+    SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest, UpdateProjectRequest,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -284,6 +286,183 @@ impl MobileHttpClient {
                 Some(thread_id.into()),
             );
             Ok(last_seq)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn create_project(
+        &self,
+        access_token: &str,
+        req: CreateProjectRequest,
+    ) -> Result<CreateProjectResponse, MinosError> {
+        let path = "/v1/projects";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!("name={} slug={}", req.name, req.workspace_slug)),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: CreateProjectResponse =
+                decode_success_json(resp, "CreateProjectResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("project_id={}", body.project.project_id)),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn list_projects(
+        &self,
+        access_token: &str,
+    ) -> Result<ListProjectsResponse, MinosError> {
+        let path = "/v1/projects/query";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ListProjectsResponse =
+                decode_success_json(resp, "ListProjectsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("projects={}", body.projects.len())),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn update_project(
+        &self,
+        access_token: &str,
+        req: UpdateProjectRequest,
+    ) -> Result<(), MinosError> {
+        let path = "/v1/projects/update";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!("project_id={}", req.project_id)),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(trace_id, Some(status.as_u16()), None, None);
+            Ok(())
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn delete_project(
+        &self,
+        access_token: &str,
+        req: DeleteProjectRequest,
+    ) -> Result<(), MinosError> {
+        let path = "/v1/projects/delete";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!("project_id={}", req.project_id)),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(trace_id, Some(status.as_u16()), None, None);
+            Ok(())
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn assign_project_thread(
+        &self,
+        access_token: &str,
+        req: AssignProjectThreadRequest,
+    ) -> Result<(), MinosError> {
+        let path = "/v1/projects/threads/assign";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!(
+                "project_id={} thread_id={}",
+                req.project_id, req.thread_id
+            )),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(trace_id, Some(status.as_u16()), None, None);
+            Ok(())
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn list_project_threads(
+        &self,
+        access_token: &str,
+        req: ListProjectThreadsParams,
+    ) -> Result<ListProjectThreadsResponse, MinosError> {
+        let path = "/v1/projects/threads/query";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!(
+                "project_id={} limit={} before_ts_ms={:?}",
+                req.project_id, req.limit, req.before_ts_ms
+            )),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ListProjectThreadsResponse =
+                decode_success_json(resp, "ListProjectThreadsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("threads={}", body.threads.len())),
+                None,
+            );
+            Ok(body)
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
@@ -976,12 +1155,11 @@ impl MobileHttpClient {
 
 fn connect_err(url: &str, e: &WireError) -> MinosError {
     match e.response_status() {
-        Some(StatusCode::UNAUTHORIZED) => MinosError::Unauthorized {
-            reason: format!("{url}: {e}"),
-        },
-        Some(StatusCode::FOUND | StatusCode::FORBIDDEN) => MinosError::Unauthorized {
-            reason: format!("{url}: {e}"),
-        },
+        Some(StatusCode::UNAUTHORIZED | StatusCode::FOUND | StatusCode::FORBIDDEN) => {
+            MinosError::Unauthorized {
+                reason: format!("{url}: {e}"),
+            }
+        }
         _ => MinosError::ConnectFailed {
             url: url.into(),
             message: e.to_string(),

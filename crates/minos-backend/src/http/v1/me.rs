@@ -161,27 +161,25 @@ async fn get_me_peers(
                 )
             })?;
 
-        let (mobile_device_name, last_active_at_ms) = match mobile {
-            Some(row) => (row.display_name, row.last_seen_at),
-            None => {
-                tracing::warn!(
-                    target: "minos_backend::v1::me",
-                    mobile = %pair.paired_via_device_id,
-                    "pair row references mobile device with no devices row; using placeholder name",
-                );
-                ("unknown".into(), pair.paired_at_ms)
-            }
+        let (mobile_device_name, last_active_at_ms) = if let Some(row) = mobile {
+            (row.display_name, row.last_seen_at)
+        } else {
+            tracing::warn!(
+                target: "minos_backend::v1::me",
+                mobile = %pair.paired_via_device_id,
+                "pair row references mobile device with no devices row; using placeholder name",
+            );
+            ("unknown".into(), pair.paired_at_ms)
         };
-        let account_email = match account {
-            Some(row) => row.email,
-            None => {
-                tracing::warn!(
-                    target: "minos_backend::v1::me",
-                    account_id = %pair.mobile_account_id,
-                    "pair row references missing account row; falling back to account id",
-                );
-                pair.mobile_account_id.clone()
-            }
+        let account_email = if let Some(row) = account {
+            row.email
+        } else {
+            tracing::warn!(
+                target: "minos_backend::v1::me",
+                account_id = %pair.mobile_account_id,
+                "pair row references missing account row; falling back to account id",
+            );
+            pair.mobile_account_id.clone()
         };
 
         peers.push(HostPeerSummary {
@@ -316,29 +314,29 @@ async fn get_me_peer(
         )
     })?;
 
-    let peer_name = match crate::store::devices::get_device(&state.store, pair.paired_via_device_id)
-        .await
-        .map_err(|e| {
-            tracing::warn!(
-                target: "minos_backend::v1::me",
-                error = %e,
-                peer = %pair.paired_via_device_id,
-                "get_device(peer) failed",
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                err_body("internal", e.to_string()),
-            )
-        })? {
-        Some(row) => row.display_name,
-        None => {
-            tracing::warn!(
-                target: "minos_backend::v1::me",
-                peer = %pair.paired_via_device_id,
-                "pair row references mobile device with no devices row; using placeholder name",
-            );
-            "unknown".into()
-        }
+    let peer_name = if let Some(row) =
+        crate::store::devices::get_device(&state.store, pair.paired_via_device_id)
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    target: "minos_backend::v1::me",
+                    error = %e,
+                    peer = %pair.paired_via_device_id,
+                    "get_device(peer) failed",
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    err_body("internal", e.to_string()),
+                )
+            })? {
+        row.display_name
+    } else {
+        tracing::warn!(
+            target: "minos_backend::v1::me",
+            peer = %pair.paired_via_device_id,
+            "pair row references mobile device with no devices row; using placeholder name",
+        );
+        "unknown".into()
     };
 
     Ok(Json(minos_protocol::MePeerResponse {

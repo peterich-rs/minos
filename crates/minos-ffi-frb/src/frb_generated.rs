@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1962245884;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1047203381;
 
 // Section: executor
 
@@ -462,6 +462,66 @@ fn wire__crate__api__minos__MobileClient_create_group_conversation_impl(
         },
     )
 }
+fn wire__crate__api__minos__MobileClient_create_project_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_create_project",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            let api_req = <crate::api::minos::CreateProjectRequest>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::minos::MobileClient::create_project(
+                            &*api_that_guard,
+                            api_req,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__minos__MobileClient_current_state_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -507,6 +567,66 @@ fn wire__crate__api__minos__MobileClient_current_state_impl(
                 )?;
                 Ok(output_ok)
             })())
+        },
+    )
+}
+fn wire__crate__api__minos__MobileClient_delete_project_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_delete_project",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            let api_req = <crate::api::minos::DeleteProjectRequest>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::minos::MobileClient::delete_project(
+                            &*api_that_guard,
+                            api_req,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
         },
     )
 }
@@ -1034,6 +1154,124 @@ fn wire__crate__api__minos__MobileClient_list_paired_hosts_impl(
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok =
                             crate::api::minos::MobileClient::list_paired_hosts(&*api_that_guard)
+                                .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__minos__MobileClient_list_project_threads_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_list_project_threads",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            let api_req =
+                <crate::api::minos::ListProjectThreadsParams>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::minos::MobileClient::list_project_threads(
+                            &*api_that_guard,
+                            api_req,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__minos__MobileClient_list_projects_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_list_projects",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok =
+                            crate::api::minos::MobileClient::list_projects(&*api_that_guard)
                                 .await?;
                         Ok(output_ok)
                     })()
@@ -2346,6 +2584,70 @@ fn wire__crate__api__minos__MobileClient_start_agent_impl(
         },
     )
 }
+fn wire__crate__api__minos__MobileClient_start_agent_in_project_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_start_agent_in_project",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            let api_agent = <crate::api::minos::AgentName>::sse_decode(&mut deserializer);
+            let api_prompt = <String>::sse_decode(&mut deserializer);
+            let api_project_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::minos::MobileClient::start_agent_in_project(
+                            &*api_that_guard,
+                            api_agent,
+                            api_prompt,
+                            api_project_id,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__minos__MobileClient_subscribe_auth_state_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2574,6 +2876,66 @@ fn wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
                     })?;
                     Ok(output_ok)
                 })())
+            }
+        },
+    )
+}
+fn wire__crate__api__minos__MobileClient_update_project_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_update_project",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            let api_req = <crate::api::minos::UpdateProjectRequest>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::minos::MobileClient::update_project(
+                            &*api_that_guard,
+                            api_req,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
             }
         },
     )
@@ -2947,6 +3309,7 @@ const _: fn() = || {
         let _: Option<crate::api::minos::ChatMessageReplySummary> = ChatMessageSummary.reply_to;
         let _: Option<i64> = ChatMessageSummary.recalled_at_ms;
         let _: Vec<String> = ChatMessageSummary.mentioned_account_ids;
+        let _: crate::api::minos::SenderType = ChatMessageSummary.sender_type;
     }
     match None::<crate::api::minos::ConnectionState>.unwrap() {
         crate::api::minos::ConnectionState::Disconnected => {}
@@ -2984,6 +3347,19 @@ const _: fn() = || {
     {
         let ConversationsResponse = None::<crate::api::minos::ConversationsResponse>.unwrap();
         let _: Vec<crate::api::minos::ConversationSummary> = ConversationsResponse.conversations;
+    }
+    {
+        let CreateProjectRequest = None::<crate::api::minos::CreateProjectRequest>.unwrap();
+        let _: String = CreateProjectRequest.name;
+        let _: String = CreateProjectRequest.workspace_slug;
+    }
+    {
+        let CreateProjectResponse = None::<crate::api::minos::CreateProjectResponse>.unwrap();
+        let _: crate::api::minos::ProjectSummary = CreateProjectResponse.project;
+    }
+    {
+        let DeleteProjectRequest = None::<crate::api::minos::DeleteProjectRequest>.unwrap();
+        let _: String = DeleteProjectRequest.project_id;
     }
     {
         let FriendRequestSummary = None::<crate::api::minos::FriendRequestSummary>.unwrap();
@@ -3039,6 +3415,21 @@ const _: fn() = || {
     {
         let ListHostSkillsResponse = None::<crate::api::minos::ListHostSkillsResponse>.unwrap();
         let _: Vec<crate::api::minos::HostSkillsEntry> = ListHostSkillsResponse.data;
+    }
+    {
+        let ListProjectThreadsParams = None::<crate::api::minos::ListProjectThreadsParams>.unwrap();
+        let _: String = ListProjectThreadsParams.project_id;
+        let _: u32 = ListProjectThreadsParams.limit;
+        let _: Option<i64> = ListProjectThreadsParams.before_ts_ms;
+    }
+    {
+        let ListProjectThreadsResponse =
+            None::<crate::api::minos::ListProjectThreadsResponse>.unwrap();
+        let _: Vec<crate::api::minos::ThreadSummary> = ListProjectThreadsResponse.threads;
+    }
+    {
+        let ListProjectsResponse = None::<crate::api::minos::ListProjectsResponse>.unwrap();
+        let _: Vec<crate::api::minos::ProjectSummary> = ListProjectsResponse.projects;
     }
     {
         let ListThreadsParams = None::<crate::api::minos::ListThreadsParams>.unwrap();
@@ -3165,6 +3556,15 @@ const _: fn() = || {
         let _: Option<String> = MyProfileResponse.display_name;
     }
     {
+        let ProjectSummary = None::<crate::api::minos::ProjectSummary>.unwrap();
+        let _: String = ProjectSummary.project_id;
+        let _: String = ProjectSummary.name;
+        let _: String = ProjectSummary.workspace_slug;
+        let _: i64 = ProjectSummary.created_at_ms;
+        let _: i64 = ProjectSummary.updated_at_ms;
+        let _: u32 = ProjectSummary.thread_count;
+    }
+    {
         let ReadThreadParams = None::<crate::api::minos::ReadThreadParams>.unwrap();
         let _: String = ReadThreadParams.thread_id;
         let _: Option<u64> = ReadThreadParams.from_seq;
@@ -3283,6 +3683,11 @@ const _: fn() = || {
             let _: String = kind;
             let _: String = payload_json;
         }
+    }
+    {
+        let UpdateProjectRequest = None::<crate::api::minos::UpdateProjectRequest>.unwrap();
+        let _: String = UpdateProjectRequest.project_id;
+        let _: String = UpdateProjectRequest.name;
     }
     {
         let UserSummary = None::<crate::api::minos::UserSummary>.unwrap();
@@ -3651,6 +4056,38 @@ impl SseDecode for crate::api::minos::ConversationsResponse {
             <Vec<crate::api::minos::ConversationSummary>>::sse_decode(deserializer);
         return crate::api::minos::ConversationsResponse {
             conversations: var_conversations,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::CreateProjectRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_workspaceSlug = <String>::sse_decode(deserializer);
+        return crate::api::minos::CreateProjectRequest {
+            name: var_name,
+            workspace_slug: var_workspaceSlug,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::CreateProjectResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_project = <crate::api::minos::ProjectSummary>::sse_decode(deserializer);
+        return crate::api::minos::CreateProjectResponse {
+            project: var_project,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::DeleteProjectRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_projectId = <String>::sse_decode(deserializer);
+        return crate::api::minos::DeleteProjectRequest {
+            project_id: var_projectId,
         };
     }
 }
@@ -4045,6 +4482,54 @@ impl SseDecode for Vec<u8> {
             ans_.push(<u8>::sse_decode(deserializer));
         }
         return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::minos::ProjectSummary> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::minos::ProjectSummary>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for crate::api::minos::ListProjectThreadsParams {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_projectId = <String>::sse_decode(deserializer);
+        let mut var_limit = <u32>::sse_decode(deserializer);
+        let mut var_beforeTsMs = <Option<i64>>::sse_decode(deserializer);
+        return crate::api::minos::ListProjectThreadsParams {
+            project_id: var_projectId,
+            limit: var_limit,
+            before_ts_ms: var_beforeTsMs,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::ListProjectThreadsResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_threads = <Vec<crate::api::minos::ThreadSummary>>::sse_decode(deserializer);
+        return crate::api::minos::ListProjectThreadsResponse {
+            threads: var_threads,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::ListProjectsResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_projects = <Vec<crate::api::minos::ProjectSummary>>::sse_decode(deserializer);
+        return crate::api::minos::ListProjectsResponse {
+            projects: var_projects,
+        };
     }
 }
 
@@ -4543,6 +5028,26 @@ impl SseDecode for crate::api::minos::PersistedPairingState {
     }
 }
 
+impl SseDecode for crate::api::minos::ProjectSummary {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_projectId = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_workspaceSlug = <String>::sse_decode(deserializer);
+        let mut var_createdAtMs = <i64>::sse_decode(deserializer);
+        let mut var_updatedAtMs = <i64>::sse_decode(deserializer);
+        let mut var_threadCount = <u32>::sse_decode(deserializer);
+        return crate::api::minos::ProjectSummary {
+            project_id: var_projectId,
+            name: var_name,
+            workspace_slug: var_workspaceSlug,
+            created_at_ms: var_createdAtMs,
+            updated_at_ms: var_updatedAtMs,
+            thread_count: var_threadCount,
+        };
+    }
+}
+
 impl SseDecode for crate::api::minos::ReadThreadParams {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -4628,6 +5133,18 @@ impl SseDecode for crate::api::minos::RequestTraceTransport {
             0 => crate::api::minos::RequestTraceTransport::Http,
             1 => crate::api::minos::RequestTraceTransport::Rpc,
             _ => unreachable!("Invalid variant for RequestTraceTransport: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::SenderType {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::minos::SenderType::User,
+            1 => crate::api::minos::SenderType::Agent,
+            _ => unreachable!("Invalid variant for SenderType: {}", inner),
         };
     }
 }
@@ -4876,6 +5393,18 @@ impl SseDecode for () {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {}
 }
 
+impl SseDecode for crate::api::minos::UpdateProjectRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_projectId = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        return crate::api::minos::UpdateProjectRequest {
+            project_id: var_projectId,
+            name: var_name,
+        };
+    }
+}
+
 impl SseDecode for crate::api::minos::UserSummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -4958,185 +5487,221 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        9 => wire__crate__api__minos__MobileClient_ensure_direct_conversation_impl(
+        8 => wire__crate__api__minos__MobileClient_create_project_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        10 => wire__crate__api__minos__MobileClient_forget_host_impl(
+        10 => wire__crate__api__minos__MobileClient_delete_project_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        11 => wire__crate__api__minos__MobileClient_friend_requests_impl(
+        11 => wire__crate__api__minos__MobileClient_ensure_direct_conversation_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        12 => wire__crate__api__minos__MobileClient_friends_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__minos__MobileClient_interrupt_thread_impl(
+        12 => wire__crate__api__minos__MobileClient_forget_host_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        14 => wire__crate__api__minos__MobileClient_list_chat_messages_impl(
+        13 => wire__crate__api__minos__MobileClient_friend_requests_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        15 => {
+        14 => wire__crate__api__minos__MobileClient_friends_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__minos__MobileClient_interrupt_thread_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        16 => wire__crate__api__minos__MobileClient_list_chat_messages_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        17 => {
             wire__crate__api__minos__MobileClient_list_clis_impl(port, ptr, rust_vec_len, data_len)
         }
-        16 => wire__crate__api__minos__MobileClient_list_host_skills_impl(
+        18 => wire__crate__api__minos__MobileClient_list_host_skills_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        17 => wire__crate__api__minos__MobileClient_list_paired_hosts_impl(
+        19 => wire__crate__api__minos__MobileClient_list_paired_hosts_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        18 => wire__crate__api__minos__MobileClient_list_threads_impl(
+        20 => wire__crate__api__minos__MobileClient_list_project_threads_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        19 => wire__crate__api__minos__MobileClient_login_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__minos__MobileClient_logout_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__minos__MobileClient_mark_conversation_read_impl(
+        21 => wire__crate__api__minos__MobileClient_list_projects_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        22 => {
+        22 => wire__crate__api__minos__MobileClient_list_threads_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        23 => wire__crate__api__minos__MobileClient_login_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__minos__MobileClient_logout_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__minos__MobileClient_mark_conversation_read_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        26 => {
             wire__crate__api__minos__MobileClient_my_profile_impl(port, ptr, rust_vec_len, data_len)
         }
-        27 => wire__crate__api__minos__MobileClient_pair_with_qr_json_impl(
+        31 => wire__crate__api__minos__MobileClient_pair_with_qr_json_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__minos__MobileClient_persisted_pairing_state_impl(
+        32 => wire__crate__api__minos__MobileClient_persisted_pairing_state_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => wire__crate__api__minos__MobileClient_read_thread_impl(
+        33 => wire__crate__api__minos__MobileClient_read_thread_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => wire__crate__api__minos__MobileClient_recall_chat_message_impl(
+        34 => wire__crate__api__minos__MobileClient_recall_chat_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        31 => wire__crate__api__minos__MobileClient_refresh_session_impl(
+        35 => wire__crate__api__minos__MobileClient_refresh_session_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        32 => {
+        36 => {
             wire__crate__api__minos__MobileClient_register_impl(port, ptr, rust_vec_len, data_len)
         }
-        33 => wire__crate__api__minos__MobileClient_reject_friend_request_impl(
+        37 => wire__crate__api__minos__MobileClient_reject_friend_request_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        34 => wire__crate__api__minos__MobileClient_resume_persisted_session_impl(
+        38 => wire__crate__api__minos__MobileClient_resume_persisted_session_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        35 => wire__crate__api__minos__MobileClient_search_users_impl(
+        39 => wire__crate__api__minos__MobileClient_search_users_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        36 => wire__crate__api__minos__MobileClient_send_chat_message_impl(
+        40 => wire__crate__api__minos__MobileClient_send_chat_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        37 => wire__crate__api__minos__MobileClient_send_user_message_impl(
+        41 => wire__crate__api__minos__MobileClient_send_user_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        38 => wire__crate__api__minos__MobileClient_set_active_host_impl(
+        42 => wire__crate__api__minos__MobileClient_set_active_host_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        39 => wire__crate__api__minos__MobileClient_set_minos_id_impl(
+        43 => wire__crate__api__minos__MobileClient_set_minos_id_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__minos__MobileClient_start_agent_impl(
+        44 => wire__crate__api__minos__MobileClient_start_agent_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        41 => wire__crate__api__minos__MobileClient_subscribe_auth_state_impl(
+        45 => wire__crate__api__minos__MobileClient_start_agent_in_project_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        42 => wire__crate__api__minos__MobileClient_subscribe_social_events_impl(
+        46 => wire__crate__api__minos__MobileClient_subscribe_auth_state_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        43 => wire__crate__api__minos__MobileClient_subscribe_state_impl(
+        47 => wire__crate__api__minos__MobileClient_subscribe_social_events_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        44 => wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
+        48 => wire__crate__api__minos__MobileClient_subscribe_state_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        45 => wire__crate__api__minos__MobileClient_write_host_skill_config_impl(
+        49 => wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        48 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
-        52 => {
+        50 => wire__crate__api__minos__MobileClient_update_project_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        51 => wire__crate__api__minos__MobileClient_write_host_skill_config_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        54 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
+        58 => {
             wire__crate__api__minos__subscribe_log_records_impl(port, ptr, rust_vec_len, data_len)
         }
-        53 => wire__crate__api__minos__subscribe_request_traces_impl(
+        59 => wire__crate__api__minos__subscribe_request_traces_impl(
             port,
             ptr,
             rust_vec_len,
@@ -5154,28 +5719,28 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        8 => wire__crate__api__minos__MobileClient_current_state_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__minos__MobileClient_new_impl(ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__minos__MobileClient_new_with_persisted_state_impl(
+        9 => wire__crate__api__minos__MobileClient_current_state_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__minos__MobileClient_new_impl(ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__minos__MobileClient_new_with_persisted_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__minos__MobileClient_notify_backgrounded_impl(
+        29 => wire__crate__api__minos__MobileClient_notify_backgrounded_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__minos__MobileClient_notify_foregrounded_impl(
+        30 => wire__crate__api__minos__MobileClient_notify_foregrounded_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        46 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__minos__emit_log_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__minos__emit_log_impl(ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -5353,6 +5918,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ChatMessage
             self.0.reply_to.into_into_dart().into_dart(),
             self.0.recalled_at_ms.into_into_dart().into_dart(),
             self.0.mentioned_account_ids.into_into_dart().into_dart(),
+            self.0.sender_type.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -5509,6 +6075,61 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::Conversatio
     for crate::api::minos::ConversationsResponse
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ConversationsResponse> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::CreateProjectRequest> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.name.into_into_dart().into_dart(),
+            self.0.workspace_slug.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::CreateProjectRequest>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::CreateProjectRequest>>
+    for crate::api::minos::CreateProjectRequest
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::CreateProjectRequest> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::CreateProjectResponse> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.0.project.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::CreateProjectResponse>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::CreateProjectResponse>>
+    for crate::api::minos::CreateProjectResponse
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::CreateProjectResponse> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::DeleteProjectRequest> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.0.project_id.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::DeleteProjectRequest>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::DeleteProjectRequest>>
+    for crate::api::minos::DeleteProjectRequest
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::DeleteProjectRequest> {
         self.into()
     }
 }
@@ -5826,6 +6447,62 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ListHostSki
     for crate::api::minos::ListHostSkillsResponse
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ListHostSkillsResponse> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ListProjectThreadsParams> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.project_id.into_into_dart().into_dart(),
+            self.0.limit.into_into_dart().into_dart(),
+            self.0.before_ts_ms.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ListProjectThreadsParams>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ListProjectThreadsParams>>
+    for crate::api::minos::ListProjectThreadsParams
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ListProjectThreadsParams> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ListProjectThreadsResponse> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.0.threads.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ListProjectThreadsResponse>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ListProjectThreadsResponse>>
+    for crate::api::minos::ListProjectThreadsResponse
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ListProjectThreadsResponse> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ListProjectsResponse> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.0.projects.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ListProjectsResponse>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ListProjectsResponse>>
+    for crate::api::minos::ListProjectsResponse
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ListProjectsResponse> {
         self.into()
     }
 }
@@ -6155,6 +6832,31 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::PersistedPairingState>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ProjectSummary> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.project_id.into_into_dart().into_dart(),
+            self.0.name.into_into_dart().into_dart(),
+            self.0.workspace_slug.into_into_dart().into_dart(),
+            self.0.created_at_ms.into_into_dart().into_dart(),
+            self.0.updated_at_ms.into_into_dart().into_dart(),
+            self.0.thread_count.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ProjectSummary>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ProjectSummary>>
+    for crate::api::minos::ProjectSummary
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ProjectSummary> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ReadThreadParams> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -6271,6 +6973,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::minos::RequestTraceTransport>
 {
     fn into_into_dart(self) -> crate::api::minos::RequestTraceTransport {
         self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::SenderType> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::SenderType::User => 0.into_dart(),
+            crate::api::minos::SenderType::Agent => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::SenderType>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::SenderType>>
+    for crate::api::minos::SenderType
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::SenderType> {
+        self.into()
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -6514,6 +7237,27 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::UiEventMess
     for crate::api::minos::UiEventMessage
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::UiEventMessage> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::UpdateProjectRequest> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.project_id.into_into_dart().into_dart(),
+            self.0.name.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::UpdateProjectRequest>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::UpdateProjectRequest>>
+    for crate::api::minos::UpdateProjectRequest
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::UpdateProjectRequest> {
         self.into()
     }
 }
@@ -6762,30 +7506,6 @@ impl SseEncode for crate::api::minos::ChatMessageSummary {
     }
 }
 
-impl SseDecode for crate::api::minos::SenderType {
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut tag_ = <i32>::sse_decode(deserializer);
-        match tag_ {
-            0 => crate::api::minos::SenderType::User,
-            1 => crate::api::minos::SenderType::Agent,
-            _ => unreachable!("Invalid variant for SenderType: {}", tag_),
-        }
-    }
-}
-
-impl SseEncode for crate::api::minos::SenderType {
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        match self {
-            crate::api::minos::SenderType::User => {
-                <i32>::sse_encode(0, serializer);
-            }
-            crate::api::minos::SenderType::Agent => {
-                <i32>::sse_encode(1, serializer);
-            }
-        }
-    }
-}
-
 impl SseEncode for crate::api::minos::ConnectionState {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6866,6 +7586,28 @@ impl SseEncode for crate::api::minos::ConversationsResponse {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<crate::api::minos::ConversationSummary>>::sse_encode(self.conversations, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::CreateProjectRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.workspace_slug, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::CreateProjectResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::minos::ProjectSummary>::sse_encode(self.project, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::DeleteProjectRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.project_id, serializer);
     }
 }
 
@@ -7178,6 +7920,39 @@ impl SseEncode for Vec<u8> {
         for item in self {
             <u8>::sse_encode(item, serializer);
         }
+    }
+}
+
+impl SseEncode for Vec<crate::api::minos::ProjectSummary> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::minos::ProjectSummary>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for crate::api::minos::ListProjectThreadsParams {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.project_id, serializer);
+        <u32>::sse_encode(self.limit, serializer);
+        <Option<i64>>::sse_encode(self.before_ts_ms, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::ListProjectThreadsResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<crate::api::minos::ThreadSummary>>::sse_encode(self.threads, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::ListProjectsResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<crate::api::minos::ProjectSummary>>::sse_encode(self.projects, serializer);
     }
 }
 
@@ -7577,6 +8352,18 @@ impl SseEncode for crate::api::minos::PersistedPairingState {
     }
 }
 
+impl SseEncode for crate::api::minos::ProjectSummary {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.project_id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.workspace_slug, serializer);
+        <i64>::sse_encode(self.created_at_ms, serializer);
+        <i64>::sse_encode(self.updated_at_ms, serializer);
+        <u32>::sse_encode(self.thread_count, serializer);
+    }
+}
+
 impl SseEncode for crate::api::minos::ReadThreadParams {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -7641,6 +8428,22 @@ impl SseEncode for crate::api::minos::RequestTraceTransport {
             match self {
                 crate::api::minos::RequestTraceTransport::Http => 0,
                 crate::api::minos::RequestTraceTransport::Rpc => 1,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::minos::SenderType {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::minos::SenderType::User => 0,
+                crate::api::minos::SenderType::Agent => 1,
                 _ => {
                     unimplemented!("");
                 }
@@ -7851,6 +8654,14 @@ impl SseEncode for crate::api::minos::UiEventMessage {
 impl SseEncode for () {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {}
+}
+
+impl SseEncode for crate::api::minos::UpdateProjectRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.project_id, serializer);
+        <String>::sse_encode(self.name, serializer);
+    }
 }
 
 impl SseEncode for crate::api::minos::UserSummary {

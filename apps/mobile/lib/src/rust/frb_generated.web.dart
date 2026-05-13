@@ -107,7 +107,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  CreateProjectRequest dco_decode_box_autoadd_create_project_request(
+    dynamic raw,
+  );
+
+  @protected
+  DeleteProjectRequest dco_decode_box_autoadd_delete_project_request(
+    dynamic raw,
+  );
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  ListProjectThreadsParams dco_decode_box_autoadd_list_project_threads_params(
+    dynamic raw,
+  );
 
   @protected
   ListThreadsParams dco_decode_box_autoadd_list_threads_params(dynamic raw);
@@ -134,6 +149,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  UpdateProjectRequest dco_decode_box_autoadd_update_project_request(
+    dynamic raw,
+  );
 
   @protected
   UserSummary dco_decode_box_autoadd_user_summary(dynamic raw);
@@ -166,6 +186,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ConversationsResponse dco_decode_conversations_response(dynamic raw);
+
+  @protected
+  CreateProjectRequest dco_decode_create_project_request(dynamic raw);
+
+  @protected
+  CreateProjectResponse dco_decode_create_project_response(dynamic raw);
+
+  @protected
+  DeleteProjectRequest dco_decode_delete_project_request(dynamic raw);
 
   @protected
   ErrorKind dco_decode_error_kind(dynamic raw);
@@ -251,6 +280,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<ProjectSummary> dco_decode_list_project_summary(dynamic raw);
+
+  @protected
+  ListProjectThreadsParams dco_decode_list_project_threads_params(dynamic raw);
+
+  @protected
+  ListProjectThreadsResponse dco_decode_list_project_threads_response(
+    dynamic raw,
+  );
+
+  @protected
+  ListProjectsResponse dco_decode_list_projects_response(dynamic raw);
+
+  @protected
   List<RequestTraceRecord> dco_decode_list_request_trace_record(dynamic raw);
 
   @protected
@@ -318,6 +361,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PersistedPairingState dco_decode_persisted_pairing_state(dynamic raw);
 
   @protected
+  ProjectSummary dco_decode_project_summary(dynamic raw);
+
+  @protected
   ReadThreadParams dco_decode_read_thread_params(dynamic raw);
 
   @protected
@@ -331,6 +377,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RequestTraceTransport dco_decode_request_trace_transport(dynamic raw);
+
+  @protected
+  SenderType dco_decode_sender_type(dynamic raw);
 
   @protected
   SocialEventFrame dco_decode_social_event_frame(dynamic raw);
@@ -364,6 +413,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void dco_decode_unit(dynamic raw);
+
+  @protected
+  UpdateProjectRequest dco_decode_update_project_request(dynamic raw);
 
   @protected
   UserSummary dco_decode_user_summary(dynamic raw);
@@ -459,7 +511,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  CreateProjectRequest sse_decode_box_autoadd_create_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DeleteProjectRequest sse_decode_box_autoadd_delete_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  ListProjectThreadsParams sse_decode_box_autoadd_list_project_threads_params(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ListThreadsParams sse_decode_box_autoadd_list_threads_params(
@@ -492,6 +559,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  UpdateProjectRequest sse_decode_box_autoadd_update_project_request(
+    SseDeserializer deserializer,
+  );
 
   @protected
   UserSummary sse_decode_box_autoadd_user_summary(SseDeserializer deserializer);
@@ -534,6 +606,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ConversationsResponse sse_decode_conversations_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreateProjectRequest sse_decode_create_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreateProjectResponse sse_decode_create_project_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DeleteProjectRequest sse_decode_delete_project_request(
     SseDeserializer deserializer,
   );
 
@@ -647,6 +734,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<ProjectSummary> sse_decode_list_project_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListProjectThreadsParams sse_decode_list_project_threads_params(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListProjectThreadsResponse sse_decode_list_project_threads_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListProjectsResponse sse_decode_list_projects_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<RequestTraceRecord> sse_decode_list_request_trace_record(
     SseDeserializer deserializer,
   );
@@ -736,6 +843,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ProjectSummary sse_decode_project_summary(SseDeserializer deserializer);
+
+  @protected
   ReadThreadParams sse_decode_read_thread_params(SseDeserializer deserializer);
 
   @protected
@@ -757,6 +867,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RequestTraceTransport sse_decode_request_trace_transport(
     SseDeserializer deserializer,
   );
+
+  @protected
+  SenderType sse_decode_sender_type(SseDeserializer deserializer);
 
   @protected
   SocialEventFrame sse_decode_social_event_frame(SseDeserializer deserializer);
@@ -792,6 +905,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_decode_unit(SseDeserializer deserializer);
+
+  @protected
+  UpdateProjectRequest sse_decode_update_project_request(
+    SseDeserializer deserializer,
+  );
 
   @protected
   UserSummary sse_decode_user_summary(SseDeserializer deserializer);
@@ -913,8 +1031,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_create_project_request(
+    CreateProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_delete_project_request(
+    DeleteProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_list_project_threads_params(
+    ListProjectThreadsParams self,
     SseSerializer serializer,
   );
 
@@ -956,6 +1092,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_update_project_request(
+    UpdateProjectRequest self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_box_autoadd_user_summary(
@@ -1014,6 +1156,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_conversations_response(
     ConversationsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_create_project_request(
+    CreateProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_create_project_response(
+    CreateProjectResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_delete_project_request(
+    DeleteProjectRequest self,
     SseSerializer serializer,
   );
 
@@ -1162,6 +1322,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_project_summary(
+    List<ProjectSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_project_threads_params(
+    ListProjectThreadsParams self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_project_threads_response(
+    ListProjectThreadsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_projects_response(
+    ListProjectsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_request_trace_record(
     List<RequestTraceRecord> self,
     SseSerializer serializer,
@@ -1267,6 +1451,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_project_summary(
+    ProjectSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_read_thread_params(
     ReadThreadParams self,
     SseSerializer serializer,
@@ -1295,6 +1485,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     RequestTraceTransport self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_sender_type(SenderType self, SseSerializer serializer);
 
   @protected
   void sse_encode_social_event_frame(
@@ -1340,6 +1533,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_update_project_request(
+    UpdateProjectRequest self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_user_summary(UserSummary self, SseSerializer serializer);

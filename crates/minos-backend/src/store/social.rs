@@ -114,6 +114,37 @@ pub async fn profile_by_account(
     .map_err(store_err("social::profile_by_account"))
 }
 
+/// Batch-load profiles for multiple account IDs in a single query.
+/// Returns a map from account_id to ProfileRow. Missing accounts are
+/// silently omitted from the result.
+pub async fn profiles_by_accounts(
+    pool: &SqlitePool,
+    account_ids: &[String],
+) -> Result<HashMap<String, ProfileRow>, BackendError> {
+    if account_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT account_id, email, minos_id, display_name FROM accounts WHERE account_id IN (",
+    );
+    {
+        let mut separated = builder.separated(", ");
+        for id in account_ids {
+            separated.push_bind(id);
+        }
+    }
+    builder.push(')');
+    let rows = builder
+        .build_query_as::<ProfileRow>()
+        .fetch_all(pool)
+        .await
+        .map_err(store_err("social::profiles_by_accounts"))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.account_id.clone(), r))
+        .collect())
+}
+
 pub async fn find_by_minos_id(
     pool: &SqlitePool,
     minos_id: &str,
@@ -376,7 +407,7 @@ pub async fn ensure_direct_conversation(
         .await
         .map_err(store_err("social::ensure_direct_conversation.begin"))?;
     let conversation_id = Uuid::new_v4().to_string();
-    sqlx::query(
+    let insert_result = sqlx::query(
         "INSERT INTO conversations
             (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
          VALUES (?, 'direct', NULL, ?, ?, ?, ?, ?)",
@@ -388,31 +419,46 @@ pub async fn ensure_direct_conversation(
     .bind(now_ms)
     .bind(now_ms)
     .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::ensure_direct_conversation.insert_conversation"))?;
-    for member in [low, high] {
-        sqlx::query(
-            "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
-             VALUES (?, ?, ?)",
-        )
-        .bind(&conversation_id)
-        .bind(member)
-        .bind(now_ms)
-        .execute(&mut *tx)
-        .await
-        .map_err(store_err(
-            "social::ensure_direct_conversation.insert_member",
-        ))?;
+    .await;
+
+    match insert_result {
+        Ok(_) => {
+            for member in [low, high] {
+                sqlx::query(
+                    "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                     VALUES (?, ?, ?)",
+                )
+                .bind(&conversation_id)
+                .bind(member)
+                .bind(now_ms)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err(
+                    "social::ensure_direct_conversation.insert_member",
+                ))?;
+            }
+            tx.commit()
+                .await
+                .map_err(store_err("social::ensure_direct_conversation.commit"))?;
+            get_conversation(pool, &conversation_id)
+                .await?
+                .ok_or_else(|| BackendError::StoreQuery {
+                    operation: "social::ensure_direct_conversation.load".into(),
+                    message: "conversation missing after insert".into(),
+                })
+        }
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+            // Concurrent insert won the race — rollback and fetch the winner.
+            tx.rollback().await.ok();
+            find_direct_conversation(pool, low, high)
+                .await?
+                .ok_or_else(|| BackendError::StoreQuery {
+                    operation: "social::ensure_direct_conversation.race_fallback".into(),
+                    message: "conversation missing after unique violation".into(),
+                })
+        }
+        Err(e) => Err(store_err("social::ensure_direct_conversation.insert_conversation")(e)),
     }
-    tx.commit()
-        .await
-        .map_err(store_err("social::ensure_direct_conversation.commit"))?;
-    get_conversation(pool, &conversation_id)
-        .await?
-        .ok_or_else(|| BackendError::StoreQuery {
-            operation: "social::ensure_direct_conversation.load".into(),
-            message: "conversation missing after insert".into(),
-        })
 }
 
 pub async fn create_group_conversation(
@@ -815,7 +861,7 @@ pub async fn recall_message(
         .map_err(store_err("social::recall_message.begin"))?;
     sqlx::query(
         "UPDATE chat_messages
-            SET text = '消息已撤回',
+            SET text = '[message recalled]',
                 recalled_at_ms = COALESCE(recalled_at_ms, ?)
           WHERE message_id = ?
             AND conversation_id = ?
@@ -959,14 +1005,12 @@ pub async fn delete_agent(
     agent_id: &str,
     owner_account_id: &str,
 ) -> Result<bool, BackendError> {
-    let result = sqlx::query(
-        "DELETE FROM agents WHERE agent_id = ? AND owner_account_id = ?",
-    )
-    .bind(agent_id)
-    .bind(owner_account_id)
-    .execute(pool)
-    .await
-    .map_err(store_err("social::delete_agent"))?;
+    let result = sqlx::query("DELETE FROM agents WHERE agent_id = ? AND owner_account_id = ?")
+        .bind(agent_id)
+        .bind(owner_account_id)
+        .execute(pool)
+        .await
+        .map_err(store_err("social::delete_agent"))?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -1100,14 +1144,14 @@ pub async fn insert_agent_message(
         .map_err(store_err("social::insert_agent_message.mention"))?;
     }
 
-    sqlx::query(
-        "UPDATE conversations SET updated_at_ms = ? WHERE conversation_id = ?",
-    )
-    .bind(now_ms)
-    .bind(conversation_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::insert_agent_message.update_conversation"))?;
+    sqlx::query("UPDATE conversations SET updated_at_ms = ? WHERE conversation_id = ?")
+        .bind(now_ms)
+        .bind(conversation_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(store_err(
+            "social::insert_agent_message.update_conversation",
+        ))?;
 
     tx.commit()
         .await
@@ -1282,14 +1326,14 @@ mod tests {
         assert_eq!(carol_rows[0].unread_mention_count, 0);
         assert_eq!(
             carol_rows[0].last_message_preview.as_deref(),
-            Some("消息已撤回")
+            Some("[message recalled]")
         );
 
         let alice_rows = list_conversations_for(&pool, &alice).await.unwrap();
         assert_eq!(alice_rows.len(), 1);
         assert_eq!(
             alice_rows[0].last_message_preview.as_deref(),
-            Some("消息已撤回")
+            Some("[message recalled]")
         );
     }
 }

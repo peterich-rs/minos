@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart' hide ConnectionState;
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:minos/application/active_session_provider.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/auth_provider.dart';
@@ -9,7 +10,7 @@ import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/auth_state.dart';
 import 'package:minos/presentation/error_feedback.dart';
 import 'package:minos/presentation/pages/pairing_page.dart';
-import 'package:minos/presentation/pages/thread_view_page.dart';
+import 'package:minos/presentation/router.dart';
 import 'package:minos/presentation/widgets/shimmer_box.dart';
 import 'package:minos/src/rust/api/minos.dart'
     as minos_api
@@ -575,10 +576,9 @@ class AgentProfilePage extends ConsumerWidget {
             child: FilledButton.icon(
               onPressed: () {
                 ref.read(activeSessionControllerProvider.notifier).reset();
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => ThreadViewPage(agentProfileId: profile.id),
-                  ),
+                context.push(
+                  AppRoutes.newThread,
+                  extra: ThreadRouteExtra(agentProfileId: profile.id),
                 );
               },
               icon: const Icon(CupertinoIcons.bubble_left_bubble_right_fill),
@@ -1344,12 +1344,8 @@ class _ProfilesSection extends ConsumerWidget {
                     profile: ordered[index],
                     hostLabel: _resolvedProfileHostLabel(ordered[index], hosts),
                     isPreferred: ordered[index].id == preferredProfileId,
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) =>
-                            AgentProfilePage(profileId: ordered[index].id),
-                      ),
-                    ),
+                    onTap: () =>
+                        context.push('/agent-profile/${ordered[index].id}'),
                     onMakeDefault: () => ref
                         .read(agentProfilesControllerProvider.notifier)
                         .setPreferredProfile(ordered[index].id),
@@ -1443,11 +1439,7 @@ class _HostRuntimeCard extends ConsumerWidget {
                   ),
                   const SizedBox(height: 12),
                   ShadButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const PairingPage(),
-                      ),
-                    ),
+                    onPressed: () => context.push(AppRoutes.pairing),
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

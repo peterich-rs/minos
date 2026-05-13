@@ -5,16 +5,26 @@
 //! lean (spec §12.1 flagged the ecosystem churn risk). The bucket is
 //! adequate for the auth surface, where the rate limits are coarse and
 //! we never need per-route middleware composition.
+//!
+//! Key-count is bounded by `max_keys` to prevent memory exhaustion from
+//! rotating-IP attacks. When the limit is reached, the oldest-accessed
+//! key is evicted.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+/// Maximum number of distinct keys a single `RateLimiter` will track.
+/// Beyond this, the least-recently-used key is evicted. 100k keys ×
+/// ~256 bytes each ≈ 25 MB worst case — acceptable for the auth surface.
+const DEFAULT_MAX_KEYS: usize = 100_000;
 
 #[derive(Debug)]
 pub struct RateLimiter {
     inner: Mutex<HashMap<String, Vec<Instant>>>,
     permits: usize,
     window: Duration,
+    max_keys: usize,
 }
 
 impl RateLimiter {
@@ -24,6 +34,7 @@ impl RateLimiter {
             inner: Mutex::new(HashMap::new()),
             permits,
             window,
+            max_keys: DEFAULT_MAX_KEYS,
         }
     }
 
@@ -32,13 +43,10 @@ impl RateLimiter {
     /// the oldest in-window timestamp so callers can populate the
     /// `Retry-After` HTTP header truthfully (clamped to ≥1 second).
     ///
-    /// Bounded-key contract: a key is only kept in the map while it owns
-    /// at least one in-window timestamp. After the retain trims expired
-    /// entries, if no fresh permit ends up pushed (e.g. degenerate
-    /// `permits == 0` config or a future mutator path that skips push),
-    /// the key is removed entirely. This keeps the map size bounded by
-    /// the active working set and stops abandoned keys from accumulating
-    /// across long uptimes when an attacker rotates IPs/emails.
+    /// Bounded-key contract: the map is capped at `max_keys`. When a new
+    /// key would exceed the cap, we evict the key whose most-recent
+    /// timestamp is oldest (least recently active). This keeps memory
+    /// bounded even under rotating-IP floods.
     pub fn check(&self, key: &str) -> Result<(), u32> {
         let now = Instant::now();
         let mut map = self
@@ -53,21 +61,30 @@ impl RateLimiter {
                 .window
                 .saturating_sub(now.duration_since(oldest))
                 .as_secs();
-            // Clamp into u32. The window is bounded by the caller; in
-            // practice it never exceeds an hour, so the truncation is a
-            // formality. `min(u32::MAX as u64) → as u32` is the
-            // explicitly-checked path clippy is happy with.
             let retry = u32::try_from(retry_secs).unwrap_or(u32::MAX);
             return Err(retry.max(1));
         }
         entries.push(now);
-        // GC: drop the key if its bucket is somehow still empty (the
-        // success path always pushes, so this only fires on the
-        // degenerate `permits == 0` config or a future mutator path).
-        // Belt-and-braces against the rotating-IP memory leak.
+        // GC: drop the key if its bucket is somehow still empty.
         if entries.is_empty() {
             map.remove(key);
         }
+
+        // Evict oldest-accessed keys when we exceed the cap.
+        if map.len() > self.max_keys {
+            // Find the key with the oldest most-recent timestamp.
+            let victim = map
+                .iter()
+                .filter(|(k, _)| k.as_str() != key) // don't evict the one we just inserted
+                .min_by_key(|(_, timestamps)| {
+                    timestamps.last().copied().unwrap_or(now)
+                })
+                .map(|(k, _)| k.clone());
+            if let Some(victim_key) = victim {
+                map.remove(&victim_key);
+            }
+        }
+
         Ok(())
     }
 }

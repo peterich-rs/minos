@@ -32,6 +32,7 @@ use crate::ChatMessageSummary;
 /// Serialised as a tagged JSON object with `kind` as the discriminator.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Envelope {
     /// Client → Relay. Relay forwards `payload` opaquely to the paired
     /// peer as an [`Envelope::Forwarded`]. The relay does not inspect or
@@ -92,6 +93,7 @@ pub enum Envelope {
 /// `#[serde(flatten)]` in [`Envelope::Event`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum EventKind {
     /// Emitted only to the Mac side after an iPhone successfully consumes
     /// a pairing token (spec §7.1). Delivers the iPhone's identity plus
@@ -285,6 +287,7 @@ mod tests {
                     reply_to: None,
                     recalled_at_ms: None,
                     mentioned_account_ids: Vec::new(),
+                    sender_type: crate::SenderType::User,
                 },
             },
         };

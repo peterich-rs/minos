@@ -4,8 +4,8 @@
 //!
 //! Spec R3.4 / Plan P6.3.
 
-use minos_agent_runtime::pty_agent::PtyAgent;
 use minos_agent_runtime::config::RawIngest;
+use minos_agent_runtime::pty_agent::PtyAgent;
 use minos_domain::AgentName;
 use tokio::sync::broadcast;
 

@@ -82,9 +82,17 @@ abstract class MobileClient implements RustOpaqueInterface {
     required List<String> memberAccountIds,
   });
 
+  /// Create a new project on the daemon.
+  Future<CreateProjectResponse> createProject({
+    required CreateProjectRequest req,
+  });
+
   /// Current connection state, read from the watch-channel cache. Cheap and
   /// synchronous.
   ConnectionState currentState();
+
+  /// Delete a project.
+  Future<void> deleteProject({required DeleteProjectRequest req});
 
   Future<ConversationResponse> ensureDirectConversation({
     required String friendAccountId,
@@ -121,6 +129,14 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   /// List every Mac paired to the caller's account.
   Future<List<HostSummaryDto>> listPairedHosts();
+
+  /// List threads within a project.
+  Future<ListProjectThreadsResponse> listProjectThreads({
+    required ListProjectThreadsParams req,
+  });
+
+  /// List all projects on the daemon.
+  Future<ListProjectsResponse> listProjects();
 
   /// Request a page of thread summaries.
   Future<ListThreadsResponse> listThreads({required ListThreadsParams req});
@@ -225,6 +241,13 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String workspace,
   });
 
+  /// Start an agent within a project context.
+  Future<StartAgentResponse> startAgentInProject({
+    required AgentName agent,
+    required String prompt,
+    required String projectId,
+  });
+
   /// Subscribe to auth-state transitions. Emits the current cached frame
   /// immediately, then every subsequent change. The spawned task exits
   /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
@@ -242,6 +265,9 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Every frb stream sink gets its own broadcast receiver; lagging
   /// subscribers lose old frames rather than blocking the producer.
   Stream<UiEventFrame> subscribeUiEvents();
+
+  /// Update a project's name.
+  Future<void> updateProject({required UpdateProjectRequest req});
 
   /// Enable or disable one host-side skill.
   Future<WriteHostSkillConfigResponse> writeHostSkillConfig({
@@ -361,6 +387,7 @@ class ChatMessageSummary {
   final ChatMessageReplySummary? replyTo;
   final PlatformInt64? recalledAtMs;
   final List<String> mentionedAccountIds;
+  final SenderType senderType;
 
   const ChatMessageSummary({
     required this.messageId,
@@ -371,6 +398,7 @@ class ChatMessageSummary {
     this.replyTo,
     this.recalledAtMs,
     required this.mentionedAccountIds,
+    required this.senderType,
   });
 
   @override
@@ -382,7 +410,8 @@ class ChatMessageSummary {
       createdAtMs.hashCode ^
       replyTo.hashCode ^
       recalledAtMs.hashCode ^
-      mentionedAccountIds.hashCode;
+      mentionedAccountIds.hashCode ^
+      senderType.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -396,7 +425,8 @@ class ChatMessageSummary {
           createdAtMs == other.createdAtMs &&
           replyTo == other.replyTo &&
           recalledAtMs == other.recalledAtMs &&
-          mentionedAccountIds == other.mentionedAccountIds;
+          mentionedAccountIds == other.mentionedAccountIds &&
+          senderType == other.senderType;
 }
 
 @freezed
@@ -525,6 +555,56 @@ class ConversationsResponse {
       other is ConversationsResponse &&
           runtimeType == other.runtimeType &&
           conversations == other.conversations;
+}
+
+class CreateProjectRequest {
+  final String name;
+  final String workspaceSlug;
+
+  const CreateProjectRequest({required this.name, required this.workspaceSlug});
+
+  @override
+  int get hashCode => name.hashCode ^ workspaceSlug.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CreateProjectRequest &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          workspaceSlug == other.workspaceSlug;
+}
+
+class CreateProjectResponse {
+  final ProjectSummary project;
+
+  const CreateProjectResponse({required this.project});
+
+  @override
+  int get hashCode => project.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CreateProjectResponse &&
+          runtimeType == other.runtimeType &&
+          project == other.project;
+}
+
+class DeleteProjectRequest {
+  final String projectId;
+
+  const DeleteProjectRequest({required this.projectId});
+
+  @override
+  int get hashCode => projectId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DeleteProjectRequest &&
+          runtimeType == other.runtimeType &&
+          projectId == other.projectId;
 }
 
 enum ErrorKind {
@@ -831,6 +911,62 @@ class ListHostSkillsResponse {
           data == other.data;
 }
 
+class ListProjectThreadsParams {
+  final String projectId;
+  final int limit;
+  final PlatformInt64? beforeTsMs;
+
+  const ListProjectThreadsParams({
+    required this.projectId,
+    required this.limit,
+    this.beforeTsMs,
+  });
+
+  @override
+  int get hashCode => projectId.hashCode ^ limit.hashCode ^ beforeTsMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListProjectThreadsParams &&
+          runtimeType == other.runtimeType &&
+          projectId == other.projectId &&
+          limit == other.limit &&
+          beforeTsMs == other.beforeTsMs;
+}
+
+class ListProjectThreadsResponse {
+  final List<ThreadSummary> threads;
+
+  const ListProjectThreadsResponse({required this.threads});
+
+  @override
+  int get hashCode => threads.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListProjectThreadsResponse &&
+          runtimeType == other.runtimeType &&
+          threads == other.threads;
+}
+
+class ListProjectsResponse {
+  final List<ProjectSummary> projects;
+
+  const ListProjectsResponse({required this.projects});
+
+  @override
+  int get hashCode => projects.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListProjectsResponse &&
+          runtimeType == other.runtimeType &&
+          projects == other.projects;
+}
+
 class ListThreadsParams {
   final int limit;
   final PlatformInt64? beforeTsMs;
@@ -1089,6 +1225,45 @@ class PersistedPairingState {
           accountEmail == other.accountEmail;
 }
 
+class ProjectSummary {
+  final String projectId;
+  final String name;
+  final String workspaceSlug;
+  final PlatformInt64 createdAtMs;
+  final PlatformInt64 updatedAtMs;
+  final int threadCount;
+
+  const ProjectSummary({
+    required this.projectId,
+    required this.name,
+    required this.workspaceSlug,
+    required this.createdAtMs,
+    required this.updatedAtMs,
+    required this.threadCount,
+  });
+
+  @override
+  int get hashCode =>
+      projectId.hashCode ^
+      name.hashCode ^
+      workspaceSlug.hashCode ^
+      createdAtMs.hashCode ^
+      updatedAtMs.hashCode ^
+      threadCount.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ProjectSummary &&
+          runtimeType == other.runtimeType &&
+          projectId == other.projectId &&
+          name == other.name &&
+          workspaceSlug == other.workspaceSlug &&
+          createdAtMs == other.createdAtMs &&
+          updatedAtMs == other.updatedAtMs &&
+          threadCount == other.threadCount;
+}
+
 class ReadThreadParams {
   final String threadId;
   final BigInt? fromSeq;
@@ -1208,6 +1383,8 @@ class RequestTraceRecord {
 enum RequestTraceStatus { pending, success, failure }
 
 enum RequestTraceTransport { http, rpc }
+
+enum SenderType { user, agent }
 
 /// Dart-visible shape of `minos_mobile::SocialEventFrame`.
 class SocialEventFrame {
@@ -1393,6 +1570,24 @@ sealed class UiEventMessage with _$UiEventMessage {
     required String kind,
     required String payloadJson,
   }) = UiEventMessage_Raw;
+}
+
+class UpdateProjectRequest {
+  final String projectId;
+  final String name;
+
+  const UpdateProjectRequest({required this.projectId, required this.name});
+
+  @override
+  int get hashCode => projectId.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UpdateProjectRequest &&
+          runtimeType == other.runtimeType &&
+          projectId == other.projectId &&
+          name == other.name;
 }
 
 class UserSummary {

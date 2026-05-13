@@ -162,7 +162,7 @@ pub async fn post_register(
     if let Some(resp) = check_bucket(&state.auth_register_per_ip, &client_ip(&headers)) {
         return resp;
     }
-    if req.password.len() < 8 {
+    if req.password.len() < 8 || req.password.chars().count() < 8 {
         return (StatusCode::BAD_REQUEST, err("weak_password")).into_response();
     }
     let Ok(outcome) = authenticate(&state.store, &headers).await else {
@@ -343,19 +343,27 @@ pub async fn post_refresh(
         return resp;
     }
 
-    if refresh_tokens::revoke_one(&state.store, &req.refresh_token)
-        .await
-        .is_err()
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    }
+    // Atomic rotate: revoke old + insert new in one transaction.
+    // If another concurrent request already consumed this token, we get
+    // None back and return invalid_refresh.
     let new_plain = refresh_tokens::generate_plaintext();
-    if refresh_tokens::insert(&state.store, &new_plain, &row.account_id, &row.device_id)
-        .await
-        .is_err()
+    match refresh_tokens::rotate(
+        &state.store,
+        &req.refresh_token,
+        &new_plain,
+        &row.account_id,
+        &row.device_id,
+    )
+    .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+        Ok(Some(_)) => {} // success
+        Ok(None) => {
+            // CAS failure: token was already consumed by a concurrent request.
+            return (StatusCode::UNAUTHORIZED, err("invalid_refresh")).into_response();
+        }
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
     }
+
     let Ok(access) = jwt::sign(state.jwt_secret.as_bytes(), &row.account_id, &row.device_id) else {
         return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
     };
@@ -386,6 +394,25 @@ pub async fn post_logout(
     // refresh_tokens, both should share the same per-account budget.
     if let Some(resp) = check_bucket(&state.auth_refresh_per_acc, &bearer_outcome.account_id) {
         return resp;
+    }
+    // Verify the refresh token belongs to the caller's account before
+    // revoking. This prevents an authenticated user from revoking another
+    // user's token if they somehow obtained the plaintext.
+    match refresh_tokens::find_active(&state.store, &req.refresh_token).await {
+        Ok(Some(row)) if row.account_id == bearer_outcome.account_id => {
+            // Token belongs to this account — proceed with revocation.
+        }
+        Ok(Some(_)) => {
+            // Token belongs to a different account — reject silently.
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        Ok(None) => {
+            // Token not found or already revoked — idempotent success.
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+        }
     }
     if refresh_tokens::revoke_one(&state.store, &req.refresh_token)
         .await
@@ -452,7 +479,7 @@ pub async fn post_change_password(
     let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
-    if req.new_password.len() < 8 {
+    if req.new_password.len() < 8 || req.new_password.chars().count() < 8 {
         return (StatusCode::BAD_REQUEST, err("weak_password")).into_response();
     }
     // Reuse the per-account refresh bucket: change-password writes

@@ -14,6 +14,7 @@ use crate::error::BackendError;
 pub mod account_host_pairings;
 pub mod accounts;
 pub mod devices;
+pub mod projects;
 pub mod raw_events;
 pub mod refresh_tokens;
 pub mod social;

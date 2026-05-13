@@ -41,12 +41,14 @@ pub use minos_domain::{
 pub use minos_protocol::{
     AuthSummary, ChatMessageReplySummary, ChatMessageSummary, ConversationKind,
     ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
-    ConversationSummary, ConversationsResponse, FriendRequestStatus, FriendRequestSummary,
-    FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary,
-    HostSkillsEntry, HostSummary, ListChatMessagesResponse, ListHostSkillsResponse,
-    ListThreadsParams, ListThreadsResponse, MyProfileResponse, ReadThreadParams,
-    ReadThreadResponse, SearchUsersResponse, SenderType, StartAgentResponse, ThreadSummary,
-    UserSummary, WriteHostSkillConfigResponse,
+    ConversationSummary, ConversationsResponse, CreateProjectRequest, CreateProjectResponse,
+    DeleteProjectRequest, FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse,
+    FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, HostSummary,
+    ListChatMessagesResponse, ListHostSkillsResponse, ListProjectThreadsParams,
+    ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams, ListThreadsResponse,
+    MyProfileResponse, ProjectSummary, ReadThreadParams, ReadThreadResponse, SearchUsersResponse,
+    SenderType, StartAgentResponse, ThreadSummary, UpdateProjectRequest, UserSummary,
+    WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
@@ -448,6 +450,7 @@ impl MobileClient {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(skipped = n, "ui_events_stream lagged");
+                        break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -468,6 +471,7 @@ impl MobileClient {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(skipped = n, "social_events_stream lagged");
+                        break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -566,6 +570,51 @@ impl MobileClient {
     /// Permanently close the given thread. Idempotent.
     pub async fn close_thread(&self, thread_id: String) -> Result<(), MinosError> {
         self.0.close_thread(thread_id).await
+    }
+
+    // ─────────────────────────── project rpcs ──────────────────────────────
+
+    /// Create a new project on the daemon.
+    pub async fn create_project(
+        &self,
+        req: CreateProjectRequest,
+    ) -> Result<CreateProjectResponse, MinosError> {
+        self.0.create_project(req).await
+    }
+
+    /// List all projects on the daemon.
+    pub async fn list_projects(&self) -> Result<ListProjectsResponse, MinosError> {
+        self.0.list_projects().await
+    }
+
+    /// Update a project's name.
+    pub async fn update_project(&self, req: UpdateProjectRequest) -> Result<(), MinosError> {
+        self.0.update_project(req).await
+    }
+
+    /// Delete a project.
+    pub async fn delete_project(&self, req: DeleteProjectRequest) -> Result<(), MinosError> {
+        self.0.delete_project(req).await
+    }
+
+    /// List threads within a project.
+    pub async fn list_project_threads(
+        &self,
+        req: ListProjectThreadsParams,
+    ) -> Result<ListProjectThreadsResponse, MinosError> {
+        self.0.list_project_threads(req).await
+    }
+
+    /// Start an agent within a project context.
+    pub async fn start_agent_in_project(
+        &self,
+        agent: AgentName,
+        prompt: String,
+        project_id: String,
+    ) -> Result<StartAgentResponse, MinosError> {
+        self.0
+            .start_agent_in_project(agent, prompt, project_id)
+            .await
     }
 
     // ─────────────────────────── lifecycle hooks ───────────────────────────
@@ -1295,6 +1344,65 @@ pub struct _ListHostSkillsResponse {
 #[frb(mirror(WriteHostSkillConfigResponse))]
 pub struct _WriteHostSkillConfigResponse {
     pub effective_enabled: bool,
+}
+
+// ─────────────────────── mirrored project types ──────────────────────────
+
+#[allow(dead_code)]
+#[frb(mirror(ProjectSummary))]
+pub struct _ProjectSummary {
+    pub project_id: String,
+    pub name: String,
+    pub workspace_slug: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub thread_count: u32,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(CreateProjectRequest))]
+pub struct _CreateProjectRequest {
+    pub name: String,
+    pub workspace_slug: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(CreateProjectResponse))]
+pub struct _CreateProjectResponse {
+    pub project: ProjectSummary,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(UpdateProjectRequest))]
+pub struct _UpdateProjectRequest {
+    pub project_id: String,
+    pub name: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(DeleteProjectRequest))]
+pub struct _DeleteProjectRequest {
+    pub project_id: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListProjectsResponse))]
+pub struct _ListProjectsResponse {
+    pub projects: Vec<ProjectSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListProjectThreadsParams))]
+pub struct _ListProjectThreadsParams {
+    pub project_id: String,
+    pub limit: u32,
+    pub before_ts_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListProjectThreadsResponse))]
+pub struct _ListProjectThreadsResponse {
+    pub threads: Vec<ThreadSummary>,
 }
 
 #[cfg(test)]

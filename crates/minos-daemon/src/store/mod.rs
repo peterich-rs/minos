@@ -195,6 +195,161 @@ impl LocalStore {
         .await?;
         Ok(())
     }
+
+    // ── Project CRUD ──────────────────────────────────────────────────
+
+    /// Create a new project. Returns the inserted row.
+    pub async fn create_project(
+        &self,
+        project_id: &str,
+        name: &str,
+        workspace_slug: &str,
+        ts_ms: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO projects(project_id, name, workspace_slug, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(project_id)
+        .bind(name)
+        .bind(workspace_slug)
+        .bind(ts_ms)
+        .bind(ts_ms)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// List all projects ordered by most recently updated.
+    pub async fn list_projects(&self) -> anyhow::Result<Vec<ProjectRow>> {
+        Ok(
+            sqlx::query_as::<_, ProjectRow>("SELECT * FROM projects ORDER BY updated_at DESC")
+                .fetch_all(&self.pool)
+                .await?,
+        )
+    }
+
+    /// Get a single project by id.
+    pub async fn get_project(&self, project_id: &str) -> anyhow::Result<Option<ProjectRow>> {
+        Ok(
+            sqlx::query_as::<_, ProjectRow>("SELECT * FROM projects WHERE project_id = ?")
+                .bind(project_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    /// Update a project's name and bump `updated_at`.
+    pub async fn update_project_name(
+        &self,
+        project_id: &str,
+        name: &str,
+        ts_ms: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE projects SET name = ?, updated_at = ? WHERE project_id = ?")
+            .bind(name)
+            .bind(ts_ms)
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Delete a project. Threads referencing it will have their project_id
+    /// set to NULL (SQLite FK ON DELETE SET NULL behavior is not configured,
+    /// so we do it manually).
+    pub async fn delete_project(&self, project_id: &str) -> anyhow::Result<()> {
+        sqlx::query("UPDATE threads SET project_id = NULL WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM projects WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// List threads belonging to a specific project.
+    pub async fn list_threads_by_project(
+        &self,
+        project_id: &str,
+        before_ts_ms: Option<i64>,
+        limit: Option<u32>,
+    ) -> anyhow::Result<Vec<ThreadRow>> {
+        let limit = limit.unwrap_or(50).min(500) as i64;
+        let rows = match before_ts_ms {
+            Some(ts) => {
+                sqlx::query_as::<_, ThreadRow>(
+                    "SELECT * FROM threads \
+                     WHERE project_id = ? AND last_activity_at < ? \
+                     ORDER BY last_activity_at DESC LIMIT ?",
+                )
+                .bind(project_id)
+                .bind(ts)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query_as::<_, ThreadRow>(
+                    "SELECT * FROM threads \
+                     WHERE project_id = ? \
+                     ORDER BY last_activity_at DESC LIMIT ?",
+                )
+                .bind(project_id)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        Ok(rows)
+    }
+
+    /// Assign a thread to a project.
+    pub async fn assign_thread_to_project(
+        &self,
+        thread_id: &str,
+        project_id: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE threads SET project_id = ? WHERE thread_id = ?")
+            .bind(project_id)
+            .bind(thread_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Touch a project's `updated_at` timestamp.
+    pub async fn touch_project(&self, project_id: &str, ts_ms: i64) -> anyhow::Result<()> {
+        sqlx::query("UPDATE projects SET updated_at = ? WHERE project_id = ?")
+            .bind(ts_ms)
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectRow {
+    pub project_id: String,
+    pub name: String,
+    pub workspace_slug: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ProjectRow {
+    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            project_id: row.try_get("project_id")?,
+            name: row.try_get("name")?,
+            workspace_slug: row.try_get("workspace_slug")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +365,7 @@ pub struct ThreadRow {
     pub started_at: i64,
     pub last_activity_at: i64,
     pub ended_at: Option<i64>,
+    pub project_id: Option<String>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
@@ -226,6 +382,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
             started_at: row.try_get("started_at")?,
             last_activity_at: row.try_get("last_activity_at")?,
             ended_at: row.try_get("ended_at")?,
+            project_id: row.try_get("project_id")?,
         })
     }
 }

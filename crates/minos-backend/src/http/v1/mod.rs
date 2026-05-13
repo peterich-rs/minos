@@ -20,6 +20,7 @@ use super::BackendState;
 pub mod auth;
 pub mod me;
 pub mod pairing;
+pub mod projects;
 pub mod social;
 pub mod threads;
 
@@ -28,6 +29,7 @@ pub fn router() -> Router<BackendState> {
         .merge(auth::router())
         .merge(me::router())
         .merge(pairing::router())
+        .merge(projects::router())
         .merge(social::router())
         .merge(threads::router())
 }

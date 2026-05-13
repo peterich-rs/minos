@@ -264,6 +264,39 @@ class _FakeThreadCore implements MinosCoreProtocol {
         email: 'test@example.com',
         minosId: minosId,
       );
+
+  @override
+  Future<CreateProjectResponse> createProject({
+    required String name,
+    required String workspaceSlug,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<ListProjectsResponse> listProjects() async =>
+      const ListProjectsResponse(projects: <ProjectSummary>[]);
+
+  @override
+  Future<void> updateProject({
+    required String projectId,
+    required String name,
+  }) async {}
+
+  @override
+  Future<void> deleteProject({required String projectId}) async {}
+
+  @override
+  Future<ListProjectThreadsResponse> listProjectThreads({
+    required String projectId,
+    int limit = 50,
+    int? beforeTsMs,
+  }) async => const ListProjectThreadsResponse(threads: <ThreadSummary>[]);
+
+  @override
+  Future<StartAgentResponse> startAgentInProject({
+    required AgentName agent,
+    required String prompt,
+    required String projectId,
+  }) async => const StartAgentResponse(sessionId: 'thr-proj', cwd: '/tmp');
 }
 
 Future<ProviderContainer> _pumpThreadPage(

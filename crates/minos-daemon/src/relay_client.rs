@@ -45,6 +45,7 @@
 //! writes the secret to Keychain, and publishes `PeerState::Paired`.
 
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
@@ -69,6 +70,8 @@ use crate::rpc_server::{invoke_forwarded, wrap_response_envelope, RpcServerImpl}
 /// handshake pause without back-pressuring callers. The dispatch loop
 /// drains continuously, so the steady-state depth is effectively zero.
 const OUTBOUND_QUEUE_DEPTH: usize = 64;
+const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
+const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 
 struct Inner {
     /// Shutdown signal — one-shot, captured behind a `Mutex` so a repeat
@@ -490,7 +493,7 @@ async fn refresh_peers_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSec
 
 fn apply_peers_snapshot(ctx: &DispatchCtx, peers: Vec<HostPeerSummary>) {
     if let Ok(mut guard) = ctx.peers_store.lock() {
-        *guard = peers.clone();
+        guard.clone_from(&peers);
     }
     if let Ok(mut guard) = ctx.peer_store.lock() {
         *guard = peers.first().map(peer_record_from_summary);
@@ -535,6 +538,10 @@ async fn dispatch_loop(
     shutdown_rx: &mut oneshot::Receiver<()>,
 ) -> CycleOutcome {
     let (mut sink, mut stream) = ws.split();
+    let mut heartbeat = tokio::time::interval(RELAY_PING_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_pong_at = Instant::now();
+    heartbeat.tick().await;
 
     loop {
         tokio::select! {
@@ -580,9 +587,19 @@ async fn dispatch_loop(
                         }
                     }
                     Some(Ok(Message::Ping(p))) => {
-                        let _ = sink.send(Message::Pong(p)).await;
+                        if let Err(e) = sink.send(Message::Pong(p)).await {
+                            tracing::warn!(
+                                target: "minos_daemon::relay_client",
+                                error = %e,
+                                "failed to send relay pong; reconnecting"
+                            );
+                            return CycleOutcome::Reconnect;
+                        }
                     }
-                    Some(Ok(Message::Pong(_) | Message::Binary(_) | Message::Frame(_))) => {}
+                    Some(Ok(Message::Pong(_))) => {
+                        last_pong_at = Instant::now();
+                    }
+                    Some(Ok(Message::Binary(_) | Message::Frame(_))) => {}
                     Some(Ok(Message::Close(frame))) => {
                         return classify_close(frame, ctx);
                     }
@@ -601,6 +618,31 @@ async fn dispatch_loop(
                         );
                         return CycleOutcome::Reconnect;
                     }
+                }
+            }
+            _ = heartbeat.tick() => {
+                let elapsed = last_pong_at.elapsed();
+                if elapsed > RELAY_PONG_TIMEOUT {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+                        "relay pong timeout; reconnecting"
+                    );
+                    let _ = sink
+                        .send(Message::Close(Some(CloseFrame {
+                            code: 1011u16.into(),
+                            reason: "ping_timeout".into(),
+                        })))
+                        .await;
+                    return CycleOutcome::Reconnect;
+                }
+                if let Err(e) = sink.send(Message::Ping(Vec::new().into())).await {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        error = %e,
+                        "failed to send relay ping; reconnecting"
+                    );
+                    return CycleOutcome::Reconnect;
                 }
             }
         }
@@ -688,9 +730,9 @@ async fn route_event(event: EventKind, ctx: &DispatchCtx) {
                 "Paired event delivered without your_device_secret on the Mac rail; ignoring"
             );
         }
-        EventKind::PeerOnline { .. } => should_refresh = true,
-        EventKind::PeerOffline { .. } => should_refresh = true,
-        EventKind::Unpaired => should_refresh = true,
+        EventKind::PeerOnline { .. } | EventKind::PeerOffline { .. } | EventKind::Unpaired => {
+            should_refresh = true
+        }
         EventKind::ServerShutdown => {
             // The dispatch loop will observe the socket closing next and
             // fall through to the reconnect path; nothing to do here

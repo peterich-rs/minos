@@ -76,6 +76,12 @@ pub struct Config {
     /// `main.rs`.
     #[arg(long, env = "MINOS_JWT_SECRET")]
     pub jwt_secret: Option<String>,
+
+    /// Comma-separated list of allowed CORS origins. When empty or set to
+    /// `"*"`, all origins are permitted (dev mode). In production, set to
+    /// the frontend URL(s) e.g. `"https://app.minos.dev,https://minos.dev"`.
+    #[arg(long, env = "MINOS_CORS_ORIGINS", default_value = "*")]
+    pub cors_origins: String,
 }
 
 impl Config {

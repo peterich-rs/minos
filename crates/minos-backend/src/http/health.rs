@@ -24,10 +24,7 @@ struct HealthResponse {
 /// Return `200 OK` with JSON body when healthy, `503 Service Unavailable`
 /// when the DB is unreachable.
 pub async fn get(State(state): State<BackendState>) -> impl IntoResponse {
-    let db_ok = sqlx::query("SELECT 1")
-        .execute(&state.store)
-        .await
-        .is_ok();
+    let db_ok = sqlx::query("SELECT 1").execute(&state.store).await.is_ok();
 
     if db_ok {
         (

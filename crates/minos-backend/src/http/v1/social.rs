@@ -3,6 +3,17 @@ use std::collections::{BTreeSet, HashMap};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
+
+/// Maximum time window (in milliseconds) within which a message can be
+/// recalled. 5 minutes matches common IM conventions.
+const RECALL_WINDOW_MS: i64 = 5 * 60 * 1000;
+
+/// Placeholder text for recalled messages (stored in DB).
+#[allow(dead_code)]
+const RECALLED_MESSAGE_TEXT: &str = "[message recalled]";
+
+/// Default title for unnamed group conversations.
+const DEFAULT_GROUP_TITLE: &str = "Group Chat";
 use axum::{Json, Router};
 use minos_protocol::{
     AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, ChatMessageReplySummary,
@@ -23,13 +34,10 @@ use crate::http::BackendState;
 
 pub fn router() -> Router<BackendState> {
     Router::new()
-        .route("/me/profile", post(get_my_profile))
         .route("/me/profile/query", post(get_my_profile))
         .route("/me/profile/minos-id", post(set_minos_id))
         .route("/me/profile/display-name", post(set_display_name))
-        .route("/users/search", post(search_users_query))
         .route("/users/search/query", post(search_users_query))
-        .route("/friends", post(list_friends))
         .route("/friends/query", post(list_friends))
         .route("/friend-requests", post(create_friend_request))
         .route("/friend-requests/query", post(list_friend_requests))
@@ -41,11 +49,9 @@ pub fn router() -> Router<BackendState> {
             "/friend-requests/:request_id/reject",
             post(reject_friend_request),
         )
-        .route("/conversations", post(list_conversations))
         .route("/conversations/query", post(list_conversations))
         .route("/conversations/direct", post(ensure_direct_conversation))
         .route("/conversations/group", post(create_group_conversation))
-        .route("/conversations/:conversation_id/members", post(list_conversation_members))
         .route(
             "/conversations/:conversation_id/members/query",
             post(list_conversation_members),
@@ -54,7 +60,10 @@ pub fn router() -> Router<BackendState> {
             "/conversations/:conversation_id/read",
             post(mark_conversation_read),
         )
-        .route("/conversations/:conversation_id/messages", post(send_message))
+        .route(
+            "/conversations/:conversation_id/messages",
+            post(send_message),
+        )
         .route(
             "/conversations/:conversation_id/messages/query",
             post(list_messages_query),
@@ -127,6 +136,7 @@ fn validate_minos_id(minos_id: &str) -> bool {
     (6..=24).contains(&len) && minos_id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
+#[allow(clippy::unused_async)]
 async fn require_account_id(
     state: &BackendState,
     headers: &HeaderMap,
@@ -424,18 +434,36 @@ async fn list_friends(
     let friendships = crate::store::social::list_friendships_for(&state.store, &account_id)
         .await
         .map_err(|e| err("internal", e.to_string()))?;
+
+    // Batch-load all friend profiles in one query.
+    let friend_ids: Vec<String> = friendships
+        .iter()
+        .map(|f| {
+            if f.account_low_id == account_id {
+                f.account_high_id.clone()
+            } else {
+                f.account_low_id.clone()
+            }
+        })
+        .collect();
+    let profiles = crate::store::social::profiles_by_accounts(&state.store, &friend_ids)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
+
     let mut friends = Vec::with_capacity(friendships.len());
     for friendship in friendships {
         let other_id = if friendship.account_low_id == account_id {
-            friendship.account_high_id
+            &friendship.account_high_id
         } else {
-            friendship.account_low_id
+            &friendship.account_low_id
         };
-        let profile = load_profile(&state, &other_id).await?;
-        let friend_display_name = display_name(&profile);
+        let profile = profiles
+            .get(other_id)
+            .ok_or_else(|| err("internal", format!("profile not found: {other_id}")))?;
+        let friend_display_name = display_name(profile);
         friends.push(FriendSummary {
-            account_id: profile.account_id,
-            minos_id: profile.minos_id,
+            account_id: profile.account_id.clone(),
+            minos_id: profile.minos_id.clone(),
             display_name: friend_display_name,
             created_at_ms: friendship.created_at_ms,
         });
@@ -599,6 +627,7 @@ async fn list_messages_inner(
     )
     .await
     .map_err(|e| err("internal", e.to_string()))?;
+    #[allow(clippy::cast_possible_truncation)]
     let next_before_ts_ms = if messages.len() as u32 == limit.min(200) {
         messages.last().map(|message| message.created_at_ms)
     } else {
@@ -695,6 +724,14 @@ async fn recall_message(
         ));
     }
 
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if now_ms - existing.created_at_ms > RECALL_WINDOW_MS {
+        return Err(err(
+            "bad_request",
+            "message recall window has expired (5 minutes)",
+        ));
+    }
+
     let recalled = crate::store::social::recall_message(
         &state.store,
         &conversation_id,
@@ -750,14 +787,30 @@ async fn hydrate_friend_requests(
     state: &BackendState,
     rows: Vec<crate::store::social::FriendRequestRow>,
 ) -> Result<Vec<FriendRequestSummary>, (StatusCode, Json<ErrorEnvelope>)> {
+    // Batch-load all referenced profiles in one query to avoid N+1.
+    let mut account_ids: Vec<String> = rows
+        .iter()
+        .flat_map(|r| [r.from_account_id.clone(), r.to_account_id.clone()])
+        .collect();
+    account_ids.sort();
+    account_ids.dedup();
+    let profiles =
+        crate::store::social::profiles_by_accounts(&state.store, &account_ids)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
-        let from = load_profile(state, &row.from_account_id).await?;
-        let to = load_profile(state, &row.to_account_id).await?;
+        let from = profiles
+            .get(&row.from_account_id)
+            .ok_or_else(|| err("internal", format!("profile not found: {}", row.from_account_id)))?;
+        let to = profiles
+            .get(&row.to_account_id)
+            .ok_or_else(|| err("internal", format!("profile not found: {}", row.to_account_id)))?;
         output.push(FriendRequestSummary {
             request_id: row.request_id,
-            from: to_user_summary(&from),
-            to: to_user_summary(&to),
+            from: to_user_summary(from),
+            to: to_user_summary(to),
             status: parse_request_status(&row.status)?,
             created_at_ms: row.created_at_ms,
             resolved_at_ms: row.resolved_at_ms,
@@ -789,8 +842,8 @@ async fn hydrate_conversations(
         let title = match (&kind, &row.title, &counterpart) {
             (ConversationKind::Direct, _, Some(counterpart)) => counterpart.display_name.clone(),
             (ConversationKind::Group, Some(title), _) if !title.trim().is_empty() => title.clone(),
-            (ConversationKind::Group, _, _) => "未命名群聊".into(),
-            _ => "对话".into(),
+            (ConversationKind::Group, _, _) => DEFAULT_GROUP_TITLE.into(),
+            _ => "Conversation".into(),
         };
         output.push(ConversationSummary {
             conversation_id: row.conversation_id,
@@ -1051,7 +1104,10 @@ async fn add_group_member(
         .map_err(|e| err("internal", e.to_string()))?
         .ok_or_else(|| err("not_found", "conversation not found"))?;
     if conversation.kind != "group" {
-        return Err(err("bad_request", "can only add members to group conversations"));
+        return Err(err(
+            "bad_request",
+            "can only add members to group conversations",
+        ));
     }
     // Verify the new member is a friend of the caller
     if !crate::store::social::are_friends(&state.store, &account_id, &req.member_account_id)
@@ -1110,7 +1166,10 @@ async fn add_agent_to_group(
         .map_err(|e| err("internal", e.to_string()))?
         .ok_or_else(|| err("not_found", "conversation not found"))?;
     if conversation.kind != "group" {
-        return Err(err("bad_request", "can only add agents to group conversations"));
+        return Err(err(
+            "bad_request",
+            "can only add agents to group conversations",
+        ));
     }
     // Verify the agent exists
     let _agent = crate::store::social::get_agent(&state.store, &req.agent_id)
@@ -1183,11 +1242,18 @@ async fn send_agent_message(
         return Err(err("forbidden", "you do not own this agent"));
     }
     // Verify the agent is in this conversation
-    if !crate::store::social::is_agent_in_conversation(&state.store, &conversation_id, &req.agent_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
+    if !crate::store::social::is_agent_in_conversation(
+        &state.store,
+        &conversation_id,
+        &req.agent_id,
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?
     {
-        return Err(err("bad_request", "agent is not a member of this conversation"));
+        return Err(err(
+            "bad_request",
+            "agent is not a member of this conversation",
+        ));
     }
     // Extract mentions from the message
     let members =

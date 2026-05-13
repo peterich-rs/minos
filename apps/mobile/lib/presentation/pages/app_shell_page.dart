@@ -1,32 +1,26 @@
 // ignore_for_file: unused_element
 
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart' hide ConnectionState;
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
-
+import 'package:go_router/go_router.dart';
 import 'package:minos/application/active_session_provider.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/auth_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/preferred_agent_provider.dart';
+import 'package:minos/application/project_providers.dart';
 import 'package:minos/application/social_providers.dart';
-import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/domain/active_session.dart';
-import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/auth_state.dart';
-import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/presentation/error_feedback.dart';
-import 'package:minos/presentation/pages/agent_start_page.dart';
 import 'package:minos/presentation/pages/agents_hub_page.dart';
-import 'package:minos/presentation/pages/log_viewer_page.dart';
-import 'package:minos/presentation/pages/pairing_page.dart';
-import 'package:minos/presentation/pages/social_chat_page.dart';
-import 'package:minos/presentation/pages/social_hub_page.dart';
-import 'package:minos/presentation/pages/thread_view_page.dart';
-import 'package:minos/presentation/widgets/thread_list_tile.dart';
+import 'package:minos/presentation/router.dart';
 import 'package:minos/presentation/widgets/shimmer_box.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 const String _appVersion = '1.0.0';
 
@@ -63,26 +57,14 @@ class _AppShellPageState extends ConsumerState<AppShellPage> {
 
 // ─────────────────────────── Messages tab ───────────────────────────
 
-enum _MessagesMode { agent, social }
-
-class _MessagesTab extends ConsumerStatefulWidget {
+class _MessagesTab extends ConsumerWidget {
   const _MessagesTab();
 
   @override
-  ConsumerState<_MessagesTab> createState() => _MessagesTabState();
-}
-
-class _MessagesTabState extends ConsumerState<_MessagesTab> {
-  _MessagesMode _mode = _MessagesMode.agent;
-
-  @override
-  Widget build(BuildContext context) {
-    final threadsAsync = ref.watch(threadListProvider);
-    final conversationsAsync = ref.watch(conversationsProvider);
-    final socialUnreadCount = ref.watch(socialUnreadCountProvider);
+  Widget build(BuildContext context, WidgetRef ref) {
     final connection = ref.watch(connectionStateProvider).asData?.value;
     final isConnected = connection is ConnectionState_Connected;
-    final preferredProfile = ref.watch(preferredAgentProfileProvider);
+    final projectsAsync = ref.watch(projectListProvider);
 
     return SafeArea(
       bottom: false,
@@ -91,61 +73,117 @@ class _MessagesTabState extends ConsumerState<_MessagesTab> {
           _LargeTitleBar(
             title: '消息',
             trailing: _CircleIconButton(
-              icon: _mode == _MessagesMode.agent
-                  ? LucideIcons.plus
-                  : LucideIcons.userPlus,
-              onTap: () => _mode == _MessagesMode.agent
-                  ? _openNewChat(context, ref)
-                  : Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const SocialHubPage(),
-                      ),
-                    ),
-              tooltip: _mode == _MessagesMode.agent ? '新对话' : '好友与群聊',
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: _MessagesModeSwitch(
-              mode: _mode,
-              unreadCount: socialUnreadCount,
-              onChanged: (mode) => setState(() => _mode = mode),
+              icon: LucideIcons.folderPlus,
+              onTap: () => _showCreateProjectDialog(context, ref),
+              tooltip: '新建项目',
             ),
           ),
           if (!isConnected) _OfflineBanner(state: connection),
-          Expanded(
-            child: _buildMessagesPane(
-              context,
-              ref,
-              threadsAsync,
-              conversationsAsync,
-              preferredProfile,
-            ),
-          ),
+          Expanded(child: _DiscordProjectsPane(projectsAsync: projectsAsync)),
         ],
       ),
     );
   }
 
-  Widget _buildMessagesPane(
-    BuildContext context,
-    WidgetRef ref,
-    AsyncValue<List<ThreadSummary>> threadsAsync,
-    AsyncValue<ConversationsResponse> conversationsAsync,
-    AgentProfile? preferredProfile,
-  ) {
-    if (_mode == _MessagesMode.social) {
-      return _SocialConversationsPane(conversationsAsync: conversationsAsync);
-    }
-    return threadsAsync.when(
+  void _showCreateProjectDialog(BuildContext context, WidgetRef ref) {
+    final nameController = TextEditingController();
+    final slugController = TextEditingController();
+
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('新建项目'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: '项目名称',
+                  hintText: '例如: My App',
+                ),
+                autofocus: true,
+                onChanged: (value) {
+                  if (slugController.text.isEmpty ||
+                      slugController.text ==
+                          _slugify(
+                            nameController.text.substring(
+                              0,
+                              nameController.text.length > 1
+                                  ? nameController.text.length - 1
+                                  : 0,
+                            ),
+                          )) {
+                    slugController.text = _slugify(value);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: slugController,
+                decoration: const InputDecoration(
+                  labelText: 'Workspace 文件夹名',
+                  hintText: '例如: my-app',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = nameController.text.trim();
+                final slug = slugController.text.trim();
+                if (name.isEmpty || slug.isEmpty) return;
+                Navigator.pop(ctx);
+                await ref
+                    .read(projectListProvider.notifier)
+                    .createProject(name: name, workspaceSlug: slug);
+              },
+              child: const Text('创建'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _slugify(String input) {
+    return input
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\u4e00-\u9fff]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+  }
+}
+
+class _DiscordProjectsPane extends ConsumerStatefulWidget {
+  const _DiscordProjectsPane({required this.projectsAsync});
+
+  final AsyncValue<List<ProjectSummary>> projectsAsync;
+
+  @override
+  ConsumerState<_DiscordProjectsPane> createState() =>
+      _DiscordProjectsPaneState();
+}
+
+class _DiscordProjectsPaneState extends ConsumerState<_DiscordProjectsPane> {
+  final Set<String> _collapsedProjectIds = <String>{};
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.projectsAsync.when(
       loading: () => const _MessagesListSkeleton(),
       error: (error, _) => _CupertinoRefreshScrollView(
         onRefresh: () async {
           try {
-            await ref.read(threadListProvider.notifier).refresh();
+            await ref.read(projectListProvider.notifier).refresh();
           } catch (error) {
             if (context.mounted) {
-              _showRefreshError(context, '消息刷新失败', error);
+              _showRefreshError(context, '项目刷新失败', error);
             }
           }
         },
@@ -153,198 +191,643 @@ class _MessagesTabState extends ConsumerState<_MessagesTab> {
           SliverFillRemaining(
             hasScrollBody: false,
             child: _InlineErrorState(
-              title: '消息暂时不可用',
+              title: '项目暂时不可用',
               description: error.toString(),
             ),
           ),
         ],
       ),
-      data: (threads) => _CupertinoRefreshScrollView(
+      data: (projects) => _CupertinoRefreshScrollView(
         onRefresh: () async {
           try {
-            await ref.read(threadListProvider.notifier).refresh();
+            await _refreshProjects(projects);
           } catch (error) {
             if (context.mounted) {
-              _showRefreshError(context, '消息刷新失败', error);
+              _showRefreshError(context, '项目刷新失败', error);
             }
           }
         },
         slivers: <Widget>[
-          if (threads.isEmpty)
-            SliverFillRemaining(
+          if (projects.isEmpty)
+            const SliverFillRemaining(
               hasScrollBody: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 80, 24, 24),
+                padding: EdgeInsets.fromLTRB(24, 80, 24, 24),
                 child: _EmptyState(
-                  icon: CupertinoIcons.bubble_left_bubble_right,
-                  title: '还没有会话',
-                  subtitle: preferredProfile == null
-                      ? '点右上角图标开始新对话，或先去 Agent 页创建一个 profile。'
-                      : '点右上角图标开始新对话，首条消息会通过 ${preferredProfile.name} 发起。',
+                  icon: LucideIcons.folderOpen,
+                  title: '还没有项目',
+                  subtitle: '创建一个项目后，项目内的 thread 会作为群聊出现在这里。',
                 ),
               ),
             )
           else
-            _ThreadListSliver(threads: threads),
-        ],
-      ),
-    );
-  }
-
-  void _openNewChat(BuildContext context, WidgetRef ref) {
-    ref.read(activeSessionControllerProvider.notifier).reset();
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => const AgentStartPage()));
-  }
-}
-
-class _MessagesModeSwitch extends StatelessWidget {
-  const _MessagesModeSwitch({
-    required this.mode,
-    required this.unreadCount,
-    required this.onChanged,
-  });
-
-  final _MessagesMode mode;
-  final int unreadCount;
-  final ValueChanged<_MessagesMode> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      padding: const EdgeInsets.all(3),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: ShadButton.raw(
-              variant: mode == _MessagesMode.agent
-                  ? ShadButtonVariant.secondary
-                  : ShadButtonVariant.ghost,
-              onPressed: () => onChanged(_MessagesMode.agent),
-              child: Text('Agent', style: shadTheme.textTheme.small),
-            ),
-          ),
-          Expanded(
-            child: ShadButton.raw(
-              variant: mode == _MessagesMode.social
-                  ? ShadButtonVariant.secondary
-                  : ShadButtonVariant.ghost,
-              onPressed: () => onChanged(_MessagesMode.social),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text('Chat', style: shadTheme.textTheme.small),
-                  if (unreadCount > 0) ...<Widget>[
-                    const SizedBox(width: 6),
-                    _NavCountBadge(count: unreadCount),
-                  ],
-                ],
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final project = projects[index];
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _ProjectThreadGroup(
+                      project: project,
+                      collapsed: _collapsedProjectIds.contains(
+                        project.projectId,
+                      ),
+                      onToggle: () => _toggleProject(project.projectId),
+                      onNewThread: () =>
+                          _showCreateThreadDialog(context, ref, project),
+                    ),
+                  );
+                }, childCount: projects.length),
               ),
             ),
-          ),
         ],
       ),
     );
   }
+
+  void _toggleProject(String projectId) {
+    setState(() {
+      if (!_collapsedProjectIds.add(projectId)) {
+        _collapsedProjectIds.remove(projectId);
+      }
+    });
+  }
+
+  Future<void> _refreshProjects(List<ProjectSummary> fallbackProjects) async {
+    await ref.read(projectListProvider.notifier).refresh();
+    final refreshed = ref.read(projectListProvider);
+    final projects = refreshed.hasValue
+        ? refreshed.requireValue
+        : fallbackProjects;
+    await Future.wait(<Future<void>>[
+      for (final project in projects)
+        ref
+            .read(projectThreadsProvider(project.projectId).notifier)
+            .refresh()
+            .catchError((_) {}),
+    ]);
+  }
+
+  Future<void> _showCreateThreadDialog(
+    BuildContext context,
+    WidgetRef ref,
+    ProjectSummary project,
+  ) async {
+    final preferredProfile = ref.read(preferredAgentProfileProvider);
+    final agentName = preferredProfile?.runtimeAgent ?? AgentName.codex;
+    final displayName = preferredProfile?.name ?? _agentLabel(agentName);
+    final promptController = TextEditingController();
+    final prompt = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('新建群聊 · ${project.name}'),
+        content: TextField(
+          controller: promptController,
+          autofocus: true,
+          maxLines: 3,
+          decoration: InputDecoration(
+            hintText: '$displayName 要处理什么？',
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, promptController.text.trim()),
+            child: const Text('开始'),
+          ),
+        ],
+      ),
+    );
+    promptController.dispose();
+    if (prompt == null || prompt.isEmpty) return;
+
+    final core = ref.read(minosCoreProvider);
+    try {
+      final response = await core.startAgentInProject(
+        agent: agentName,
+        prompt: prompt,
+        projectId: project.projectId,
+      );
+      await core.sendUserMessage(sessionId: response.sessionId, text: prompt);
+      ref.read(selectedProjectProvider.notifier).select(project.projectId);
+      ref.invalidate(projectListProvider);
+      ref.invalidate(projectThreadsProvider(project.projectId));
+      if (!context.mounted) return;
+      context.push(
+        '/thread/${response.sessionId}',
+        extra: ThreadRouteExtra(agent: agentName),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('启动失败: $error')));
+    }
+  }
 }
 
-class _SocialConversationsPane extends ConsumerWidget {
-  const _SocialConversationsPane({required this.conversationsAsync});
+class _ProjectThreadGroup extends ConsumerWidget {
+  const _ProjectThreadGroup({
+    required this.project,
+    required this.collapsed,
+    required this.onToggle,
+    required this.onNewThread,
+  });
 
-  final AsyncValue<ConversationsResponse> conversationsAsync;
+  final ProjectSummary project;
+  final bool collapsed;
+  final VoidCallback onToggle;
+  final VoidCallback onNewThread;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return conversationsAsync.when(
-      loading: () => const _MessagesListSkeleton(),
-      error: (error, _) => _CupertinoRefreshScrollView(
-        onRefresh: () async {
-          try {
-            await ref.read(conversationsProvider.notifier).refresh();
-          } catch (error) {
-            if (context.mounted) {
-              _showRefreshError(context, '聊天刷新失败', error);
-            }
-          }
-        },
-        slivers: <Widget>[
-          SliverFillRemaining(
-            hasScrollBody: false,
-            child: _InlineErrorState(
-              title: '聊天暂时不可用',
-              description: error.toString(),
+    final theme = Theme.of(context);
+    final threadsAsync = collapsed
+        ? null
+        : ref.watch(projectThreadsProvider(project.projectId));
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.35),
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Column(
+          children: <Widget>[
+            _ProjectGroupHeader(
+              project: project,
+              collapsed: collapsed,
+              onTap: onToggle,
+              onNewThread: onNewThread,
+            ),
+            if (!collapsed) ...<Widget>[
+              const _RowDivider(indent: 64),
+              if (threadsAsync == null)
+                const SizedBox.shrink()
+              else
+                threadsAsync.when(
+                  loading: () => const _ProjectThreadSkeletonList(),
+                  error: (error, _) => _ProjectThreadsError(
+                    error: error,
+                    onRetry: () => ref
+                        .read(
+                          projectThreadsProvider(project.projectId).notifier,
+                        )
+                        .refresh(),
+                  ),
+                  data: (threads) => threads.isEmpty
+                      ? _EmptyProjectThreads(onNewThread: onNewThread)
+                      : _ProjectThreadList(
+                          projectId: project.projectId,
+                          threads: threads,
+                        ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProjectGroupHeader extends StatelessWidget {
+  const _ProjectGroupHeader({
+    required this.project,
+    required this.collapsed,
+    required this.onTap,
+    required this.onNewThread,
+  });
+
+  final ProjectSummary project;
+  final bool collapsed;
+  final VoidCallback onTap;
+  final VoidCallback onNewThread;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final projectColor = _projectColor(project.projectId);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                collapsed ? LucideIcons.chevronRight : LucideIcons.chevronDown,
+                size: 18,
+                color: theme.colorScheme.outline,
+              ),
+              const SizedBox(width: 8),
+              _ProjectAvatar(project: project, color: projectColor),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      project.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${project.threadCount} 个群聊 · ${project.workspaceSlug}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Tooltip(
+                message: '新建群聊',
+                child: ShadIconButton.ghost(
+                  icon: const Icon(LucideIcons.messageSquarePlus),
+                  iconSize: 18,
+                  width: 36,
+                  height: 36,
+                  onPressed: onNewThread,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProjectAvatar extends StatelessWidget {
+  const _ProjectAvatar({required this.project, required this.color});
+
+  final ProjectSummary project;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.30 : 0.16),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        project.name.isNotEmpty ? project.name[0].toUpperCase() : '?',
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w800,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
+class _ProjectThreadList extends StatelessWidget {
+  const _ProjectThreadList({required this.projectId, required this.threads});
+
+  final String projectId;
+  final List<ThreadSummary> threads;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: <Widget>[
+        const _ThreadCategoryHeader(),
+        for (var index = 0; index < threads.length; index++) ...<Widget>[
+          _ProjectThreadTile(projectId: projectId, thread: threads[index]),
+          if (index < threads.length - 1) const _RowDivider(indent: 64),
+        ],
+      ],
+    );
+  }
+}
+
+class _ThreadCategoryHeader extends StatelessWidget {
+  const _ThreadCategoryHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            LucideIcons.messagesSquare,
+            size: 14,
+            color: theme.colorScheme.outline,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '群聊',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.outline,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0,
             ),
           ),
         ],
       ),
-      data: (response) => _CupertinoRefreshScrollView(
-        onRefresh: () async {
-          try {
-            await ref.read(conversationsProvider.notifier).refresh();
-          } catch (error) {
-            if (context.mounted) {
-              _showRefreshError(context, '聊天刷新失败', error);
-            }
-          }
+    );
+  }
+}
+
+class _ProjectThreadTile extends ConsumerWidget {
+  const _ProjectThreadTile({required this.projectId, required this.thread});
+
+  final String projectId;
+  final ThreadSummary thread;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final ended = thread.endedAtMs != null;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          ref.read(selectedProjectProvider.notifier).select(projectId);
+          context.push(
+            '/thread/${thread.threadId}',
+            extra: ThreadRouteExtra(agent: thread.agent),
+          );
         },
-        slivers: <Widget>[
-          if (response.conversations.isEmpty)
-            const SliverFillRemaining(
-              hasScrollBody: false,
-              child: _InlineErrorState(
-                title: '还没有聊天',
-                description: '去添加好友，或者发起一个群聊。',
-              ),
-            )
-          else
-            SliverPadding(
-              padding: const EdgeInsets.only(bottom: 24),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate((context, index) {
-                  final conversation = response.conversations[index];
-                  final preview = conversation.unreadMentionCount > 0
-                      ? '@你 ${conversation.lastMessagePreview ?? (conversation.kind == ConversationKind.group ? '群聊' : '开始聊天')}'
-                      : (conversation.lastMessagePreview ??
-                            (conversation.kind == ConversationKind.group
-                                ? '群聊'
-                                : '开始聊天'));
-                  return ThreadListTile.social(
-                    title: conversation.title,
-                    preview: preview,
-                    timestampMs: platformInt64ToInt(
-                      conversation.lastMessageAtMs,
-                    ),
-                    avatarLabel: conversation.kind == ConversationKind.group
-                        ? 'G'
-                        : _avatarInitial(conversation.counterpart?.displayName),
-                    avatarTint: conversation.kind == ConversationKind.group
-                        ? const Color(0xFF0F766E)
-                        : const Color(0xFF2563EB),
-                    unreadCount: conversation.unreadCount,
-                    hasUnreadMention: conversation.unreadMentionCount > 0,
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => SocialChatPage(
-                          conversationId: conversation.conversationId,
-                          title: conversation.title,
-                          kind: conversation.kind,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+          child: Row(
+            children: <Widget>[
+              SizedBox(
+                width: 36,
+                height: 36,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: <Widget>[
+                    _AgentAvatar(agent: thread.agent, size: 32),
+                    Positioned(
+                      right: -1,
+                      bottom: -1,
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerLow,
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(
+                          LucideIcons.usersRound,
+                          size: 9,
+                          color: ended
+                              ? theme.colorScheme.outline
+                              : theme.colorScheme.primary,
                         ),
                       ),
                     ),
-                  );
-                }, childCount: response.conversations.length),
+                  ],
+                ),
               ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            _threadTitle(thread),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: ended
+                                  ? theme.colorScheme.onSurfaceVariant
+                                  : theme.colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _formatRelativeTimestamp(thread.lastTsMs.toInt()),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '群聊会话 · ${thread.messageCount} 条消息',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                ended ? LucideIcons.lock : LucideIcons.chevronRight,
+                size: 16,
+                color: theme.colorScheme.outline,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyProjectThreads extends StatelessWidget {
+  const _EmptyProjectThreads({required this.onNewThread});
+
+  final VoidCallback onNewThread;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 20),
+      child: Column(
+        children: <Widget>[
+          Icon(
+            LucideIcons.messagesSquare,
+            size: 30,
+            color: theme.colorScheme.outline,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '还没有群聊',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
             ),
+          ),
+          const SizedBox(height: 12),
+          ShadButton.outline(
+            onPressed: onNewThread,
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(LucideIcons.messageSquarePlus, size: 16),
+                SizedBox(width: 8),
+                Text('新建群聊'),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+class _ProjectThreadsError extends StatelessWidget {
+  const _ProjectThreadsError({required this.error, required this.onRetry});
+
+  final Object error;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(
+                LucideIcons.circleAlert,
+                size: 16,
+                color: theme.colorScheme.error,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '群聊加载失败',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              TextButton(onPressed: onRetry, child: const Text('重试')),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            error.toString(),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProjectThreadSkeletonList extends StatelessWidget {
+  const _ProjectThreadSkeletonList();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(
+        children: <Widget>[
+          for (var index = 0; index < 3; index++) ...<Widget>[
+            const Row(
+              children: <Widget>[
+                ShimmerBox(width: 32, height: 32, circular: true),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      ShimmerBox(width: 160, height: 13),
+                      SizedBox(height: 7),
+                      ShimmerBox(width: 110, height: 11),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (index < 2) const SizedBox(height: 16),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _threadTitle(ThreadSummary thread) {
+  final title = thread.title?.trim();
+  if (title != null && title.isNotEmpty) return title;
+  final ts = DateTime.fromMillisecondsSinceEpoch(thread.lastTsMs.toInt());
+  return '${_agentLabel(thread.agent)} · ${ts.month}/${ts.day} ${_two(ts.hour)}:${_two(ts.minute)}';
+}
+
+String _formatRelativeTimestamp(int ms) {
+  final now = DateTime.now();
+  final ts = DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
+  final diff = now.difference(ts);
+
+  if (diff.inSeconds < 60) return '刚刚';
+  if (diff.inMinutes < 60) return '${diff.inMinutes} 分钟前';
+
+  final today = DateTime(now.year, now.month, now.day);
+  final tsDay = DateTime(ts.year, ts.month, ts.day);
+  if (tsDay == today) return '${_two(ts.hour)}:${_two(ts.minute)}';
+
+  final yesterday = today.subtract(const Duration(days: 1));
+  if (tsDay == yesterday) return '昨天';
+
+  if (ts.year == now.year) return '${_two(ts.month)}-${_two(ts.day)}';
+  return '${ts.year}-${_two(ts.month)}-${_two(ts.day)}';
+}
+
+String _two(int n) => n.toString().padLeft(2, '0');
+
+Color _projectColor(String id) {
+  const colors = <Color>[
+    Color(0xFF2563EB),
+    Color(0xFF7C3AED),
+    Color(0xFF0F766E),
+    Color(0xFFEA580C),
+    Color(0xFFDB2777),
+    Color(0xFF4F46E5),
+    Color(0xFF16A34A),
+    Color(0xFFD97706),
+  ];
+  return colors[id.hashCode.abs() % colors.length];
 }
 
 class _MessagesListSkeleton extends StatelessWidget {
@@ -357,17 +840,17 @@ class _MessagesListSkeleton extends StatelessWidget {
       physics: const NeverScrollableScrollPhysics(),
       children: List.generate(
         6,
-        (index) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        (index) => const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const ShimmerBox(width: 48, height: 48, circular: true),
-              const SizedBox(width: 14),
+              ShimmerBox(width: 48, height: 48, circular: true),
+              SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
+                  children: [
                     ShimmerBox(width: 120, height: 14),
                     SizedBox(height: 8),
                     ShimmerBox(width: double.infinity, height: 12),
@@ -376,41 +859,11 @@ class _MessagesListSkeleton extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
-              const ShimmerBox(width: 40, height: 12),
+              SizedBox(width: 12),
+              ShimmerBox(width: 40, height: 12),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _ThreadListSliver extends StatelessWidget {
-  const _ThreadListSliver({required this.threads});
-
-  final List<ThreadSummary> threads;
-
-  @override
-  Widget build(BuildContext context) {
-    return SliverPadding(
-      padding: const EdgeInsets.only(bottom: 24),
-      sliver: SliverList(
-        delegate: SliverChildListDelegate.fixed(<Widget>[
-          for (var index = 0; index < threads.length; index++) ...<Widget>[
-            ThreadListTile(
-              summary: threads[index],
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => ThreadViewPage(
-                    threadId: threads[index].threadId,
-                    agent: threads[index].agent,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ]),
       ),
     );
   }
@@ -544,9 +997,7 @@ class _RuntimeProfilePage extends ConsumerWidget {
 
   void _openNewChat(BuildContext context, WidgetRef ref) {
     ref.read(activeSessionControllerProvider.notifier).reset();
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => const AgentStartPage()));
+    context.push(AppRoutes.agentStart);
   }
 }
 
@@ -990,22 +1441,14 @@ class _ProfileTab extends ConsumerWidget {
                       icon: CupertinoIcons.ant,
                       title: 'Devtool',
                       subtitle: '日志与请求追踪',
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const LogViewerPage(),
-                        ),
-                      ),
+                      onTap: () => context.push(AppRoutes.logViewer),
                     ),
                     const _RowDivider(indent: 56),
                     _SettingsRow(
                       icon: CupertinoIcons.qrcode_viewfinder,
                       title: '添加伙伴',
                       subtitle: '扫描二维码添加 runtime 设备',
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const PairingPage(),
-                        ),
-                      ),
+                      onTap: () => context.push(AppRoutes.pairing),
                     ),
                   ],
                 ),

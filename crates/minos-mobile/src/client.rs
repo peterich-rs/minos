@@ -52,6 +52,8 @@ use crate::store::{InMemoryPairingStore, MobilePairingStore, PersistedPairingSta
 use crate::ReconnectController;
 
 const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+const WS_PING_INTERVAL: Duration = Duration::from_secs(30);
+const WS_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 
 macro_rules! auth_http_call {
     ($self:expr, |$http:ident, $access:ident| $call:expr) => {{
@@ -985,6 +987,127 @@ impl MobileClient {
         Ok(())
     }
 
+    // ─────────────────────────── project rpcs ──────────────────────────────
+
+    /// Create a project in the account-scoped backend store.
+    pub async fn create_project(
+        &self,
+        req: minos_protocol::CreateProjectRequest,
+    ) -> Result<minos_protocol::CreateProjectResponse, MinosError> {
+        auth_http_call!(self, |http, access| http.create_project(&access, req))
+    }
+
+    /// List account-scoped projects from the backend.
+    pub async fn list_projects(&self) -> Result<minos_protocol::ListProjectsResponse, MinosError> {
+        auth_http_call!(self, |http, access| http.list_projects(&access))
+    }
+
+    /// Update a project's name in the backend.
+    pub async fn update_project(
+        &self,
+        req: minos_protocol::UpdateProjectRequest,
+    ) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| http.update_project(&access, req))
+    }
+
+    /// Delete a project from the backend.
+    pub async fn delete_project(
+        &self,
+        req: minos_protocol::DeleteProjectRequest,
+    ) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| http.delete_project(&access, req))
+    }
+
+    /// List backend-known threads within a project.
+    pub async fn list_project_threads(
+        &self,
+        req: minos_protocol::ListProjectThreadsParams,
+    ) -> Result<minos_protocol::ListProjectThreadsResponse, MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.list_project_threads(&access, req)
+        })
+    }
+
+    /// Start an agent within a project context.
+    #[allow(clippy::items_after_statements)]
+    pub async fn start_agent_in_project(
+        &self,
+        agent: AgentName,
+        prompt: String,
+        project_id: String,
+    ) -> Result<StartAgentResponse, MinosError> {
+        let access = self.access_token_or_unauthorized().await?;
+        let http = self.http_client_no_secret()?;
+        let projects = self
+            .finish_authenticated_http_call(http.list_projects(&access).await)
+            .await?;
+        let project = projects
+            .projects
+            .into_iter()
+            .find(|project| project.project_id == project_id)
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "start_agent_in_project".into(),
+                message: format!("project not found: {project_id}"),
+            })?;
+        let workspace_slug = project.workspace_slug;
+
+        let outbox = self
+            .outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or(MinosError::NotConnected)?;
+        let target = self.require_active_host().await?;
+        #[derive(serde::Serialize)]
+        struct StartInProjectReq {
+            agent: AgentName,
+            workspace: String,
+            project_id: String,
+            workspace_slug: String,
+        }
+        let req = StartInProjectReq {
+            agent,
+            workspace: String::new(),
+            project_id: project_id.clone(),
+            workspace_slug,
+        };
+        let response: StartAgentResponse = forward_rpc(
+            &self.pending,
+            &self.next_id,
+            &outbox,
+            target,
+            "minos_start_agent_in_project",
+            req,
+            Duration::from_secs(60),
+            Some(RpcTraceContext {
+                thread_id: None,
+                request_summary: Some(format!(
+                    "start_agent_in_project agent={agent:?} prompt_len={}",
+                    prompt.len()
+                )),
+            }),
+        )
+        .await?;
+
+        let assign_req = minos_protocol::AssignProjectThreadRequest {
+            project_id,
+            thread_id: response.session_id.clone(),
+        };
+        if let Err(error) = self
+            .finish_authenticated_http_call(http.assign_project_thread(&access, assign_req).await)
+            .await
+        {
+            tracing::warn!(
+                target: "minos_mobile::client",
+                %error,
+                thread_id = %response.session_id,
+                "failed to assign backend project thread",
+            );
+        }
+
+        Ok(response)
+    }
+
     /// Subscribe to auth-state transitions. The first read on the receiver
     /// returns the current cached frame. Spec §6.1.
     #[must_use]
@@ -1330,6 +1453,8 @@ impl MobileClient {
         client
             .new_websocket(request)
             .handshake_timeout(WS_HANDSHAKE_TIMEOUT)
+            .ping_interval(WS_PING_INTERVAL)
+            .pong_timeout(WS_PONG_TIMEOUT)
             .execute()
             .await
     }
@@ -1809,7 +1934,7 @@ async fn reconnect_loop(ctx: ReconnectContext) {
                                 return;
                             }
                         }
-                        _ = tokio::time::sleep(connected_refresh_delay(&ctx).await) => {
+                        () = tokio::time::sleep(connected_refresh_delay(&ctx).await) => {
                             let needs_refresh = {
                                 let guard = ctx.auth_session.read().await;
                                 guard.as_ref().is_some_and(access_token_needs_refresh)
@@ -1986,6 +2111,8 @@ async fn connect_with_handles(
 
 #[cfg(test)]
 mod tests {
+    use minos_protocol::SenderType;
+
     use super::*;
 
     #[test]
@@ -2436,6 +2563,7 @@ mod tests {
                     reply_to: None,
                     recalled_at_ms: None,
                     mentioned_account_ids: Vec::new(),
+                    sender_type: SenderType::User,
                 },
             },
         };

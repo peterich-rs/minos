@@ -5,7 +5,7 @@
 //! variants) that encodes each variant and decodes back.
 
 use minos_domain::{AgentName, DeviceId, DeviceSecret};
-use minos_protocol::{ChatMessageSummary, Envelope, EventKind, UserSummary};
+use minos_protocol::{ChatMessageSummary, Envelope, EventKind, SenderType, UserSummary};
 use minos_ui_protocol::UiEventMessage;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -140,6 +140,7 @@ fn all_event_kind_variants_round_trip() {
                 reply_to: None,
                 recalled_at_ms: None,
                 mentioned_account_ids: vec!["acct-2".into()],
+                sender_type: SenderType::User
             },
         },
         EventKind::IngestCheckpoint {

@@ -128,6 +128,78 @@ pub async fn revoke_one(pool: &SqlitePool, plaintext: &str) -> Result<(), Backen
     Ok(())
 }
 
+/// Atomically revoke the old refresh token and insert a new one in a
+/// single transaction. Returns `None` if the old token was already
+/// revoked (CAS failure — another concurrent request won the race).
+/// Returns `Some(new_row)` on success.
+pub async fn rotate(
+    pool: &SqlitePool,
+    old_plaintext: &str,
+    new_plaintext: &str,
+    account_id: &str,
+    device_id: &str,
+) -> Result<Option<RefreshTokenRow>, BackendError> {
+    let old_hash = hash_plaintext(old_plaintext);
+    let now = Utc::now().timestamp_millis();
+
+    let mut tx = pool.begin().await.map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::rotate.begin".into(),
+        message: e.to_string(),
+    })?;
+
+    // CAS: only revoke if still active. rows_affected == 0 means another
+    // request already consumed this token.
+    let result = sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
+    )
+    .bind(now)
+    .bind(&old_hash)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::rotate.revoke".into(),
+        message: e.to_string(),
+    })?;
+
+    if result.rows_affected() == 0 {
+        // Token was already revoked — concurrent rotation won.
+        tx.rollback().await.ok();
+        return Ok(None);
+    }
+
+    let new_hash = hash_plaintext(new_plaintext);
+    let expires_at = now + REFRESH_TTL_MS;
+    sqlx::query(
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at, expires_at)
+           VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&new_hash)
+    .bind(account_id)
+    .bind(device_id)
+    .bind(now)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::rotate.insert".into(),
+        message: e.to_string(),
+    })?;
+
+    tx.commit().await.map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::rotate.commit".into(),
+        message: e.to_string(),
+    })?;
+
+    Ok(Some(RefreshTokenRow {
+        token_hash: new_hash,
+        account_id: account_id.into(),
+        device_id: device_id.into(),
+        issued_at: now,
+        expires_at,
+        revoked_at: None,
+    }))
+}
+
 /// Revoke every active refresh token for an account. Used on login to
 /// invalidate all devices for that account when an administrative flow needs
 /// it. Normal login uses [`revoke_all_for_device`] so multiple iOS devices can

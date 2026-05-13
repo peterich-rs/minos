@@ -33,11 +33,11 @@ use std::{sync::Arc, time::Duration};
 
 use axum::http::{
     header::{AUTHORIZATION, CONTENT_TYPE},
-    HeaderName, Method,
+    HeaderName, HeaderValue, Method,
 };
 use axum::Router;
 use sqlx::SqlitePool;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use crate::{
     auth::rate_limit::RateLimiter, ingest::translate::ThreadTranslators, pairing::PairingService,
@@ -45,6 +45,7 @@ use crate::{
 };
 
 pub mod auth;
+pub mod error_response;
 pub mod health;
 pub mod v1;
 pub mod ws_devices;
@@ -78,6 +79,8 @@ pub struct BackendState {
     pub auth_register_per_ip: Arc<RateLimiter>,
     /// Per-account refresh bucket (60 / hour, spec §5.6).
     pub auth_refresh_per_acc: Arc<RateLimiter>,
+    /// Parsed CORS origins from config. `None` means allow-all (dev mode).
+    pub cors_origins: Option<Vec<HeaderValue>>,
     /// Crate version string; exposed via `/health`.
     ///
     /// Stored here rather than read from `env!("CARGO_PKG_VERSION")` at the
@@ -98,6 +101,7 @@ impl BackendState {
         store: SqlitePool,
         token_ttl: Duration,
         jwt_secret: String,
+        cors_origins: Option<Vec<HeaderValue>>,
     ) -> Self {
         Self {
             registry,
@@ -110,8 +114,35 @@ impl BackendState {
             auth_login_per_ip: default_login_per_ip(),
             auth_register_per_ip: default_register_per_ip(),
             auth_refresh_per_acc: default_refresh_per_acc(),
+            cors_origins,
             version: env!("CARGO_PKG_VERSION"),
         }
+    }
+}
+
+/// Parse the `--cors-origins` / `MINOS_CORS_ORIGINS` config string into
+/// a list of `HeaderValue`s. Returns `None` for wildcard (allow-all).
+#[must_use]
+pub fn parse_cors_origins(raw: &str) -> Option<Vec<HeaderValue>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "*" {
+        return None;
+    }
+    let origins: Vec<HeaderValue> = trimmed
+        .split(',')
+        .filter_map(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                HeaderValue::from_str(s).ok()
+            }
+        })
+        .collect();
+    if origins.is_empty() {
+        None
+    } else {
+        Some(origins)
     }
 }
 
@@ -144,17 +175,17 @@ pub fn default_refresh_per_acc() -> Arc<RateLimiter> {
 /// Two routes (see module docs). Logs are wired via `tracing` rather than
 /// `tower-http::trace` in this MVP.
 pub fn router(state: BackendState) -> Router {
+    let cors = cors_layer(state.cors_origins.clone());
     Router::new()
         .route("/health", axum::routing::get(health::get))
         .route("/devices", axum::routing::get(ws_devices::upgrade))
         .nest("/v1", v1::router())
-        .layer(cors_layer())
+        .layer(cors)
         .with_state(state)
 }
 
-fn cors_layer() -> CorsLayer {
-    CorsLayer::new()
-        .allow_origin(Any)
+fn cors_layer(origins: Option<Vec<HeaderValue>>) -> CorsLayer {
+    let layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_headers([
             AUTHORIZATION,
@@ -163,7 +194,11 @@ fn cors_layer() -> CorsLayer {
             HeaderName::from_static(auth::HDR_DEVICE_ROLE),
             HeaderName::from_static(auth::HDR_DEVICE_SECRET),
             HeaderName::from_static(auth::HDR_DEVICE_NAME),
-        ])
+        ]);
+    match origins {
+        None => layer.allow_origin(Any),
+        Some(list) => layer.allow_origin(AllowOrigin::list(list)),
+    }
 }
 
 /// Test scaffolding factories shared by the crate's integration tests.
@@ -204,6 +239,7 @@ pub mod test_support {
             auth_login_per_ip: super::default_login_per_ip(),
             auth_register_per_ip: super::default_register_per_ip(),
             auth_refresh_per_acc: super::default_refresh_per_acc(),
+            cors_origins: None,
             version: env!("CARGO_PKG_VERSION"),
         }
     }

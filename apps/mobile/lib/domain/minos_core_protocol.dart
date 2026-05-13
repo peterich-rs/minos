@@ -99,6 +99,37 @@ abstract class MinosCoreProtocol {
   /// Translated UI event history for one thread.
   Future<ReadThreadResponse> readThread(ReadThreadParams params);
 
+  // ---- Projects (Phase P) ----
+
+  /// Create a new project on the daemon.
+  Future<CreateProjectResponse> createProject({
+    required String name,
+    required String workspaceSlug,
+  });
+
+  /// List all projects on the daemon.
+  Future<ListProjectsResponse> listProjects();
+
+  /// Update a project's name.
+  Future<void> updateProject({required String projectId, required String name});
+
+  /// Delete a project.
+  Future<void> deleteProject({required String projectId});
+
+  /// List threads within a project.
+  Future<ListProjectThreadsResponse> listProjectThreads({
+    required String projectId,
+    int limit = 50,
+    int? beforeTsMs,
+  });
+
+  /// Start an agent within a project context.
+  Future<StartAgentResponse> startAgentInProject({
+    required AgentName agent,
+    required String prompt,
+    required String projectId,
+  });
+
   /// Hot stream of [ConnectionState] transitions, starting with the current
   /// value.
   Stream<ConnectionState> get connectionStates;

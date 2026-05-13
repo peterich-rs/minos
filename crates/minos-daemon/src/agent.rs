@@ -467,6 +467,187 @@ impl AgentGlue {
         }
         Ok(())
     }
+
+    // ── Project operations ──────────────────────────────────────────────
+
+    pub async fn create_project(
+        &self,
+        req: minos_protocol::CreateProjectRequest,
+    ) -> Result<minos_protocol::CreateProjectResponse, MinosError> {
+        let project_id = uuid::Uuid::new_v4().to_string();
+        let now_ms = current_unix_ms();
+
+        // Ensure the workspace directory exists under .minos/workspaces/<slug>
+        let workspace_dir = self
+            .default_workspace
+            .parent()
+            .unwrap_or(&self.default_workspace)
+            .join("workspaces")
+            .join(&req.workspace_slug);
+        if let Err(e) = std::fs::create_dir_all(&workspace_dir) {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                path = %workspace_dir.display(),
+                "failed to create project workspace directory",
+            );
+        }
+
+        self.store
+            .create_project(&project_id, &req.name, &req.workspace_slug, now_ms)
+            .await
+            .map_err(|e| map_store_error("create_project", e))?;
+
+        // Also register the workspace in the workspaces table so threads
+        // can reference it.
+        let ws_root = workspace_dir.display().to_string();
+        if let Err(e) = self.store.upsert_workspace(&ws_root, now_ms).await {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                "upsert_workspace for project failed",
+            );
+        }
+
+        Ok(minos_protocol::CreateProjectResponse {
+            project: minos_protocol::ProjectSummary {
+                project_id,
+                name: req.name,
+                workspace_slug: req.workspace_slug,
+                created_at_ms: now_ms,
+                updated_at_ms: now_ms,
+                thread_count: 0,
+            },
+        })
+    }
+
+    pub async fn list_projects(&self) -> Result<minos_protocol::ListProjectsResponse, MinosError> {
+        let rows = self
+            .store
+            .list_projects()
+            .await
+            .map_err(|e| map_store_error("list_projects", e))?;
+
+        let mut projects = Vec::with_capacity(rows.len());
+        for row in rows {
+            #[allow(clippy::cast_possible_truncation)]
+            let thread_count = self
+                .store
+                .list_threads_by_project(&row.project_id, None, Some(500))
+                .await
+                .map_or(0, |threads| threads.len() as u32);
+            projects.push(minos_protocol::ProjectSummary {
+                project_id: row.project_id,
+                name: row.name,
+                workspace_slug: row.workspace_slug,
+                created_at_ms: row.created_at,
+                updated_at_ms: row.updated_at,
+                thread_count,
+            });
+        }
+
+        Ok(minos_protocol::ListProjectsResponse { projects })
+    }
+
+    pub async fn update_project(
+        &self,
+        req: minos_protocol::UpdateProjectRequest,
+    ) -> Result<(), MinosError> {
+        let now_ms = current_unix_ms();
+        self.store
+            .update_project_name(&req.project_id, &req.name, now_ms)
+            .await
+            .map_err(|e| map_store_error("update_project", e))
+    }
+
+    pub async fn delete_project(
+        &self,
+        req: minos_protocol::DeleteProjectRequest,
+    ) -> Result<(), MinosError> {
+        self.store
+            .delete_project(&req.project_id)
+            .await
+            .map_err(|e| map_store_error("delete_project", e))
+    }
+
+    pub async fn list_project_threads(
+        &self,
+        req: minos_protocol::ListProjectThreadsParams,
+    ) -> Result<minos_protocol::ListProjectThreadsResponse, MinosError> {
+        let threads = self
+            .store
+            .list_threads_by_project(&req.project_id, req.before_ts_ms, Some(req.limit))
+            .await
+            .map_err(|e| map_store_error("list_project_threads", e))?
+            .into_iter()
+            .map(thread_summary_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(minos_protocol::ListProjectThreadsResponse { threads })
+    }
+
+    /// Start an agent within a project context. Creates the thread and
+    /// assigns it to the project.
+    pub async fn start_agent_in_project(
+        &self,
+        req: StartAgentRequest,
+        project_id: &str,
+        workspace_slug: Option<&str>,
+    ) -> Result<StartAgentResponse, MinosError> {
+        let local_project = self
+            .store
+            .get_project(project_id)
+            .await
+            .map_err(|e| map_store_error("start_agent_in_project", e))?;
+        let resolved_workspace_slug = local_project
+            .as_ref()
+            .map(|project| project.workspace_slug.as_str())
+            .or(workspace_slug)
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "start_agent_in_project".into(),
+                message: format!("project not found: {project_id}"),
+            })?;
+
+        let workspace_dir = self
+            .default_workspace
+            .parent()
+            .unwrap_or(&self.default_workspace)
+            .join("workspaces")
+            .join(resolved_workspace_slug);
+        if let Err(e) = std::fs::create_dir_all(&workspace_dir) {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                path = %workspace_dir.display(),
+                "failed to create project workspace directory",
+            );
+        }
+
+        let mut project_req = req;
+        project_req.workspace = workspace_dir.display().to_string();
+
+        let response = self.start_agent(project_req).await?;
+
+        if local_project.is_some() {
+            if let Err(e) = self
+                .store
+                .assign_thread_to_project(&response.session_id, project_id)
+                .await
+            {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    thread_id = %response.session_id,
+                    project_id = %project_id,
+                    "assign_thread_to_project failed",
+                );
+            }
+
+            let now_ms = current_unix_ms();
+            let _ = self.store.touch_project(project_id, now_ms).await;
+        }
+
+        Ok(response)
+    }
 }
 
 #[cfg(feature = "test-support")]

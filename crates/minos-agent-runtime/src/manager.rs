@@ -884,6 +884,7 @@ fn current_unix_ms() -> i64 {
 /// Long-running event-pump task per instance: drains every inbound frame from
 /// the codex WS and forwards `Notification` payloads as `RawIngest` records
 /// keyed by the notification's `params.threadId`.
+#[allow(clippy::too_many_lines)]
 async fn event_pump_loop(
     client: Arc<CodexClient>,
     events_tx: broadcast::Sender<RawIngest>,
@@ -1058,7 +1059,10 @@ mod tests {
             mgr.thread_state(&resp.thread_id).await,
             Some(ThreadState::Idle)
         ));
-        assert_eq!(mgr.open_workspaces().await, vec![std::path::PathBuf::from("/w-test")]);
+        assert_eq!(
+            mgr.open_workspaces().await,
+            vec![std::path::PathBuf::from("/w-test")]
+        );
         fake.stop().await;
     }
 

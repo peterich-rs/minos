@@ -680,6 +680,80 @@ pub struct GetThreadLastSeqResponse {
     pub last_seq: u64,
 }
 
+// ─── Projects ──────────────────────────────────────────────────────────
+
+/// Summary of a project for list views.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSummary {
+    pub project_id: String,
+    pub name: String,
+    pub workspace_slug: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub thread_count: u32,
+}
+
+/// Request to create a new project.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateProjectRequest {
+    pub name: String,
+    pub workspace_slug: String,
+}
+
+/// Response from creating a project.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateProjectResponse {
+    pub project: ProjectSummary,
+}
+
+/// Request to update a project's name.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpdateProjectRequest {
+    pub project_id: String,
+    pub name: String,
+}
+
+/// Request to delete a project.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DeleteProjectRequest {
+    pub project_id: String,
+}
+
+/// Request to attach an existing backend thread to a project.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AssignProjectThreadRequest {
+    pub project_id: String,
+    pub thread_id: String,
+}
+
+/// Response from listing projects.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListProjectsResponse {
+    pub projects: Vec<ProjectSummary>,
+}
+
+/// Parameters for listing threads within a project.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListProjectThreadsParams {
+    pub project_id: String,
+    pub limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_ts_ms: Option<i64>,
+}
+
+/// Response from listing project threads.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListProjectThreadsResponse {
+    pub threads: Vec<ThreadSummary>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

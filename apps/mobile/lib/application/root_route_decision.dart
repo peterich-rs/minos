@@ -12,13 +12,13 @@ enum RootRoute {
   login,
 
   /// Authenticated + paired + WS up (or transient reconnect). Route to
-  /// the chat list.
-  threadList,
+  /// the project list (new home).
+  projectList,
 
   /// Authenticated + paired but the connection to server is offline / WS
-  /// torn down. Same surface as [threadList] visually but expected to render
-  /// an offline banner and disable the input bar.
-  threadListOffline,
+  /// torn down. Same surface as [projectList] visually but expected to render
+  /// an offline banner.
+  projectListOffline,
 }
 
 /// Pure decision matrix gating on auth state first, then connection state.
@@ -35,9 +35,9 @@ RootRoute decideRootRoute({
     AuthUnauthenticated() => RootRoute.login,
     AuthRefreshFailed() => RootRoute.login,
     AuthAuthenticated() => switch (connectionState) {
-      core.ConnectionState_Connected() => RootRoute.threadList,
-      core.ConnectionState_Reconnecting() => RootRoute.threadList,
-      _ => RootRoute.threadListOffline,
+      core.ConnectionState_Connected() => RootRoute.projectList,
+      core.ConnectionState_Reconnecting() => RootRoute.projectList,
+      _ => RootRoute.projectListOffline,
     },
   };
 }

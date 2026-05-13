@@ -108,6 +108,7 @@ struct UpgradeIdentity {
 ///   "401" path).
 /// - `Ok(Response)` where the response is the WS upgrade carrying
 ///   [`run_session`] as its post-upgrade callback.
+#[allow(clippy::too_many_lines)]
 pub async fn upgrade(
     State(state): State<BackendState>,
     Query(query): Query<DevicesWsQuery>,

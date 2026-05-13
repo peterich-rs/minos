@@ -98,6 +98,7 @@ async fn main() -> Result<()> {
         pool.clone(),
         cfg.token_ttl(),
         jwt_secret,
+        http::parse_cors_origins(&cfg.cors_origins),
     );
 
     let gc_task = spawn_token_gc(pool.clone());

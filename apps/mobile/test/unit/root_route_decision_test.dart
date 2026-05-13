@@ -61,23 +61,23 @@ void main() {
           connectionState: const ConnectionState.connected(),
           hasPersistedPairing: false,
         ),
-        RootRoute.threadList,
+        RootRoute.projectList,
       );
     });
 
-    test('Authenticated + paired + connected -> threadList', () {
+    test('Authenticated + paired + connected -> projectList', () {
       expect(
         decideRootRoute(
           authState: AuthAuthenticated(account),
           connectionState: const ConnectionState.connected(),
           hasPersistedPairing: true,
         ),
-        RootRoute.threadList,
+        RootRoute.projectList,
       );
     });
 
     test(
-      'Authenticated + paired + reconnecting -> threadList (banner only)',
+      'Authenticated + paired + reconnecting -> projectList (banner only)',
       () {
         expect(
           decideRootRoute(
@@ -85,35 +85,35 @@ void main() {
             connectionState: const ConnectionState.reconnecting(attempt: 3),
             hasPersistedPairing: true,
           ),
-          RootRoute.threadList,
+          RootRoute.projectList,
         );
       },
     );
 
-    test('Authenticated + paired + disconnected -> threadListOffline', () {
+    test('Authenticated + paired + disconnected -> projectListOffline', () {
       expect(
         decideRootRoute(
           authState: AuthAuthenticated(account),
           connectionState: const ConnectionState.disconnected(),
           hasPersistedPairing: true,
         ),
-        RootRoute.threadListOffline,
+        RootRoute.projectListOffline,
       );
     });
 
-    test('Authenticated + paired + null connection -> threadListOffline', () {
+    test('Authenticated + paired + null connection -> projectListOffline', () {
       expect(
         decideRootRoute(
           authState: AuthAuthenticated(account),
           connectionState: null,
           hasPersistedPairing: true,
         ),
-        RootRoute.threadListOffline,
+        RootRoute.projectListOffline,
       );
     });
 
     test(
-      'Authenticated + paired + Pairing connection -> threadListOffline',
+      'Authenticated + paired + Pairing connection -> projectListOffline',
       () {
         // The Pairing connection state means the WS is in the QR-handshake
         // phase, which from the chat surface's perspective is "not fully
@@ -124,7 +124,7 @@ void main() {
             connectionState: const ConnectionState.pairing(),
             hasPersistedPairing: true,
           ),
-          RootRoute.threadListOffline,
+          RootRoute.projectListOffline,
         );
       },
     );

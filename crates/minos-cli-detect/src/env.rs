@@ -34,6 +34,7 @@ fn process_env() -> HashMap<String, String> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::unnecessary_wraps)]
 fn default_shell() -> Option<&'static str> {
     Some("/bin/zsh")
 }

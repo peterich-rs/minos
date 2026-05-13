@@ -1,6 +1,7 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'package:minos/application/minos_providers.dart';
+import 'package:minos/domain/minos_core_protocol.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 part 'thread_events_provider.g.dart';
@@ -32,20 +33,24 @@ class ThreadEvents extends _$ThreadEvents {
       _watermark = BigInt.zero;
     }
 
-    final sub = core.uiEvents.listen((frame) {
-      if (frame.threadId != threadId) return;
-      if (frame.seq <= _watermark) return;
-      _watermark = frame.seq;
-      final prev = state.asData?.value ?? const <UiEventMessage>[];
-      state = AsyncValue.data([...prev, frame.ui]);
-    });
+    final sub = core.uiEvents.listen(
+      (frame) {
+        if (frame.threadId != threadId) return;
+        if (frame.seq <= _watermark) return;
+        _watermark = frame.seq;
+        final prev = state.asData?.value ?? const <UiEventMessage>[];
+        state = AsyncValue.data([...prev, frame.ui]);
+      },
+      onError: (Object error, StackTrace stackTrace) => ref.invalidateSelf(),
+      onDone: ref.invalidateSelf,
+    );
     ref.onDispose(sub.cancel);
 
     return resp.uiEvents;
   }
 
   Future<ReadThreadResponse> _readInitialPage(
-    dynamic core,
+    MinosCoreProtocol core,
     String threadId,
   ) async {
     const maxAttempts = 8;

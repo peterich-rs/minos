@@ -25,7 +25,10 @@ pub fn router() -> Router<BackendState> {
         .route("/threads/query", post(list_threads_query))
         .route("/threads/:thread_id/events", post(read_thread_path))
         .route("/threads/read", post(read_thread_query))
-        .route("/threads/:thread_id/last_seq", post(get_thread_last_seq_path))
+        .route(
+            "/threads/:thread_id/last_seq",
+            post(get_thread_last_seq_path),
+        )
         .route("/threads/last-seq", post(get_thread_last_seq_query))
 }
 
@@ -184,7 +187,29 @@ async fn get_thread_last_seq_inner(
     headers: HeaderMap,
     params: GetThreadLastSeqParams,
 ) -> Result<Json<GetThreadLastSeqResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let _ = require_authed_session(&state, &headers).await?;
+    let (_caller, account_id) = require_authed_session(&state, &headers).await?;
+    // Verify the thread belongs to a device owned by this account.
+    let thread_exists = crate::store::threads::exists_for_account(
+        &state.store,
+        &params.thread_id,
+        &account_id,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err("internal", e.to_string()),
+        )
+    })?;
+    if !thread_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            err(
+                "thread_not_found",
+                format!("thread not found: {}", params.thread_id),
+            ),
+        ));
+    }
     let last_seq = crate::store::raw_events::last_seq(&state.store, &params.thread_id)
         .await
         .map_err(|e| {

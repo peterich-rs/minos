@@ -67,6 +67,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
         auth_login_per_ip: minos_backend::http::default_login_per_ip(),
         auth_register_per_ip: minos_backend::http::default_register_per_ip(),
         auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
+        cors_origins: None,
         version: "ingest-roundtrip-test",
     };
     let app = router(state);

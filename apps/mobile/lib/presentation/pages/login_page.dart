@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:minos/application/auth_provider.dart';
+import 'package:minos/domain/auth_state.dart';
 import 'package:minos/domain/minos_error_display.dart';
 import 'package:minos/presentation/widgets/auth/auth_error_banner.dart';
 import 'package:minos/presentation/widgets/auth/auth_form.dart';
@@ -17,13 +18,11 @@ import 'package:minos/src/rust/api/minos.dart' show ErrorKind, MinosError;
 /// errors stay in the current mode and surface only the destructive
 /// banner.
 ///
-/// Wired from `_Router` in `presentation/app.dart` for `RootRoute.login`.
-/// `errorBanner` is the optional carry-over from `AuthRefreshFailed` so a
-/// silent token-refresh failure can surface the reason on the next mount.
+/// Wired from the GoRouter for `RootRoute.login`.
+/// Reads the auth state directly to surface any `AuthRefreshFailed` error
+/// as the initial banner.
 class LoginPage extends ConsumerStatefulWidget {
-  const LoginPage({super.key, this.errorBanner});
-
-  final MinosError? errorBanner;
+  const LoginPage({super.key});
 
   @override
   ConsumerState<LoginPage> createState() => _LoginPageState();
@@ -37,7 +36,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   @override
   void initState() {
     super.initState();
-    _error = widget.errorBanner;
+    // Surface any carry-over error from AuthRefreshFailed.
+    final authState = ref.read(authControllerProvider);
+    if (authState is AuthRefreshFailed) {
+      _error = authState.error;
+    }
   }
 
   Future<void> _submit(String email, String password) async {

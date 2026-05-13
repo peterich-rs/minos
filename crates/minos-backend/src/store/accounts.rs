@@ -67,6 +67,8 @@ pub async fn create(
                 {
                     return Err(BackendError::EmailTaken);
                 }
+                // minos_id collision — retry with a new random id.
+                continue;
             }
             Err(e) => {
                 return Err(BackendError::StoreQuery {
