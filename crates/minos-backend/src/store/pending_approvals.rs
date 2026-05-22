@@ -1,9 +1,10 @@
 use minos_domain::DeviceId;
 use serde_json::Value;
-use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+use sqlx::{Postgres, QueryBuilder, Sqlite};
 use uuid::Uuid;
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingApprovalRow {
@@ -21,7 +22,7 @@ pub struct PendingApprovalRow {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn insert(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     request_id: &str,
     thread_id: &str,
     turn_id: &str,
@@ -37,136 +38,257 @@ pub async fn insert(
             message: error.to_string(),
         })?;
 
-    sqlx::query(
-        "INSERT OR IGNORE INTO pending_approvals
-            (request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(request_id)
-    .bind(thread_id)
-    .bind(turn_id)
-    .bind(host_device_id.to_string())
-    .bind(method)
-    .bind(params_json)
-    .bind(created_at_ms)
-    .bind(timeout_at_ms)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT OR IGNORE INTO pending_approvals
+                    (request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(request_id)
+            .bind(thread_id)
+            .bind(turn_id)
+            .bind(host_device_id.to_string())
+            .bind(method)
+            .bind(params_json.as_str())
+            .bind(created_at_ms)
+            .bind(timeout_at_ms)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO pending_approvals
+                    (request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (request_id) DO NOTHING",
+            )
+            .bind(request_id)
+            .bind(thread_id)
+            .bind(turn_id)
+            .bind(host_device_id.to_string())
+            .bind(method)
+            .bind(params_json.as_str())
+            .bind(created_at_ms)
+            .bind(timeout_at_ms)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+    }
     .map_err(store_err("pending_approvals::insert"))?;
     Ok(())
 }
 
 pub async fn get(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     request_id: &str,
 ) -> Result<Option<PendingApprovalRow>, BackendError> {
-    let row = sqlx::query_as::<_, (String, String, String, String, String, String, i64, i64, Option<i64>, Option<String>)>(
-        "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
-           FROM pending_approvals
-          WHERE request_id = ?",
-    )
-    .bind(request_id)
-    .fetch_optional(pool)
-    .await
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, (String, String, String, String, String, String, i64, i64, Option<i64>, Option<String>)>(
+                "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
+                   FROM pending_approvals
+                  WHERE request_id = ?",
+            )
+            .bind(request_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, (String, String, String, String, String, String, i64, i64, Option<i64>, Option<String>)>(
+                "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
+                   FROM pending_approvals
+                  WHERE request_id = $1",
+            )
+            .bind(request_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(store_err("pending_approvals::get"))?;
 
     row.map(decode_row).transpose()
 }
 
 pub async fn resolve(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     request_id: &str,
     resolution: &str,
     resolved_at_ms: i64,
 ) -> Result<bool, BackendError> {
-    let result = sqlx::query(
-        "UPDATE pending_approvals
-            SET resolved_at_ms = ?, resolution = ?
-          WHERE request_id = ?
-            AND resolved_at_ms IS NULL",
-    )
-    .bind(resolved_at_ms)
-    .bind(resolution)
-    .bind(request_id)
-    .execute(pool)
-    .await
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE pending_approvals
+                    SET resolved_at_ms = ?, resolution = ?
+                  WHERE request_id = ?
+                    AND resolved_at_ms IS NULL",
+        )
+        .bind(resolved_at_ms)
+        .bind(resolution)
+        .bind(request_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE pending_approvals
+                    SET resolved_at_ms = $1, resolution = $2
+                  WHERE request_id = $3
+                    AND resolved_at_ms IS NULL",
+        )
+        .bind(resolved_at_ms)
+        .bind(resolution)
+        .bind(request_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
     .map_err(store_err("pending_approvals::resolve"))?;
-    Ok(result.rows_affected() == 1)
+    Ok(result == 1)
 }
 
 pub async fn list_expired_unresolved(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     now_ms: i64,
     limit: u32,
 ) -> Result<Vec<PendingApprovalRow>, BackendError> {
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, i64, i64, Option<i64>, Option<String>)>(
-        "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
-           FROM pending_approvals
-          WHERE resolved_at_ms IS NULL
-            AND timeout_at_ms <= ?
-          ORDER BY timeout_at_ms ASC
-          LIMIT ?",
-    )
-    .bind(now_ms)
-    .bind(i64::from(limit))
-    .fetch_all(pool)
-    .await
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, (String, String, String, String, String, String, i64, i64, Option<i64>, Option<String>)>(
+                "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
+                   FROM pending_approvals
+                  WHERE resolved_at_ms IS NULL
+                    AND timeout_at_ms <= ?
+                  ORDER BY timeout_at_ms ASC
+                  LIMIT ?",
+            )
+            .bind(now_ms)
+            .bind(i64::from(limit))
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, (String, String, String, String, String, String, i64, i64, Option<i64>, Option<String>)>(
+                "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
+                   FROM pending_approvals
+                  WHERE resolved_at_ms IS NULL
+                    AND timeout_at_ms <= $1
+                  ORDER BY timeout_at_ms ASC
+                  LIMIT $2",
+            )
+            .bind(now_ms)
+            .bind(i64::from(limit))
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("pending_approvals::list_expired_unresolved"))?;
 
     rows.into_iter().map(decode_row).collect()
 }
 
 pub async fn next_unresolved_timeout_at_ms(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
 ) -> Result<Option<i64>, BackendError> {
-    sqlx::query_scalar(
-        "SELECT MIN(timeout_at_ms)
-           FROM pending_approvals
-          WHERE resolved_at_ms IS NULL",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(store_err("pending_approvals::next_unresolved_timeout_at_ms"))
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar(
+                "SELECT MIN(timeout_at_ms)
+                   FROM pending_approvals
+                  WHERE resolved_at_ms IS NULL",
+            )
+            .fetch_one(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar(
+                "SELECT MIN(timeout_at_ms)
+                   FROM pending_approvals
+                  WHERE resolved_at_ms IS NULL",
+            )
+            .fetch_one(pool)
+            .await
+        }
+    }
+    .map_err(store_err(
+        "pending_approvals::next_unresolved_timeout_at_ms",
+    ))
 }
 
 pub async fn list_unresolved_for_hosts(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     host_device_ids: &[DeviceId],
 ) -> Result<Vec<PendingApprovalRow>, BackendError> {
     if host_device_ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut builder = QueryBuilder::<Sqlite>::new(
-        "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
-           FROM pending_approvals
-          WHERE resolved_at_ms IS NULL
-            AND host_device_id IN (",
-    );
-    {
-        let mut separated = builder.separated(", ");
-        for host_device_id in host_device_ids {
-            separated.push_bind(host_device_id.to_string());
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut builder = QueryBuilder::<Sqlite>::new(
+                "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
+                   FROM pending_approvals
+                  WHERE resolved_at_ms IS NULL
+                    AND host_device_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for host_device_id in host_device_ids {
+                    separated.push_bind(host_device_id.to_string());
+                }
+            }
+            builder.push(')');
+
+            builder
+                .build_query_as::<(
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    i64,
+                    i64,
+                    Option<i64>,
+                    Option<String>,
+                )>()
+                .fetch_all(pool)
+                .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut builder = QueryBuilder::<Postgres>::new(
+                "SELECT request_id, thread_id, turn_id, host_device_id, method, params_json, created_at_ms, timeout_at_ms, resolved_at_ms, resolution
+                   FROM pending_approvals
+                  WHERE resolved_at_ms IS NULL
+                    AND host_device_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for host_device_id in host_device_ids {
+                    separated.push_bind(host_device_id.to_string());
+                }
+            }
+            builder.push(')');
+
+            builder
+                .build_query_as::<(
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    i64,
+                    i64,
+                    Option<i64>,
+                    Option<String>,
+                )>()
+                .fetch_all(pool)
+                .await
         }
     }
-    builder.push(')');
-
-    let rows = builder
-        .build_query_as::<(
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            i64,
-            i64,
-            Option<i64>,
-            Option<String>,
-        )>()
-        .fetch_all(pool)
-        .await
-        .map_err(store_err("pending_approvals::list_unresolved_for_hosts"))?;
+    .map_err(store_err("pending_approvals::list_unresolved_for_hosts"))?;
 
     rows.into_iter().map(decode_row).collect()
 }
@@ -307,6 +429,9 @@ mod tests {
         .unwrap();
         assert!(resolve(&pool, "req-late", "timeout", T0 + 1).await.unwrap());
 
-        assert_eq!(next_unresolved_timeout_at_ms(&pool).await.unwrap(), Some(T0 + 500));
+        assert_eq!(
+            next_unresolved_timeout_at_ms(&pool).await.unwrap(),
+            Some(T0 + 500)
+        );
     }
 }

@@ -8,8 +8,8 @@
 //! parse on the Rust side:
 //!
 //! - Writes: `DeviceId::to_string()` and `DeviceRole::to_string()` (both use
-//!   `Display`, which for `DeviceRole` is kebab-case — matches the CHECK
-//!   constraint in `migrations/0001_devices.sql`).
+//!   `Display`, which for `DeviceRole` is kebab-case — matches the current
+//!   `devices.role` CHECK constraint).
 //! - Reads: `String.parse::<Uuid>()` and `DeviceRole::from_str`.
 //!
 //! This keeps sqlx type plumbing contained in the backend crate and avoids
@@ -17,16 +17,18 @@
 //! newtypes, we can revisit in `minos-domain`.
 
 use minos_domain::{DeviceId, DeviceRole};
-use sqlx::{Executor, Sqlite, SqlitePool};
+use sqlx::{Executor, PgPool, Sqlite, SqlitePool};
 use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
 
 type DeviceRowTuple = (
     String,
     String,
     String,
+    Option<String>,
     Option<String>,
     i64,
     i64,
@@ -42,6 +44,9 @@ pub struct DeviceRow {
     /// `None` until the device completes pairing and a bearer secret has
     /// been minted.
     pub secret_hash: Option<String>,
+    /// Host installation Ed25519 public key, stored as `ed25519:<base64url>`.
+    /// Present only for agent-host rows that have completed bootstrap TOFU.
+    pub public_key: Option<String>,
     /// Unix epoch milliseconds.
     pub created_at: i64,
     /// Unix epoch milliseconds.
@@ -60,13 +65,16 @@ pub struct DeviceRow {
 /// happens via [`upsert_secret_hash`] and unpair-time revocation via
 /// [`clear_secret_hash`].
 pub async fn insert_device(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     id: DeviceId,
     name: &str,
     role: DeviceRole,
     now: i64,
 ) -> Result<(), BackendError> {
-    insert_device_with_executor(pool, id, name, role, now).await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => insert_device_with_executor(pool, id, name, role, now).await,
+        StorePoolRef::Postgres(pool) => insert_device_postgres(pool, id, name, role, now).await,
+    }
 }
 
 pub(crate) async fn insert_device_with_executor<'e, E>(
@@ -107,11 +115,14 @@ where
 ///
 /// Returns [`BackendError::DeviceNotFound`] if no row matches `id`.
 pub async fn upsert_secret_hash(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     id: DeviceId,
     hash: &str,
 ) -> Result<(), BackendError> {
-    upsert_secret_hash_with_executor(pool, id, hash).await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => upsert_secret_hash_with_executor(pool, id, hash).await,
+        StorePoolRef::Postgres(pool) => upsert_secret_hash_postgres(pool, id, hash).await,
+    }
 }
 
 pub(crate) async fn upsert_secret_hash_with_executor<'e, E>(
@@ -179,39 +190,65 @@ where
 /// inherits its peer's account). `account_id` is a UUIDv4 string; the
 /// foreign-key reference to `accounts(account_id)` is enforced by SQLite.
 pub async fn set_account_id(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     device_id: &DeviceId,
     account_id: &str,
 ) -> Result<(), BackendError> {
     let id_str = device_id.to_string();
-    sqlx::query("UPDATE devices SET account_id = ? WHERE device_id = ?")
-        .bind(account_id)
-        .bind(&id_str)
-        .execute(pool)
-        .await
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "set_account_id".to_string(),
-            message: e.to_string(),
-        })?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE devices SET account_id = ? WHERE device_id = ?")
+                .bind(account_id)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE devices SET account_id = $1 WHERE device_id = $2")
+                .bind(account_id)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "set_account_id".to_string(),
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
 /// Update the display name on an existing device row.
 pub async fn set_display_name(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     device_id: &DeviceId,
     display_name: &str,
 ) -> Result<(), BackendError> {
     let id_str = device_id.to_string();
-    sqlx::query("UPDATE devices SET display_name = ? WHERE device_id = ?")
-        .bind(display_name)
-        .bind(&id_str)
-        .execute(pool)
-        .await
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "set_display_name".to_string(),
-            message: e.to_string(),
-        })?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE devices SET display_name = ? WHERE device_id = ?")
+                .bind(display_name)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE devices SET display_name = $1 WHERE device_id = $2")
+                .bind(display_name)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "set_display_name".to_string(),
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
@@ -219,10 +256,13 @@ pub async fn set_display_name(
 ///
 /// Returns `Ok(None)` if the row does not exist.
 pub async fn get_device(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     id: DeviceId,
 ) -> Result<Option<DeviceRow>, BackendError> {
-    get_device_with_executor(pool, id).await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => get_device_with_executor(pool, id).await,
+        StorePoolRef::Postgres(pool) => get_device_postgres(pool, id).await,
+    }
 }
 
 pub(crate) async fn get_device_with_executor<'e, E>(
@@ -236,7 +276,7 @@ where
 
     let row = sqlx::query_as::<_, DeviceRowTuple>(
         r#"
-        SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id
+        SELECT device_id, display_name, role, secret_hash, public_key, created_at, last_seen_at, account_id
         FROM devices
         WHERE device_id = ?
         "#,
@@ -269,7 +309,7 @@ pub async fn list_by_account(
 ) -> Result<Vec<DeviceRow>, BackendError> {
     let rows = sqlx::query_as::<_, DeviceRowTuple>(
         r#"
-        SELECT device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id
+        SELECT device_id, display_name, role, secret_hash, public_key, created_at, last_seen_at, account_id
         FROM devices
         WHERE account_id = ?
         ORDER BY created_at ASC
@@ -293,7 +333,7 @@ pub async fn list_by_account(
 /// hash-yet" (the latter should never happen post-pair) can follow up with
 /// [`get_device`].
 pub async fn get_secret_hash(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     id: DeviceId,
 ) -> Result<Option<String>, BackendError> {
     let id_str = id.to_string();
@@ -302,21 +342,75 @@ pub async fn get_secret_hash(
     // fetch_optional: outer Option = row-present, inner = NULL-vs-set. We
     // flatten since we don't distinguish "no row" from "row with NULL hash"
     // at this API surface.
-    let hash: Option<Option<String>> =
-        sqlx::query_scalar(r#"SELECT secret_hash FROM devices WHERE device_id = ?"#)
-            .bind(&id_str)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| BackendError::StoreQuery {
-                operation: "get_secret_hash".to_string(),
-                message: e.to_string(),
-            })?;
+    let hash: Option<Option<String>> = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar(r#"SELECT secret_hash FROM devices WHERE device_id = ?"#)
+                .bind(&id_str)
+                .fetch_optional(pool)
+                .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar(r#"SELECT secret_hash FROM devices WHERE device_id = $1"#)
+                .bind(&id_str)
+                .fetch_optional(pool)
+                .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "get_secret_hash".to_string(),
+        message: e.to_string(),
+    })?;
 
     Ok(hash.flatten())
 }
 
+/// Set the host bootstrap public key when it is not already recorded.
+///
+/// Returns `true` when this call performed the TOFU registration, `false`
+/// when a key was already present.
+pub async fn set_public_key_if_absent(
+    store: &impl AsStorePool,
+    device_id: &DeviceId,
+    public_key: &str,
+) -> Result<bool, BackendError> {
+    let id_str = device_id.to_string();
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE devices SET public_key = ? WHERE device_id = ? AND public_key IS NULL",
+        )
+        .bind(public_key)
+        .bind(&id_str)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE devices SET public_key = $1 WHERE device_id = $2 AND public_key IS NULL",
+        )
+        .bind(public_key)
+        .bind(&id_str)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "set_public_key_if_absent".to_string(),
+        message: e.to_string(),
+    })?;
+
+    Ok(result == 1)
+}
+
 fn decode_device_row(row: DeviceRowTuple) -> Result<DeviceRow, BackendError> {
-    let (device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id) = row;
+    let (
+        device_id,
+        display_name,
+        role,
+        secret_hash,
+        public_key,
+        created_at,
+        last_seen_at,
+        account_id,
+    ) = row;
     let device_id =
         Uuid::parse_str(&device_id)
             .map(DeviceId)
@@ -334,10 +428,94 @@ fn decode_device_row(row: DeviceRowTuple) -> Result<DeviceRow, BackendError> {
         display_name,
         role,
         secret_hash,
+        public_key,
         created_at,
         last_seen_at,
         account_id,
     })
+}
+
+async fn insert_device_postgres(
+    pool: &PgPool,
+    id: DeviceId,
+    name: &str,
+    role: DeviceRole,
+    now: i64,
+) -> Result<(), BackendError> {
+    let id_str = id.to_string();
+    let role_str = role.to_string();
+
+    sqlx::query(
+        r#"
+        INSERT INTO devices (device_id, display_name, role, secret_hash, created_at, last_seen_at)
+        VALUES ($1, $2, $3, NULL, $4, $5)
+        "#,
+    )
+    .bind(&id_str)
+    .bind(name)
+    .bind(&role_str)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "insert_device".to_string(),
+        message: e.to_string(),
+    })?;
+
+    Ok(())
+}
+
+async fn upsert_secret_hash_postgres(
+    pool: &PgPool,
+    id: DeviceId,
+    hash: &str,
+) -> Result<(), BackendError> {
+    let id_str = id.to_string();
+
+    let result = sqlx::query(r#"UPDATE devices SET secret_hash = $1 WHERE device_id = $2"#)
+        .bind(hash)
+        .bind(&id_str)
+        .execute(pool)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: "upsert_secret_hash".to_string(),
+            message: e.to_string(),
+        })?;
+
+    if result.rows_affected() == 0 {
+        return Err(BackendError::DeviceNotFound { device_id: id_str });
+    }
+
+    Ok(())
+}
+
+async fn get_device_postgres(
+    pool: &PgPool,
+    id: DeviceId,
+) -> Result<Option<DeviceRow>, BackendError> {
+    let id_str = id.to_string();
+
+    let row = sqlx::query_as::<_, DeviceRowTuple>(
+        r#"
+        SELECT device_id, display_name, role, secret_hash, public_key, created_at, last_seen_at, account_id
+        FROM devices
+        WHERE device_id = $1
+        "#,
+    )
+    .bind(&id_str)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "get_device".to_string(),
+        message: e.to_string(),
+    })?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    decode_device_row(row).map(Some)
 }
 
 #[cfg(test)]

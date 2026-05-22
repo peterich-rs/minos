@@ -11,6 +11,7 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
 
 /// Decoded row from the `raw_events` table.
 #[derive(Debug, Clone)]
@@ -87,7 +88,7 @@ pub async fn insert_if_absent(
 /// - same `(thread_id, seq)` with a different payload is appended at the next
 ///   available seq and returns that assigned value.
 pub async fn insert_assigning_seq(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     thread_id: &str,
     requested_seq: u64,
     agent: AgentName,
@@ -99,29 +100,43 @@ pub async fn insert_assigning_seq(
         message: e.to_string(),
     })?;
 
-    if insert_payload_at_seq(pool, thread_id, requested_seq, agent, &payload_s, ts_ms).await? {
+    if insert_payload_at_seq(store, thread_id, requested_seq, agent, &payload_s, ts_ms).await? {
         return Ok(Some(requested_seq));
     }
 
     let requested_seq_i64 = i64::try_from(requested_seq).unwrap_or(i64::MAX);
-    let existing: Option<String> =
-        sqlx::query_scalar("SELECT payload_json FROM raw_events WHERE thread_id = ?1 AND seq = ?2")
+    let existing: Option<String> = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar(
+                "SELECT payload_json FROM raw_events WHERE thread_id = ?1 AND seq = ?2",
+            )
             .bind(thread_id)
             .bind(requested_seq_i64)
             .fetch_optional(pool)
             .await
-            .map_err(|e| BackendError::StoreQuery {
-                operation: "raw_events.insert_assigning_seq.lookup_collision".into(),
-                message: e.to_string(),
-            })?;
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar(
+                "SELECT payload_json FROM raw_events WHERE thread_id = $1 AND seq = $2",
+            )
+            .bind(thread_id)
+            .bind(requested_seq_i64)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.insert_assigning_seq.lookup_collision".into(),
+        message: e.to_string(),
+    })?;
 
     if existing.as_deref() == Some(payload_s.as_str()) {
         return Ok(None);
     }
 
     for _ in 0..8 {
-        let next = last_seq(pool, thread_id).await?.saturating_add(1);
-        if insert_payload_at_seq(pool, thread_id, next, agent, &payload_s, ts_ms).await? {
+        let next = last_seq(store, thread_id).await?.saturating_add(1);
+        if insert_payload_at_seq(store, thread_id, next, agent, &payload_s, ts_ms).await? {
             tracing::warn!(
                 target: "minos_backend::raw_events",
                 thread_id,
@@ -140,50 +155,82 @@ pub async fn insert_assigning_seq(
 }
 
 async fn insert_payload_at_seq(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     thread_id: &str,
     seq: u64,
     agent: AgentName,
     payload_s: &str,
     ts_ms: i64,
 ) -> Result<bool, BackendError> {
-    let result = sqlx::query(
-        r"INSERT OR IGNORE INTO raw_events (thread_id, seq, agent, payload_json, ts_ms)
-           VALUES (?1, ?2, ?3, ?4, ?5)",
-    )
-    .bind(thread_id)
-    .bind(i64::try_from(seq).unwrap_or(i64::MAX))
-    .bind(agent_str(agent))
-    .bind(payload_s)
-    .bind(ts_ms)
-    .execute(pool)
-    .await
+    let rows_affected = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r"INSERT OR IGNORE INTO raw_events (thread_id, seq, agent, payload_json, ts_ms)
+                   VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(thread_id)
+        .bind(i64::try_from(seq).unwrap_or(i64::MAX))
+        .bind(agent_str(agent))
+        .bind(payload_s)
+        .bind(ts_ms)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r"INSERT INTO raw_events (thread_id, seq, agent, payload_json, ts_ms)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (thread_id, seq) DO NOTHING",
+        )
+        .bind(thread_id)
+        .bind(i64::try_from(seq).unwrap_or(i64::MAX))
+        .bind(agent_str(agent))
+        .bind(payload_s)
+        .bind(ts_ms)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "raw_events.insert_payload_at_seq".into(),
         message: e.to_string(),
     })?;
-    Ok(result.rows_affected() == 1)
+    Ok(rows_affected == 1)
 }
 
 /// Read a contiguous window of raw events for `thread_id` starting at
 /// `from_seq` (inclusive), capped at `limit`. Rows are returned in
 /// ascending `seq` order.
 pub async fn read_range(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     thread_id: &str,
     from_seq: u64,
     limit: u32,
 ) -> Result<Vec<RawEventRow>, BackendError> {
-    let rows = sqlx::query_as::<_, (i64, String, String, i64)>(
-        r"SELECT seq, agent, payload_json, ts_ms FROM raw_events
-           WHERE thread_id = ?1 AND seq >= ?2
-           ORDER BY seq ASC LIMIT ?3",
-    )
-    .bind(thread_id)
-    .bind(i64::try_from(from_seq).unwrap_or(i64::MAX))
-    .bind(i64::from(limit))
-    .fetch_all(pool)
-    .await
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, (i64, String, String, i64)>(
+                r"SELECT seq, agent, payload_json, ts_ms FROM raw_events
+                   WHERE thread_id = ?1 AND seq >= ?2
+                   ORDER BY seq ASC LIMIT ?3",
+            )
+            .bind(thread_id)
+            .bind(i64::try_from(from_seq).unwrap_or(i64::MAX))
+            .bind(i64::from(limit))
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, (i64, String, String, i64)>(
+                r"SELECT seq, agent, payload_json, ts_ms FROM raw_events
+                   WHERE thread_id = $1 AND seq >= $2
+                   ORDER BY seq ASC LIMIT $3",
+            )
+            .bind(thread_id)
+            .bind(i64::try_from(from_seq).unwrap_or(i64::MAX))
+            .bind(i64::from(limit))
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "raw_events.read_range".into(),
         message: e.to_string(),
@@ -216,19 +263,35 @@ pub async fn read_range(
 /// daemon compares each backend max against its local watermark and
 /// replays the gap.
 pub async fn last_seq_per_owner(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     owner_device_id: &str,
 ) -> Result<std::collections::HashMap<String, u64>, BackendError> {
-    let rows = sqlx::query_as::<_, (String, i64)>(
-        r"SELECT t.thread_id, MAX(r.seq)
-           FROM raw_events r
-           INNER JOIN threads t ON t.thread_id = r.thread_id
-           WHERE t.owner_device_id = ?1
-           GROUP BY t.thread_id",
-    )
-    .bind(owner_device_id)
-    .fetch_all(pool)
-    .await
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, (String, i64)>(
+                r"SELECT t.thread_id, MAX(r.seq)
+                   FROM raw_events r
+                   INNER JOIN threads t ON t.thread_id = r.thread_id
+                   WHERE t.owner_device_id = ?1
+                   GROUP BY t.thread_id",
+            )
+            .bind(owner_device_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, (String, i64)>(
+                r"SELECT t.thread_id, MAX(r.seq)
+                   FROM raw_events r
+                   INNER JOIN threads t ON t.thread_id = r.thread_id
+                   WHERE t.owner_device_id = $1
+                   GROUP BY t.thread_id",
+            )
+            .bind(owner_device_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "raw_events.last_seq_per_owner".into(),
         message: e.to_string(),
@@ -243,16 +306,25 @@ pub async fn last_seq_per_owner(
 /// Return the largest `seq` ever persisted for `thread_id`, or `0` if no
 /// rows exist. Used by the agent-host to decide whether to re-ingest on
 /// startup (`GET /v1/threads/{id}/last_seq`).
-pub async fn last_seq(pool: &SqlitePool, thread_id: &str) -> Result<u64, BackendError> {
-    let v: Option<i64> =
-        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE thread_id = ?1")
-            .bind(thread_id)
-            .fetch_one(pool)
-            .await
-            .map_err(|e| BackendError::StoreQuery {
-                operation: "raw_events.last_seq".into(),
-                message: e.to_string(),
-            })?;
+pub async fn last_seq(store: &impl AsStorePool, thread_id: &str) -> Result<u64, BackendError> {
+    let v: Option<i64> = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE thread_id = ?1")
+                .bind(thread_id)
+                .fetch_one(pool)
+                .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE thread_id = $1")
+                .bind(thread_id)
+                .fetch_one(pool)
+                .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.last_seq".into(),
+        message: e.to_string(),
+    })?;
     Ok(u64::try_from(v.unwrap_or(0)).unwrap_or(0))
 }
 

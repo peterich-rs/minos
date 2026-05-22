@@ -12,9 +12,10 @@
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
+use sqlx::{PgPool, SqlitePool};
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
 
 pub const REFRESH_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -56,12 +57,15 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-pub async fn insert(
-    pool: &SqlitePool,
+pub async fn insert<S>(
+    store: &S,
     plaintext: &str,
     account_id: &str,
     device_id: &str,
-) -> Result<RefreshTokenRow, BackendError> {
+) -> Result<RefreshTokenRow, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
     let now = Utc::now().timestamp_millis();
     let row = RefreshTokenRow {
         token_hash: hash_plaintext(plaintext),
@@ -71,17 +75,10 @@ pub async fn insert(
         expires_at: now + REFRESH_TTL_MS,
         revoked_at: None,
     };
-    sqlx::query(
-        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at, expires_at)
-           VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&row.token_hash)
-    .bind(&row.account_id)
-    .bind(&row.device_id)
-    .bind(row.issued_at)
-    .bind(row.expires_at)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => insert_sqlite(pool, &row).await,
+        StorePoolRef::Postgres(pool) => insert_postgres(pool, &row).await,
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "refresh_tokens::insert".into(),
         message: e.to_string(),
@@ -89,21 +86,39 @@ pub async fn insert(
     Ok(row)
 }
 
-pub async fn find_active(
-    pool: &SqlitePool,
+pub async fn find_active<S>(
+    store: &S,
     plaintext: &str,
-) -> Result<Option<RefreshTokenRow>, BackendError> {
+) -> Result<Option<RefreshTokenRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
     let hash = hash_plaintext(plaintext);
     let now = Utc::now().timestamp_millis();
-    let row = sqlx::query_as::<_, RefreshTokenRow>(
-        "SELECT token_hash, account_id, device_id, issued_at, expires_at, revoked_at
-           FROM refresh_tokens
-           WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
-    )
-    .bind(&hash)
-    .bind(now)
-    .fetch_optional(pool)
-    .await
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, RefreshTokenRow>(
+                "SELECT token_hash, account_id, device_id, issued_at, expires_at, revoked_at
+                   FROM refresh_tokens
+                   WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+            )
+            .bind(&hash)
+            .bind(now)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, RefreshTokenRow>(
+                "SELECT token_hash, account_id, device_id, issued_at, expires_at, revoked_at
+                   FROM refresh_tokens
+                   WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > $2",
+            )
+            .bind(&hash)
+            .bind(now)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "refresh_tokens::find_active".into(),
         message: e.to_string(),
@@ -111,16 +126,71 @@ pub async fn find_active(
     Ok(row)
 }
 
-pub async fn revoke_one(pool: &SqlitePool, plaintext: &str) -> Result<(), BackendError> {
+pub async fn find_any<S>(
+    store: &S,
+    plaintext: &str,
+) -> Result<Option<RefreshTokenRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    let hash = hash_plaintext(plaintext);
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, RefreshTokenRow>(
+                "SELECT token_hash, account_id, device_id, issued_at, expires_at, revoked_at
+                   FROM refresh_tokens
+                   WHERE token_hash = ?",
+            )
+            .bind(&hash)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, RefreshTokenRow>(
+                "SELECT token_hash, account_id, device_id, issued_at, expires_at, revoked_at
+                   FROM refresh_tokens
+                   WHERE token_hash = $1",
+            )
+            .bind(&hash)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::find_any".into(),
+        message: e.to_string(),
+    })?;
+    Ok(row)
+}
+
+pub async fn revoke_one<S>(store: &S, plaintext: &str) -> Result<(), BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
     let hash = hash_plaintext(plaintext);
     let now = Utc::now().timestamp_millis();
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
-    )
-    .bind(now)
-    .bind(&hash)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                "UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
+            )
+            .bind(now)
+            .bind(&hash)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                "UPDATE refresh_tokens SET revoked_at = $1 WHERE token_hash = $2 AND revoked_at IS NULL",
+            )
+            .bind(now)
+            .bind(&hash)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "refresh_tokens::revoke_one".into(),
         message: e.to_string(),
@@ -132,28 +202,150 @@ pub async fn revoke_one(pool: &SqlitePool, plaintext: &str) -> Result<(), Backen
 /// single transaction. Returns `None` if the old token was already
 /// revoked (CAS failure — another concurrent request won the race).
 /// Returns `Some(new_row)` on success.
-pub async fn rotate(
-    pool: &SqlitePool,
+pub async fn rotate<S>(
+    store: &S,
     old_plaintext: &str,
     new_plaintext: &str,
     account_id: &str,
     device_id: &str,
-) -> Result<Option<RefreshTokenRow>, BackendError> {
+) -> Result<Option<RefreshTokenRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
     let old_hash = hash_plaintext(old_plaintext);
     let now = Utc::now().timestamp_millis();
 
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            rotate_sqlite(pool, &old_hash, new_plaintext, account_id, device_id, now).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            rotate_postgres(pool, &old_hash, new_plaintext, account_id, device_id, now).await
+        }
+    }
+}
+
+/// Revoke every active refresh token for an account. Used on login to
+/// invalidate all devices for that account when an administrative flow needs
+/// it. Normal login uses [`revoke_all_for_device`] so multiple iOS devices can
+/// remain signed in at once.
+pub async fn revoke_all_for_account(
+    store: &impl AsStorePool,
+    account_id: &str,
+) -> Result<u64, BackendError> {
+    let now = Utc::now().timestamp_millis();
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                "UPDATE refresh_tokens SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL",
+            )
+            .bind(now)
+            .bind(account_id)
+            .execute(pool)
+            .await
+            .map(|result| result.rows_affected())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                "UPDATE refresh_tokens SET revoked_at = $1 WHERE account_id = $2 AND revoked_at IS NULL",
+            )
+            .bind(now)
+            .bind(account_id)
+            .execute(pool)
+            .await
+            .map(|result| result.rows_affected())
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::revoke_all_for_account".into(),
+        message: e.to_string(),
+    })?;
+    Ok(result)
+}
+
+/// Revoke every active refresh token for a single device.
+///
+/// Login mints a fresh token for the current device, but it must not evict
+/// other devices on the same account now that multi-mobile pairing is
+/// supported.
+pub async fn revoke_all_for_device(
+    store: &impl AsStorePool,
+    device_id: &str,
+) -> Result<u64, BackendError> {
+    let now = Utc::now().timestamp_millis();
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
+        )
+        .bind(now)
+        .bind(device_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = $1 WHERE device_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(now)
+        .bind(device_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::revoke_all_for_device".into(),
+        message: e.to_string(),
+    })?;
+    Ok(result)
+}
+
+async fn insert_sqlite(pool: &SqlitePool, row: &RefreshTokenRow) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at, expires_at)
+           VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&row.token_hash)
+    .bind(&row.account_id)
+    .bind(&row.device_id)
+    .bind(row.issued_at)
+    .bind(row.expires_at)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+async fn insert_postgres(pool: &PgPool, row: &RefreshTokenRow) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at, expires_at)
+           VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&row.token_hash)
+    .bind(&row.account_id)
+    .bind(&row.device_id)
+    .bind(row.issued_at)
+    .bind(row.expires_at)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+async fn rotate_sqlite(
+    pool: &SqlitePool,
+    old_hash: &str,
+    new_plaintext: &str,
+    account_id: &str,
+    device_id: &str,
+    now: i64,
+) -> Result<Option<RefreshTokenRow>, BackendError> {
     let mut tx = pool.begin().await.map_err(|e| BackendError::StoreQuery {
         operation: "refresh_tokens::rotate.begin".into(),
         message: e.to_string(),
     })?;
 
-    // CAS: only revoke if still active. rows_affected == 0 means another
-    // request already consumed this token.
     let result = sqlx::query(
         "UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
     )
     .bind(now)
-    .bind(&old_hash)
+    .bind(old_hash)
     .execute(&mut *tx)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -162,7 +354,6 @@ pub async fn rotate(
     })?;
 
     if result.rows_affected() == 0 {
-        // Token was already revoked — concurrent rotation won.
         tx.rollback().await.ok();
         return Ok(None);
     }
@@ -200,51 +391,67 @@ pub async fn rotate(
     }))
 }
 
-/// Revoke every active refresh token for an account. Used on login to
-/// invalidate all devices for that account when an administrative flow needs
-/// it. Normal login uses [`revoke_all_for_device`] so multiple iOS devices can
-/// remain signed in at once.
-pub async fn revoke_all_for_account(
-    pool: &SqlitePool,
+async fn rotate_postgres(
+    pool: &PgPool,
+    old_hash: &str,
+    new_plaintext: &str,
     account_id: &str,
-) -> Result<u64, BackendError> {
-    let now = Utc::now().timestamp_millis();
-    let result = sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL",
-    )
-    .bind(now)
-    .bind(account_id)
-    .execute(pool)
-    .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "refresh_tokens::revoke_all_for_account".into(),
-        message: e.to_string(),
-    })?;
-    Ok(result.rows_affected())
-}
-
-/// Revoke every active refresh token for a single device.
-///
-/// Login mints a fresh token for the current device, but it must not evict
-/// other devices on the same account now that multi-mobile pairing is
-/// supported.
-pub async fn revoke_all_for_device(
-    pool: &SqlitePool,
     device_id: &str,
-) -> Result<u64, BackendError> {
-    let now = Utc::now().timestamp_millis();
-    let result = sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
-    )
-    .bind(now)
-    .bind(device_id)
-    .execute(pool)
-    .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "refresh_tokens::revoke_all_for_device".into(),
+    now: i64,
+) -> Result<Option<RefreshTokenRow>, BackendError> {
+    let mut tx = pool.begin().await.map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::rotate.begin".into(),
         message: e.to_string(),
     })?;
-    Ok(result.rows_affected())
+
+    let result = sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = $1 WHERE token_hash = $2 AND revoked_at IS NULL",
+    )
+    .bind(now)
+    .bind(old_hash)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::rotate.revoke".into(),
+        message: e.to_string(),
+    })?;
+
+    if result.rows_affected() == 0 {
+        tx.rollback().await.ok();
+        return Ok(None);
+    }
+
+    let new_hash = hash_plaintext(new_plaintext);
+    let expires_at = now + REFRESH_TTL_MS;
+    sqlx::query(
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at, expires_at)
+           VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&new_hash)
+    .bind(account_id)
+    .bind(device_id)
+    .bind(now)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::rotate.insert".into(),
+        message: e.to_string(),
+    })?;
+
+    tx.commit().await.map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::rotate.commit".into(),
+        message: e.to_string(),
+    })?;
+
+    Ok(Some(RefreshTokenRow {
+        token_hash: new_hash,
+        account_id: account_id.into(),
+        device_id: device_id.into(),
+        issued_at: now,
+        expires_at,
+        revoked_at: None,
+    }))
 }
 
 #[cfg(test)]
@@ -317,6 +524,20 @@ mod tests {
             .unwrap();
         revoke_one(&pool, &plain).await.unwrap();
         assert!(find_active(&pool, &plain).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn find_any_returns_revoked_row() {
+        let pool = memory_pool().await;
+        let (account_id, device_id) = setup_account_and_device(&pool).await;
+        let plain = generate_plaintext();
+        insert(&pool, &plain, &account_id, &device_id)
+            .await
+            .unwrap();
+        revoke_one(&pool, &plain).await.unwrap();
+
+        let row = find_any(&pool, &plain).await.unwrap().unwrap();
+        assert!(row.revoked_at.is_some());
     }
 
     #[tokio::test]

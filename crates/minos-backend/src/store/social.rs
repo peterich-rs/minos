@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
 use minos_protocol::FriendRequestStatus;
-use sqlx::{FromRow, QueryBuilder, Sqlite, SqlitePool};
+use sqlx::{Executor, FromRow, Postgres, QueryBuilder, Sqlite};
 use uuid::Uuid;
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct ProfileRow {
@@ -30,6 +31,23 @@ pub struct FriendshipRow {
     pub account_low_id: String,
     pub account_high_id: String,
     pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveFriendRequestTxResult {
+    Resolved(FriendRequestRow),
+    NotFound,
+    Unauthorized,
+    AlreadyResolved,
+}
+
+fn friend_request_status_str(status: FriendRequestStatus) -> &'static str {
+    match status {
+        FriendRequestStatus::Pending => "pending",
+        FriendRequestStatus::Accepted => "accepted",
+        FriendRequestStatus::Rejected => "rejected",
+        FriendRequestStatus::Canceled => "canceled",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
@@ -101,17 +119,31 @@ pub struct ConversationAgentMemberRow {
 }
 
 pub async fn profile_by_account(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_id: &str,
 ) -> Result<Option<ProfileRow>, BackendError> {
-    sqlx::query_as::<_, ProfileRow>(
-        "SELECT account_id, email, minos_id, display_name
-           FROM accounts
-          WHERE account_id = ?",
-    )
-    .bind(account_id)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ProfileRow>(
+                "SELECT account_id, email, minos_id, display_name
+                   FROM accounts
+                  WHERE account_id = ?",
+            )
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ProfileRow>(
+                "SELECT account_id, email, minos_id, display_name
+                   FROM accounts
+                  WHERE account_id = $1",
+            )
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::profile_by_account"))
 }
 
@@ -119,27 +151,49 @@ pub async fn profile_by_account(
 /// Returns a map from account_id to ProfileRow. Missing accounts are
 /// silently omitted from the result.
 pub async fn profiles_by_accounts(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_ids: &[String],
 ) -> Result<HashMap<String, ProfileRow>, BackendError> {
     if account_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let mut builder = QueryBuilder::<Sqlite>::new(
-        "SELECT account_id, email, minos_id, display_name FROM accounts WHERE account_id IN (",
-    );
-    {
-        let mut separated = builder.separated(", ");
-        for id in account_ids {
-            separated.push_bind(id);
+
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut builder = QueryBuilder::<Sqlite>::new(
+                "SELECT account_id, email, minos_id, display_name FROM accounts WHERE account_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for id in account_ids {
+                    separated.push_bind(id);
+                }
+            }
+            builder.push(')');
+            builder
+                .build_query_as::<ProfileRow>()
+                .fetch_all(pool)
+                .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut builder = QueryBuilder::<Postgres>::new(
+                "SELECT account_id, email, minos_id, display_name FROM accounts WHERE account_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for id in account_ids {
+                    separated.push_bind(id);
+                }
+            }
+            builder.push(')');
+            builder
+                .build_query_as::<ProfileRow>()
+                .fetch_all(pool)
+                .await
         }
     }
-    builder.push(')');
-    let rows = builder
-        .build_query_as::<ProfileRow>()
-        .fetch_all(pool)
-        .await
-        .map_err(store_err("social::profiles_by_accounts"))?;
+    .map_err(store_err("social::profiles_by_accounts"))?;
+
     Ok(rows
         .into_iter()
         .map(|r| (r.account_id.clone(), r))
@@ -147,202 +201,519 @@ pub async fn profiles_by_accounts(
 }
 
 pub async fn find_by_minos_id(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     minos_id: &str,
 ) -> Result<Option<ProfileRow>, BackendError> {
-    sqlx::query_as::<_, ProfileRow>(
-        "SELECT account_id, email, minos_id, display_name
-           FROM accounts
-          WHERE minos_id = ? COLLATE BINARY",
-    )
-    .bind(minos_id)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ProfileRow>(
+                "SELECT account_id, email, minos_id, display_name
+                   FROM accounts
+                  WHERE minos_id = ? COLLATE BINARY",
+            )
+            .bind(minos_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ProfileRow>(
+                "SELECT account_id, email, minos_id, display_name
+                   FROM accounts
+                  WHERE minos_id = $1",
+            )
+            .bind(minos_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::find_by_minos_id"))
 }
 
 pub async fn search_by_minos_id_prefix(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     query: &str,
 ) -> Result<Vec<ProfileRow>, BackendError> {
-    sqlx::query_as::<_, ProfileRow>(
-        "SELECT account_id, email, minos_id, display_name
-           FROM accounts
-          WHERE substr(minos_id, 1, length(?)) = ?
-          ORDER BY CASE WHEN minos_id = ? THEN 0 ELSE 1 END, minos_id
-          LIMIT 20",
-    )
-    .bind(query)
-    .bind(query)
-    .bind(query)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ProfileRow>(
+                "SELECT account_id, email, minos_id, display_name
+                   FROM accounts
+                  WHERE substr(minos_id, 1, length(?)) = ?
+                  ORDER BY CASE WHEN minos_id = ? THEN 0 ELSE 1 END, minos_id
+                  LIMIT 20",
+            )
+            .bind(query)
+            .bind(query)
+            .bind(query)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ProfileRow>(
+                "SELECT account_id, email, minos_id, display_name
+                   FROM accounts
+                  WHERE minos_id LIKE ($1 || '%')
+                  ORDER BY CASE WHEN minos_id = $1 THEN 0 ELSE 1 END, minos_id
+                  LIMIT 20",
+            )
+            .bind(query)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::search_by_minos_id_prefix"))
 }
 
 pub async fn set_minos_id(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_id: &str,
     minos_id: &str,
 ) -> Result<(), BackendError> {
-    sqlx::query("UPDATE accounts SET minos_id = ? WHERE account_id = ?")
-        .bind(minos_id)
-        .bind(account_id)
-        .execute(pool)
-        .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(db) if db.is_unique_violation() => BackendError::StoreQuery {
-                operation: "social::set_minos_id".into(),
-                message: "minos_id_taken".into(),
-            },
-            _ => BackendError::StoreQuery {
-                operation: "social::set_minos_id".into(),
-                message: e.to_string(),
-            },
-        })?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE accounts SET minos_id = ? WHERE account_id = ?")
+                .bind(minos_id)
+                .bind(account_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE accounts SET minos_id = $1 WHERE account_id = $2")
+                .bind(minos_id)
+                .bind(account_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+    }
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.is_unique_violation() => BackendError::StoreQuery {
+            operation: "social::set_minos_id".into(),
+            message: "minos_id_taken".into(),
+        },
+        _ => BackendError::StoreQuery {
+            operation: "social::set_minos_id".into(),
+            message: e.to_string(),
+        },
+    })?;
     Ok(())
 }
 
 pub async fn set_display_name(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_id: &str,
     display_name: Option<&str>,
 ) -> Result<(), BackendError> {
-    sqlx::query("UPDATE accounts SET display_name = ? WHERE account_id = ?")
-        .bind(display_name)
-        .bind(account_id)
-        .execute(pool)
-        .await
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "social::set_display_name".into(),
-            message: e.to_string(),
-        })?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE accounts SET display_name = ? WHERE account_id = ?")
+                .bind(display_name)
+                .bind(account_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE accounts SET display_name = $1 WHERE account_id = $2")
+                .bind(display_name)
+                .bind(account_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "social::set_display_name".into(),
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
 pub async fn create_friend_request(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     from_account_id: &str,
     to_account_id: &str,
     created_at_ms: i64,
 ) -> Result<String, BackendError> {
     let request_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO friend_requests
-            (request_id, from_account_id, to_account_id, status, created_at_ms)
-         VALUES (?, ?, ?, 'pending', ?)",
-    )
-    .bind(&request_id)
-    .bind(from_account_id)
-    .bind(to_account_id)
-    .bind(created_at_ms)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "INSERT INTO friend_requests
+                    (request_id, from_account_id, to_account_id, status, created_at_ms)
+                 VALUES (?, ?, ?, 'pending', ?)",
+        )
+        .bind(&request_id)
+        .bind(from_account_id)
+        .bind(to_account_id)
+        .bind(created_at_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "INSERT INTO friend_requests
+                    (request_id, from_account_id, to_account_id, status, created_at_ms)
+                 VALUES ($1, $2, $3, 'pending', $4)",
+        )
+        .bind(&request_id)
+        .bind(from_account_id)
+        .bind(to_account_id)
+        .bind(created_at_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+    }
     .map_err(store_err("social::create_friend_request"))?;
+
     Ok(request_id)
 }
 
 pub async fn get_friend_request(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     request_id: &str,
 ) -> Result<Option<FriendRequestRow>, BackendError> {
-    sqlx::query_as::<_, FriendRequestRow>(
-        "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
-           FROM friend_requests
-          WHERE request_id = ?",
-    )
-    .bind(request_id)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE request_id = ?",
+            )
+            .bind(request_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE request_id = $1",
+            )
+            .bind(request_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::get_friend_request"))
 }
 
 pub async fn list_incoming_friend_requests(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_id: &str,
 ) -> Result<Vec<FriendRequestRow>, BackendError> {
-    sqlx::query_as::<_, FriendRequestRow>(
-        "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
-           FROM friend_requests
-          WHERE to_account_id = ?
-          ORDER BY created_at_ms DESC",
-    )
-    .bind(account_id)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE to_account_id = ?
+                  ORDER BY created_at_ms DESC",
+            )
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE to_account_id = $1
+                  ORDER BY created_at_ms DESC",
+            )
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_incoming_friend_requests"))
 }
 
 pub async fn list_outgoing_friend_requests(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_id: &str,
 ) -> Result<Vec<FriendRequestRow>, BackendError> {
-    sqlx::query_as::<_, FriendRequestRow>(
-        "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
-           FROM friend_requests
-          WHERE from_account_id = ?
-          ORDER BY created_at_ms DESC",
-    )
-    .bind(account_id)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE from_account_id = ?
+                  ORDER BY created_at_ms DESC",
+            )
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE from_account_id = $1
+                  ORDER BY created_at_ms DESC",
+            )
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_outgoing_friend_requests"))
 }
 
 pub async fn has_pending_friend_request_between(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     left: &str,
     right: &str,
 ) -> Result<bool, BackendError> {
-    let row = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)
-           FROM friend_requests
-          WHERE status = 'pending'
-            AND ((from_account_id = ? AND to_account_id = ?) OR
-                 (from_account_id = ? AND to_account_id = ?))",
-    )
-    .bind(left)
-    .bind(right)
-    .bind(right)
-    .bind(left)
-    .fetch_one(pool)
-    .await
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM friend_requests
+                  WHERE status = 'pending'
+                    AND ((from_account_id = ? AND to_account_id = ?) OR
+                         (from_account_id = ? AND to_account_id = ?))",
+            )
+            .bind(left)
+            .bind(right)
+            .bind(right)
+            .bind(left)
+            .fetch_one(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM friend_requests
+                  WHERE status = 'pending'
+                    AND ((from_account_id = $1 AND to_account_id = $2) OR
+                         (from_account_id = $3 AND to_account_id = $4))",
+            )
+            .bind(left)
+            .bind(right)
+            .bind(right)
+            .bind(left)
+            .fetch_one(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::has_pending_friend_request_between"))?;
+
     Ok(row > 0)
 }
 
 pub async fn resolve_friend_request(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     request_id: &str,
     status: FriendRequestStatus,
     resolved_at_ms: i64,
 ) -> Result<bool, BackendError> {
-    let status = match status {
-        FriendRequestStatus::Pending => "pending",
-        FriendRequestStatus::Accepted => "accepted",
-        FriendRequestStatus::Rejected => "rejected",
-        FriendRequestStatus::Canceled => "canceled",
-    };
-    let result = sqlx::query(
-        "UPDATE friend_requests
-            SET status = ?, resolved_at_ms = ?
-          WHERE request_id = ? AND status = 'pending'",
-    )
-    .bind(status)
-    .bind(resolved_at_ms)
-    .bind(request_id)
-    .execute(pool)
-    .await
+    let status = friend_request_status_str(status);
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE friend_requests
+                    SET status = ?, resolved_at_ms = ?
+                  WHERE request_id = ? AND status = 'pending'",
+        )
+        .bind(status)
+        .bind(resolved_at_ms)
+        .bind(request_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE friend_requests
+                    SET status = $1, resolved_at_ms = $2
+                  WHERE request_id = $3 AND status = 'pending'",
+        )
+        .bind(status)
+        .bind(resolved_at_ms)
+        .bind(request_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
     .map_err(store_err("social::resolve_friend_request"))?;
-    Ok(result.rows_affected() == 1)
+
+    Ok(result == 1)
 }
 
-pub async fn create_friendship(
-    pool: &SqlitePool,
+pub async fn resolve_friend_request_transactional(
+    store: &impl AsStorePool,
+    acting_account_id: &str,
+    request_id: &str,
+    status: FriendRequestStatus,
+    resolved_at_ms: i64,
+) -> Result<ResolveFriendRequestTxResult, BackendError> {
+    let status = friend_request_status_str(status);
+
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool.begin().await.map_err(store_err(
+                "social::resolve_friend_request_transactional.begin",
+            ))?;
+
+            let Some(existing) = sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE request_id = ?",
+            )
+            .bind(request_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(store_err(
+                "social::resolve_friend_request_transactional.load",
+            ))?
+            else {
+                tx.rollback().await.ok();
+                return Ok(ResolveFriendRequestTxResult::NotFound);
+            };
+
+            if existing.to_account_id != acting_account_id {
+                tx.rollback().await.ok();
+                return Ok(ResolveFriendRequestTxResult::Unauthorized);
+            }
+            if existing.status != "pending" {
+                tx.rollback().await.ok();
+                return Ok(ResolveFriendRequestTxResult::AlreadyResolved);
+            }
+
+            sqlx::query(
+                "UPDATE friend_requests
+                    SET status = ?, resolved_at_ms = ?
+                  WHERE request_id = ? AND status = 'pending'",
+            )
+            .bind(status)
+            .bind(resolved_at_ms)
+            .bind(request_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err(
+                "social::resolve_friend_request_transactional.update",
+            ))?;
+
+            if status == "accepted" {
+                create_friendship_with_sqlite_executor(
+                    &mut *tx,
+                    &existing.from_account_id,
+                    &existing.to_account_id,
+                    resolved_at_ms,
+                )
+                .await
+                .map_err(|error| BackendError::StoreQuery {
+                    operation: "social::resolve_friend_request_transactional.create_friendship"
+                        .into(),
+                    message: error.to_string(),
+                })?;
+            }
+
+            let row = sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE request_id = ?",
+            )
+            .bind(request_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(store_err(
+                "social::resolve_friend_request_transactional.reload",
+            ))?;
+
+            tx.commit().await.map_err(store_err(
+                "social::resolve_friend_request_transactional.commit",
+            ))?;
+
+            Ok(ResolveFriendRequestTxResult::Resolved(row))
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool.begin().await.map_err(store_err(
+                "social::resolve_friend_request_transactional.begin",
+            ))?;
+
+            let Some(existing) = sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE request_id = $1
+                  FOR UPDATE",
+            )
+            .bind(request_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(store_err(
+                "social::resolve_friend_request_transactional.load",
+            ))?
+            else {
+                tx.rollback().await.ok();
+                return Ok(ResolveFriendRequestTxResult::NotFound);
+            };
+
+            if existing.to_account_id != acting_account_id {
+                tx.rollback().await.ok();
+                return Ok(ResolveFriendRequestTxResult::Unauthorized);
+            }
+            if existing.status != "pending" {
+                tx.rollback().await.ok();
+                return Ok(ResolveFriendRequestTxResult::AlreadyResolved);
+            }
+
+            sqlx::query(
+                "UPDATE friend_requests
+                    SET status = $1, resolved_at_ms = $2
+                  WHERE request_id = $3 AND status = 'pending'",
+            )
+            .bind(status)
+            .bind(resolved_at_ms)
+            .bind(request_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err(
+                "social::resolve_friend_request_transactional.update",
+            ))?;
+
+            if status == "accepted" {
+                create_friendship_with_postgres_executor(
+                    &mut *tx,
+                    &existing.from_account_id,
+                    &existing.to_account_id,
+                    resolved_at_ms,
+                )
+                .await
+                .map_err(|error| BackendError::StoreQuery {
+                    operation: "social::resolve_friend_request_transactional.create_friendship"
+                        .into(),
+                    message: error.to_string(),
+                })?;
+            }
+
+            let row = sqlx::query_as::<_, FriendRequestRow>(
+                "SELECT request_id, from_account_id, to_account_id, status, created_at_ms, resolved_at_ms
+                   FROM friend_requests
+                  WHERE request_id = $1",
+            )
+            .bind(request_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(store_err(
+                "social::resolve_friend_request_transactional.reload",
+            ))?;
+
+            tx.commit().await.map_err(store_err(
+                "social::resolve_friend_request_transactional.commit",
+            ))?;
+
+            Ok(ResolveFriendRequestTxResult::Resolved(row))
+        }
+    }
+}
+
+pub(crate) async fn create_friendship_with_sqlite_executor<'e, E>(
+    executor: E,
     left: &str,
     right: &str,
     created_at_ms: i64,
-) -> Result<(), BackendError> {
+) -> Result<(), BackendError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let (low, high) = normalized_pair(left, right);
     sqlx::query(
         "INSERT OR IGNORE INTO friendships
@@ -353,119 +724,260 @@ pub async fn create_friendship(
     .bind(low)
     .bind(high)
     .bind(created_at_ms)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(store_err("social::create_friendship"))?;
     Ok(())
 }
 
-pub async fn are_friends(pool: &SqlitePool, left: &str, right: &str) -> Result<bool, BackendError> {
+pub(crate) async fn create_friendship_with_postgres_executor<'e, E>(
+    executor: E,
+    left: &str,
+    right: &str,
+    created_at_ms: i64,
+) -> Result<(), BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let (low, high) = normalized_pair(left, right);
-    let row = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)
-           FROM friendships
-          WHERE account_low_id = ? AND account_high_id = ?",
+    sqlx::query(
+        "INSERT INTO friendships
+            (friendship_id, account_low_id, account_high_id, created_at_ms)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT DO NOTHING",
     )
+    .bind(Uuid::new_v4().to_string())
     .bind(low)
     .bind(high)
-    .fetch_one(pool)
+    .bind(created_at_ms)
+    .execute(executor)
     .await
+    .map_err(store_err("social::create_friendship"))?;
+    Ok(())
+}
+
+pub async fn create_friendship(
+    store: &impl AsStorePool,
+    left: &str,
+    right: &str,
+    created_at_ms: i64,
+) -> Result<(), BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            create_friendship_with_sqlite_executor(pool, left, right, created_at_ms).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            create_friendship_with_postgres_executor(pool, left, right, created_at_ms).await
+        }
+    }
+}
+
+pub async fn are_friends(
+    store: &impl AsStorePool,
+    left: &str,
+    right: &str,
+) -> Result<bool, BackendError> {
+    let (low, high) = normalized_pair(left, right);
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM friendships
+                  WHERE account_low_id = ? AND account_high_id = ?",
+            )
+            .bind(low)
+            .bind(high)
+            .fetch_one(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM friendships
+                  WHERE account_low_id = $1 AND account_high_id = $2",
+            )
+            .bind(low)
+            .bind(high)
+            .fetch_one(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::are_friends"))?;
+
     Ok(row > 0)
 }
 
 pub async fn list_friendships_for(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_id: &str,
 ) -> Result<Vec<FriendshipRow>, BackendError> {
-    sqlx::query_as::<_, FriendshipRow>(
-        "SELECT friendship_id, account_low_id, account_high_id, created_at_ms
-           FROM friendships
-          WHERE account_low_id = ? OR account_high_id = ?
-          ORDER BY created_at_ms DESC",
-    )
-    .bind(account_id)
-    .bind(account_id)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, FriendshipRow>(
+                "SELECT friendship_id, account_low_id, account_high_id, created_at_ms
+                   FROM friendships
+                  WHERE account_low_id = ? OR account_high_id = ?
+                  ORDER BY created_at_ms DESC",
+            )
+            .bind(account_id)
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, FriendshipRow>(
+                "SELECT friendship_id, account_low_id, account_high_id, created_at_ms
+                   FROM friendships
+                  WHERE account_low_id = $1 OR account_high_id = $2
+                  ORDER BY created_at_ms DESC",
+            )
+            .bind(account_id)
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_friendships_for"))
 }
 
 pub async fn ensure_direct_conversation(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     creator_account_id: &str,
     left: &str,
     right: &str,
     now_ms: i64,
 ) -> Result<ConversationRow, BackendError> {
     let (low, high) = normalized_pair(left, right);
-    if let Some(existing) = find_direct_conversation(pool, low, high).await? {
+    if let Some(existing) = find_direct_conversation(store, low, high).await? {
         return Ok(existing);
     }
 
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(store_err("social::ensure_direct_conversation.begin"))?;
-    let conversation_id = Uuid::new_v4().to_string();
-    let insert_result = sqlx::query(
-        "INSERT INTO conversations
-            (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
-         VALUES (?, 'direct', NULL, ?, ?, ?, ?, ?)",
-    )
-    .bind(&conversation_id)
-    .bind(creator_account_id)
-    .bind(low)
-    .bind(high)
-    .bind(now_ms)
-    .bind(now_ms)
-    .execute(&mut *tx)
-    .await;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::ensure_direct_conversation.begin"))?;
+            let conversation_id = Uuid::new_v4().to_string();
+            let insert_result = sqlx::query(
+                "INSERT INTO conversations
+                    (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
+                 VALUES (?, 'direct', NULL, ?, ?, ?, ?, ?)",
+            )
+            .bind(&conversation_id)
+            .bind(creator_account_id)
+            .bind(low)
+            .bind(high)
+            .bind(now_ms)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await;
 
-    match insert_result {
-        Ok(_) => {
-            for member in [low, high] {
-                sqlx::query(
-                    "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
-                     VALUES (?, ?, ?)",
-                )
-                .bind(&conversation_id)
-                .bind(member)
-                .bind(now_ms)
-                .execute(&mut *tx)
-                .await
-                .map_err(store_err(
-                    "social::ensure_direct_conversation.insert_member",
-                ))?;
+            match insert_result {
+                Ok(_) => {
+                    for member in [low, high] {
+                        sqlx::query(
+                            "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                             VALUES (?, ?, ?)",
+                        )
+                        .bind(&conversation_id)
+                        .bind(member)
+                        .bind(now_ms)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(store_err(
+                            "social::ensure_direct_conversation.insert_member",
+                        ))?;
+                    }
+                    tx.commit()
+                        .await
+                        .map_err(store_err("social::ensure_direct_conversation.commit"))?;
+                    get_conversation(pool, &conversation_id)
+                        .await?
+                        .ok_or_else(|| BackendError::StoreQuery {
+                            operation: "social::ensure_direct_conversation.load".into(),
+                            message: "conversation missing after insert".into(),
+                        })
+                }
+                Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+                    tx.rollback().await.ok();
+                    find_direct_conversation(pool, low, high)
+                        .await?
+                        .ok_or_else(|| BackendError::StoreQuery {
+                            operation: "social::ensure_direct_conversation.race_fallback".into(),
+                            message: "conversation missing after unique violation".into(),
+                        })
+                }
+                Err(e) => Err(store_err(
+                    "social::ensure_direct_conversation.insert_conversation",
+                )(e)),
             }
-            tx.commit()
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool
+                .begin()
                 .await
-                .map_err(store_err("social::ensure_direct_conversation.commit"))?;
-            get_conversation(pool, &conversation_id)
-                .await?
-                .ok_or_else(|| BackendError::StoreQuery {
-                    operation: "social::ensure_direct_conversation.load".into(),
-                    message: "conversation missing after insert".into(),
-                })
+                .map_err(store_err("social::ensure_direct_conversation.begin"))?;
+            let conversation_id = Uuid::new_v4().to_string();
+            let insert_result = sqlx::query(
+                "INSERT INTO conversations
+                    (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
+                 VALUES ($1, 'direct', NULL, $2, $3, $4, $5, $6)",
+            )
+            .bind(&conversation_id)
+            .bind(creator_account_id)
+            .bind(low)
+            .bind(high)
+            .bind(now_ms)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await;
+
+            match insert_result {
+                Ok(_) => {
+                    for member in [low, high] {
+                        sqlx::query(
+                            "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                             VALUES ($1, $2, $3)",
+                        )
+                        .bind(&conversation_id)
+                        .bind(member)
+                        .bind(now_ms)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(store_err(
+                            "social::ensure_direct_conversation.insert_member",
+                        ))?;
+                    }
+                    tx.commit()
+                        .await
+                        .map_err(store_err("social::ensure_direct_conversation.commit"))?;
+                    get_conversation(pool, &conversation_id)
+                        .await?
+                        .ok_or_else(|| BackendError::StoreQuery {
+                            operation: "social::ensure_direct_conversation.load".into(),
+                            message: "conversation missing after insert".into(),
+                        })
+                }
+                Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+                    tx.rollback().await.ok();
+                    find_direct_conversation(pool, low, high)
+                        .await?
+                        .ok_or_else(|| BackendError::StoreQuery {
+                            operation: "social::ensure_direct_conversation.race_fallback".into(),
+                            message: "conversation missing after unique violation".into(),
+                        })
+                }
+                Err(e) => Err(store_err(
+                    "social::ensure_direct_conversation.insert_conversation",
+                )(e)),
+            }
         }
-        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-            // Concurrent insert won the race — rollback and fetch the winner.
-            tx.rollback().await.ok();
-            find_direct_conversation(pool, low, high)
-                .await?
-                .ok_or_else(|| BackendError::StoreQuery {
-                    operation: "social::ensure_direct_conversation.race_fallback".into(),
-                    message: "conversation missing after unique violation".into(),
-                })
-        }
-        Err(e) => Err(store_err(
-            "social::ensure_direct_conversation.insert_conversation",
-        )(e)),
     }
 }
 
 pub async fn create_group_conversation(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     creator_account_id: &str,
     title: &str,
     member_account_ids: &[String],
@@ -478,256 +990,480 @@ pub async fn create_group_conversation(
     members.sort();
     members.dedup();
 
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(store_err("social::create_group_conversation.begin"))?;
-    let conversation_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO conversations
-            (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
-         VALUES (?, 'group', ?, ?, NULL, NULL, ?, ?)",
-    )
-    .bind(&conversation_id)
-    .bind(title)
-    .bind(creator_account_id)
-    .bind(now_ms)
-    .bind(now_ms)
-    .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::create_group_conversation.insert_conversation"))?;
-    for member in members {
-        sqlx::query(
-            "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
-             VALUES (?, ?, ?)",
-        )
-        .bind(&conversation_id)
-        .bind(member)
-        .bind(now_ms)
-        .execute(&mut *tx)
-        .await
-        .map_err(store_err("social::create_group_conversation.insert_member"))?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::create_group_conversation.begin"))?;
+            let conversation_id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO conversations
+                    (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
+                 VALUES (?, 'group', ?, ?, NULL, NULL, ?, ?)",
+            )
+            .bind(&conversation_id)
+            .bind(title)
+            .bind(creator_account_id)
+            .bind(now_ms)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::create_group_conversation.insert_conversation"))?;
+            for member in members {
+                sqlx::query(
+                    "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                     VALUES (?, ?, ?)",
+                )
+                .bind(&conversation_id)
+                .bind(member)
+                .bind(now_ms)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err("social::create_group_conversation.insert_member"))?;
+            }
+            tx.commit()
+                .await
+                .map_err(store_err("social::create_group_conversation.commit"))?;
+            get_conversation(pool, &conversation_id)
+                .await?
+                .ok_or_else(|| BackendError::StoreQuery {
+                    operation: "social::create_group_conversation.load".into(),
+                    message: "conversation missing after insert".into(),
+                })
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::create_group_conversation.begin"))?;
+            let conversation_id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO conversations
+                    (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
+                 VALUES ($1, 'group', $2, $3, NULL, NULL, $4, $5)",
+            )
+            .bind(&conversation_id)
+            .bind(title)
+            .bind(creator_account_id)
+            .bind(now_ms)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::create_group_conversation.insert_conversation"))?;
+            for member in members {
+                sqlx::query(
+                    "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                     VALUES ($1, $2, $3)",
+                )
+                .bind(&conversation_id)
+                .bind(member)
+                .bind(now_ms)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err("social::create_group_conversation.insert_member"))?;
+            }
+            tx.commit()
+                .await
+                .map_err(store_err("social::create_group_conversation.commit"))?;
+            get_conversation(pool, &conversation_id)
+                .await?
+                .ok_or_else(|| BackendError::StoreQuery {
+                    operation: "social::create_group_conversation.load".into(),
+                    message: "conversation missing after insert".into(),
+                })
+        }
     }
-    tx.commit()
-        .await
-        .map_err(store_err("social::create_group_conversation.commit"))?;
-    get_conversation(pool, &conversation_id)
-        .await?
-        .ok_or_else(|| BackendError::StoreQuery {
-            operation: "social::create_group_conversation.load".into(),
-            message: "conversation missing after insert".into(),
-        })
 }
 
 pub async fn get_conversation(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
 ) -> Result<Option<ConversationRow>, BackendError> {
-    sqlx::query_as::<_, ConversationRow>(
-        "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
-           FROM conversations
-          WHERE conversation_id = ?",
-    )
-    .bind(conversation_id)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ConversationRow>(
+                "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
+                   FROM conversations
+                  WHERE conversation_id = ?",
+            )
+            .bind(conversation_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ConversationRow>(
+                "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
+                   FROM conversations
+                  WHERE conversation_id = $1",
+            )
+            .bind(conversation_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::get_conversation"))
 }
 
 pub async fn list_conversations_for(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_id: &str,
 ) -> Result<Vec<ConversationDigestRow>, BackendError> {
-    sqlx::query_as::<_, ConversationDigestRow>(
-        "SELECT
-            c.conversation_id,
-            c.kind,
-            c.title,
-            c.created_by_account_id,
-            c.direct_account_low,
-            c.direct_account_high,
-            c.created_at_ms,
-            c.updated_at_ms,
-            (SELECT COUNT(*) FROM conversation_members cm2 WHERE cm2.conversation_id = c.conversation_id) AS member_count,
-            (SELECT m.text FROM chat_messages m WHERE m.conversation_id = c.conversation_id ORDER BY m.created_at_ms DESC LIMIT 1) AS last_message_preview,
-                        COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) AS last_message_at_ms,
-                        COALESCE((
-                                SELECT COUNT(*)
-                                    FROM chat_messages m
-                                 WHERE m.conversation_id = c.conversation_id
-                                     AND m.sender_account_id <> ?
-                                     AND m.recalled_at_ms IS NULL
-                                     AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
-                        ), 0) AS unread_count,
-                        COALESCE((
-                                SELECT COUNT(*)
-                                    FROM chat_messages m
-                                    JOIN chat_message_mentions mm ON mm.message_id = m.message_id
-                                 WHERE m.conversation_id = c.conversation_id
-                                     AND m.sender_account_id <> ?
-                                     AND m.recalled_at_ms IS NULL
-                                     AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
-                                     AND mm.mentioned_account_id = ?
-                        ), 0) AS unread_mention_count
-          FROM conversations c
-          JOIN conversation_members cm ON cm.conversation_id = c.conversation_id
-                    LEFT JOIN conversation_reads cr
-                        ON cr.conversation_id = c.conversation_id
-                     AND cr.account_id = ?
-         WHERE cm.account_id = ?
-         ORDER BY last_message_at_ms DESC",
-    )
-        .bind(account_id)
-        .bind(account_id)
-        .bind(account_id)
-        .bind(account_id)
-    .bind(account_id)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ConversationDigestRow>(
+                "SELECT
+                    c.conversation_id,
+                    c.kind,
+                    c.title,
+                    c.created_by_account_id,
+                    c.direct_account_low,
+                    c.direct_account_high,
+                    c.created_at_ms,
+                    c.updated_at_ms,
+                    (SELECT COUNT(*) FROM conversation_members cm2 WHERE cm2.conversation_id = c.conversation_id) AS member_count,
+                    (SELECT m.text FROM chat_messages m WHERE m.conversation_id = c.conversation_id ORDER BY m.created_at_ms DESC LIMIT 1) AS last_message_preview,
+                    COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) AS last_message_at_ms,
+                    COALESCE((
+                        SELECT COUNT(*)
+                          FROM chat_messages m
+                         WHERE m.conversation_id = c.conversation_id
+                           AND m.sender_account_id <> ?
+                           AND m.recalled_at_ms IS NULL
+                           AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                    ), 0) AS unread_count,
+                    COALESCE((
+                        SELECT COUNT(*)
+                          FROM chat_messages m
+                          JOIN chat_message_mentions mm ON mm.message_id = m.message_id
+                         WHERE m.conversation_id = c.conversation_id
+                           AND m.sender_account_id <> ?
+                           AND m.recalled_at_ms IS NULL
+                           AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND mm.mentioned_account_id = ?
+                    ), 0) AS unread_mention_count
+                  FROM conversations c
+                  JOIN conversation_members cm ON cm.conversation_id = c.conversation_id
+             LEFT JOIN conversation_reads cr
+                    ON cr.conversation_id = c.conversation_id
+                   AND cr.account_id = ?
+                 WHERE cm.account_id = ?
+              ORDER BY last_message_at_ms DESC",
+            )
+            .bind(account_id)
+            .bind(account_id)
+            .bind(account_id)
+            .bind(account_id)
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ConversationDigestRow>(
+                "SELECT
+                    c.conversation_id,
+                    c.kind,
+                    c.title,
+                    c.created_by_account_id,
+                    c.direct_account_low,
+                    c.direct_account_high,
+                    c.created_at_ms,
+                    c.updated_at_ms,
+                    (SELECT COUNT(*) FROM conversation_members cm2 WHERE cm2.conversation_id = c.conversation_id) AS member_count,
+                    (SELECT m.text FROM chat_messages m WHERE m.conversation_id = c.conversation_id ORDER BY m.created_at_ms DESC LIMIT 1) AS last_message_preview,
+                    COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) AS last_message_at_ms,
+                    COALESCE((
+                        SELECT COUNT(*)
+                          FROM chat_messages m
+                         WHERE m.conversation_id = c.conversation_id
+                           AND m.sender_account_id <> $1
+                           AND m.recalled_at_ms IS NULL
+                           AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                    ), 0) AS unread_count,
+                    COALESCE((
+                        SELECT COUNT(*)
+                          FROM chat_messages m
+                          JOIN chat_message_mentions mm ON mm.message_id = m.message_id
+                         WHERE m.conversation_id = c.conversation_id
+                           AND m.sender_account_id <> $2
+                           AND m.recalled_at_ms IS NULL
+                           AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND mm.mentioned_account_id = $3
+                    ), 0) AS unread_mention_count
+                  FROM conversations c
+                  JOIN conversation_members cm ON cm.conversation_id = c.conversation_id
+             LEFT JOIN conversation_reads cr
+                    ON cr.conversation_id = c.conversation_id
+                   AND cr.account_id = $4
+                 WHERE cm.account_id = $5
+              ORDER BY last_message_at_ms DESC",
+            )
+            .bind(account_id)
+            .bind(account_id)
+            .bind(account_id)
+            .bind(account_id)
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_conversations_for"))
 }
 
 pub async fn list_conversation_member_profiles(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
 ) -> Result<Vec<ProfileRow>, BackendError> {
-    sqlx::query_as::<_, ProfileRow>(
-        "SELECT a.account_id, a.email, a.minos_id, a.display_name
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ProfileRow>(
+                "SELECT a.account_id, a.email, a.minos_id, a.display_name
                      FROM accounts a
                      JOIN conversation_members cm ON cm.account_id = a.account_id
                     WHERE cm.conversation_id = ?
                     ORDER BY cm.joined_at_ms ASC, a.account_id ASC",
-    )
-    .bind(conversation_id)
-    .fetch_all(pool)
-    .await
+            )
+            .bind(conversation_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ProfileRow>(
+                "SELECT a.account_id, a.email, a.minos_id, a.display_name
+                     FROM accounts a
+                     JOIN conversation_members cm ON cm.account_id = a.account_id
+                    WHERE cm.conversation_id = $1
+                    ORDER BY cm.joined_at_ms ASC, a.account_id ASC",
+            )
+            .bind(conversation_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_conversation_member_profiles"))
 }
 
 pub async fn list_conversation_members(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
 ) -> Result<Vec<String>, BackendError> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT account_id
-           FROM conversation_members
-          WHERE conversation_id = ?
-          ORDER BY joined_at_ms ASC",
-    )
-    .bind(conversation_id)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, String>(
+                "SELECT account_id
+                   FROM conversation_members
+                  WHERE conversation_id = ?
+                  ORDER BY joined_at_ms ASC",
+            )
+            .bind(conversation_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, String>(
+                "SELECT account_id
+                   FROM conversation_members
+                  WHERE conversation_id = $1
+                  ORDER BY joined_at_ms ASC",
+            )
+            .bind(conversation_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_conversation_members"))
 }
 
 pub async fn is_conversation_member(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     account_id: &str,
 ) -> Result<bool, BackendError> {
-    let row = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)
-           FROM conversation_members
-          WHERE conversation_id = ? AND account_id = ?",
-    )
-    .bind(conversation_id)
-    .bind(account_id)
-    .fetch_one(pool)
-    .await
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM conversation_members
+                  WHERE conversation_id = ? AND account_id = ?",
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM conversation_members
+                  WHERE conversation_id = $1 AND account_id = $2",
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::is_conversation_member"))?;
+
     Ok(row > 0)
 }
 
 pub async fn get_message(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     message_id: &str,
 ) -> Result<Option<ChatMessageRow>, BackendError> {
-    sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
-           FROM chat_messages
-          WHERE message_id = ?",
-    )
-    .bind(message_id)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ChatMessageRow>(
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+                   FROM chat_messages
+                  WHERE message_id = ?",
+            )
+            .bind(message_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ChatMessageRow>(
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+                   FROM chat_messages
+                  WHERE message_id = $1",
+            )
+            .bind(message_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::get_message"))
 }
 
 pub async fn list_messages(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     before_ts_ms: Option<i64>,
     limit: u32,
 ) -> Result<Vec<ChatMessageRow>, BackendError> {
     let effective_limit = i64::from(limit.min(200));
     let before = before_ts_ms.unwrap_or(i64::MAX);
-    sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
-           FROM chat_messages
-          WHERE conversation_id = ? AND created_at_ms < ?
-          ORDER BY created_at_ms DESC
-          LIMIT ?",
-    )
-    .bind(conversation_id)
-    .bind(before)
-    .bind(effective_limit)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ChatMessageRow>(
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+                   FROM chat_messages
+                  WHERE conversation_id = ? AND created_at_ms < ?
+                  ORDER BY created_at_ms DESC
+                  LIMIT ?",
+            )
+            .bind(conversation_id)
+            .bind(before)
+            .bind(effective_limit)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ChatMessageRow>(
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+                   FROM chat_messages
+                  WHERE conversation_id = $1 AND created_at_ms < $2
+                  ORDER BY created_at_ms DESC
+                  LIMIT $3",
+            )
+            .bind(conversation_id)
+            .bind(before)
+            .bind(effective_limit)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_messages"))
 }
 
 pub async fn list_messages_by_ids(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     message_ids: &[String],
 ) -> Result<Vec<ChatMessageRow>, BackendError> {
     if message_ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut builder = QueryBuilder::<Sqlite>::new(
-        "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
-    );
-    {
-        let mut separated = builder.separated(", ");
-        for message_id in message_ids {
-            separated.push_bind(message_id);
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut builder = QueryBuilder::<Sqlite>::new(
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for message_id in message_ids {
+                    separated.push_bind(message_id);
+                }
+            }
+            builder.push(')');
+            builder.build_query_as::<ChatMessageRow>().fetch_all(pool).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut builder = QueryBuilder::<Postgres>::new(
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for message_id in message_ids {
+                    separated.push_bind(message_id);
+                }
+            }
+            builder.push(')');
+            builder.build_query_as::<ChatMessageRow>().fetch_all(pool).await
         }
     }
-    builder.push(')');
-
-    builder
-        .build_query_as::<ChatMessageRow>()
-        .fetch_all(pool)
-        .await
-        .map_err(store_err("social::list_messages_by_ids"))
+    .map_err(store_err("social::list_messages_by_ids"))
 }
 
 pub async fn list_message_mentions(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     message_ids: &[String],
 ) -> Result<HashMap<String, Vec<String>>, BackendError> {
     if message_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let mut builder = QueryBuilder::<Sqlite>::new(
-        "SELECT message_id, mentioned_account_id
-           FROM chat_message_mentions
-          WHERE message_id IN (",
-    );
-    {
-        let mut separated = builder.separated(", ");
-        for message_id in message_ids {
-            separated.push_bind(message_id);
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut builder = QueryBuilder::<Sqlite>::new(
+                "SELECT message_id, mentioned_account_id
+                   FROM chat_message_mentions
+                  WHERE message_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for message_id in message_ids {
+                    separated.push_bind(message_id);
+                }
+            }
+            builder.push(") ORDER BY message_id ASC, mentioned_account_id ASC");
+            builder
+                .build_query_as::<MessageMentionRow>()
+                .fetch_all(pool)
+                .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut builder = QueryBuilder::<Postgres>::new(
+                "SELECT message_id, mentioned_account_id
+                   FROM chat_message_mentions
+                  WHERE message_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for message_id in message_ids {
+                    separated.push_bind(message_id);
+                }
+            }
+            builder.push(") ORDER BY message_id ASC, mentioned_account_id ASC");
+            builder
+                .build_query_as::<MessageMentionRow>()
+                .fetch_all(pool)
+                .await
         }
     }
-    builder.push(") ORDER BY message_id ASC, mentioned_account_id ASC");
-
-    let rows = builder
-        .build_query_as::<MessageMentionRow>()
-        .fetch_all(pool)
-        .await
-        .map_err(store_err("social::list_message_mentions"))?;
+    .map_err(store_err("social::list_message_mentions"))?;
 
     let mut mentions_by_message = HashMap::<String, Vec<String>>::new();
     for row in rows {
@@ -740,51 +1476,86 @@ pub async fn list_message_mentions(
 }
 
 pub async fn mark_conversation_read_to_latest(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     account_id: &str,
     updated_at_ms: i64,
 ) -> Result<Option<i64>, BackendError> {
-    let Some(last_read_at_ms) = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT MAX(created_at_ms)
-           FROM chat_messages
-          WHERE conversation_id = ?",
-    )
-    .bind(conversation_id)
-    .fetch_one(pool)
-    .await
-    .map_err(store_err(
-        "social::mark_conversation_read_to_latest.fetch_latest",
-    ))?
-    else {
+    let last_read_at_ms = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MAX(created_at_ms)
+                   FROM chat_messages
+                  WHERE conversation_id = ?",
+        )
+        .bind(conversation_id)
+        .fetch_one(pool)
+        .await
+        .map_err(store_err(
+            "social::mark_conversation_read_to_latest.fetch_latest",
+        ))?,
+        StorePoolRef::Postgres(pool) => sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MAX(created_at_ms)
+                   FROM chat_messages
+                  WHERE conversation_id = $1",
+        )
+        .bind(conversation_id)
+        .fetch_one(pool)
+        .await
+        .map_err(store_err(
+            "social::mark_conversation_read_to_latest.fetch_latest",
+        ))?,
+    };
+    let Some(last_read_at_ms) = last_read_at_ms else {
         return Ok(None);
     };
 
-    sqlx::query(
-        "INSERT INTO conversation_reads
-            (conversation_id, account_id, last_read_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(conversation_id, account_id) DO UPDATE SET
-            last_read_at_ms = CASE
-                WHEN excluded.last_read_at_ms > conversation_reads.last_read_at_ms
-                    THEN excluded.last_read_at_ms
-                ELSE conversation_reads.last_read_at_ms
-            END,
-            updated_at_ms = excluded.updated_at_ms",
-    )
-    .bind(conversation_id)
-    .bind(account_id)
-    .bind(last_read_at_ms)
-    .bind(updated_at_ms)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "INSERT INTO conversation_reads
+                    (conversation_id, account_id, last_read_at_ms, updated_at_ms)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(conversation_id, account_id) DO UPDATE SET
+                    last_read_at_ms = CASE
+                        WHEN excluded.last_read_at_ms > conversation_reads.last_read_at_ms
+                            THEN excluded.last_read_at_ms
+                        ELSE conversation_reads.last_read_at_ms
+                    END,
+                    updated_at_ms = excluded.updated_at_ms",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .bind(last_read_at_ms)
+        .bind(updated_at_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "INSERT INTO conversation_reads
+                    (conversation_id, account_id, last_read_at_ms, updated_at_ms)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT(conversation_id, account_id) DO UPDATE SET
+                    last_read_at_ms = CASE
+                        WHEN EXCLUDED.last_read_at_ms > conversation_reads.last_read_at_ms
+                            THEN EXCLUDED.last_read_at_ms
+                        ELSE conversation_reads.last_read_at_ms
+                    END,
+                    updated_at_ms = EXCLUDED.updated_at_ms",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .bind(last_read_at_ms)
+        .bind(updated_at_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+    }
     .map_err(store_err("social::mark_conversation_read_to_latest.upsert"))?;
 
     Ok(Some(last_read_at_ms))
 }
 
 pub async fn insert_message(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     sender_account_id: &str,
     text: &str,
@@ -792,53 +1563,104 @@ pub async fn insert_message(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(store_err("social::insert_message.begin"))?;
     let message_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO chat_messages
-            (message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id)
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&message_id)
-    .bind(conversation_id)
-    .bind(sender_account_id)
-    .bind(text)
-    .bind(created_at_ms)
-    .bind(reply_to_message_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::insert_message.insert"))?;
     let mut unique_mentions = mentioned_account_ids.to_vec();
     unique_mentions.sort();
     unique_mentions.dedup();
-    for mentioned_account_id in unique_mentions {
-        sqlx::query(
-            "INSERT INTO chat_message_mentions
-                (message_id, mentioned_account_id)
-             VALUES (?, ?)",
-        )
-        .bind(&message_id)
-        .bind(mentioned_account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(store_err("social::insert_message.insert_mention"))?;
+
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::insert_message.begin"))?;
+            sqlx::query(
+                "INSERT INTO chat_messages
+                    (message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&message_id)
+            .bind(conversation_id)
+            .bind(sender_account_id)
+            .bind(text)
+            .bind(created_at_ms)
+            .bind(reply_to_message_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::insert_message.insert"))?;
+            for mentioned_account_id in &unique_mentions {
+                sqlx::query(
+                    "INSERT INTO chat_message_mentions
+                        (message_id, mentioned_account_id)
+                     VALUES (?, ?)",
+                )
+                .bind(&message_id)
+                .bind(mentioned_account_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err("social::insert_message.insert_mention"))?;
+            }
+            sqlx::query(
+                "UPDATE conversations
+                    SET updated_at_ms = ?
+                  WHERE conversation_id = ?",
+            )
+            .bind(created_at_ms)
+            .bind(conversation_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::insert_message.touch_conversation"))?;
+            tx.commit()
+                .await
+                .map_err(store_err("social::insert_message.commit"))?;
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::insert_message.begin"))?;
+            sqlx::query(
+                "INSERT INTO chat_messages
+                    (message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(&message_id)
+            .bind(conversation_id)
+            .bind(sender_account_id)
+            .bind(text)
+            .bind(created_at_ms)
+            .bind(reply_to_message_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::insert_message.insert"))?;
+            for mentioned_account_id in &unique_mentions {
+                sqlx::query(
+                    "INSERT INTO chat_message_mentions
+                        (message_id, mentioned_account_id)
+                     VALUES ($1, $2)",
+                )
+                .bind(&message_id)
+                .bind(mentioned_account_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err("social::insert_message.insert_mention"))?;
+            }
+            sqlx::query(
+                "UPDATE conversations
+                    SET updated_at_ms = $1
+                  WHERE conversation_id = $2",
+            )
+            .bind(created_at_ms)
+            .bind(conversation_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::insert_message.touch_conversation"))?;
+            tx.commit()
+                .await
+                .map_err(store_err("social::insert_message.commit"))?;
+        }
     }
-    sqlx::query(
-        "UPDATE conversations
-            SET updated_at_ms = ?
-          WHERE conversation_id = ?",
-    )
-    .bind(created_at_ms)
-    .bind(conversation_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::insert_message.touch_conversation"))?;
-    tx.commit()
-        .await
-        .map_err(store_err("social::insert_message.commit"))?;
+
     Ok(ChatMessageRow {
         message_id,
         conversation_id: conversation_id.to_string(),
@@ -853,54 +1675,99 @@ pub async fn insert_message(
 }
 
 pub async fn bind_session_to_message(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     message_id: &str,
     session_id: &str,
 ) -> Result<(), BackendError> {
-    sqlx::query(
-        "UPDATE chat_messages
-            SET agent_session_id = ?
-          WHERE message_id = ?",
-    )
-    .bind(session_id)
-    .bind(message_id)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE chat_messages
+                    SET agent_session_id = ?
+                  WHERE message_id = ?",
+        )
+        .bind(session_id)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE chat_messages
+                    SET agent_session_id = $1
+                  WHERE message_id = $2",
+        )
+        .bind(session_id)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+    }
     .map_err(store_err("social::bind_session_to_message"))?;
+
     Ok(())
 }
 
 pub async fn lookup_session_id_for_message(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     message_id: &str,
 ) -> Result<Option<String>, BackendError> {
-    sqlx::query_scalar::<_, Option<String>>(
-        "SELECT agent_session_id
-           FROM chat_messages
-          WHERE message_id = ?",
-    )
-    .bind(message_id)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT agent_session_id
+                   FROM chat_messages
+                  WHERE message_id = ?",
+            )
+            .bind(message_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT agent_session_id
+                   FROM chat_messages
+                  WHERE message_id = $1",
+            )
+            .bind(message_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map(Option::flatten)
     .map_err(store_err("social::lookup_session_id_for_message"))
 }
 
 pub async fn lookup_latest_session_id_for_conversation(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
 ) -> Result<Option<String>, BackendError> {
-    sqlx::query_scalar::<_, Option<String>>(
-        "SELECT agent_session_id
-           FROM chat_messages
-          WHERE conversation_id = ?
-            AND agent_session_id IS NOT NULL
-          ORDER BY created_at_ms DESC
-          LIMIT 1",
-    )
-    .bind(conversation_id)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT agent_session_id
+                   FROM chat_messages
+                  WHERE conversation_id = ?
+                    AND agent_session_id IS NOT NULL
+                  ORDER BY created_at_ms DESC
+                  LIMIT 1",
+            )
+            .bind(conversation_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT agent_session_id
+                   FROM chat_messages
+                  WHERE conversation_id = $1
+                    AND agent_session_id IS NOT NULL
+                  ORDER BY created_at_ms DESC
+                  LIMIT 1",
+            )
+            .bind(conversation_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map(Option::flatten)
     .map_err(store_err(
         "social::lookup_latest_session_id_for_conversation",
@@ -908,94 +1775,181 @@ pub async fn lookup_latest_session_id_for_conversation(
 }
 
 pub async fn has_bound_message_for_session(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     session_id: &str,
 ) -> Result<bool, BackendError> {
-    let row = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)
-           FROM chat_messages
-          WHERE agent_session_id = ?",
-    )
-    .bind(session_id)
-    .fetch_one(pool)
-    .await
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM chat_messages
+                  WHERE agent_session_id = ?",
+            )
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM chat_messages
+                  WHERE agent_session_id = $1",
+            )
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::has_bound_message_for_session"))?;
+
     Ok(row > 0)
 }
 
 pub async fn suppress_live_ui_fanout_for_session(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     session_id: &str,
 ) -> Result<bool, BackendError> {
-    let row = sqlx::query_scalar::<_, i64>(
-        "SELECT EXISTS(
-             SELECT 1
-               FROM chat_messages m
-               JOIN conversation_members cm ON cm.conversation_id = m.conversation_id
-              WHERE m.agent_session_id = ?
-              GROUP BY m.conversation_id
-             HAVING COUNT(DISTINCT cm.account_id) > 1
-         )",
-    )
-    .bind(session_id)
-    .fetch_one(pool)
-    .await
-    .map_err(store_err("social::suppress_live_ui_fanout_for_session"))?;
-    Ok(row > 0)
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let row = sqlx::query_scalar::<_, i64>(
+                "SELECT EXISTS(
+                     SELECT 1
+                       FROM chat_messages m
+                       JOIN conversation_members cm ON cm.conversation_id = m.conversation_id
+                      WHERE m.agent_session_id = ?
+                      GROUP BY m.conversation_id
+                     HAVING COUNT(DISTINCT cm.account_id) > 1
+                 )",
+            )
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+            .map_err(store_err("social::suppress_live_ui_fanout_for_session"))?;
+            Ok(row > 0)
+        }
+        StorePoolRef::Postgres(pool) => {
+            let row = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(
+                     SELECT 1
+                       FROM chat_messages m
+                       JOIN conversation_members cm ON cm.conversation_id = m.conversation_id
+                      WHERE m.agent_session_id = $1
+                      GROUP BY m.conversation_id
+                     HAVING COUNT(DISTINCT cm.account_id) > 1
+                 )",
+            )
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+            .map_err(store_err("social::suppress_live_ui_fanout_for_session"))?;
+            Ok(row)
+        }
+    }
 }
 
 pub async fn recall_message(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     message_id: &str,
     sender_account_id: &str,
     recalled_at_ms: i64,
 ) -> Result<Option<ChatMessageRow>, BackendError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(store_err("social::recall_message.begin"))?;
-    sqlx::query(
-        "UPDATE chat_messages
-            SET text = '[message recalled]',
-                recalled_at_ms = COALESCE(recalled_at_ms, ?)
-          WHERE message_id = ?
-            AND conversation_id = ?
-            AND sender_account_id = ?",
-    )
-    .bind(recalled_at_ms)
-    .bind(message_id)
-    .bind(conversation_id)
-    .bind(sender_account_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::recall_message.update_message"))?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::recall_message.begin"))?;
+            sqlx::query(
+                "UPDATE chat_messages
+                    SET text = '[message recalled]',
+                        recalled_at_ms = COALESCE(recalled_at_ms, ?)
+                  WHERE message_id = ?
+                    AND conversation_id = ?
+                    AND sender_account_id = ?",
+            )
+            .bind(recalled_at_ms)
+            .bind(message_id)
+            .bind(conversation_id)
+            .bind(sender_account_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::recall_message.update_message"))?;
 
-    sqlx::query(
-        "DELETE FROM chat_message_mentions
-          WHERE message_id = ?",
-    )
-    .bind(message_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::recall_message.delete_mentions"))?;
+            sqlx::query(
+                "DELETE FROM chat_message_mentions
+                  WHERE message_id = ?",
+            )
+            .bind(message_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::recall_message.delete_mentions"))?;
 
-    sqlx::query(
-        "UPDATE conversations
-            SET updated_at_ms = MAX(updated_at_ms, ?)
-          WHERE conversation_id = ?",
-    )
-    .bind(recalled_at_ms)
-    .bind(conversation_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::recall_message.touch_conversation"))?;
+            sqlx::query(
+                "UPDATE conversations
+                    SET updated_at_ms = MAX(updated_at_ms, ?)
+                  WHERE conversation_id = ?",
+            )
+            .bind(recalled_at_ms)
+            .bind(conversation_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::recall_message.touch_conversation"))?;
 
-    tx.commit()
-        .await
-        .map_err(store_err("social::recall_message.commit"))?;
+            tx.commit()
+                .await
+                .map_err(store_err("social::recall_message.commit"))?;
 
-    get_message(pool, message_id).await
+            get_message(pool, message_id).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::recall_message.begin"))?;
+            sqlx::query(
+                "UPDATE chat_messages
+                    SET text = '[message recalled]',
+                        recalled_at_ms = COALESCE(recalled_at_ms, $1)
+                  WHERE message_id = $2
+                    AND conversation_id = $3
+                    AND sender_account_id = $4",
+            )
+            .bind(recalled_at_ms)
+            .bind(message_id)
+            .bind(conversation_id)
+            .bind(sender_account_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::recall_message.update_message"))?;
+
+            sqlx::query(
+                "DELETE FROM chat_message_mentions
+                  WHERE message_id = $1",
+            )
+            .bind(message_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::recall_message.delete_mentions"))?;
+
+            sqlx::query(
+                "UPDATE conversations
+                    SET updated_at_ms = GREATEST(updated_at_ms, $1)
+                  WHERE conversation_id = $2",
+            )
+            .bind(recalled_at_ms)
+            .bind(conversation_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::recall_message.touch_conversation"))?;
+
+            tx.commit()
+                .await
+                .map_err(store_err("social::recall_message.commit"))?;
+
+            get_message(pool, message_id).await
+        }
+    }
 }
 
 fn normalized_pair<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
@@ -1007,21 +1961,38 @@ fn normalized_pair<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
 }
 
 async fn find_direct_conversation(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     low: &str,
     high: &str,
 ) -> Result<Option<ConversationRow>, BackendError> {
-    sqlx::query_as::<_, ConversationRow>(
-        "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
-           FROM conversations
-          WHERE kind = 'direct'
-            AND direct_account_low = ?
-            AND direct_account_high = ?",
-    )
-    .bind(low)
-    .bind(high)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ConversationRow>(
+                "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
+                   FROM conversations
+                  WHERE kind = 'direct'
+                    AND direct_account_low = ?
+                    AND direct_account_high = ?",
+            )
+            .bind(low)
+            .bind(high)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ConversationRow>(
+                "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
+                   FROM conversations
+                  WHERE kind = 'direct'
+                    AND direct_account_low = $1
+                    AND direct_account_high = $2",
+            )
+            .bind(low)
+            .bind(high)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::find_direct_conversation"))
 }
 
@@ -1035,7 +2006,7 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
 // ─── Agent Store Functions ─────────────────────────────────────────────
 
 pub async fn register_agent(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     owner_account_id: &str,
     name: &str,
     description: &str,
@@ -1044,23 +2015,45 @@ pub async fn register_agent(
     now_ms: i64,
 ) -> Result<AgentRow, BackendError> {
     let agent_id = format!("bot-{}", Uuid::new_v4());
-    sqlx::query(
-        "INSERT INTO agents (agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&agent_id)
-    .bind(owner_account_id)
-    .bind(name)
-    .bind(description)
-    .bind(runtime_agent)
-    .bind(model)
-    .bind(now_ms)
-    .bind(now_ms)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO agents (agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&agent_id)
+            .bind(owner_account_id)
+            .bind(name)
+            .bind(description)
+            .bind(runtime_agent)
+            .bind(model)
+            .bind(now_ms)
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO agents (agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(&agent_id)
+            .bind(owner_account_id)
+            .bind(name)
+            .bind(description)
+            .bind(runtime_agent)
+            .bind(model)
+            .bind(now_ms)
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+    }
     .map_err(store_err("social::register_agent"))?;
 
-    get_agent(pool, &agent_id)
+    get_agent(store, &agent_id)
         .await?
         .ok_or_else(|| BackendError::StoreQuery {
             operation: "social::register_agent.load".into(),
@@ -1069,138 +2062,302 @@ pub async fn register_agent(
 }
 
 pub async fn get_agent(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     agent_id: &str,
 ) -> Result<Option<AgentRow>, BackendError> {
-    sqlx::query_as::<_, AgentRow>(
-        "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms
-           FROM agents WHERE agent_id = ?",
-    )
-    .bind(agent_id)
-    .fetch_optional(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AgentRow>(
+                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms
+                   FROM agents WHERE agent_id = ?",
+            )
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AgentRow>(
+                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms
+                   FROM agents WHERE agent_id = $1",
+            )
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::get_agent"))
 }
 
+pub async fn agents_by_ids(
+    store: &impl AsStorePool,
+    agent_ids: &[String],
+) -> Result<HashMap<String, AgentRow>, BackendError> {
+    if agent_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut builder = QueryBuilder::<Sqlite>::new(
+                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms\n           FROM agents\n          WHERE agent_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for agent_id in agent_ids {
+                    separated.push_bind(agent_id);
+                }
+            }
+            builder.push(')');
+            builder.build_query_as::<AgentRow>().fetch_all(pool).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut builder = QueryBuilder::<Postgres>::new(
+                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms\n           FROM agents\n          WHERE agent_id IN (",
+            );
+            {
+                let mut separated = builder.separated(", ");
+                for agent_id in agent_ids {
+                    separated.push_bind(agent_id);
+                }
+            }
+            builder.push(')');
+            builder.build_query_as::<AgentRow>().fetch_all(pool).await
+        }
+    }
+    .map_err(store_err("social::agents_by_ids"))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.agent_id.clone(), row))
+        .collect())
+}
+
 pub async fn list_agents_for_owner(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     owner_account_id: &str,
 ) -> Result<Vec<AgentRow>, BackendError> {
-    sqlx::query_as::<_, AgentRow>(
-        "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms
-           FROM agents WHERE owner_account_id = ? ORDER BY created_at_ms DESC",
-    )
-    .bind(owner_account_id)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AgentRow>(
+                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms
+                   FROM agents WHERE owner_account_id = ? ORDER BY created_at_ms DESC",
+            )
+            .bind(owner_account_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AgentRow>(
+                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, created_at_ms, updated_at_ms
+                   FROM agents WHERE owner_account_id = $1 ORDER BY created_at_ms DESC",
+            )
+            .bind(owner_account_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_agents_for_owner"))
 }
 
 pub async fn delete_agent(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     agent_id: &str,
     owner_account_id: &str,
 ) -> Result<bool, BackendError> {
-    let result = sqlx::query("DELETE FROM agents WHERE agent_id = ? AND owner_account_id = ?")
-        .bind(agent_id)
-        .bind(owner_account_id)
-        .execute(pool)
-        .await
-        .map_err(store_err("social::delete_agent"))?;
-    Ok(result.rows_affected() > 0)
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("DELETE FROM agents WHERE agent_id = ? AND owner_account_id = ?")
+                .bind(agent_id)
+                .bind(owner_account_id)
+                .execute(pool)
+                .await
+                .map(|result| result.rows_affected())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("DELETE FROM agents WHERE agent_id = $1 AND owner_account_id = $2")
+                .bind(agent_id)
+                .bind(owner_account_id)
+                .execute(pool)
+                .await
+                .map(|result| result.rows_affected())
+        }
+    }
+    .map_err(store_err("social::delete_agent"))?;
+
+    Ok(result > 0)
 }
 
 pub async fn add_agent_to_conversation(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     agent_id: &str,
     added_by_account_id: &str,
     now_ms: i64,
 ) -> Result<(), BackendError> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO conversation_agent_members (conversation_id, agent_id, added_by_account_id, joined_at_ms)
-         VALUES (?, ?, ?, ?)",
-    )
-    .bind(conversation_id)
-    .bind(agent_id)
-    .bind(added_by_account_id)
-    .bind(now_ms)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT OR IGNORE INTO conversation_agent_members (conversation_id, agent_id, added_by_account_id, joined_at_ms)
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .bind(added_by_account_id)
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO conversation_agent_members (conversation_id, agent_id, added_by_account_id, joined_at_ms)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .bind(added_by_account_id)
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+    }
     .map_err(store_err("social::add_agent_to_conversation"))?;
+
     Ok(())
 }
 
 pub async fn remove_agent_from_conversation(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     agent_id: &str,
 ) -> Result<bool, BackendError> {
-    let result = sqlx::query(
-        "DELETE FROM conversation_agent_members WHERE conversation_id = ? AND agent_id = ?",
-    )
-    .bind(conversation_id)
-    .bind(agent_id)
-    .execute(pool)
-    .await
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "DELETE FROM conversation_agent_members WHERE conversation_id = ? AND agent_id = ?",
+        )
+        .bind(conversation_id)
+        .bind(agent_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "DELETE FROM conversation_agent_members WHERE conversation_id = $1 AND agent_id = $2",
+        )
+        .bind(conversation_id)
+        .bind(agent_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
     .map_err(store_err("social::remove_agent_from_conversation"))?;
-    Ok(result.rows_affected() > 0)
+
+    Ok(result > 0)
 }
 
 pub async fn list_conversation_agents(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
 ) -> Result<Vec<AgentRow>, BackendError> {
-    sqlx::query_as::<_, AgentRow>(
-        "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.runtime_agent, a.model, a.created_at_ms, a.updated_at_ms
-           FROM agents a
-           JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
-          WHERE cam.conversation_id = ?
-          ORDER BY cam.joined_at_ms ASC",
-    )
-    .bind(conversation_id)
-    .fetch_all(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AgentRow>(
+                "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.runtime_agent, a.model, a.created_at_ms, a.updated_at_ms
+                   FROM agents a
+                   JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
+                  WHERE cam.conversation_id = ?
+                  ORDER BY cam.joined_at_ms ASC",
+            )
+            .bind(conversation_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AgentRow>(
+                "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.runtime_agent, a.model, a.created_at_ms, a.updated_at_ms
+                   FROM agents a
+                   JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
+                  WHERE cam.conversation_id = $1
+                  ORDER BY cam.joined_at_ms ASC",
+            )
+            .bind(conversation_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::list_conversation_agents"))
 }
 
 pub async fn is_agent_in_conversation(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     agent_id: &str,
 ) -> Result<bool, BackendError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM conversation_agent_members WHERE conversation_id = ? AND agent_id = ?",
-    )
-    .bind(conversation_id)
-    .bind(agent_id)
-    .fetch_optional(pool)
-    .await
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM conversation_agent_members
+                  WHERE conversation_id = ? AND agent_id = ?",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .fetch_one(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)
+                   FROM conversation_agent_members
+                  WHERE conversation_id = $1 AND agent_id = $2",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .fetch_one(pool)
+            .await
+        }
+    }
     .map_err(store_err("social::is_agent_in_conversation"))?;
-    Ok(row.is_some())
+    Ok(row > 0)
 }
 
 pub async fn add_member_to_group(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     account_id: &str,
     now_ms: i64,
 ) -> Result<(), BackendError> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO conversation_members (conversation_id, account_id, joined_at_ms)
-         VALUES (?, ?, ?)",
-    )
-    .bind(conversation_id)
-    .bind(account_id)
-    .bind(now_ms)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "INSERT OR IGNORE INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                 VALUES (?, ?, ?)",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .bind(now_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT DO NOTHING",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .bind(now_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+    }
     .map_err(store_err("social::add_member_to_group"))?;
+
     Ok(())
 }
 
 pub async fn insert_agent_message(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     conversation_id: &str,
     agent_id: &str,
     text: &str,
@@ -1208,78 +2365,140 @@ pub async fn insert_agent_message(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
-    let agent = get_agent(pool, agent_id)
+    let agent = get_agent(store, agent_id)
         .await?
         .ok_or_else(|| BackendError::StoreQuery {
             operation: "social::insert_agent_message.load_agent".into(),
             message: format!("agent not found: {agent_id}"),
         })?;
     let message_id = Uuid::new_v4().to_string();
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(store_err("social::insert_agent_message.begin"))?;
 
-    sqlx::query(
-        "INSERT INTO chat_messages (
-            message_id,
-            conversation_id,
-            sender_account_id,
-            sender_agent_id,
-            text,
-            created_at_ms,
-            reply_to_message_id,
-            sender_type
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'agent')",
-    )
-    .bind(&message_id)
-    .bind(conversation_id)
-    .bind(&agent.owner_account_id)
-    .bind(&agent.agent_id)
-    .bind(text)
-    .bind(now_ms)
-    .bind(reply_to_message_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(store_err("social::insert_agent_message.insert"))?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::insert_agent_message.begin"))?;
 
-    for mentioned_id in mentioned_account_ids {
-        sqlx::query(
-            "INSERT OR IGNORE INTO chat_message_mentions (message_id, mentioned_account_id)
-             VALUES (?, ?)",
-        )
-        .bind(&message_id)
-        .bind(mentioned_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(store_err("social::insert_agent_message.mention"))?;
-    }
+            sqlx::query(
+                "INSERT INTO chat_messages (
+                    message_id,
+                    conversation_id,
+                    sender_account_id,
+                    sender_agent_id,
+                    text,
+                    created_at_ms,
+                    reply_to_message_id,
+                    sender_type
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'agent')",
+            )
+            .bind(&message_id)
+            .bind(conversation_id)
+            .bind(&agent.owner_account_id)
+            .bind(&agent.agent_id)
+            .bind(text)
+            .bind(now_ms)
+            .bind(reply_to_message_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::insert_agent_message.insert"))?;
 
-    sqlx::query("UPDATE conversations SET updated_at_ms = ? WHERE conversation_id = ?")
-        .bind(now_ms)
-        .bind(conversation_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(store_err(
-            "social::insert_agent_message.update_conversation",
-        ))?;
+            for mentioned_id in mentioned_account_ids {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO chat_message_mentions (message_id, mentioned_account_id)
+                     VALUES (?, ?)",
+                )
+                .bind(&message_id)
+                .bind(mentioned_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err("social::insert_agent_message.mention"))?;
+            }
 
-    tx.commit()
-        .await
-        .map_err(store_err("social::insert_agent_message.commit"))?;
+            sqlx::query("UPDATE conversations SET updated_at_ms = ? WHERE conversation_id = ?")
+                .bind(now_ms)
+                .bind(conversation_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err(
+                    "social::insert_agent_message.update_conversation",
+                ))?;
 
-    get_message(pool, &message_id)
-        .await?
-        .ok_or_else(|| BackendError::StoreQuery {
-            operation: "social::insert_agent_message.load".into(),
-            message: "message missing after insert".into(),
-        })
+            tx.commit()
+                .await
+                .map_err(store_err("social::insert_agent_message.commit"))?;
+
+            get_message(pool, &message_id).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::insert_agent_message.begin"))?;
+
+            sqlx::query(
+                "INSERT INTO chat_messages (
+                    message_id,
+                    conversation_id,
+                    sender_account_id,
+                    sender_agent_id,
+                    text,
+                    created_at_ms,
+                    reply_to_message_id,
+                    sender_type
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'agent')",
+            )
+            .bind(&message_id)
+            .bind(conversation_id)
+            .bind(&agent.owner_account_id)
+            .bind(&agent.agent_id)
+            .bind(text)
+            .bind(now_ms)
+            .bind(reply_to_message_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::insert_agent_message.insert"))?;
+
+            for mentioned_id in mentioned_account_ids {
+                sqlx::query(
+                    "INSERT INTO chat_message_mentions (message_id, mentioned_account_id)
+                     VALUES ($1, $2)
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(&message_id)
+                .bind(mentioned_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err("social::insert_agent_message.mention"))?;
+            }
+
+            sqlx::query("UPDATE conversations SET updated_at_ms = $1 WHERE conversation_id = $2")
+                .bind(now_ms)
+                .bind(conversation_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err(
+                    "social::insert_agent_message.update_conversation",
+                ))?;
+
+            tx.commit()
+                .await
+                .map_err(store_err("social::insert_agent_message.commit"))?;
+
+            get_message(pool, &message_id).await
+        }
+    }?
+    .ok_or_else(|| BackendError::StoreQuery {
+        operation: "social::insert_agent_message.load".into(),
+        message: "message missing after insert".into(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::test_support::{insert_account, memory_pool, T0};
+    use sqlx::SqlitePool;
 
     async fn seed_group(pool: &SqlitePool) -> (String, String, String, String) {
         let alice = insert_account(pool, "alice@example.com").await;

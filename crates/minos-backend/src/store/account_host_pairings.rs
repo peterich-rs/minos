@@ -14,10 +14,11 @@
 //! no `AccountId` newtype yet.
 
 use minos_domain::DeviceId;
-use sqlx::SqlitePool;
+use sqlx::{Executor, Postgres, Sqlite};
 use uuid::Uuid;
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
 
 type PairRowTuple = (String, String, String, String, i64);
 
@@ -43,12 +44,46 @@ pub struct PairRow {
 /// return — used by the pairing handler to decide whether to emit the
 /// `Paired` event.
 pub async fn insert_pair(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     host_device_id: DeviceId,
     mobile_account_id: &str,
     paired_via_device_id: DeviceId,
     now_ms: i64,
 ) -> Result<bool, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            insert_pair_with_executor(
+                pool,
+                host_device_id,
+                mobile_account_id,
+                paired_via_device_id,
+                now_ms,
+            )
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            insert_pair_with_postgres_executor(
+                pool,
+                host_device_id,
+                mobile_account_id,
+                paired_via_device_id,
+                now_ms,
+            )
+            .await
+        }
+    }
+}
+
+pub(crate) async fn insert_pair_with_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+    paired_via_device_id: DeviceId,
+    now_ms: i64,
+) -> Result<bool, BackendError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let pair_id = Uuid::new_v4().to_string();
     let host_s = host_device_id.to_string();
     let via_s = paired_via_device_id.to_string();
@@ -65,7 +100,42 @@ pub async fn insert_pair(
     .bind(mobile_account_id)
     .bind(&via_s)
     .bind(now_ms)
-    .execute(pool)
+    .execute(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "account_host_pairings::insert_pair".into(),
+        message: e.to_string(),
+    })?;
+    Ok(res.rows_affected() == 1)
+}
+
+pub(crate) async fn insert_pair_with_postgres_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+    paired_via_device_id: DeviceId,
+    now_ms: i64,
+) -> Result<bool, BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let pair_id = Uuid::new_v4().to_string();
+    let host_s = host_device_id.to_string();
+    let via_s = paired_via_device_id.to_string();
+    let res = sqlx::query(
+        r#"
+        INSERT INTO account_host_pairings
+            (pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (host_device_id, mobile_account_id) DO NOTHING
+        "#,
+    )
+    .bind(&pair_id)
+    .bind(&host_s)
+    .bind(mobile_account_id)
+    .bind(&via_s)
+    .bind(now_ms)
+    .execute(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "account_host_pairings::insert_pair".into(),
@@ -77,20 +147,37 @@ pub async fn insert_pair(
 /// Return every Mac paired to the given account, ordered most-recent
 /// first by `paired_at_ms`.
 pub async fn list_hosts_for_account(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     mobile_account_id: &str,
 ) -> Result<Vec<PairRow>, BackendError> {
-    let rows = sqlx::query_as::<_, PairRowTuple>(
-        r#"
-        SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
-        FROM account_host_pairings
-        WHERE mobile_account_id = ?
-        ORDER BY paired_at_ms DESC
-        "#,
-    )
-    .bind(mobile_account_id)
-    .fetch_all(pool)
-    .await
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, PairRowTuple>(
+                r#"
+                SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
+                FROM account_host_pairings
+                WHERE mobile_account_id = ?
+                ORDER BY paired_at_ms DESC
+                "#,
+            )
+            .bind(mobile_account_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, PairRowTuple>(
+                r#"
+                SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
+                FROM account_host_pairings
+                WHERE mobile_account_id = $1
+                ORDER BY paired_at_ms DESC
+                "#,
+            )
+            .bind(mobile_account_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "account_host_pairings::list_hosts_for_account".into(),
         message: e.to_string(),
@@ -101,21 +188,38 @@ pub async fn list_hosts_for_account(
 /// Return every account paired to the given Mac, ordered most-recent
 /// first by `paired_at_ms`.
 pub async fn list_accounts_for_host(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     host_device_id: DeviceId,
 ) -> Result<Vec<PairRow>, BackendError> {
     let host_s = host_device_id.to_string();
-    let rows = sqlx::query_as::<_, PairRowTuple>(
-        r#"
-        SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
-        FROM account_host_pairings
-        WHERE host_device_id = ?
-        ORDER BY paired_at_ms DESC
-        "#,
-    )
-    .bind(&host_s)
-    .fetch_all(pool)
-    .await
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, PairRowTuple>(
+                r#"
+                SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
+                FROM account_host_pairings
+                WHERE host_device_id = ?
+                ORDER BY paired_at_ms DESC
+                "#,
+            )
+            .bind(&host_s)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, PairRowTuple>(
+                r#"
+                SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
+                FROM account_host_pairings
+                WHERE host_device_id = $1
+                ORDER BY paired_at_ms DESC
+                "#,
+            )
+            .bind(&host_s)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "account_host_pairings::list_accounts_for_host".into(),
         message: e.to_string(),
@@ -123,25 +227,91 @@ pub async fn list_accounts_for_host(
     rows.into_iter().map(decode_pair_row).collect()
 }
 
+pub async fn list_account_client_targets_for_host(
+    store: &impl AsStorePool,
+    host_device_id: DeviceId,
+) -> Result<Vec<DeviceId>, BackendError> {
+    let host_s = host_device_id.to_string();
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, String>(
+                r#"
+                SELECT DISTINCT d.device_id
+                FROM account_host_pairings ahp
+                JOIN devices d
+                  ON d.account_id = ahp.mobile_account_id
+                WHERE ahp.host_device_id = ?
+                  AND d.role IN ('mobile-client', 'browser-admin')
+                ORDER BY d.device_id ASC
+                "#,
+            )
+            .bind(&host_s)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, String>(
+                r#"
+                SELECT DISTINCT d.device_id
+                FROM account_host_pairings ahp
+                JOIN devices d
+                  ON d.account_id = ahp.mobile_account_id
+                WHERE ahp.host_device_id = $1
+                  AND d.role IN ('mobile-client', 'browser-admin')
+                ORDER BY d.device_id ASC
+                "#,
+            )
+            .bind(&host_s)
+            .fetch_all(pool)
+            .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "account_host_pairings::list_account_client_targets_for_host".into(),
+        message: e.to_string(),
+    })?;
+    rows.into_iter()
+        .map(|raw| parse_device_id(&raw, "device_id"))
+        .collect()
+}
+
 /// Does the (host, account) pair exist?
 pub async fn exists(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     host_device_id: DeviceId,
     mobile_account_id: &str,
 ) -> Result<bool, BackendError> {
     let host_s = host_device_id.to_string();
-    let row = sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT pair_id
-        FROM account_host_pairings
-        WHERE host_device_id = ? AND mobile_account_id = ?
-        LIMIT 1
-        "#,
-    )
-    .bind(&host_s)
-    .bind(mobile_account_id)
-    .fetch_optional(pool)
-    .await
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, String>(
+                r#"
+                SELECT pair_id
+                FROM account_host_pairings
+                WHERE host_device_id = ? AND mobile_account_id = ?
+                LIMIT 1
+                "#,
+            )
+            .bind(&host_s)
+            .bind(mobile_account_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, String>(
+                r#"
+                SELECT pair_id
+                FROM account_host_pairings
+                WHERE host_device_id = $1 AND mobile_account_id = $2
+                LIMIT 1
+                "#,
+            )
+            .bind(&host_s)
+            .bind(mobile_account_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "account_host_pairings::exists".into(),
         message: e.to_string(),
@@ -151,10 +321,28 @@ pub async fn exists(
 
 /// Delete a specific (host, account) pair. Returns rows-deleted (0 or 1).
 pub async fn delete_pair(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     host_device_id: DeviceId,
     mobile_account_id: &str,
 ) -> Result<u64, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            delete_pair_with_executor(pool, host_device_id, mobile_account_id).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            delete_pair_with_postgres_executor(pool, host_device_id, mobile_account_id).await
+        }
+    }
+}
+
+pub(crate) async fn delete_pair_with_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+) -> Result<u64, BackendError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let host_s = host_device_id.to_string();
     let res = sqlx::query(
         r#"
@@ -164,13 +352,87 @@ pub async fn delete_pair(
     )
     .bind(&host_s)
     .bind(mobile_account_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
         operation: "account_host_pairings::delete_pair".into(),
         message: e.to_string(),
     })?;
     Ok(res.rows_affected())
+}
+
+pub(crate) async fn delete_pair_with_postgres_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+) -> Result<u64, BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let host_s = host_device_id.to_string();
+    let res = sqlx::query(
+        r#"
+        DELETE FROM account_host_pairings
+        WHERE host_device_id = $1 AND mobile_account_id = $2
+        "#,
+    )
+    .bind(&host_s)
+    .bind(mobile_account_id)
+    .execute(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "account_host_pairings::delete_pair".into(),
+        message: e.to_string(),
+    })?;
+    Ok(res.rows_affected())
+}
+
+pub(crate) async fn count_accounts_for_host_with_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+) -> Result<i64, BackendError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let host_s = host_device_id.to_string();
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM account_host_pairings
+        WHERE host_device_id = ?
+        "#,
+    )
+    .bind(&host_s)
+    .fetch_one(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "account_host_pairings::count_accounts_for_host".into(),
+        message: e.to_string(),
+    })
+}
+
+pub(crate) async fn count_accounts_for_host_with_postgres_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+) -> Result<i64, BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let host_s = host_device_id.to_string();
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM account_host_pairings
+        WHERE host_device_id = $1
+        "#,
+    )
+    .bind(&host_s)
+    .fetch_one(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "account_host_pairings::count_accounts_for_host".into(),
+        message: e.to_string(),
+    })
 }
 
 fn decode_pair_row(row: PairRowTuple) -> Result<PairRow, BackendError> {
@@ -196,7 +458,7 @@ fn parse_device_id(raw: &str, column: &str) -> Result<DeviceId, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::devices::insert_device;
+    use crate::store::devices::{insert_device, set_account_id};
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
     use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
@@ -288,5 +550,32 @@ mod tests {
     async fn exists_returns_false_when_missing() {
         let (pool, account, host, _mobile) = setup_one_host_one_account().await;
         assert!(!exists(&pool, host, &account).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_account_client_targets_for_host_flattens_joined_targets() {
+        let pool = memory_pool().await;
+        let account_id = insert_account(&pool, "joined-targets@example.com").await;
+        let host = DeviceId::new();
+        insert_device(&pool, host, "Mac-mini", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        let mobile = insert_ios_device(&pool, &account_id).await;
+        let browser = DeviceId::new();
+        insert_device(&pool, browser, "browser", DeviceRole::BrowserAdmin, T0)
+            .await
+            .unwrap();
+        set_account_id(&pool, &browser, &account_id).await.unwrap();
+        insert_pair(&pool, host, &account_id, mobile, T0)
+            .await
+            .unwrap();
+
+        let targets = list_account_client_targets_for_host(&pool, host)
+            .await
+            .unwrap();
+
+        assert_eq!(targets.len(), 2);
+        assert!(targets.contains(&mobile));
+        assert!(targets.contains(&browser));
     }
 }

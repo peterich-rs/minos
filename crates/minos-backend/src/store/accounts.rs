@@ -11,10 +11,11 @@
 //! `devices.rs` / `tokens.rs` / `pairings.rs` callers.
 
 use chrono::Utc;
-use sqlx::SqlitePool;
+use sqlx::{error::DatabaseError, PgPool, SqlitePool};
 use uuid::Uuid;
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AccountRow {
@@ -27,27 +28,43 @@ pub struct AccountRow {
     pub last_login_at: Option<i64>,
 }
 
-pub async fn create(
-    pool: &SqlitePool,
+pub async fn create<S>(
+    store: &S,
     email: &str,
     password_hash: &str,
-) -> Result<AccountRow, BackendError> {
+) -> Result<AccountRow, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
     let account_id = Uuid::new_v4().to_string();
     let email_norm = email.to_lowercase();
     let now = Utc::now().timestamp_millis();
     for _ in 0..4 {
         let minos_id = Uuid::new_v4().simple().to_string()[..12].to_string();
-        let result = sqlx::query(
-            "INSERT INTO accounts (account_id, email, minos_id, display_name, password_hash, created_at)
-               VALUES (?, ?, ?, NULL, ?, ?)",
-        )
-        .bind(&account_id)
-        .bind(&email_norm)
-        .bind(&minos_id)
-        .bind(password_hash)
-        .bind(now)
-        .execute(pool)
-        .await;
+        let result = match store.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                create_sqlite(
+                    pool,
+                    &account_id,
+                    &email_norm,
+                    &minos_id,
+                    password_hash,
+                    now,
+                )
+                .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                create_postgres(
+                    pool,
+                    &account_id,
+                    &email_norm,
+                    &minos_id,
+                    password_hash,
+                    now,
+                )
+                .await
+            }
+        };
 
         match result {
             Ok(_) => {
@@ -62,9 +79,7 @@ pub async fn create(
                 });
             }
             Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-                if db.message().contains("accounts.email")
-                    || db.message().contains("idx_accounts_email")
-                {
+                if is_email_unique_violation(db.as_ref()) {
                     return Err(BackendError::EmailTaken);
                 }
                 // minos_id collision — retry with a new random id.
@@ -84,18 +99,31 @@ pub async fn create(
     })
 }
 
-pub async fn find_by_email(
-    pool: &SqlitePool,
-    email: &str,
-) -> Result<Option<AccountRow>, BackendError> {
+pub async fn find_by_email<S>(store: &S, email: &str) -> Result<Option<AccountRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
     let email_norm = email.to_lowercase();
-    let row = sqlx::query_as::<_, AccountRow>(
-        "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-           FROM accounts WHERE email = ?",
-    )
-    .bind(&email_norm)
-    .fetch_optional(pool)
-    .await
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AccountRow>(
+                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
+                   FROM accounts WHERE email = ?",
+            )
+            .bind(&email_norm)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AccountRow>(
+                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
+                   FROM accounts WHERE email = $1",
+            )
+            .bind(&email_norm)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "accounts::find_by_email".into(),
         message: e.to_string(),
@@ -103,17 +131,30 @@ pub async fn find_by_email(
     Ok(row)
 }
 
-pub async fn find_by_id(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<Option<AccountRow>, BackendError> {
-    let row = sqlx::query_as::<_, AccountRow>(
-        "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-           FROM accounts WHERE account_id = ?",
-    )
-    .bind(account_id)
-    .fetch_optional(pool)
-    .await
+pub async fn find_by_id<S>(store: &S, account_id: &str) -> Result<Option<AccountRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AccountRow>(
+                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
+                   FROM accounts WHERE account_id = ?",
+            )
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AccountRow>(
+                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
+                   FROM accounts WHERE account_id = $1",
+            )
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "accounts::find_by_id".into(),
         message: e.to_string(),
@@ -121,53 +162,154 @@ pub async fn find_by_id(
     Ok(row)
 }
 
-pub async fn touch_last_login(pool: &SqlitePool, account_id: &str) -> Result<(), BackendError> {
+pub async fn touch_last_login<S>(store: &S, account_id: &str) -> Result<(), BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
     let now = Utc::now().timestamp_millis();
-    sqlx::query("UPDATE accounts SET last_login_at = ? WHERE account_id = ?")
-        .bind(now)
-        .bind(account_id)
-        .execute(pool)
-        .await
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "accounts::touch_last_login".into(),
-            message: e.to_string(),
-        })?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE accounts SET last_login_at = ? WHERE account_id = ?")
+                .bind(now)
+                .bind(account_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE accounts SET last_login_at = $1 WHERE account_id = $2")
+                .bind(now)
+                .bind(account_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "accounts::touch_last_login".into(),
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
-pub async fn set_password_hash(
-    pool: &SqlitePool,
+pub async fn set_password_hash<S>(
+    store: &S,
     account_id: &str,
     password_hash: &str,
-) -> Result<(), BackendError> {
-    sqlx::query("UPDATE accounts SET password_hash = ? WHERE account_id = ?")
-        .bind(password_hash)
-        .bind(account_id)
-        .execute(pool)
-        .await
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "accounts::set_password_hash".into(),
-            message: e.to_string(),
-        })?;
+) -> Result<(), BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE accounts SET password_hash = ? WHERE account_id = ?")
+                .bind(password_hash)
+                .bind(account_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE accounts SET password_hash = $1 WHERE account_id = $2")
+                .bind(password_hash)
+                .bind(account_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "accounts::set_password_hash".into(),
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
-pub async fn find_by_minos_id(
-    pool: &SqlitePool,
+pub async fn find_by_minos_id<S>(
+    store: &S,
     minos_id: &str,
-) -> Result<Option<AccountRow>, BackendError> {
-    let row = sqlx::query_as::<_, AccountRow>(
-        "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-           FROM accounts WHERE minos_id = ? COLLATE BINARY",
-    )
-    .bind(minos_id)
-    .fetch_optional(pool)
-    .await
+) -> Result<Option<AccountRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AccountRow>(
+                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
+                   FROM accounts WHERE minos_id = ? COLLATE BINARY",
+            )
+            .bind(minos_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AccountRow>(
+                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
+                   FROM accounts WHERE minos_id = $1",
+            )
+            .bind(minos_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "accounts::find_by_minos_id".into(),
         message: e.to_string(),
     })?;
     Ok(row)
+}
+
+async fn create_sqlite(
+    pool: &SqlitePool,
+    account_id: &str,
+    email_norm: &str,
+    minos_id: &str,
+    password_hash: &str,
+    now: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO accounts (account_id, email, minos_id, display_name, password_hash, created_at)
+           VALUES (?, ?, ?, NULL, ?, ?)",
+    )
+    .bind(account_id)
+    .bind(email_norm)
+    .bind(minos_id)
+    .bind(password_hash)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+async fn create_postgres(
+    pool: &PgPool,
+    account_id: &str,
+    email_norm: &str,
+    minos_id: &str,
+    password_hash: &str,
+    now: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO accounts (account_id, email, minos_id, display_name, password_hash, created_at)
+           VALUES ($1, $2, $3, NULL, $4, $5)",
+    )
+    .bind(account_id)
+    .bind(email_norm)
+    .bind(minos_id)
+    .bind(password_hash)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+fn is_email_unique_violation(db: &dyn DatabaseError) -> bool {
+    matches!(db.constraint(), Some(name) if name.eq_ignore_ascii_case("idx_accounts_email")
+        || name.eq_ignore_ascii_case("accounts_email_key")
+        || name.eq_ignore_ascii_case("accounts_email"))
+        || db.message().contains("accounts.email")
+        || db.message().contains("idx_accounts_email")
+        || db.message().contains("accounts_email_key")
 }
 
 #[cfg(test)]
