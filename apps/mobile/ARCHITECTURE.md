@@ -50,42 +50,22 @@ lib/
 │   ├── request_trace_records_provider.dart # Request trace mirror
 │   └── root_route_decision.dart # Navigation decision logic
 │
-├── presentation/                # UI Layer — Views (legacy path)
-│   ├── app.dart                 # Root widget + theme + router
-│   ├── error_feedback.dart      # Toast error helper
-│   ├── pages/                   # Full-screen page widgets
-│   │   ├── app_shell_page.dart  # Tab shell (Messages/Members/Profile)
-│   │   ├── login_page.dart      # Auth surface
-│   │   ├── thread_view_page.dart# Agent chat surface
-│   │   ├── project_list_page.dart    # Project grid
-│   │   ├── project_detail_page.dart  # Project detail
-│   │   ├── agents_hub_page.dart # Agent management
-│   │   ├── agent_start_page.dart# New agent session
-│   │   ├── social_hub_page.dart # Friends & conversations
-│   │   ├── social_chat_page.dart# Social chat
-│   │   ├── group_members_page.dart   # Group member management
-│   │   ├── pairing_page.dart    # QR pairing flow
-│   │   ├── log_viewer_page.dart # Debug log viewer
-│   │   └── permission_denied_page.dart
-│   └── widgets/                 # Reusable widget components
-│       ├── auth/                # Auth-specific widgets
-│       ├── chat/                # Chat-specific widgets
-│       ├── shimmer_box.dart     # Loading placeholder
-│       ├── thread_list_tile.dart# Thread row widget
-│       └── workspace_mru_chips.dart
+├── data/
+│   ├── repositories/           # Concrete repository providers + adapters
+│   └── services/               # Concrete service/store providers
 │
-├── ui/                          # UI Layer — Feature-organized (barrel exports)
+├── ui/                         # UI Layer — Feature-organized implementation
 │   ├── core/
 │   │   └── widgets/widgets.dart # Shared widget exports
 │   └── features/
-│       ├── auth/auth.dart       # Auth feature barrel
-│       ├── chat/chat.dart       # Chat feature barrel
-│       ├── projects/projects.dart    # Projects feature barrel
-│       ├── agents/agents.dart   # Agents feature barrel
-│       ├── social/social.dart   # Social feature barrel
-│       ├── pairing/pairing.dart # Pairing feature barrel
-│       ├── debug/debug.dart     # Debug feature barrel
-│       └── shell/shell.dart     # Shell feature barrel
+│       ├── auth/                # Auth screens/widgets + barrel
+│       ├── chat/                # Agent thread screens/widgets + barrel
+│       ├── projects/            # Project screens/widgets + barrel
+│       ├── agents/              # Agent management screens/widgets + barrel
+│       ├── social/              # Social screens/widgets + barrel
+│       ├── pairing/             # Pairing screens/widgets + barrel
+│       ├── debug/               # Debug screens/widgets + barrel
+│       └── shell/               # Root app shell, router, navigation
 │
 └── src/rust/                    # Generated FRB code (do not edit)
 ```
@@ -97,42 +77,41 @@ lib/
 - Defines the `MinosCoreProtocol` abstract class (dependency inversion).
 - All models are immutable value types.
 
-### Data Layer (`lib/infrastructure/` + `lib/data/`)
-- `infrastructure/` contains concrete service implementations.
-- `MinosCore` implements `MinosCoreProtocol` — the only file that imports FRB.
-- Stores handle persistence (keychain, SQLite, JSON files).
-- `data/` provides barrel exports for clean imports from upper layers.
+### Data Layer (`lib/data/` + `lib/infrastructure/`)
+- `data/repositories/` contains the concrete repository interfaces consumed by `application/`.
+- `data/services/` contains provider-backed service/store access used by repositories.
+- `infrastructure/` contains raw concrete implementations such as `MinosCore` and persistence stores.
+- `MinosCore` implements `MinosCoreProtocol`; FRB remains isolated to infrastructure/generated code.
 
 ### Application Layer (`lib/application/`)
 - Riverpod providers acting as ViewModels.
 - Manages UI state, handles user interactions, orchestrates data flow.
-- Depends on `domain/` protocols, never on `infrastructure/` directly.
-- `minosCoreProvider` is the DI seam — overridden in `main()`.
+- Depends on `domain/` models and `data/repositories/`, never on `ui/` or `infrastructure/` directly.
+- Root dependency injection happens in `main()` by overriding `minosCoreServiceProvider`.
 
-### UI Layer (`lib/presentation/` + `lib/ui/`)
-- `presentation/` contains the actual widget implementations.
-- `ui/` provides feature-organized barrel exports for discoverability.
+### UI Layer (`lib/ui/`)
+- `ui/` contains the actual widget implementations and feature barrels.
 - Views are lean — delegate all logic to application-layer providers.
 - Shared widgets live in `ui/core/widgets/`.
 
 ## Dependency Flow
 
 ```
-UI → Application → Domain ← Infrastructure
-         ↓                        ↑
-    (reads providers)    (implements protocol)
+UI → Application → Data/Repositories → Data/Services → Infrastructure
+          \_________________ Domain models / protocols _________________/
 ```
 
 The UI layer watches Riverpod providers from the Application layer.
-The Application layer depends on the Domain protocol.
-The Infrastructure layer implements the Domain protocol.
+The Application layer depends on repositories instead of concrete services.
+Repositories coordinate service/store access while preserving domain-facing APIs.
+The Infrastructure layer implements domain protocols and low-level persistence.
 No circular dependencies exist between layers.
 
 ## Adding a New Feature
 
 1. Define domain models in `lib/domain/` (if new entities are needed).
-2. Add service methods to `MinosCoreProtocol` + `MinosCore` (if new API calls).
-3. Create Riverpod providers in `lib/application/` (state management).
-4. Build views in `lib/presentation/pages/` or `lib/presentation/widgets/`.
-5. Add a barrel export in `lib/ui/features/<feature>/`.
-6. Register any new providers in the dependency graph.
+2. Extend repositories/services and `MinosCoreProtocol` + `MinosCore` when new API calls are required.
+3. Create Riverpod providers or action facades in `lib/application/`.
+4. Build screens/widgets in `lib/ui/features/<feature>/`.
+5. Export the feature surface from `lib/ui/features/<feature>/<feature>.dart`.
+6. Register provider overrides or routing changes in the shell when needed.

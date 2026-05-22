@@ -74,7 +74,7 @@ final class ThreadEventsProvider
   }
 }
 
-String _$threadEventsHash() => r'48658e4ff8435849e17abdb5ef982f5c6570bd55';
+String _$threadEventsHash() => r'eade856c89fea57654b821695ee86f25d30206f0';
 
 /// Loads the translated history for one thread and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps

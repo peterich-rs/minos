@@ -6,9 +6,14 @@ include: package:flutter_lints/flutter.yaml
 # `flutter pub get`.
 plugins:
   riverpod_lint: ^3.1.0
+  prefer_shorthands: ^0.4.7
+
+prefer_shorthands:
+  convert_implicit_declaration: true
 
 linter:
   rules:
+    convert_implicit_declaration: true
     # Async / correctness
     unawaited_futures: true
     discarded_futures: true

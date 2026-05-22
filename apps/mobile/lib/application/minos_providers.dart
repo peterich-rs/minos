@@ -1,30 +1,20 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart'
     show AsyncNotifier, AsyncNotifierProvider, FutureProvider;
-import 'package:minos/domain/minos_core_protocol.dart';
+import 'package:minos/data/repositories/runtime_repository.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'minos_providers.g.dart';
 
-/// Root provider for the Rust core. Must be overridden in `main()` with a
-/// concrete [MinosCore] instance once `init()` has completed.
-@Riverpod(keepAlive: true)
-MinosCoreProtocol minosCore(Ref ref) {
-  throw UnimplementedError(
-    'minosCoreProvider must be overridden in main() with a concrete '
-    'MinosCore instance',
-  );
-}
-
 /// Hot stream of connection-state transitions sourced from the Rust core.
 @Riverpod(keepAlive: true)
 Stream<ConnectionState> connectionState(Ref ref) {
-  return ref.watch(minosCoreProvider).connectionStates;
+  return ref.watch(runtimeRepositoryProvider).connectionStates;
 }
 
 final hasPersistedPairingProvider = FutureProvider<bool>((ref) {
-  return ref.watch(minosCoreProvider).hasPersistedPairing();
+  return ref.watch(runtimeRepositoryProvider).hasPersistedPairing();
 });
 
 /// Display name of the currently paired peer, sourced from the QR's
@@ -32,7 +22,7 @@ final hasPersistedPairingProvider = FutureProvider<bool>((ref) {
 /// the name was never recorded (e.g. pairings made before this field
 /// was added).
 final peerDisplayNameProvider = FutureProvider<String?>((ref) {
-  return ref.watch(minosCoreProvider).peerDisplayName();
+  return ref.watch(runtimeRepositoryProvider).peerDisplayName();
 });
 
 final runtimeAgentDescriptorsProvider = FutureProvider<List<AgentDescriptor>>((
@@ -42,7 +32,7 @@ final runtimeAgentDescriptorsProvider = FutureProvider<List<AgentDescriptor>>((
   if (pairedHosts.isEmpty) {
     return const <AgentDescriptor>[];
   }
-  return ref.watch(minosCoreProvider).listClis();
+  return ref.watch(runtimeRepositoryProvider).listRuntimeAgents();
 });
 
 final hostSkillsProvider =
@@ -50,10 +40,9 @@ final hostSkillsProvider =
       ref,
       hostDeviceId,
     ) async {
-      final response = await ref
-          .watch(minosCoreProvider)
-          .listHostSkills(hostDeviceId: hostDeviceId, forceReload: true);
-      return response.data;
+      return ref
+          .watch(runtimeRepositoryProvider)
+          .listHostSkills(hostDeviceId: hostDeviceId);
     });
 
 /// Paired Macs for the current account. Drives the Partners list. Refresh
@@ -66,14 +55,14 @@ final pairedMacsProvider =
 class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
   @override
   Future<List<HostSummaryDto>> build() {
-    return ref.watch(minosCoreProvider).listPairedHosts();
+    return ref.watch(runtimeRepositoryProvider).listPairedHosts();
   }
 
   Future<void> refresh() async {
     final previous = state;
     try {
       state = AsyncValue.data(
-        await ref.read(minosCoreProvider).listPairedHosts(),
+        await ref.read(runtimeRepositoryProvider).listPairedHosts(),
       );
     } catch (error, stackTrace) {
       if (previous.hasValue) {
@@ -91,7 +80,7 @@ class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
 class ActiveMac extends _$ActiveMac {
   @override
   Future<String?> build() {
-    return ref.watch(minosCoreProvider).activeHost();
+    return ref.watch(runtimeRepositoryProvider).activeHost();
   }
 
   /// Set [macId] as the routing target. Updates state optimistically; if
@@ -101,11 +90,13 @@ class ActiveMac extends _$ActiveMac {
     final previous = state;
     state = AsyncValue.data(macId);
     try {
-      await ref.read(minosCoreProvider).setActiveHost(macId);
+      await ref.read(runtimeRepositoryProvider).setActiveHost(macId);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
       try {
-        state = AsyncValue.data(await ref.read(minosCoreProvider).activeHost());
+        state = AsyncValue.data(
+          await ref.read(runtimeRepositoryProvider).activeHost(),
+        );
       } catch (_) {
         state = previous;
       }
@@ -117,7 +108,9 @@ class ActiveMac extends _$ActiveMac {
   Future<void> refresh() async {
     state = const AsyncValue.loading();
     try {
-      state = AsyncValue.data(await ref.read(minosCoreProvider).activeHost());
+      state = AsyncValue.data(
+        await ref.read(runtimeRepositoryProvider).activeHost(),
+      );
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
@@ -167,10 +160,10 @@ class PairingController extends _$PairingController {
   Future<void> submit(String qrJson, {String? displayName}) async {
     state = const AsyncValue.loading();
     try {
-      final core = ref.read(minosCoreProvider);
-      await core.pairWithQrJson(qrJson);
+      final repository = ref.read(runtimeRepositoryProvider);
+      await repository.pairWithQrJson(qrJson);
       try {
-        await core.setPeerDisplayName(displayName);
+        await repository.setPeerDisplayName(displayName);
       } catch (_) {
         // Best-effort: a keychain write failure here should not undo the
         // successful pair — the partner row will fall back to a generic

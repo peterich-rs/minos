@@ -1,13 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:minos/data/repositories/agent_profile_repository.dart';
 import 'package:minos/domain/agent_profile.dart';
-import 'package:minos/infrastructure/agent_profile_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
-
-final agentProfileStoreProvider = Provider<AgentProfileStore>((ref) {
-  return const JsonFileAgentProfileStore();
-});
 
 final agentProfilesControllerProvider =
     AsyncNotifierProvider<AgentProfilesController, AgentWorkspaceState>(
@@ -32,11 +28,12 @@ final threadBoundAgentProfileProvider = Provider.family<AgentProfile?, String>((
 });
 
 class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
-  AgentProfileStore get _store => ref.read(agentProfileStoreProvider);
+  AgentProfileRepository get _repository =>
+      ref.read(agentProfileRepositoryProvider);
 
   @override
   Future<AgentWorkspaceState> build() async {
-    return (await _store.load()).normalized();
+    return _repository.loadWorkspace();
   }
 
   Future<AgentProfile> createProfile(AgentProfileDraft draft) async {
@@ -145,6 +142,6 @@ class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
 
   Future<void> _persist(AgentWorkspaceState next) async {
     state = AsyncValue.data(next);
-    await _store.save(next);
+    await _repository.saveWorkspace(next);
   }
 }

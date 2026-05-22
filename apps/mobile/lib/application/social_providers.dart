@@ -1,21 +1,15 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:minos/application/minos_providers.dart';
+import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/domain/social_message.dart';
-import 'package:minos/infrastructure/platform_int64.dart';
-import 'package:minos/infrastructure/social_cache_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'social_providers.g.dart';
 
-final socialCacheStoreProvider = Provider<SocialCacheStore>((ref) {
-  return SocialCacheStore();
-});
-
 final socialProfileProvider = FutureProvider<MyProfileResponse>((ref) {
-  return ref.watch(minosCoreProvider).myProfile();
+  return ref.watch(socialRepositoryProvider).myProfile();
 });
 
 @riverpod
@@ -34,15 +28,14 @@ final socialSearchProvider = FutureProvider.family
     .autoDispose<List<UserSummary>, String>((ref, query) async {
       final trimmed = query.trim();
       if (trimmed.isEmpty) return const <UserSummary>[];
-      return ref.watch(minosCoreProvider).searchUsers(minosId: trimmed);
+      return ref.watch(socialRepositoryProvider).searchUsers(minosId: trimmed);
     });
 
 final conversationMembersProvider = FutureProvider.family
     .autoDispose<List<UserSummary>, String>((ref, conversationId) async {
-      final response = await ref
-          .watch(minosCoreProvider)
+      return ref
+          .watch(socialRepositoryProvider)
           .conversationMembers(conversationId: conversationId);
-      return response.members;
     });
 
 @riverpod
@@ -140,7 +133,7 @@ class SocialConversation extends _$SocialConversation {
     _conversationId = conversationId;
     _eventsSub?.cancel();
     _eventsSub = ref
-        .read(minosCoreProvider)
+        .read(socialRepositoryProvider)
         .socialEvents
         .listen(
           _onSocialEvent,
@@ -164,47 +157,48 @@ class SocialConversation extends _$SocialConversation {
       return;
     }
 
-    final cache = ref.read(socialCacheStoreProvider);
+    final repository = ref.read(socialRepositoryProvider);
     final replyPreview = _replyPreviewForMessage(replyToMessage);
-    final pending = await cache.insertPendingMessage(
+    final pending = await repository.insertPendingMessage(
       conversationId: _conversationId,
       sender: await _localSender(),
       text: trimmed,
       replyTo: replyPreview,
     );
-    await cache.touchConversationPreview(
+    await repository.touchConversationPreview(
       conversationId: _conversationId,
       preview: trimmed,
       createdAtMs: pending.createdAtMs,
     );
     state = state.copyWith(
-      messages: await cache.loadMessages(_conversationId),
+      messages: await repository.loadMessages(_conversationId),
       error: null,
     );
     ref.invalidate(conversationsProvider);
 
     try {
-      final message = await ref
-          .read(minosCoreProvider)
-          .sendChatMessage(
-            conversationId: _conversationId,
-            text: trimmed,
-            replyToMessageId: replyPreview?.messageId,
-          );
-      await cache.markMessageSent(localId: pending.localId, message: message);
-      await cache.touchConversationPreview(
+      final message = await repository.sendChatMessage(
+        conversationId: _conversationId,
+        text: trimmed,
+        replyToMessageId: replyPreview?.messageId,
+      );
+      await repository.markMessageSent(
+        localId: pending.localId,
+        message: message,
+      );
+      await repository.touchConversationPreview(
         conversationId: _conversationId,
         preview: message.text,
-        createdAtMs: platformInt64ToInt(message.createdAtMs),
+        createdAtMs: repository.platformInt64ToIntValue(message.createdAtMs),
       );
       state = state.copyWith(
-        messages: await cache.loadMessages(_conversationId),
+        messages: await repository.loadMessages(_conversationId),
       );
       ref.invalidate(conversationsProvider);
     } catch (error) {
-      await cache.markMessageFailed(pending.localId);
+      await repository.markMessageFailed(pending.localId);
       state = state.copyWith(
-        messages: await cache.loadMessages(_conversationId),
+        messages: await repository.loadMessages(_conversationId),
       );
       rethrow;
     }
@@ -223,35 +217,35 @@ class SocialConversation extends _$SocialConversation {
       return;
     }
 
-    final cache = ref.read(socialCacheStoreProvider);
-    await cache.markMessageSending(localId);
-    state = state.copyWith(messages: await cache.loadMessages(_conversationId));
+    final repository = ref.read(socialRepositoryProvider);
+    await repository.markMessageSending(localId);
+    state = state.copyWith(
+      messages: await repository.loadMessages(_conversationId),
+    );
 
     try {
       final replyToMessageId = target.replyTo?.recalledAtMs == null
           ? target.replyTo?.messageId
           : null;
-      final message = await ref
-          .read(minosCoreProvider)
-          .sendChatMessage(
-            conversationId: _conversationId,
-            text: target.text,
-            replyToMessageId: replyToMessageId,
-          );
-      await cache.markMessageSent(localId: localId, message: message);
-      await cache.touchConversationPreview(
+      final message = await repository.sendChatMessage(
+        conversationId: _conversationId,
+        text: target.text,
+        replyToMessageId: replyToMessageId,
+      );
+      await repository.markMessageSent(localId: localId, message: message);
+      await repository.touchConversationPreview(
         conversationId: _conversationId,
         preview: message.text,
-        createdAtMs: platformInt64ToInt(message.createdAtMs),
+        createdAtMs: repository.platformInt64ToIntValue(message.createdAtMs),
       );
       state = state.copyWith(
-        messages: await cache.loadMessages(_conversationId),
+        messages: await repository.loadMessages(_conversationId),
       );
       ref.invalidate(conversationsProvider);
     } catch (error) {
-      await cache.markMessageFailed(localId);
+      await repository.markMessageFailed(localId);
       state = state.copyWith(
-        messages: await cache.loadMessages(_conversationId),
+        messages: await repository.loadMessages(_conversationId),
       );
       rethrow;
     }
@@ -269,20 +263,20 @@ class SocialConversation extends _$SocialConversation {
       return;
     }
 
-    final message = await ref
-        .read(minosCoreProvider)
-        .recallChatMessage(
-          conversationId: _conversationId,
-          messageId: target.serverMessageId!,
-        );
-    final cache = ref.read(socialCacheStoreProvider);
-    await cache.upsertRemoteMessage(message);
-    await cache.touchConversationPreview(
+    final repository = ref.read(socialRepositoryProvider);
+    final message = await repository.recallChatMessage(
+      conversationId: _conversationId,
+      messageId: target.serverMessageId!,
+    );
+    await repository.upsertRemoteMessage(message);
+    await repository.touchConversationPreview(
       conversationId: _conversationId,
       preview: message.text,
-      createdAtMs: platformInt64ToInt(message.createdAtMs),
+      createdAtMs: repository.platformInt64ToIntValue(message.createdAtMs),
     );
-    state = state.copyWith(messages: await cache.loadMessages(_conversationId));
+    state = state.copyWith(
+      messages: await repository.loadMessages(_conversationId),
+    );
     final replyDraft = ref.read(socialReplyDraftProvider(_conversationId));
     if (replyDraft == localId) {
       ref.read(socialReplyDraftProvider(_conversationId).notifier).clear();
@@ -291,10 +285,10 @@ class SocialConversation extends _$SocialConversation {
   }
 
   Future<void> _load({SocialConversationState? seedState}) async {
-    final cache = ref.read(socialCacheStoreProvider);
+    final repository = ref.read(socialRepositoryProvider);
     final previous = seedState ?? state;
-    final cachedMessages = await cache.loadMessages(_conversationId);
-    final cachedAccountId = await cache.loadCurrentAccountId();
+    final cachedMessages = await repository.loadMessages(_conversationId);
+    final cachedAccountId = await repository.loadCurrentAccountId();
     state = previous.copyWith(
       myAccountId: cachedAccountId ?? previous.myAccountId,
       messages: cachedMessages.isEmpty ? previous.messages : cachedMessages,
@@ -302,21 +296,20 @@ class SocialConversation extends _$SocialConversation {
       error: null,
     );
     try {
-      final core = ref.read(minosCoreProvider);
-      final profile = await core.myProfile();
-      await cache.saveCurrentAccountId(profile.accountId);
-      final response = await core.listChatMessages(
+      final profile = await repository.myProfile();
+      await repository.saveCurrentAccountId(profile.accountId);
+      final response = await repository.listChatMessages(
         conversationId: _conversationId,
         limit: 100,
       );
-      await cache.upsertRemoteMessages(
+      await repository.upsertRemoteMessages(
         conversationId: _conversationId,
         messages: response.messages,
       );
-      await core.markConversationRead(conversationId: _conversationId);
+      await repository.markConversationRead(conversationId: _conversationId);
       state = SocialConversationState(
         myAccountId: profile.accountId,
-        messages: await cache.loadMessages(_conversationId),
+        messages: await repository.loadMessages(_conversationId),
         isLoading: false,
         error: null,
       );
@@ -339,15 +332,15 @@ class SocialConversation extends _$SocialConversation {
   }
 
   Future<void> _applyRemoteMessage(ChatMessageSummary message) async {
-    final cache = ref.read(socialCacheStoreProvider);
-    await cache.upsertRemoteMessage(message);
-    await cache.touchConversationPreview(
+    final repository = ref.read(socialRepositoryProvider);
+    await repository.upsertRemoteMessage(message);
+    await repository.touchConversationPreview(
       conversationId: message.conversationId,
       preview: message.text,
-      createdAtMs: platformInt64ToInt(message.createdAtMs),
+      createdAtMs: repository.platformInt64ToIntValue(message.createdAtMs),
     );
     state = state.copyWith(
-      messages: await cache.loadMessages(_conversationId),
+      messages: await repository.loadMessages(_conversationId),
       error: null,
     );
     unawaited(_markConversationRead());
@@ -357,7 +350,7 @@ class SocialConversation extends _$SocialConversation {
   Future<void> _markConversationRead() async {
     try {
       await ref
-          .read(minosCoreProvider)
+          .read(socialRepositoryProvider)
           .markConversationRead(conversationId: _conversationId);
       ref.invalidate(conversationsProvider);
     } catch (_) {}
@@ -366,7 +359,7 @@ class SocialConversation extends _$SocialConversation {
   Future<UserSummary> _localSender() async {
     final accountId =
         state.myAccountId ??
-        await ref.read(socialCacheStoreProvider).loadCurrentAccountId() ??
+        await ref.read(socialRepositoryProvider).loadCurrentAccountId() ??
         'local-self';
     return UserSummary(accountId: accountId, minosId: 'me', displayName: '我');
   }
@@ -383,7 +376,9 @@ class SocialConversation extends _$SocialConversation {
       text: message.text,
       recalledAtMs: message.recalledAtMs == null
           ? null
-          : platformInt64FromInt(message.recalledAtMs!),
+          : ref
+                .read(socialRepositoryProvider)
+                .platformInt64FromIntValue(message.recalledAtMs!),
     );
   }
 }
@@ -396,11 +391,13 @@ final friendRequestsProvider =
 class FriendRequestsController extends AsyncNotifier<FriendRequestsResponse> {
   @override
   Future<FriendRequestsResponse> build() {
-    return ref.watch(minosCoreProvider).friendRequests();
+    return ref.watch(socialRepositoryProvider).friendRequests();
   }
 
   Future<void> refresh() async {
-    state = AsyncValue.data(await ref.read(minosCoreProvider).friendRequests());
+    state = AsyncValue.data(
+      await ref.read(socialRepositoryProvider).friendRequests(),
+    );
   }
 }
 
@@ -412,11 +409,11 @@ final friendsProvider =
 class FriendsController extends AsyncNotifier<FriendsResponse> {
   @override
   Future<FriendsResponse> build() {
-    return ref.watch(minosCoreProvider).friends();
+    return ref.watch(socialRepositoryProvider).friends();
   }
 
   Future<void> refresh() async {
-    state = AsyncValue.data(await ref.read(minosCoreProvider).friends());
+    state = AsyncValue.data(await ref.read(socialRepositoryProvider).friends());
   }
 }
 
@@ -431,7 +428,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   @override
   Future<ConversationsResponse> build() async {
     _eventsSub ??= ref
-        .read(minosCoreProvider)
+        .read(socialRepositoryProvider)
         .socialEvents
         .listen(
           (_) {
@@ -443,8 +440,8 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
         );
     ref.onDispose(() => _eventsSub?.cancel());
 
-    final cache = ref.read(socialCacheStoreProvider);
-    final cached = await cache.loadConversations();
+    final repository = ref.read(socialRepositoryProvider);
+    final cached = await repository.loadConversations();
     if (cached != null && cached.conversations.isNotEmpty) {
       unawaited(_refreshFromRemote());
       return cached;
@@ -465,10 +462,9 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   }
 
   Future<ConversationsResponse> _fetchRemoteConversations() async {
-    final response = await ref.read(minosCoreProvider).conversations();
-    await ref
-        .read(socialCacheStoreProvider)
-        .saveConversations(response.conversations);
+    final repository = ref.read(socialRepositoryProvider);
+    final response = await repository.conversations();
+    await repository.saveConversations(response.conversations);
     return response;
   }
 

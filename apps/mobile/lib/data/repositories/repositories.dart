@@ -9,23 +9,10 @@
 /// directly.
 library;
 
-export 'package:minos/application/agent_profiles_provider.dart'
-    show
-        agentProfileStoreProvider,
-        agentProfilesControllerProvider,
-        AgentProfilesController;
-export 'package:minos/application/group_agent_provider.dart'
-    show groupAgentBindingsProvider, GroupAgentBindingsController;
-export 'package:minos/application/minos_providers.dart';
-export 'package:minos/application/project_providers.dart';
-export 'package:minos/application/social_providers.dart'
-    show
-        socialCacheStoreProvider,
-        socialProfileProvider,
-        friendRequestsProvider,
-        friendsProvider,
-        conversationsProvider,
-        FriendRequestsController,
-        FriendsController,
-        ConversationsController;
-export 'package:minos/application/thread_list_provider.dart';
+export 'package:minos/data/repositories/agent_profile_repository.dart';
+export 'package:minos/data/repositories/auth_repository.dart';
+export 'package:minos/data/repositories/group_agent_repository.dart';
+export 'package:minos/data/repositories/project_repository.dart';
+export 'package:minos/data/repositories/runtime_repository.dart';
+export 'package:minos/data/repositories/social_repository.dart';
+export 'package:minos/data/repositories/thread_repository.dart';

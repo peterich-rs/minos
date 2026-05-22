@@ -6,7 +6,7 @@
 ///
 /// Rules:
 ///   - Domain models must NOT import from `infrastructure/`, `application/`,
-///     or `presentation/`.
+///     or `ui/`.
 ///   - They may import from `src/rust/api/minos.dart` only for shared
 ///     enums/types that are part of the domain contract (e.g. AgentName).
 ///   - All domain models should be immutable (use `@immutable` or sealed).

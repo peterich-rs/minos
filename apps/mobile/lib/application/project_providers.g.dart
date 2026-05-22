@@ -36,7 +36,7 @@ final class ProjectListProvider
   ProjectList create() => ProjectList();
 }
 
-String _$projectListHash() => r'657a55601ddf63c6d4b24ea72f5f1083d34d794e';
+String _$projectListHash() => r'428ccef8ed46133cc271ca1dbc3bb9854c8d5be4';
 
 /// Loads and caches the project list. Refresh via invalidation.
 
@@ -108,7 +108,7 @@ final class ProjectThreadsProvider
   }
 }
 
-String _$projectThreadsHash() => r'67d37661f9fa67d40865090f7f5adc6900de77b5';
+String _$projectThreadsHash() => r'b4f1142e59e96c3bbb8d18827345890168bb7d3e';
 
 /// Loads threads for a specific project.
 

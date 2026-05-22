@@ -8,61 +8,6 @@ part of 'minos_providers.dart';
 
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
-/// Root provider for the Rust core. Must be overridden in `main()` with a
-/// concrete [MinosCore] instance once `init()` has completed.
-
-@ProviderFor(minosCore)
-final minosCoreProvider = MinosCoreProvider._();
-
-/// Root provider for the Rust core. Must be overridden in `main()` with a
-/// concrete [MinosCore] instance once `init()` has completed.
-
-final class MinosCoreProvider
-    extends
-        $FunctionalProvider<
-          MinosCoreProtocol,
-          MinosCoreProtocol,
-          MinosCoreProtocol
-        >
-    with $Provider<MinosCoreProtocol> {
-  /// Root provider for the Rust core. Must be overridden in `main()` with a
-  /// concrete [MinosCore] instance once `init()` has completed.
-  MinosCoreProvider._()
-    : super(
-        from: null,
-        argument: null,
-        retry: null,
-        name: r'minosCoreProvider',
-        isAutoDispose: false,
-        dependencies: null,
-        $allTransitiveDependencies: null,
-      );
-
-  @override
-  String debugGetCreateSourceHash() => _$minosCoreHash();
-
-  @$internal
-  @override
-  $ProviderElement<MinosCoreProtocol> $createElement(
-    $ProviderPointer pointer,
-  ) => $ProviderElement(pointer);
-
-  @override
-  MinosCoreProtocol create(Ref ref) {
-    return minosCore(ref);
-  }
-
-  /// {@macro riverpod.override_with_value}
-  Override overrideWithValue(MinosCoreProtocol value) {
-    return $ProviderOverride(
-      origin: this,
-      providerOverride: $SyncValueProvider<MinosCoreProtocol>(value),
-    );
-  }
-}
-
-String _$minosCoreHash() => r'5ec8eda43e87c21ec080a15cb9fb884ca0e18d03';
-
 /// Hot stream of connection-state transitions sourced from the Rust core.
 
 @ProviderFor(connectionState)
@@ -105,7 +50,7 @@ final class ConnectionStateProvider
   }
 }
 
-String _$connectionStateHash() => r'7e2c58fcec3f59ae8890c0d5343a75bac0330ed8';
+String _$connectionStateHash() => r'976528f1afea84dc282e0b373ef213a6d7bfe773';
 
 /// Routing target for `Forward` envelopes. `null` means no Mac is selected
 /// — the daemon falls back to broadcast-style fan-out when this is unset.
@@ -138,7 +83,7 @@ final class ActiveMacProvider
   ActiveMac create() => ActiveMac();
 }
 
-String _$activeMacHash() => r'ba3a53ca961ea670a034399ab349cc2741f091a5';
+String _$activeMacHash() => r'1ecc8a916b71d3342a6629a74bee1ef546322a41';
 
 /// Routing target for `Forward` envelopes. `null` means no Mac is selected
 /// — the daemon falls back to broadcast-style fan-out when this is unset.
@@ -250,7 +195,7 @@ final class PairingControllerProvider
   PairingController create() => PairingController();
 }
 
-String _$pairingControllerHash() => r'97ea21fac9d46667ee1a9ca8bb13b100856358cc';
+String _$pairingControllerHash() => r'119bdabe0164366c449ffc418dd9ea8e1f8b765c';
 
 /// Owns the pairing submission lifecycle. The outcome is a plain
 /// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not

@@ -125,7 +125,7 @@ final class AuthControllerProvider
   }
 }
 
-String _$authControllerHash() => r'3506eef1100b655e5d50d8308afe305401dc8822';
+String _$authControllerHash() => r'61dd6de9a76cbeb897e47e974e77a7dfb1614756';
 
 /// Mirrors the Rust-side `AuthState` watch-channel into the Dart UI tier.
 ///

@@ -1,4 +1,4 @@
-import 'package:minos/application/minos_providers.dart';
+import 'package:minos/data/repositories/project_repository.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -9,17 +9,15 @@ part 'project_providers.g.dart';
 class ProjectList extends _$ProjectList {
   @override
   Future<List<ProjectSummary>> build() async {
-    final core = ref.read(minosCoreProvider);
-    final resp = await core.listProjects();
-    return resp.projects;
+    return ref.read(projectRepositoryProvider).listProjects();
   }
 
   Future<void> refresh() async {
     final previous = state;
     try {
-      final core = ref.read(minosCoreProvider);
-      final resp = await core.listProjects();
-      state = AsyncValue.data(resp.projects);
+      state = AsyncValue.data(
+        await ref.read(projectRepositoryProvider).listProjects(),
+      );
     } catch (error, stackTrace) {
       if (previous.hasValue) {
         state = previous;
@@ -34,19 +32,16 @@ class ProjectList extends _$ProjectList {
     required String name,
     required String workspaceSlug,
   }) async {
-    final core = ref.read(minosCoreProvider);
-    final resp = await core.createProject(
-      name: name,
-      workspaceSlug: workspaceSlug,
-    );
+    final project = await ref
+        .read(projectRepositoryProvider)
+        .createProject(name: name, workspaceSlug: workspaceSlug);
     await refresh();
-    return resp.project;
+    return project;
   }
 
   /// Delete a project and refresh the list.
   Future<void> deleteProject(String projectId) async {
-    final core = ref.read(minosCoreProvider);
-    await core.deleteProject(projectId: projectId);
+    await ref.read(projectRepositoryProvider).deleteProject(projectId);
     await refresh();
   }
 
@@ -55,8 +50,9 @@ class ProjectList extends _$ProjectList {
     required String projectId,
     required String name,
   }) async {
-    final core = ref.read(minosCoreProvider);
-    await core.updateProject(projectId: projectId, name: name);
+    await ref
+        .read(projectRepositoryProvider)
+        .updateProject(projectId: projectId, name: name);
     await refresh();
   }
 }
@@ -66,18 +62,16 @@ class ProjectList extends _$ProjectList {
 class ProjectThreads extends _$ProjectThreads {
   @override
   Future<List<ThreadSummary>> build(String projectId) async {
-    final core = ref.read(minosCoreProvider);
-    final resp = await core.listProjectThreads(projectId: projectId);
-    return resp.threads;
+    return ref.read(projectRepositoryProvider).listProjectThreads(projectId);
   }
 
   Future<void> refresh() async {
     final previous = state;
     final projectId = this.projectId;
     try {
-      final core = ref.read(minosCoreProvider);
-      final resp = await core.listProjectThreads(projectId: projectId);
-      state = AsyncValue.data(resp.threads);
+      state = AsyncValue.data(
+        await ref.read(projectRepositoryProvider).listProjectThreads(projectId),
+      );
     } catch (error, stackTrace) {
       if (previous.hasValue) {
         state = previous;

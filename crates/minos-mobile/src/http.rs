@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use http::header::CONTENT_TYPE;
 use http::{Method, Request, Response, StatusCode};
-use minos_domain::{DeviceId, MinosError};
+use minos_domain::{AgentName, DeviceId, MinosError};
 use minos_protocol::{
     AddAgentToGroupRequest, AddGroupMemberRequest, ApprovalDecisionRequest,
     AssignProjectThreadRequest, AuthRequest, AuthResponse, ConversationAgentMembersResponse,
@@ -28,6 +28,7 @@ use minos_protocol::{
     RefreshRequest, RefreshResponse, RemoveAgentFromGroupRequest, SearchUsersRequest,
     SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest, UpdateProjectRequest,
 };
+use minos_ui_protocol::ThreadEndReason;
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -45,6 +46,83 @@ struct ErrorEnvelope {
 struct ErrorBody {
     code: String,
     message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ApprovalRespondRequest<'a> {
+    request_id: &'a str,
+    decision: &'a serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_request_id: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct LinkProjectAgentSessionRequest<'a> {
+    project_id: &'a str,
+    session_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct ListProjectAgentSessionsRequest<'a> {
+    project_id: &'a str,
+    limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_started_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectAgentSessionsResponse {
+    sessions: Vec<ProjectAgentSessionSummary>,
+    #[allow(dead_code)]
+    next_before_started_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectAgentSessionSummary {
+    session_id: String,
+    #[allow(dead_code)]
+    conversation_id: String,
+    #[allow(dead_code)]
+    project_id: Option<String>,
+    agent_id: Option<String>,
+    agent: Option<AgentName>,
+    #[allow(dead_code)]
+    status: String,
+    started_at_ms: i64,
+    ended_at_ms: Option<i64>,
+    title: Option<String>,
+    last_activity_at_ms: i64,
+    message_count: u32,
+    end_reason: Option<ThreadEndReason>,
+}
+
+impl ProjectAgentSessionSummary {
+    fn into_thread_summary(self) -> Result<minos_protocol::ThreadSummary, MinosError> {
+        let session_id = self.session_id;
+        let agent = self
+            .agent
+            .or_else(|| {
+                self.agent_id
+                    .as_deref()
+                    .and_then(agent_name_from_session_agent_id)
+            })
+            .ok_or_else(|| MinosError::BackendInternal {
+                message: format!(
+                    "decode ProjectAgentSessionSummary: missing agent for {session_id}"
+                ),
+            })?;
+
+        Ok(minos_protocol::ThreadSummary {
+            thread_id: session_id,
+            agent,
+            title: self.title,
+            first_ts_ms: self.started_at_ms,
+            last_ts_ms: self.last_activity_at_ms,
+            message_count: self.message_count,
+            ended_at_ms: self.ended_at_ms,
+            end_reason: self.end_reason,
+        })
+    }
 }
 
 pub struct MobileHttpClient {
@@ -300,7 +378,7 @@ impl MobileHttpClient {
         access_token: &str,
         req: ApprovalDecisionRequest,
     ) -> Result<(), MinosError> {
-        let path = "/v1/threads/approval-decision";
+        let path = "/v1/approvals/respond";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
@@ -308,7 +386,16 @@ impl MobileHttpClient {
             Some(req.thread_id.clone()),
             Some(format!("request_id={}", req.request_id)),
         );
-        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            Some(access_token),
+            &ApprovalRespondRequest {
+                request_id: &req.request_id,
+                decision: &req.decision,
+                client_request_id: None,
+            },
+        )?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -443,7 +530,7 @@ impl MobileHttpClient {
         access_token: &str,
         req: AssignProjectThreadRequest,
     ) -> Result<(), MinosError> {
-        let path = "/v1/projects/threads/assign";
+        let path = "/v1/projects/agent-sessions/link";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
@@ -454,7 +541,15 @@ impl MobileHttpClient {
                 req.project_id, req.thread_id
             )),
         );
-        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            Some(access_token),
+            &LinkProjectAgentSessionRequest {
+                project_id: &req.project_id,
+                session_id: &req.thread_id,
+            },
+        )?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -472,7 +567,7 @@ impl MobileHttpClient {
         access_token: &str,
         req: ListProjectThreadsParams,
     ) -> Result<ListProjectThreadsResponse, MinosError> {
-        let path = "/v1/projects/threads/query";
+        let path = "/v1/projects/agent-sessions/query";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
@@ -483,19 +578,33 @@ impl MobileHttpClient {
                 req.project_id, req.limit, req.before_ts_ms
             )),
         );
-        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            Some(access_token),
+            &ListProjectAgentSessionsRequest {
+                project_id: &req.project_id,
+                limit: req.limit,
+                before_started_at_ms: req.before_ts_ms,
+            },
+        )?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
-            let body: ListProjectThreadsResponse =
-                decode_success_json(resp, "ListProjectThreadsResponse").await?;
+            let body: ProjectAgentSessionsResponse =
+                decode_success_json(resp, "ProjectAgentSessionsResponse").await?;
+            let threads = body
+                .sessions
+                .into_iter()
+                .map(ProjectAgentSessionSummary::into_thread_summary)
+                .collect::<Result<Vec<_>, _>>()?;
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                Some(format!("threads={}", body.threads.len())),
+                Some(format!("threads={}", threads.len())),
                 None,
             );
-            Ok(body)
+            Ok(ListProjectThreadsResponse { threads })
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
@@ -1459,6 +1568,15 @@ pub(crate) fn http_base(ws_url: &str) -> Option<String> {
     Some(format!("{scheme}://{host}{port}"))
 }
 
+fn agent_name_from_session_agent_id(agent_id: &str) -> Option<AgentName> {
+    match agent_id {
+        "agent_codex" | "codex" => Some(AgentName::Codex),
+        "agent_claude" | "claude" => Some(AgentName::Claude),
+        "agent_gemini" | "gemini" => Some(AgentName::Gemini),
+        _ => None,
+    }
+}
+
 fn start_http_trace(
     method: &str,
     target: &str,
@@ -1472,4 +1590,57 @@ fn start_http_trace(
         thread_id,
         request_summary,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_agent_session_summary_maps_to_thread_summary() {
+        let summary = ProjectAgentSessionSummary {
+            session_id: "sess-1".into(),
+            conversation_id: "conv-1".into(),
+            project_id: Some("proj-1".into()),
+            agent_id: Some("agent_codex".into()),
+            agent: Some(AgentName::Codex),
+            status: "running".into(),
+            started_at_ms: 100,
+            ended_at_ms: None,
+            title: Some("Thread title".into()),
+            last_activity_at_ms: 250,
+            message_count: 3,
+            end_reason: None,
+        };
+
+        let thread = summary.into_thread_summary().unwrap();
+        assert_eq!(thread.thread_id, "sess-1");
+        assert_eq!(thread.agent, AgentName::Codex);
+        assert_eq!(thread.title.as_deref(), Some("Thread title"));
+        assert_eq!(thread.first_ts_ms, 100);
+        assert_eq!(thread.last_ts_ms, 250);
+        assert_eq!(thread.message_count, 3);
+        assert_eq!(thread.ended_at_ms, None);
+    }
+
+    #[test]
+    fn project_agent_session_summary_falls_back_to_agent_id_slug() {
+        let summary = ProjectAgentSessionSummary {
+            session_id: "sess-2".into(),
+            conversation_id: "conv-2".into(),
+            project_id: Some("proj-2".into()),
+            agent_id: Some("agent_claude".into()),
+            agent: None,
+            status: "ended".into(),
+            started_at_ms: 10,
+            ended_at_ms: Some(20),
+            title: None,
+            last_activity_at_ms: 20,
+            message_count: 0,
+            end_reason: None,
+        };
+
+        let thread = summary.into_thread_summary().unwrap();
+        assert_eq!(thread.agent, AgentName::Claude);
+    }
 }

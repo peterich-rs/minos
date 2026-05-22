@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:minos/application/minos_providers.dart';
+import 'package:minos/data/repositories/auth_repository.dart';
 import 'package:minos/domain/auth_state.dart';
 import 'package:minos/src/rust/api/minos.dart'
     show
@@ -46,10 +46,11 @@ class AuthController extends _$AuthController {
   StreamSubscription<AuthStateFrame>? _sub;
   bool _wsResumed = false;
 
+  AuthRepository get _repository => ref.read(authRepositoryProvider);
+
   @override
   AuthState build() {
-    final core = ref.watch(minosCoreProvider);
-    _sub = core.authStates.listen(_onFrame);
+    _sub = ref.watch(authRepositoryProvider).authStates.listen(_onFrame);
     ref.onDispose(() => _sub?.cancel());
     return const AuthBootstrapping();
   }
@@ -67,9 +68,7 @@ class AuthController extends _$AuthController {
       _wsResumed = true;
       // Best-effort: a missing pairing snapshot or an unreachable Mac
       // surfaces on connectionStateProvider — don't block the auth flow.
-      unawaited(
-        ref.read(minosCoreProvider).resumePersistedSession().catchError((_) {}),
-      );
+      unawaited(_repository.resumePersistedSession().catchError((_) {}));
     } else if (frame is AuthStateFrame_Unauthenticated) {
       _wsResumed = false;
     }
@@ -80,20 +79,18 @@ class AuthController extends _$AuthController {
   /// the same transitions whether the trigger was UI-initiated or
   /// background refresh.
   Future<void> register(String email, String password) async {
-    await ref
-        .read(minosCoreProvider)
-        .register(email: email, password: password);
+    await _repository.register(email, password);
   }
 
   /// Log into an existing account. See [register] for state-update
   /// semantics.
   Future<void> login(String email, String password) async {
-    await ref.read(minosCoreProvider).login(email: email, password: password);
+    await _repository.login(email, password);
   }
 
   /// Best-effort logout: revoke server-side, wipe local secrets, and let
   /// the Rust core flip [authStates] to `Unauthenticated`.
   Future<void> logout() async {
-    await ref.read(minosCoreProvider).logout();
+    await _repository.logout();
   }
 }

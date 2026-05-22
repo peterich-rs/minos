@@ -1,4 +1,4 @@
-import 'package:minos/application/minos_providers.dart';
+import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -11,17 +11,15 @@ part 'thread_list_provider.g.dart';
 class ThreadList extends _$ThreadList {
   @override
   Future<List<ThreadSummary>> build() async {
-    final core = ref.read(minosCoreProvider);
-    final resp = await core.listThreads(const ListThreadsParams(limit: 50));
-    return resp.threads;
+    return ref.read(threadRepositoryProvider).listThreads();
   }
 
   Future<void> refresh() async {
     final previous = state;
     try {
-      final core = ref.read(minosCoreProvider);
-      final resp = await core.listThreads(const ListThreadsParams(limit: 50));
-      state = AsyncValue.data(resp.threads);
+      state = AsyncValue.data(
+        await ref.read(threadRepositoryProvider).listThreads(),
+      );
     } catch (error, stackTrace) {
       if (previous.hasValue) {
         state = previous;

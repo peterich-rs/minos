@@ -1,20 +1,20 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:minos/application/agent_profiles_provider.dart';
-import 'package:minos/application/minos_providers.dart';
+import 'package:minos/data/repositories/group_agent_repository.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/group_member.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 final conversationAgentMembersProvider =
-    FutureProvider.family<ConversationAgentMembersResponse, String>((
+    FutureProvider.family<List<AgentSummary>, String>((
       ref,
       conversationId,
     ) async {
-      final core = ref.read(minosCoreProvider);
-      return core.listConversationAgents(conversationId: conversationId);
+      return ref
+          .read(groupAgentRepositoryProvider)
+          .listConversationAgents(conversationId);
     });
-
 final groupAgentsProvider = Provider.family<List<AgentProfile>, String>((
   ref,
   conversationId,
@@ -23,8 +23,7 @@ final groupAgentsProvider = Provider.family<List<AgentProfile>, String>((
       ref
           .watch(conversationAgentMembersProvider(conversationId))
           .asData
-          ?.value
-          .agents ??
+          ?.value ??
       const <AgentSummary>[];
   if (agentSummaries.isEmpty) {
     return const <AgentProfile>[];

@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:minos/application/minos_providers.dart';
+import 'package:minos/application/flutter_log.dart';
+import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/src/rust/api/minos.dart'
     show
@@ -26,8 +27,10 @@ class ActiveSessionController extends _$ActiveSessionController {
 
   @override
   ActiveSession build() {
-    final core = ref.watch(minosCoreProvider);
-    _eventsSub = core.uiEvents.listen(_onUiEvent);
+    _eventsSub = ref
+        .watch(threadRepositoryProvider)
+        .uiEvents
+        .listen(_onUiEvent);
     ref.onDispose(() => _eventsSub?.cancel());
     return const SessionIdle();
   }
@@ -78,6 +81,10 @@ class ActiveSessionController extends _$ActiveSessionController {
     required Future<void> Function() dispatch,
   }) async {
     final previous = state;
+    logFlutterInfo(
+      'active_session',
+      'send started agent=$agent textLength=${text.length} previous=${previous.runtimeType}',
+    );
     state = SessionSending(agent: agent, text: text);
     try {
       await dispatch();
@@ -91,8 +98,18 @@ class ActiveSessionController extends _$ActiveSessionController {
       if (threadId != null) {
         state = SessionStreaming(threadId: threadId, agent: agent);
       }
+      logFlutterDebug(
+        'active_session',
+        'send dispatched agent=$agent threadId=${threadId ?? '<pending>'}',
+      );
       return null;
-    } on MinosError catch (e) {
+    } on MinosError catch (e, stackTrace) {
+      logFlutterError(
+        'active_session',
+        'send failed agent=$agent',
+        error: e,
+        stackTrace: stackTrace,
+      );
       state = _restoreAfterSendFailure(previous, e);
       return e;
     }
@@ -133,9 +150,21 @@ class ActiveSessionController extends _$ActiveSessionController {
     if (threadId == null || agent == null) return;
 
     try {
-      await ref.read(minosCoreProvider).interruptThread(threadId: threadId);
+      await ref
+          .read(threadRepositoryProvider)
+          .interruptThread(threadId: threadId);
       state = SessionSuspended(threadId: threadId, agent: agent);
-    } on MinosError catch (error) {
+      logFlutterInfo(
+        'active_session',
+        'stop succeeded threadId=$threadId agent=$agent',
+      );
+    } on MinosError catch (error, stackTrace) {
+      logFlutterError(
+        'active_session',
+        'stop failed threadId=$threadId agent=$agent',
+        error: error,
+        stackTrace: stackTrace,
+      );
       state = SessionError(threadId: threadId, error: error);
       return;
     }
@@ -144,6 +173,7 @@ class ActiveSessionController extends _$ActiveSessionController {
   /// Clear any thread-bound session state before routing the user into a
   /// fresh chat composer.
   void reset() {
+    logFlutterDebug('active_session', 'session reset to idle');
     state = const SessionIdle();
   }
 }
