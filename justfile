@@ -69,6 +69,15 @@ backend:
 check:
     cargo xtask check-all
 
+# Backend-focused verification for formal-cutover work.
+check-backend:
+    cargo xtask gen-backend-platform-contract --check
+    cargo test -p minos-backend
+
+# Regenerate the backend runtime contract, OpenAPI, and websocket schema artifacts.
+gen-backend-platform-contract:
+    cargo xtask gen-backend-platform-contract
+
 # Run the standalone web admin client.
 dev-web:
     cd apps/web && pnpm dev

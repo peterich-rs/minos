@@ -1,0 +1,541 @@
+{
+  "service": "minos-backend",
+  "version": "0.1.0",
+  "runtime_modes": [
+    "monolith",
+    "http-only",
+    "worker-only"
+  ],
+  "storage_modes": [
+    "sqlite",
+    "external-sql"
+  ],
+  "external_sql": {
+    "supported_drivers": [
+      "postgres"
+    ],
+    "boot_capabilities": [
+      "Validates postgres:// and postgresql:// URLs during config parsing",
+      "Opens a real sqlx Postgres pool for the runtime store handle",
+      "Queries current_database() and version() for boot diagnostics",
+      "Serves /health/* and /metrics against the live external SQL pool",
+      "Serves /v1/auth/* plus formal pairing and ticket-issuance endpoints under /v1/host/*, /v1/pairing/*, and /v1/realtime/ws-ticket"
+    ],
+    "runtime_blockers": [
+      "Most remaining /v1 handlers and all /ws handlers still rely on SQLite-only services and store queries",
+      "Many store modules under crates/minos-backend/src/store still use SQLite-specific SQL placeholders and transactions",
+      "The embedded migration set under crates/minos-backend/migrations is SQLite-only"
+    ]
+  },
+  "cache_backends": [
+    "in-memory",
+    "redis"
+  ],
+  "message_bus_backends": [
+    "inline",
+    "redis"
+  ],
+  "defaults": {
+    "environment": "dev",
+    "storage_mode": "sqlite",
+    "runtime_mode": "monolith",
+    "db_max_connections": 32,
+    "token_ttl_secs": 300,
+    "cache_backend": "in-memory",
+    "message_bus_backend": "inline",
+    "cluster_channel": "minos.backend.cluster"
+  },
+  "prod_guards": [
+    "MINOS_STORAGE_MODE must not remain sqlite in prod",
+    "MINOS_CORS_ORIGINS must not be wildcard for HTTP-serving prod nodes",
+    "MINOS_CACHE_BACKEND must be redis for HTTP-serving prod nodes",
+    "MINOS_MESSAGE_BUS_BACKEND must be redis for HTTP-serving prod nodes",
+    "MINOS_REDIS_URL is required whenever redis runtime adapters are selected",
+    "MINOS_STORAGE_MODE=external-sql now boots platform probes on Postgres and serves /v1/auth/* plus formal pairing/ticket-issuance endpoints, but most remaining /v1 and all /ws still stop at SQLite-specific store blockers"
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/health/live",
+      "probe_path": "/health/live",
+      "surface": "platform",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "probe_path": "/health/ready",
+      "surface": "platform",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/health/info",
+      "probe_path": "/health/info",
+      "surface": "platform",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "probe_path": "/metrics",
+      "surface": "platform",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/ws/client",
+      "probe_path": "/ws/client",
+      "surface": "client_gateway",
+      "auth": "realtime_ticket"
+    },
+    {
+      "method": "GET",
+      "path": "/ws/host",
+      "probe_path": "/ws/host",
+      "surface": "host_gateway",
+      "auth": "realtime_ticket"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/approvals/respond",
+      "probe_path": "/v1/approvals/respond",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agent-sessions/list",
+      "probe_path": "/v1/agent-sessions/list",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agent-sessions/read-turns",
+      "probe_path": "/v1/agent-sessions/read-turns",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/register",
+      "probe_path": "/v1/auth/register",
+      "surface": "account_api",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/login",
+      "probe_path": "/v1/auth/login",
+      "surface": "account_api",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/refresh",
+      "probe_path": "/v1/auth/refresh",
+      "surface": "account_api",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/logout",
+      "probe_path": "/v1/auth/logout",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/change-password",
+      "probe_path": "/v1/auth/change-password",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host/bootstrap/nonce",
+      "probe_path": "/v1/host/bootstrap/nonce",
+      "surface": "host_api",
+      "auth": "host_bootstrap"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host/pairing/request-code",
+      "probe_path": "/v1/host/pairing/request-code",
+      "surface": "host_api",
+      "auth": "host_bootstrap"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host/pairing/redeem",
+      "probe_path": "/v1/host/pairing/redeem",
+      "surface": "host_api",
+      "auth": "host_bootstrap"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host/installations/self",
+      "probe_path": "/v1/host/installations/self",
+      "surface": "host_api",
+      "auth": "host_installation"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host/realtime/ws-ticket",
+      "probe_path": "/v1/host/realtime/ws-ticket",
+      "surface": "host_api",
+      "auth": "host_installation"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/pairing/confirm",
+      "probe_path": "/v1/pairing/confirm",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/pairing/revoke",
+      "probe_path": "/v1/pairing/revoke",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/pairing/list-hosts",
+      "probe_path": "/v1/pairing/list-hosts",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/pairings/:host_device_id",
+      "probe_path": "/v1/pairings/00000000-0000-0000-0000-000000000001",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects",
+      "probe_path": "/v1/projects",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/create",
+      "probe_path": "/v1/projects/create",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/query",
+      "probe_path": "/v1/projects/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/list",
+      "probe_path": "/v1/projects/list",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/update",
+      "probe_path": "/v1/projects/update",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/rename",
+      "probe_path": "/v1/projects/rename",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/delete",
+      "probe_path": "/v1/projects/delete",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/projects/:project_id",
+      "probe_path": "/v1/projects/proj_probe",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/link-conversation",
+      "probe_path": "/v1/projects/link-conversation",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/conversations/link",
+      "probe_path": "/v1/projects/conversations/link",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/agent-sessions/link",
+      "probe_path": "/v1/projects/agent-sessions/link",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/agent-sessions/query",
+      "probe_path": "/v1/projects/agent-sessions/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/realtime/ws-ticket",
+      "probe_path": "/v1/realtime/ws-ticket",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/profile/query",
+      "probe_path": "/v1/me/profile/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/profile/minos-id",
+      "probe_path": "/v1/me/profile/minos-id",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/profile/display-name",
+      "probe_path": "/v1/me/profile/display-name",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/users/search/query",
+      "probe_path": "/v1/users/search/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/friends/query",
+      "probe_path": "/v1/friends/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/friend-requests",
+      "probe_path": "/v1/friend-requests",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/friend-requests/query",
+      "probe_path": "/v1/friend-requests/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/friend-requests/:request_id/accept",
+      "probe_path": "/v1/friend-requests/request_probe/accept",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/friend-requests/:request_id/reject",
+      "probe_path": "/v1/friend-requests/request_probe/reject",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/query",
+      "probe_path": "/v1/conversations/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/list",
+      "probe_path": "/v1/conversations/list",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/direct",
+      "probe_path": "/v1/conversations/direct",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/group",
+      "probe_path": "/v1/conversations/group",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/members/query",
+      "probe_path": "/v1/conversations/conv_probe/members/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/read",
+      "probe_path": "/v1/conversations/conv_probe/read",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/messages",
+      "probe_path": "/v1/conversations/conv_probe/messages",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/send-message",
+      "probe_path": "/v1/conversations/send-message",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/messages/query",
+      "probe_path": "/v1/conversations/conv_probe/messages/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/messages/:message_id/recall",
+      "probe_path": "/v1/conversations/conv_probe/messages/msg_probe/recall",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agents",
+      "probe_path": "/v1/agents",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agents/query",
+      "probe_path": "/v1/agents/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agents/:agent_id/delete",
+      "probe_path": "/v1/agents/agent_probe/delete",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/members/add",
+      "probe_path": "/v1/conversations/conv_probe/members/add",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/agents",
+      "probe_path": "/v1/conversations/conv_probe/agents",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/agents/add",
+      "probe_path": "/v1/conversations/conv_probe/agents/add",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/agents/remove",
+      "probe_path": "/v1/conversations/conv_probe/agents/remove",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/agents/message",
+      "probe_path": "/v1/conversations/conv_probe/agents/message",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads",
+      "probe_path": "/v1/threads",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/query",
+      "probe_path": "/v1/threads/query",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/:thread_id/events",
+      "probe_path": "/v1/threads/thread_probe/events",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/read",
+      "probe_path": "/v1/threads/read",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/:thread_id/last_seq",
+      "probe_path": "/v1/threads/thread_probe/last_seq",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/last-seq",
+      "probe_path": "/v1/threads/last-seq",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    }
+  ]
+}

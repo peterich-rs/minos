@@ -14,6 +14,7 @@ use tempfile::TempDir;
 use tokio::runtime::Builder;
 use tokio::sync::broadcast::error::RecvError;
 
+mod backend_platform_schemas;
 mod gen_codex;
 mod lint_naming;
 
@@ -57,6 +58,12 @@ enum Cmd {
     /// Regenerate `crates/minos-codex-protocol/src/generated/{types,methods}.rs`
     /// from the JSON schemas in `/schemas`. Run after editing `/schemas`.
     GenCodexProtocol,
+    /// Generate the backend platform artifacts (runtime contract, OpenAPI,
+    /// and websocket schema), or verify they are up to date with `--check`.
+    GenBackendPlatformContract {
+        #[arg(long)]
+        check: bool,
+    },
     /// Scan protocol/FFI/HTTP/SQL surfaces for `mac_*` / `ios_*` identifiers
     /// (Phase B naming-sweep guard). Fails if any are found.
     LintNaming,
@@ -76,6 +83,9 @@ fn main() -> Result<()> {
         Cmd::BackendDbReset => backend_db_reset(),
         Cmd::BackendRun => backend_run(),
         Cmd::GenCodexProtocol => gen_codex::run(&workspace_root()?),
+        Cmd::GenBackendPlatformContract { check } => {
+            backend_platform_schemas::generate(&workspace_root()?, check)
+        }
         Cmd::LintNaming => lint_naming::run(&workspace_root()?),
     }
 }
@@ -179,6 +189,9 @@ fn check_all(with_codex: bool) -> Result<()> {
     flutter_leg(&workspace_root)?;
 
     frb_drift_guard(&workspace_root)?;
+
+    eprintln!("==> backend platform schema drift");
+    backend_platform_schemas::generate(&workspace_root, true)?;
 
     if with_codex {
         codex_smoke_leg()?;

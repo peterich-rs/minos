@@ -11,7 +11,9 @@ anyhow = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 fs2 = "0.4"
 minos-agent-runtime = { path = "../crates/minos-agent-runtime", version = "0.1.0" }
+minos-backend = { path = "../crates/minos-backend", version = "0.1.0" }
 minos-domain = { path = "../crates/minos-domain", version = "0.1.0" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
