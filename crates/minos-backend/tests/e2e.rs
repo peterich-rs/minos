@@ -9,15 +9,16 @@
 //!
 //! # Test layout
 //!
-//! 1. `e2e_reconnect_with_wrong_secret_returns_401` — a device row exists
-//!    with a known secret hash; reconnecting with a bogus secret is rejected
-//!    pre-upgrade with HTTP 401 (see `src/http/ws_devices.rs` module
-//!    header).
-//! 2. `e2e_reconnect_supersedes_old_socket` — a second authenticated socket
-//!    for the same `DeviceId` actively revokes the first, and the
-//!    replacement keeps serving traffic (verified by sending a `Forward`
-//!    frame and receiving a synthesised peer-offline `Forwarded` reply).
-//! 3. `e2e_presence_tracks_live_peer_membership` — paired devices observe
+//! 1. `e2e_reconnect_with_invalid_ticket_returns_401` — the formal gateway
+//!    rejects a malformed ticket pre-upgrade with HTTP 401.
+//! 2. `e2e_reconnect_supersedes_old_socket_records_close_reason_metric` — a
+//!    second authenticated socket for the same `DeviceId` actively revokes
+//!    the first, and the replacement keeps serving traffic while `/metrics`
+//!    records `reason="session_superseded"`.
+//! 3. `e2e_client_sent_server_frame_records_close_reason_metric` — a mobile
+//!    client sends a server-only envelope kind and the live runtime closes
+//!    the socket while `/metrics` records `reason="client_sent_server_frame"`.
+//! 4. `e2e_presence_tracks_live_peer_membership` — paired devices observe
 //!    `Event::PeerOnline` / `Event::PeerOffline` on each other's connect
 //!    and disconnect.
 
@@ -27,7 +28,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
-    auth::jwt,
+    auth::use_case::AuthUseCase,
     http::{router, BackendState},
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
@@ -39,7 +40,7 @@ use sqlx::SqlitePool;
 use tempfile::NamedTempFile;
 use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
 use tokio_tungstenite::{
-    tungstenite::{client::ClientRequestBuilder, http::Uri, protocol::Message, Error as WsError},
+    tungstenite::{http::Uri, protocol::Message, Error as WsError},
     MaybeTlsStream, WebSocketStream,
 };
 
@@ -58,6 +59,7 @@ type WsClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
 struct Relay {
     addr: SocketAddr,
     pool: SqlitePool,
+    auth: Arc<AuthUseCase>,
     _db_file: NamedTempFile,
     _db_path: PathBuf,
     task: JoinHandle<()>,
@@ -75,25 +77,17 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
     let registry = Arc::new(SessionRegistry::new());
-    let approval_relay =
-        minos_backend::approval_relay::ApprovalRelay::new(pool.clone(), Arc::clone(&registry));
-
-    let state = BackendState {
+    let mut state = BackendState::new(
         registry,
-        pairing: Arc::new(PairingService::new(pool.clone())),
-        store: pool.clone(),
-        token_ttl: DEFAULT_TOKEN_TTL,
-        translators: minos_backend::ingest::translate::ThreadTranslators::new(),
-        approval_relay,
-        jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
-        auth_login_per_email: minos_backend::http::default_login_per_email(),
-        auth_login_per_ip: minos_backend::http::default_login_per_ip(),
-        auth_register_per_ip: minos_backend::http::default_register_per_ip(),
-        auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
-        cors_origins: None,
-        instance_id: "e2e-instance".to_string(),
-        version: "e2e-test",
-    };
+        Arc::new(PairingService::new(pool.clone())),
+        pool.clone(),
+        DEFAULT_TOKEN_TTL,
+        TEST_JWT_SECRET.to_string(),
+        None,
+        "e2e-instance".to_string(),
+    );
+    state.version = "e2e-test";
+    let auth = Arc::clone(&state.auth);
     let app = router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -105,6 +99,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     Ok(Relay {
         addr,
         pool,
+        auth,
         _db_file: tmp,
         _db_path: tmp_path,
         task,
@@ -113,50 +108,57 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
 
 // ── client helpers ───────────────────────────────────────────────────────
 
+fn gateway_path_for_role(role: DeviceRole) -> &'static str {
+    if role.is_account_client() {
+        "/ws/client"
+    } else {
+        assert_eq!(role, DeviceRole::AgentHost, "unsupported gateway role");
+        "/ws/host"
+    }
+}
+
+async fn issue_client_ws_ticket(
+    relay: &Relay,
+    account_id: &str,
+    device_id: DeviceId,
+    role: DeviceRole,
+) -> anyhow::Result<String> {
+    Ok(relay
+        .auth
+        .issue_ws_ticket(account_id, device_id, role)
+        .await
+        .map_err(|error| anyhow::anyhow!("issue_ws_ticket failed: {error:?}"))?
+        .ticket)
+}
+
+fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
+    Ok(relay
+        .auth
+        .issue_host_ws_ticket(host_id)
+        .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
+        .ticket)
+}
+
 async fn connect_client(
     relay: &Relay,
     device_id: DeviceId,
     role: DeviceRole,
-    secret: Option<&str>,
-    name: Option<&str>,
-) -> Result<WsClient, WsError> {
-    // Phase 2 Task 2.2: iOS upgrades require a bearer JWT. The e2e tests
-    // pre-date the account model so they don't have a "real" account to
-    // log in as — synthesise a token bound to the same `device_id` here so
-    // the existing scenarios still exercise the post-upgrade behaviour.
-    let token = (role == DeviceRole::MobileClient).then(|| {
-        jwt::sign(
-            TEST_JWT_SECRET.as_bytes(),
-            "e2e-acct",
-            &device_id.to_string(),
-        )
-        .expect("test bearer signs cleanly")
-    });
-    connect_client_with_bearer(relay, device_id, role, secret, name, token.as_deref()).await
-}
-
-async fn connect_client_with_bearer(
-    relay: &Relay,
-    device_id: DeviceId,
-    role: DeviceRole,
-    secret: Option<&str>,
-    name: Option<&str>,
-    bearer: Option<&str>,
-) -> Result<WsClient, WsError> {
-    let url: Uri = format!("ws://{}/devices", relay.addr).parse().unwrap();
-    let mut builder = ClientRequestBuilder::new(url)
-        .with_header("X-Device-Id", device_id.to_string())
-        .with_header("X-Device-Role", role.to_string());
-    if let Some(s) = secret {
-        builder = builder.with_header("X-Device-Secret", s.to_string());
-    }
-    if let Some(n) = name {
-        builder = builder.with_header("X-Device-Name", n.to_string());
-    }
-    if let Some(t) = bearer {
-        builder = builder.with_header("Authorization", format!("Bearer {t}"));
-    }
-    let (ws, _resp) = tokio_tungstenite::connect_async(builder).await?;
+    account_id: Option<&str>,
+) -> anyhow::Result<WsClient> {
+    let ticket = if role.is_account_client() {
+        let acct = account_id.expect("account client connect requires an account_id");
+        issue_client_ws_ticket(relay, acct, device_id, role).await?
+    } else {
+        issue_host_ws_ticket(relay, device_id)?
+    };
+    let url: Uri = format!(
+        "ws://{}{}?ticket={ticket}",
+        relay.addr,
+        gateway_path_for_role(role)
+    )
+    .parse()
+    .unwrap();
+    let (ws, _resp) = tokio_tungstenite::connect_async(url.to_string()).await?;
     Ok(ws)
 }
 
@@ -225,33 +227,85 @@ async fn expect_unpaired_event(ws: &mut WsClient) -> anyhow::Result<()> {
     }
 }
 
+struct Response {
+    status: u16,
+    body: String,
+}
+
+async fn reqwest_style_get(url: &str) -> Response {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let url = url::Url::parse(url).unwrap();
+    let host = url.host_str().unwrap();
+    let port = url.port().unwrap();
+    let path = url.path();
+
+    let mut stream = tokio::net::TcpStream::connect((host, port)).await.unwrap();
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.unwrap();
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await.unwrap();
+    let text = String::from_utf8_lossy(&buf).into_owned();
+
+    let mut lines = text.split("\r\n");
+    let status_line = lines.next().unwrap_or("");
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let body = text.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    Response {
+        status,
+        body: body.to_string(),
+    }
+}
+
+async fn assert_metrics_contains(
+    relay: &Relay,
+    metric: &str,
+    labels: &[(&str, &str)],
+) -> anyhow::Result<()> {
+    let response = reqwest_style_get(&format!("http://{}/metrics", relay.addr)).await;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "expected /metrics to return 200, got {} with body {:?}",
+            response.status,
+            response.body
+        ));
+    }
+
+    let found = response.body.lines().any(|line| {
+        line.starts_with(metric)
+            && labels
+                .iter()
+                .all(|(name, value)| line.contains(&format!("{name}=\"{value}\"")))
+    });
+    if found {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "missing metric {metric} with labels {:?} in /metrics body:\n{}",
+            labels,
+            response.body
+        ))
+    }
+}
+
 // ── tests ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn e2e_reconnect_with_wrong_secret_returns_401() -> anyhow::Result<()> {
-    // Spec §10.3 reserves WS close 4401 for auth failure, but step 9
-    // rejects bad creds PRE-UPGRADE with HTTP 401 to avoid a wasted WS
-    // round trip (see `src/http/ws_devices.rs` module header). That's the
-    // semantically-equivalent contract this test asserts.
+async fn e2e_reconnect_with_invalid_ticket_returns_401() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    // Seed a device row with a known secret hash (bypass the first-connect
-    // flow — we want the reconnect path where a hash is already on file).
-    let id = DeviceId::new();
-    let good = DeviceSecret::generate();
-    let good_hash = hash_secret(&good)?;
-    store::devices::insert_device(&relay.pool, id, "seeded", DeviceRole::MobileClient, 0).await?;
-    store::devices::upsert_secret_hash(&relay.pool, id, &good_hash).await?;
-
-    let err = connect_client(
-        &relay,
-        id,
-        DeviceRole::MobileClient,
-        Some("definitely-not-the-right-secret"),
-        None,
-    )
-    .await
-    .expect_err("wrong secret must be rejected at handshake");
+    let url: Uri = format!("ws://{}/ws/client?ticket=not-a-ticket", relay.addr)
+        .parse()
+        .unwrap();
+    let err = tokio_tungstenite::connect_async(url.to_string())
+        .await
+        .expect_err("invalid ticket must be rejected at handshake");
 
     match err {
         WsError::Http(resp) => assert_eq!(resp.status().as_u16(), 401, "expected HTTP 401"),
@@ -262,36 +316,28 @@ async fn e2e_reconnect_with_wrong_secret_returns_401() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
+async fn e2e_reconnect_supersedes_old_socket_records_close_reason_metric() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    let id = DeviceId::new();
-    let secret = DeviceSecret::generate();
-    let secret_hash = hash_secret(&secret)?;
-    store::devices::insert_device(&relay.pool, id, "ios", DeviceRole::MobileClient, 0).await?;
-    store::devices::upsert_secret_hash(&relay.pool, id, &secret_hash).await?;
+    let account_id = store::accounts::create(&relay.pool, "reconnect-e2e@example.com", "phc")
+        .await?
+        .account_id;
+    let id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
 
-    let mut first = connect_client(
-        &relay,
-        id,
-        DeviceRole::MobileClient,
-        Some(secret.as_str()),
-        Some("ios"),
-    )
-    .await?;
+    let mut first = connect_client(&relay, id, DeviceRole::MobileClient, Some(&account_id)).await?;
     expect_unpaired_event(&mut first).await?;
 
-    let mut second = connect_client(
-        &relay,
-        id,
-        DeviceRole::MobileClient,
-        Some(secret.as_str()),
-        Some("ios"),
-    )
-    .await?;
+    let mut second =
+        connect_client(&relay, id, DeviceRole::MobileClient, Some(&account_id)).await?;
     expect_unpaired_event(&mut second).await?;
 
     expect_close_frame(&mut first).await?;
+    assert_metrics_contains(
+        &relay,
+        "minos_backend_ws_close_total",
+        &[("role", "mobile-client"), ("reason", "session_superseded")],
+    )
+    .await?;
 
     // Confirm the replacement socket is still alive by sending a `Forward`
     // frame from the unpaired session and asserting the relay synthesises
@@ -301,7 +347,7 @@ async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
         "method": "list_clis",
         "id": 7,
     });
-    // The iOS session has account_id "e2e-acct" from the bearer; no Mac is
+    // The iOS session has a real account_id from the formal ticket; no Mac is
     // paired to that account, so the Forward's iOS→Mac path will fail the
     // `account_host_pairings::exists` gate and the relay should synthesise a
     // peer_offline error back to the same socket. We use a fresh DeviceId
@@ -333,6 +379,46 @@ async fn e2e_reconnect_supersedes_old_socket() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn e2e_client_sent_server_frame_records_close_reason_metric() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+
+    let account_id = store::accounts::create(&relay.pool, "server-frame@example.com", "phc")
+        .await?
+        .account_id;
+    let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
+    let mut ws = connect_client(
+        &relay,
+        phone_id,
+        DeviceRole::MobileClient,
+        Some(&account_id),
+    )
+    .await?;
+    expect_unpaired_event(&mut ws).await?;
+
+    send_envelope(
+        &mut ws,
+        &Envelope::Event {
+            version: 1,
+            event: EventKind::Unpaired,
+        },
+    )
+    .await?;
+
+    expect_close_frame(&mut ws).await?;
+    assert_metrics_contains(
+        &relay,
+        "minos_backend_ws_close_total",
+        &[
+            ("role", "mobile-client"),
+            ("reason", "client_sent_server_frame"),
+        ],
+    )
+    .await?;
+
+    Ok(())
+}
+
 // ADR-0020 / Phase G: single-peer presence tracking
 // (`PeerOnline`/`PeerOffline` on connect/disconnect) was deleted with the
 // device-keyed pairings module. The activate hook now always emits
@@ -344,33 +430,21 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     let mac_id = DeviceId::new();
-    let ios_id = DeviceId::new();
     let mac_secret = DeviceSecret::generate();
-    let ios_secret = DeviceSecret::generate();
     let mac_hash = hash_secret(&mac_secret)?;
-    let ios_hash = hash_secret(&ios_secret)?;
 
     store::devices::insert_device(&relay.pool, mac_id, "mac", DeviceRole::AgentHost, 0).await?;
-    store::devices::insert_device(&relay.pool, ios_id, "ios", DeviceRole::MobileClient, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, mac_id, &mac_hash).await?;
-    store::devices::upsert_secret_hash(&relay.pool, ios_id, &ios_hash).await?;
     // ADR-0020: insert via account_host_pairings instead of legacy device-keyed
     // pairings. The body of this test still asserts presence semantics that
     // were removed in Phase G; #[ignore]'d at the test attribute.
     let account_id = store::accounts::create(&relay.pool, "presence@example.com", "phc")
         .await?
         .account_id;
-    store::devices::set_account_id(&relay.pool, &ios_id, &account_id).await?;
+    let ios_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
     store::account_host_pairings::insert_pair(&relay.pool, mac_id, &account_id, ios_id, 0).await?;
 
-    let mut host = connect_client(
-        &relay,
-        mac_id,
-        DeviceRole::AgentHost,
-        Some(mac_secret.as_str()),
-        Some("mac"),
-    )
-    .await?;
+    let mut host = connect_client(&relay, mac_id, DeviceRole::AgentHost, None).await?;
     match recv_envelope(&mut host).await? {
         Envelope::Event {
             event: EventKind::PeerOffline { peer_device_id },
@@ -379,14 +453,8 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
         other => panic!("expected initial PeerOffline on host, got {other:?}"),
     }
 
-    let mut ios = connect_client(
-        &relay,
-        ios_id,
-        DeviceRole::MobileClient,
-        Some(ios_secret.as_str()),
-        Some("ios"),
-    )
-    .await?;
+    let mut ios =
+        connect_client(&relay, ios_id, DeviceRole::MobileClient, Some(&account_id)).await?;
     match recv_envelope(&mut ios).await? {
         Envelope::Event {
             event: EventKind::PeerOnline { peer_device_id },

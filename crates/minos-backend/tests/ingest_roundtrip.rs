@@ -3,17 +3,15 @@
 //! `Envelope::Event { UiEventMessage }`.
 //!
 //! The test pre-seeds a paired (agent-host, ios-client) pair directly in the
-//! DB with known `DeviceSecret`s so we skip the full pairing dance. It then
-//! opens two live WS connections and drives one ingest frame through the
-//! backend.
+//! DB so we skip the full pairing dance. It then opens two live formal WS
+//! gateway connections and drives one ingest frame through the backend.
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
-    auth::jwt,
+    auth::use_case::AuthUseCase,
     http::{router, BackendState},
-    ingest::translate::ThreadTranslators,
     pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
     store,
@@ -25,11 +23,10 @@ use sqlx::SqlitePool;
 use tempfile::NamedTempFile;
 use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
 use tokio_tungstenite::{
-    tungstenite::{client::ClientRequestBuilder, http::Uri, protocol::Message, Error as WsError},
+    tungstenite::{http::Uri, protocol::Message},
     MaybeTlsStream, WebSocketStream,
 };
 
-/// Fixed JWT secret used by the test relay; mirrors `test_support::TEST_JWT_SECRET`.
 const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
@@ -39,6 +36,7 @@ type WsClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
 struct Relay {
     addr: SocketAddr,
     pool: SqlitePool,
+    auth: Arc<AuthUseCase>,
     _db_file: NamedTempFile,
     _db_path: PathBuf,
     task: JoinHandle<()>,
@@ -56,25 +54,17 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
     let registry = Arc::new(SessionRegistry::new());
-    let approval_relay =
-        minos_backend::approval_relay::ApprovalRelay::new(pool.clone(), Arc::clone(&registry));
-
-    let state = BackendState {
+    let mut state = BackendState::new(
         registry,
-        pairing: Arc::new(PairingService::new(pool.clone())),
-        store: pool.clone(),
-        token_ttl: Duration::from_mins(5),
-        translators: ThreadTranslators::new(),
-        approval_relay,
-        jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
-        auth_login_per_email: minos_backend::http::default_login_per_email(),
-        auth_login_per_ip: minos_backend::http::default_login_per_ip(),
-        auth_register_per_ip: minos_backend::http::default_register_per_ip(),
-        auth_refresh_per_acc: minos_backend::http::default_refresh_per_acc(),
-        cors_origins: None,
-        instance_id: "ingest-roundtrip-instance".to_string(),
-        version: "ingest-roundtrip-test",
-    };
+        Arc::new(PairingService::new(pool.clone())),
+        pool.clone(),
+        Duration::from_mins(5),
+        TEST_JWT_SECRET.to_string(),
+        None,
+        "ingest-roundtrip-instance".to_string(),
+    );
+    state.version = "ingest-roundtrip-test";
+    let auth = Arc::clone(&state.auth);
     let app = router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -86,40 +76,64 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     Ok(Relay {
         addr,
         pool,
+        auth,
         _db_file: tmp,
         _db_path: tmp_path,
         task,
     })
 }
 
+fn gateway_path_for_role(role: DeviceRole) -> &'static str {
+    if role.is_account_client() {
+        "/ws/client"
+    } else {
+        assert_eq!(role, DeviceRole::AgentHost, "unsupported gateway role");
+        "/ws/host"
+    }
+}
+
+async fn issue_client_ws_ticket(
+    relay: &Relay,
+    account_id: &str,
+    device_id: DeviceId,
+    role: DeviceRole,
+) -> anyhow::Result<String> {
+    Ok(relay
+        .auth
+        .issue_ws_ticket(account_id, device_id, role)
+        .await
+        .map_err(|error| anyhow::anyhow!("issue_ws_ticket failed: {error:?}"))?
+        .ticket)
+}
+
+fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
+    Ok(relay
+        .auth
+        .issue_host_ws_ticket(host_id)
+        .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
+        .ticket)
+}
+
 async fn connect_client(
     relay: &Relay,
     device_id: DeviceId,
     role: DeviceRole,
-    secret: Option<&str>,
-    name: Option<&str>,
     account_id: Option<&str>,
-) -> Result<WsClient, WsError> {
-    let url: Uri = format!("ws://{}/devices", relay.addr).parse().unwrap();
-    let mut builder = ClientRequestBuilder::new(url)
-        .with_header("X-Device-Id", device_id.to_string())
-        .with_header("X-Device-Role", role.to_string());
-    if let Some(s) = secret {
-        builder = builder.with_header("X-Device-Secret", s.to_string());
-    }
-    if let Some(n) = name {
-        builder = builder.with_header("X-Device-Name", n.to_string());
-    }
-    // Phase 2 Task 2.2 / ADR-0020: iOS upgrades require a bearer JWT bound
-    // to the same `X-Device-Id`. The bearer also seeds `session.account_id`
-    // which the new account_host_pairings fan-out path keys on.
-    if role == DeviceRole::MobileClient {
-        let acct = account_id.expect("iOS connect requires a real account_id");
-        let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), acct, &device_id.to_string())
-            .expect("test bearer signs cleanly");
-        builder = builder.with_header("Authorization", format!("Bearer {token}"));
-    }
-    let (ws, _resp) = tokio_tungstenite::connect_async(builder).await?;
+) -> anyhow::Result<WsClient> {
+    let ticket = if role.is_account_client() {
+        let acct = account_id.expect("account client connect requires an account_id");
+        issue_client_ws_ticket(relay, acct, device_id, role).await?
+    } else {
+        issue_host_ws_ticket(relay, device_id)?
+    };
+    let url: Uri = format!(
+        "ws://{}{}?ticket={ticket}",
+        relay.addr,
+        gateway_path_for_role(role)
+    )
+    .parse()
+    .unwrap();
+    let (ws, _resp) = tokio_tungstenite::connect_async(url.to_string()).await?;
     Ok(ws)
 }
 
@@ -207,8 +221,6 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
         &relay,
         phone_id,
         DeviceRole::MobileClient,
-        None,
-        Some("phone"),
         Some(&account_id),
     )
     .await?;
@@ -218,15 +230,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
     // multi-host presence).
     let _initial_presence = recv_envelope(&mut phone).await?;
 
-    let mut host = connect_client(
-        &relay,
-        host_id,
-        DeviceRole::AgentHost,
-        Some(host_secret.as_str()),
-        Some("mac"),
-        None,
-    )
-    .await?;
+    let mut host = connect_client(&relay, host_id, DeviceRole::AgentHost, None).await?;
     // Host also gets the initial Unpaired frame — drain it.
     let _ = recv_envelope(&mut host).await?;
 
@@ -288,15 +292,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
     store::devices::insert_device(&relay.pool, host_id, "mac", DeviceRole::AgentHost, 0).await?;
     store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
 
-    let mut host = connect_client(
-        &relay,
-        host_id,
-        DeviceRole::AgentHost,
-        Some(host_secret.as_str()),
-        Some("mac"),
-        None,
-    )
-    .await?;
+    let mut host = connect_client(&relay, host_id, DeviceRole::AgentHost, None).await?;
     // Drain Unpaired presence frame.
     let _ = recv_envelope(&mut host).await?;
 
@@ -345,22 +341,12 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
         &relay,
         phone_id,
         DeviceRole::MobileClient,
-        None,
-        Some("phone"),
         Some(&account_id),
     )
     .await?;
     let _ = recv_envelope(&mut phone).await?;
 
-    let mut host = connect_client(
-        &relay,
-        host_id,
-        DeviceRole::AgentHost,
-        Some(host_secret.as_str()),
-        Some("mac"),
-        None,
-    )
-    .await?;
+    let mut host = connect_client(&relay, host_id, DeviceRole::AgentHost, None).await?;
     let _ = recv_envelope(&mut host).await?;
 
     let prompt = "Explain why the mobile pair contract broke and how to fix it cleanly";

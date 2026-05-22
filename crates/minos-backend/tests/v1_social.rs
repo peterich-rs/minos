@@ -3,9 +3,12 @@ use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
 use minos_backend::session::SessionHandle;
-use minos_backend::store::{account_host_pairings, devices, raw_events, social, threads};
+use minos_backend::store::{
+    account_host_pairings, devices, host_commands, raw_events, social, threads,
+};
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::{AgentDispatchRequest, Envelope};
+use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,6 +92,7 @@ fn seed_live_host_session(
 
 fn spawn_agent_dispatch_responder(
     registry: Arc<minos_backend::session::SessionRegistry>,
+    pool: sqlx::SqlitePool,
     host_device_id: DeviceId,
     mut host_rx: tokio::sync::mpsc::Receiver<Envelope>,
     response_session_id: &str,
@@ -106,20 +110,69 @@ fn spawn_agent_dispatch_responder(
         let request: AgentDispatchRequest =
             serde_json::from_value(payload["params"].clone()).expect("dispatch params decode");
 
-        registry
-            .route(
-                host_device_id,
-                from,
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": payload["id"].clone(),
-                    "result": { "session_id": response_session_id }
-                }),
-            )
-            .await
-            .expect("host rpc response routes back to requester");
+        let host = registry
+            .get(host_device_id)
+            .expect("host session should remain registered");
+        let handled = minos_backend::envelope::handle_forward(
+            &host,
+            &registry,
+            &pool,
+            from,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": payload["id"].clone(),
+                "result": { "session_id": response_session_id }
+            }),
+        )
+        .await;
+        assert!(
+            handled.is_none(),
+            "server-side rpc reply should not synthesize a frame"
+        );
         request
     })
+}
+
+async fn assert_agent_dispatch_host_command(
+    pool: &sqlx::SqlitePool,
+    host_device_id: DeviceId,
+    origin_message_id: &str,
+    expected_request_session_id: Option<&str>,
+    expected_response_session_id: &str,
+    expected_text: &str,
+    expected_conversation_id: &str,
+) {
+    let row = host_commands::get(pool, &format!("cmd-agent-dispatch-{origin_message_id}"))
+        .await
+        .unwrap()
+        .expect("host command should be recorded for agent dispatch");
+
+    assert_eq!(row.host_installation_id, host_device_id);
+    assert_eq!(row.method, "minos_agent_dispatch");
+    assert_eq!(row.agent_session_id.as_deref(), expected_request_session_id);
+    assert_eq!(row.status, host_commands::HostCommandStatus::Succeeded);
+    assert_eq!(
+        row.response_json,
+        Some(serde_json::json!({ "session_id": expected_response_session_id }))
+    );
+
+    let mut expected_params = serde_json::Map::from_iter([
+        ("agent".to_string(), serde_json::json!("codex")),
+        ("text".to_string(), serde_json::json!(expected_text)),
+        ("workspace".to_string(), serde_json::json!("")),
+        (
+            "conversation_id".to_string(),
+            serde_json::json!(expected_conversation_id),
+        ),
+        (
+            "origin_message_id".to_string(),
+            serde_json::json!(origin_message_id),
+        ),
+    ]);
+    if let Some(session_id) = expected_request_session_id {
+        expected_params.insert("session_id".to_string(), serde_json::json!(session_id));
+    }
+    assert_eq!(row.params_json, serde_json::Value::Object(expected_params));
 }
 
 async fn wait_for_message_count(
@@ -318,6 +371,70 @@ async fn social_friend_and_chat_flow_round_trips() {
 }
 
 #[tokio::test]
+async fn conversation_command_aliases_list_and_send_message() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Alias Conversation",
+        &[],
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/list",
+            alice_device,
+            &alice.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["conversations"][0]["conversation_id"],
+        conversation.conversation_id
+    );
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/send-message",
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "conversation_id": conversation.conversation_id,
+                    "text": "hello via command route",
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["text"], "hello via command route");
+
+    let rows = social::list_messages(&state.store, &conversation.conversation_id, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text, "hello via command route");
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     let state = backend_state().await;
@@ -365,6 +482,10 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
 
     let dispatch = spawn_agent_dispatch_responder(
         Arc::clone(&state.registry),
+        state
+            .store
+            .sqlite_pool_cloned()
+            .expect("social dispatch tests run only against sqlite test state"),
         host_device_id,
         host_rx,
         "sess-group-1",
@@ -411,6 +532,16 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
             .as_deref(),
         Some("sess-group-1")
     );
+    assert_agent_dispatch_host_command(
+        &state.store,
+        host_device_id,
+        &user_message_id,
+        None,
+        "sess-group-1",
+        "please help",
+        &conversation.conversation_id,
+    )
+    .await;
 
     threads::upsert(
         &state.store,
@@ -529,6 +660,7 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
     .unwrap();
 
     let registry = Arc::clone(&state.registry);
+    let pool = state.store.clone();
     let host_task = tokio::spawn(async move {
         let mut requests = Vec::new();
         for session_id in ["sess-direct-1", "sess-direct-1"] {
@@ -542,18 +674,25 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
             assert_eq!(payload["method"], "minos_agent_dispatch");
             let request: AgentDispatchRequest =
                 serde_json::from_value(payload["params"].clone()).expect("dispatch params decode");
-            registry
-                .route(
-                    host_device_id,
-                    from,
-                    serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": payload["id"].clone(),
-                        "result": { "session_id": session_id }
-                    }),
-                )
-                .await
-                .expect("host rpc response routes back to requester");
+            let host = registry
+                .get(host_device_id)
+                .expect("host session should remain registered");
+            let handled = minos_backend::envelope::handle_forward(
+                &host,
+                &registry,
+                &pool,
+                from,
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": payload["id"].clone(),
+                    "result": { "session_id": session_id }
+                }),
+            )
+            .await;
+            assert!(
+                handled.is_none(),
+                "server-side rpc reply should not synthesize a frame"
+            );
             requests.push(request);
         }
         requests
@@ -631,6 +770,26 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
             .as_deref(),
         Some("sess-direct-1")
     );
+    assert_agent_dispatch_host_command(
+        &state.store,
+        host_device_id,
+        &first_user_message_id,
+        None,
+        "sess-direct-1",
+        "hello agent",
+        &conversation.conversation_id,
+    )
+    .await;
+    assert_agent_dispatch_host_command(
+        &state.store,
+        host_device_id,
+        &second_user_message_id,
+        Some("sess-direct-1"),
+        "sess-direct-1",
+        "follow up",
+        &conversation.conversation_id,
+    )
+    .await;
 
     let requests = host_task.await.unwrap();
     assert_eq!(requests.len(), 2);
@@ -706,6 +865,10 @@ async fn group_reply_to_agent_message_reuses_session() {
     // Step 1: Send initial @mention to create a session
     let dispatch = spawn_agent_dispatch_responder(
         Arc::clone(&state.registry),
+        state
+            .store
+            .sqlite_pool_cloned()
+            .expect("social dispatch tests run only against sqlite test state"),
         host_device_id,
         host_rx,
         "sess-group-reply-1",
@@ -771,6 +934,10 @@ async fn group_reply_to_agent_message_reuses_session() {
     let host_rx2 = seed_live_host_session(&state, host_device_id, &alice.account_id);
     let dispatch2 = spawn_agent_dispatch_responder(
         Arc::clone(&state.registry),
+        state
+            .store
+            .sqlite_pool_cloned()
+            .expect("social dispatch tests run only against sqlite test state"),
         host_device_id,
         host_rx2,
         "sess-group-reply-1",

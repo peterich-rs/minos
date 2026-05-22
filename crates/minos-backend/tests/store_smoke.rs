@@ -17,7 +17,15 @@ async fn connect_creates_tables_and_migrates() {
         "devices",
         "accounts",
         "account_host_pairings",
+        "agent_sessions",
+        "agent_turns",
+        "agent_turn_events",
         "pairing_tokens",
+        "pairing_codes",
+        "host_installation_tokens",
+        "host_commands",
+        "durable_event_log",
+        "outbox_events",
     ] {
         let row: Option<String> =
             sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
@@ -32,16 +40,22 @@ async fn connect_creates_tables_and_migrates() {
     // 0012 + 0013 ran cleanly. STRICT mode has no reflection API, but the
     // CHECK constraints embedded in STRICT rejections are exercised by
     // store submodule tests.
-    let idx: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_account_host_pairings_account'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-    assert!(
-        idx.is_some(),
-        "idx_account_host_pairings_account missing after migrate"
-    );
+    for index in [
+        "idx_account_host_pairings_account",
+        "idx_agent_sessions_conversation_status",
+        "idx_agent_turns_session_seq",
+        "idx_host_commands_host_status_deadline",
+        "idx_durable_event_log_topic_seq",
+        "idx_outbox_events_status_available",
+    ] {
+        let idx: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
+                .bind(index)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(idx.is_some(), "index {index} missing after migrate");
+    }
 }
 
 #[tokio::test]

@@ -68,7 +68,7 @@ async fn auth_register_returns_access_and_refresh_tokens() {
 }
 
 #[tokio::test]
-async fn auth_ws_ticket_returns_short_lived_browser_upgrade_token() {
+async fn auth_realtime_ws_ticket_returns_short_lived_browser_upgrade_token() {
     let state = backend_state().await;
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
@@ -87,24 +87,62 @@ async fn auth_ws_ticket_returns_short_lived_browser_upgrade_token() {
     let auth_hdr = format!("Bearer {access}");
     let (status, body) = post_json(
         &mut app,
-        "/v1/auth/ws-ticket",
-        &[
-            ("x-device-id", &device_id),
-            ("x-device-role", "browser-admin"),
-            ("authorization", &auth_hdr),
-        ],
-        json!({}),
+        "/v1/realtime/ws-ticket",
+        &[("authorization", &auth_hdr)],
+        json!({"installation_id": device_id.clone()}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
-    assert_eq!(body["device_id"], device_id);
-    assert_eq!(body["device_role"], "browser-admin");
-    assert_eq!(body["expires_in"], jwt::WS_TICKET_TTL_SECS);
-    let ticket = body["ticket"].as_str().unwrap();
+    assert!(body["data"]["expires_at_ms"].as_i64().unwrap() > 0);
+    let ticket = body["data"]["ticket"].as_str().unwrap();
+    assert_eq!(
+        body["data"]["gateway_url"],
+        format!("/ws/client?ticket={ticket}")
+    );
     let claims = jwt::verify_ws_ticket(TEST_JWT_SECRET.as_bytes(), ticket).unwrap();
     assert_eq!(claims.sub, account_id);
     assert_eq!(claims.did, device_id);
     assert_eq!(claims.role.to_string(), "browser-admin");
+}
+
+#[tokio::test]
+async fn auth_realtime_ws_ticket_rejects_cross_account_device_rebind() {
+    let state = backend_state().await;
+    let mut app = http::router(state);
+    let browser_device_id = uuid::Uuid::new_v4().to_string();
+    let second_device_id = uuid::Uuid::new_v4().to_string();
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/register",
+        &browser_headers(&browser_device_id),
+        json!({"email": "browser-a@example.com", "password": "testpass1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/register",
+        &ios_headers(&second_device_id),
+        json!({"email": "browser-b@example.com", "password": "testpass1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let account_b = body["account"]["account_id"].as_str().unwrap().to_string();
+
+    let cross_account_token =
+        jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_b, &browser_device_id).unwrap();
+    let auth_hdr = format!("Bearer {cross_account_token}");
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/realtime/ws-ticket",
+        &[("authorization", &auth_hdr)],
+        json!({"installation_id": browser_device_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body={body}");
+    assert_eq!(body["error"]["code"], "unauthorized");
 }
 
 #[tokio::test]
@@ -326,7 +364,7 @@ async fn auth_login_keeps_other_iphone_ws_sessions_for_same_account() {
         state.registry.get(device_a_id).is_some(),
         "device A's session must remain live after device B logs in",
     );
-    assert!(!*a_revoked.borrow(), "device A must not be revoked");
+    assert_eq!(*a_revoked.borrow(), None, "device A must not be revoked");
     assert!(
         rx_a.try_recv().is_err(),
         "device A should not receive a forced-close frame"
@@ -420,6 +458,64 @@ async fn auth_refresh_rotation_old_token_invalidated() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "invalid_refresh");
+}
+
+#[tokio::test]
+async fn auth_refresh_reuse_revokes_all_account_tokens_and_records_metric() {
+    let state = backend_state().await;
+    let mut app = http::router(state);
+    let device_a = uuid::Uuid::new_v4().to_string();
+    let device_b = uuid::Uuid::new_v4().to_string();
+
+    let (_, register_body) = post_json(
+        &mut app,
+        "/v1/auth/register",
+        &ios_headers(&device_a),
+        json!({"email": "reuse@example.com", "password": "testpass1"}),
+    )
+    .await;
+    let original_refresh = register_body["refresh_token"].as_str().unwrap().to_string();
+
+    let (_, login_body) = post_json(
+        &mut app,
+        "/v1/auth/login",
+        &ios_headers(&device_b),
+        json!({"email": "reuse@example.com", "password": "testpass1"}),
+    )
+    .await;
+    let device_b_refresh = login_body["refresh_token"].as_str().unwrap().to_string();
+
+    let (status, refresh_body) = post_json(
+        &mut app,
+        "/v1/auth/refresh",
+        &ios_headers(&device_a),
+        json!({"refresh_token": original_refresh}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={refresh_body}");
+
+    let (status, reuse_body) = post_json(
+        &mut app,
+        "/v1/auth/refresh",
+        &ios_headers(&device_a),
+        json!({"refresh_token": original_refresh}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body={reuse_body}");
+    assert_eq!(reuse_body["error"]["code"], "invalid_refresh");
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/refresh",
+        &ios_headers(&device_b),
+        json!({"refresh_token": device_b_refresh}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body={body}");
+    assert_eq!(body["error"]["code"], "invalid_refresh");
+
+    let metrics = minos_backend::telemetry::render();
+    assert!(metrics.contains("minos_backend_auth_refresh_reuse_total"));
 }
 
 #[tokio::test]
