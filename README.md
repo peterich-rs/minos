@@ -4,22 +4,15 @@ Native macOS status-bar app + Flutter mobile client + shared Rust core for remot
 
 ## Status
 
-Plans 01–04 are ready in-repo.
+Minos is moving from MVP delivery into formal development.
 
-- **Plan 02** — macOS MenuBarExtra app, UniFFI bridge, XcodeGen project spec, Swift logic tests, macOS CI lane.
-- **Plan 03** — Flutter iOS app under `apps/mobile/` with `flutter_rust_bridge` v2 bindings over `minos-mobile::MobileClient`, Riverpod-codegen state layer, `shadcn_ui` UI, `mobile_scanner` QR capture, Dart-side `mars-xlog` via `peterich-rs/xlog-rs`, and the pair-over-Tailscale pipeline. Tier A scope: iOS scans macOS QR → `pair` JSON-RPC → WebSocket connected. `cargo xtask check-all` covers Rust + Swift + Flutter legs with an frb codegen drift guard. Real-device smoke (MVP spec §8.4 items 1–5) is the last gate and is driven manually — see `docs/superpowers/plans/03-flutter-app-and-frb-pairing.md` §Phase F.
-- **Plan 04** — `codex app-server` loopback integration via `minos-agent-runtime`, daemon-side `subscribe_events` streaming plus `start_agent` / `send_user_message` / `stop_agent` RPCs, and a debug-build macOS menubar Agent segment for maintainer smoke testing.
-- **Plan 05** (this branch) — Mac app migrated from Tailscale P2P to the hosted `minos-relay` WSS client path. Tailscale code (`tailscale.rs`, `WsServer`, port-retry autobind) removed; backend URL is baked at compile time via `option_env!("MINOS_BACKEND_URL")`; connection state split into `RelayLinkState` + `PeerState` (two orthogonal axes); new dev bin `cargo run -p minos-mobile --bin fake-peer --features cli` supports end-to-end smoke without iOS.
-
-Tier B (list_clis in Dart, auto-reconnect, Keychain-backed pairing store, "Forget this Mac") lives in a future `ios-mvp-completion-design.md` spec.
+- Historical planning docs under `docs/superpowers/` have been retired.
+- The active backend architecture source of truth is `docs/backend-formal-development.md`.
+- Current shipped surfaces are the hosted Rust backend, the macOS host app / daemon, the Flutter mobile client, and the browser-admin web client.
 
 ## Roadmap
 
-The next P1 surface is the streaming chat UI and the mobile-side consumer for the landed agent RPC/event stream. Until that exists, the macOS app exposes debug-build-only menubar controls to start Codex, send a test ping, and stop the session locally.
-
-An additional web surface now lives under `apps/web/`: a standalone React/Vite browser-admin console that uses the same backend auth + `/devices` relay. Because browsers cannot attach the native clients' custom auth headers during WebSocket upgrade, the backend exposes a short-lived `ws-ticket` flow for the web console.
-
-See `docs/superpowers/specs/minos-architecture-and-mvp-design.md` for the overall product design, `docs/superpowers/specs/flutter-app-and-frb-pairing-design.md` for the iOS Tier A design, and `docs/superpowers/plans/` for execution plans.
+The next backend-facing work is to replace the remaining MVP runtime seams with the formal design in `docs/backend-formal-development.md`, while keeping the existing product scope: account auth, host pairing, agent sessions, approvals, conversations, and projects.
 
 ## Quick start (development)
 
@@ -154,8 +147,7 @@ Direct `flutter run`, `flutter build`, and Xcode IDE Build/Run now
 self-bootstrap the Rust FFI compile through `just` via Cargokit, so
 `.env.local` is still loaded before `option_env!` is evaluated. Prefer the
 public `just` recipes for normal work because they also run the project-level
-validation and documented build flags. See
-`docs/superpowers/specs/unified-config-pipeline-design.md` and ADR 0018.
+validation and documented build flags. See ADR 0018.
 
 During development without a real device: the Mac-side relay flow has a dev
 bin — see `just smoke-fake-peer register` (or `pair` / `smoke-session`),
@@ -163,7 +155,7 @@ which drives the relay end-to-end without an iPhone.
 
 ## Mobile login + agent session
 
-Plan 08 (`docs/superpowers/plans/08-mobile-auth-and-agent-session.md` + 08a/08b) introduced account-based login and the `start_agent` dispatch surface to the mobile client. End-to-end the flow is:
+The current account-based login + agent session flow is:
 
 1. **Register or log in** — the iOS client (or `fake-peer`) calls `POST /v1/auth/register` or `/v1/auth/login` against the backend, which returns an access + refresh token tuple plus an `account_id`.
 2. **Pair** — once authenticated, the iPhone scans the Mac's QR (v2 payload), POSTs `/v1/pairing/consume` with the bearer, and persists the freshly minted `DeviceSecret`. Same-device subsequent runs re-use the secret; switching accounts on a previously-paired device drops the pairing automatically (`MinosCore._onAuthLanded`).
@@ -197,9 +189,9 @@ compile instead of silently baking localhost.
 
 `minos-backend` requires `MINOS_JWT_SECRET` (32+ bytes) at startup;
 `just backend` enforces it before invoking cargo. See
-`docs/superpowers/specs/unified-config-pipeline-design.md` for the
-config pipeline design and `docs/adr/0018-just-config-pipeline.md` for
-the policy decision.
+`docs/backend-formal-development.md` for the backend runtime direction
+and `docs/adr/0018-just-config-pipeline.md` for the build-through-just
+policy.
 
 ### Dev smoke without an iPhone
 
@@ -252,7 +244,7 @@ crates/    Rust workspace (9 crates: domain, protocol, pairing, cli-detect,
 apps/      macOS (SwiftUI/UniFFI, XcodeGen-managed) and mobile (Flutter/frb)
           plus the standalone web admin client (React/Vite)
 xtask/     Build / codegen orchestration in Rust
-docs/      Specs (`docs/superpowers/specs/`) and ADRs (`docs/adr/`)
+docs/      Active architecture docs plus ADRs and operations runbooks
 ```
 
 ## License

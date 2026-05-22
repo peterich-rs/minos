@@ -46,10 +46,11 @@ jobs:
 
       - name: Install sqlx-cli
         # Needed for the offline-metadata freshness check below. Sqlite-only
-        # features keep the install lean; rust-cache persists the binary in
+        # plus postgres features keep the install aligned with the backend's
+        # real adapter set; rust-cache persists the binary in
         # `~/.cargo/bin` across runs, so the `cargo install` is a near-noop
         # on cache hits.
-        run: cargo install sqlx-cli --no-default-features --features sqlite --locked
+        run: cargo install sqlx-cli --no-default-features --features sqlite,postgres --locked
 
       - name: Verify sqlx offline metadata
         # Catches stale `.sqlx/` cache entries before they surface as opaque
@@ -60,6 +61,11 @@ jobs:
         # directory was committed in a297e28 (relay store CRUD).
         run: cargo sqlx prepare --check --workspace -- -p minos-backend --all-targets
 
+      - name: Verify backend platform schema drift
+        # The backend generator now emits the runtime contract plus OpenAPI and
+        # websocket schema artifacts from the same formal route/runtime inputs.
+        run: cargo xtask gen-backend-platform-contract --check
+
       - name: cargo xtask check-all
         # Single source of truth — same command developers run locally.
         # Includes: cargo fmt --check, cargo clippy --workspace -- -D warnings,
@@ -67,6 +73,12 @@ jobs:
         # frb-drift guard inside check-all both self-skip when fvm /
         # flutter_rust_bridge_codegen are absent, so this lane stays Rust-only.
         run: cargo xtask check-all
+
+      - name: cargo test -p minos-backend
+        # Keep the backend cutover pass on an explicit CI hook even though
+        # `check-all` already runs workspace tests. This makes backend-only
+        # regressions and route-contract failures obvious in the linux lane.
+        run: cargo test -p minos-backend
 
       - name: cargo build -p minos-daemon --bin minos-daemon
         # Explicit Linux build of the daemon CLI binary. `check-all` already
@@ -284,4 +296,4 @@ jobs:
 # to empty (gate the job with
 # `if: github.event.pull_request.head.repo.full_name == github.repository`).
 # Then sign + notarize + upload as before. Tracked in
-# `docs/superpowers/specs/unified-config-pipeline-design.md` §4.8.
+# ADR 0018 and README.md document the build-through-just requirement.
