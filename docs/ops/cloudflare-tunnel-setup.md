@@ -182,8 +182,7 @@ sudo journalctl -u cloudflared -f
 The backend itself does not need `MINOS_BACKEND_URL`,
 `CF_ACCESS_CLIENT_ID`, or `CF_ACCESS_CLIENT_SECRET`. Mobile and daemon
 clients dial the URL baked at build time (set via `.env.local`,
-documented in
-`docs/superpowers/specs/unified-config-pipeline-design.md`). Cloudflare
+documented in `README.md` and ADR 0018). Cloudflare
 Access service tokens are configured on clients only — the backend is
 unaware of CF Access (it sees post-edge HTTP loopback on
 `127.0.0.1:8787`).
@@ -252,7 +251,7 @@ Save. The token is now authorized for this hostname.
 curl -v \
   -H "CF-Access-Client-Id: <CLIENT_ID>.access" \
   -H "CF-Access-Client-Secret: <CLIENT_SECRET>" \
-  https://minos.fan-nn.top/health
+  https://minos.fan-nn.top/health/ready
 ```
 
 Expect `200 OK` from the backend. If you get `302` or a sign-in page, the headers are not set correctly or the Service Token policy is missing.
@@ -303,7 +302,7 @@ Rotating the token means minting a new Service Token in Cloudflare, updating bui
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `curl https://minos.fan-nn.top/health` returns `Cloudflare 1033` | Tunnel not running | Start `cloudflared` or check service status |
+| `curl https://minos.fan-nn.top/health/ready` returns `Cloudflare 1033` | Tunnel not running | Start `cloudflared` or check service status |
 | Handshake returns `5xx`  | Backend not listening on configured port | Start `minos-backend`; verify `MINOS_BACKEND_LISTEN` matches `config.yml` `service:` |
 | Backend rejects boot with `CfAccessMisconfigured` | `PUBLIC_URL` is `wss://...` but env vars not set | Step 7a; or set `MINOS_BACKEND_ALLOW_DEV=1` for loopback dev |
 | Clients disconnect every ~100s | Heartbeat not firing | Check `minos-transport` heartbeat loop; CF edge idle cutoff is ~100s |
@@ -333,4 +332,4 @@ Rotating the token means minting a new Service Token in Cloudflare, updating bui
 - ADR 0010: Cloudflare Tunnel + Access for Public Exposure
 - ADR 0014: Backend-Assembled Pairing QR (CF Access tokens leave the host)
 - ADR 0015: Rename `minos-relay` → `minos-backend`
-- Spec: `docs/superpowers/specs/minos-relay-backend-design.md` §4.3 (security boundaries) and §9.3 (runbook reference) — note: filename retains the historical `minos-relay-backend-design` slug, see ADR 0015
+- Design: `docs/backend-formal-development.md` (formal backend architecture source of truth)
