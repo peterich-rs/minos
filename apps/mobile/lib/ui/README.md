@@ -1,22 +1,24 @@
-# UI Layer — Feature-Organized Barrel Exports
+# UI Layer — Feature-Organized Widgets and Barrels
 
-This directory provides **feature-organized barrel exports** that map the
-presentation layer into a discoverable, architecture-aligned structure.
+This directory contains the concrete widget implementation for the app, grouped
+by feature, plus barrel exports that keep UI imports discoverable.
 
 ## Usage
 
-Instead of importing individual files scattered across `presentation/` and
-`application/`, import the feature barrel:
+Instead of importing individual view files from several feature folders, import
+the feature barrel when you need that UI surface:
 
 ```dart
-// Before (scattered imports):
-import 'package:minos/application/project_providers.dart';
-import 'package:minos/presentation/pages/project_list_page.dart';
-import 'package:minos/presentation/pages/project_detail_page.dart';
+// Before (scattered view imports):
+import 'package:minos/ui/features/projects/views/project_detail_page.dart';
+import 'package:minos/ui/features/projects/views/project_list_page.dart';
 
 // After (feature barrel):
 import 'package:minos/ui/features/projects/projects.dart';
 ```
+
+Application providers are still imported directly from `application/` when the
+UI needs them.
 
 ## Feature Map
 

@@ -8,9 +8,11 @@
 ///
 /// Views:
 ///   - [AppShellPage]
-///   - [MinosApp] (presentation/app.dart)
+///   - [MinosApp]
 library;
 
 export 'package:minos/application/root_route_decision.dart';
-export 'package:minos/presentation/app.dart';
-export 'package:minos/presentation/pages/app_shell_page.dart';
+export 'package:minos/ui/features/shell/router.dart';
+export 'package:minos/ui/features/shell/router_provider.dart';
+export 'package:minos/ui/features/shell/views/app.dart';
+export 'package:minos/ui/features/shell/views/app_shell_page.dart';

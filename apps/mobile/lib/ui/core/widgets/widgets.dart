@@ -5,6 +5,6 @@
 /// building blocks used across multiple features.
 library;
 
-export 'package:minos/presentation/error_feedback.dart';
-export 'package:minos/presentation/widgets/shimmer_box.dart';
-export 'package:minos/presentation/widgets/workspace_mru_chips.dart';
+export 'package:minos/ui/core/widgets/approval_sheet.dart';
+export 'package:minos/ui/core/widgets/error_feedback.dart';
+export 'package:minos/ui/core/widgets/shimmer_box.dart';

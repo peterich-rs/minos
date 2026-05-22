@@ -17,4 +17,5 @@ library;
 export 'package:minos/application/agent_profiles_provider.dart';
 export 'package:minos/application/group_agent_provider.dart';
 export 'package:minos/application/preferred_agent_provider.dart';
-export 'package:minos/presentation/pages/agents_hub_page.dart';
+export 'package:minos/ui/features/agents/views/agent_start_page.dart';
+export 'package:minos/ui/features/agents/views/agents_hub_page.dart';

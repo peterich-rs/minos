@@ -16,9 +16,10 @@ library;
 
 export 'package:minos/application/active_session_provider.dart';
 export 'package:minos/application/thread_events_provider.dart';
-export 'package:minos/presentation/pages/thread_view_page.dart';
-export 'package:minos/presentation/widgets/chat/input_bar.dart';
-export 'package:minos/presentation/widgets/chat/message_bubble.dart';
-export 'package:minos/presentation/widgets/chat/reasoning_section.dart';
-export 'package:minos/presentation/widgets/chat/streaming_text.dart';
-export 'package:minos/presentation/widgets/chat/tool_call_card.dart';
+export 'package:minos/ui/features/chat/views/thread_view_page.dart';
+export 'package:minos/ui/features/chat/widgets/input_bar.dart';
+export 'package:minos/ui/features/chat/widgets/message_bubble.dart';
+export 'package:minos/ui/features/chat/widgets/message_meta_row.dart';
+export 'package:minos/ui/features/chat/widgets/reasoning_section.dart';
+export 'package:minos/ui/features/chat/widgets/streaming_text.dart';
+export 'package:minos/ui/features/chat/widgets/tool_call_card.dart';

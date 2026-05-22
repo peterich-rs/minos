@@ -14,5 +14,5 @@
 library;
 
 export 'package:minos/application/project_providers.dart';
-export 'package:minos/presentation/pages/project_detail_page.dart';
-export 'package:minos/presentation/pages/project_list_page.dart';
+export 'package:minos/ui/features/projects/views/project_detail_page.dart';
+export 'package:minos/ui/features/projects/views/project_list_page.dart';

@@ -16,6 +16,6 @@
 library;
 
 export 'package:minos/application/social_providers.dart';
-export 'package:minos/presentation/pages/group_members_page.dart';
-export 'package:minos/presentation/pages/social_chat_page.dart';
-export 'package:minos/presentation/pages/social_hub_page.dart';
+export 'package:minos/ui/features/social/views/group_members_page.dart';
+export 'package:minos/ui/features/social/views/social_chat_page.dart';
+export 'package:minos/ui/features/social/views/social_hub_page.dart';
