@@ -1,11 +1,17 @@
-//! `GET /devices` — WebSocket upgrade with header auth or short-lived
-//! query-ticket auth for browser clients.
+//! WebSocket upgrade handlers for the formal realtime gateways, plus the
+//! retained mixed-auth compatibility path used during legacy retirement.
+//!
+//! The public router now serves `/ws/client` and `/ws/host`; both reuse the
+//! shared activation/session path in this module. The mixed header-auth entry
+//! point remains here as an implementation detail until the follow-up cleanup
+//! slice removes the remaining compatibility code.
 //!
 //! Implements the handshake defined in plan §9 (in turn derived from spec
 //! §7.1/§9.4). The flow is:
 //!
-//! 1. Parse headers (`X-Device-Id`, optional `X-Device-Role`, optional
-//!    `X-Device-Secret`, optional `X-Device-Name`).
+//! 1. For the retained mixed-auth branch, parse headers (`X-Device-Id`,
+//!    optional `X-Device-Role`, optional `X-Device-Secret`, optional
+//!    `X-Device-Name`).
 //! 2. Look up the device row. Two cases:
 //!    - **No row**: insert a fresh row with `secret_hash = NULL`; the
 //!      session goes live in Unpaired mode; first server frame is
@@ -69,8 +75,8 @@ use crate::{
     auth::bearer,
     envelope::run_session,
     http::auth::{self, AuthError, Classification},
-    session::{SessionHandle, SessionRegistry},
-    store,
+    session::{SessionHandle, SessionRegistry, SessionRevocation},
+    store::{self, AsStorePool},
 };
 
 /// WS close code used when auth changes after the HTTP upgrade succeeds but
@@ -83,6 +89,20 @@ const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
 #[derive(Debug, Deserialize, Default)]
 pub struct DevicesWsQuery {
     pub ws_ticket: Option<String>,
+    pub ticket: Option<String>,
+}
+
+impl DevicesWsQuery {
+    fn ticket(&self) -> Option<&str> {
+        self.ticket.as_deref().or(self.ws_ticket.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayAuthMode {
+    DevicesCompat,
+    ClientTicketOnly,
+    HostTicketOnly,
 }
 
 enum UpgradeAuth {
@@ -102,7 +122,10 @@ struct UpgradeIdentity {
     auth: UpgradeAuth,
 }
 
-/// `GET /devices` handler: classify auth, then WS upgrade.
+/// Legacy mixed-gateway compatibility handler.
+///
+/// The public router no longer exposes `/devices`; the supported entry points
+/// are [`upgrade_client`] and [`upgrade_host`].
 ///
 /// Returns either:
 /// - `Err((StatusCode, String))` for pre-upgrade auth failures (the plan's
@@ -116,29 +139,93 @@ pub async fn upgrade(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
-    let identity = if let Some(ticket) = query.ws_ticket.as_deref() {
-        let claims = crate::auth::jwt::verify_ws_ticket(state.jwt_secret.as_bytes(), ticket)
-            .map_err(|error| {
+    let result = upgrade_inner(state, query, headers, ws, GatewayAuthMode::DevicesCompat).await;
+    if result.is_err() {
+        crate::telemetry::record_ws_connect("preauth", crate::telemetry::OUTCOME_UNAUTHORIZED);
+    }
+    result
+}
+
+pub async fn upgrade_client(
+    State(state): State<BackendState>,
+    Query(query): Query<DevicesWsQuery>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, String)> {
+    let result = upgrade_inner(state, query, headers, ws, GatewayAuthMode::ClientTicketOnly).await;
+    if result.is_err() {
+        crate::telemetry::record_ws_connect("preauth", crate::telemetry::OUTCOME_UNAUTHORIZED);
+    }
+    result
+}
+
+pub async fn upgrade_host(
+    State(state): State<BackendState>,
+    Query(query): Query<DevicesWsQuery>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, String)> {
+    let result = upgrade_inner(state, query, headers, ws, GatewayAuthMode::HostTicketOnly).await;
+    if result.is_err() {
+        crate::telemetry::record_ws_connect("preauth", crate::telemetry::OUTCOME_UNAUTHORIZED);
+    }
+    result
+}
+
+#[allow(clippy::too_many_lines)]
+async fn upgrade_inner(
+    state: BackendState,
+    query: DevicesWsQuery,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    auth_mode: GatewayAuthMode,
+) -> Result<Response, (StatusCode, String)> {
+    let identity = if let Some(ticket) = query.ticket() {
+        let claims = crate::auth::jwt::verify_ws_ticket(state.auth.jwt_secret(), ticket).map_err(
+            |error| {
                 tracing::debug!(
                     target: "minos_backend::http",
                     error = %error,
                     "devices websocket ws_ticket verify failed"
                 );
                 (StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string())
-            })?;
+            },
+        )?;
         let device_id = Uuid::parse_str(&claims.did)
             .map(DeviceId)
             .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()))?;
-        if !claims.role.is_account_client() {
-            return Err((StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()));
+        match auth_mode {
+            GatewayAuthMode::DevicesCompat | GatewayAuthMode::ClientTicketOnly => {
+                if !claims.role.is_account_client() {
+                    return Err((StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()));
+                }
+            }
+            GatewayAuthMode::HostTicketOnly => {
+                if claims.role != DeviceRole::AgentHost {
+                    return Err((StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()));
+                }
+            }
         }
+        state.auth.consume_ws_ticket(&claims).map_err(|error| {
+            tracing::debug!(
+                target: "minos_backend::http",
+                error = ?error,
+                jti = %claims.jti,
+                "devices websocket ws_ticket consume failed"
+            );
+            (StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string())
+        })?;
+        let account_id = claims.role.is_account_client().then(|| claims.sub.clone());
         UpgradeIdentity {
             device_id,
             role: claims.role,
-            account_id: Some(claims.sub.clone()),
+            account_id,
             auth: UpgradeAuth::WsTicket { claims },
         }
     } else {
+        if auth_mode != GatewayAuthMode::DevicesCompat {
+            return Err((StatusCode::UNAUTHORIZED, "ticket required".to_string()));
+        }
         let outcome = auth::authenticate(&state.store, &headers)
             .await
             .map_err(AuthError::into_response_tuple)?;
@@ -179,7 +266,7 @@ pub async fn upgrade(
     // Perform the upgrade; `run_session` owns the socket for its lifetime.
     let registry = Arc::clone(&state.registry);
     let store = state.store.clone();
-    let translators = Arc::clone(&state.translators);
+    let ingest = Arc::clone(&state.ingest);
     let approval_relay = Arc::clone(&state.approval_relay);
     let request_span = tracing::Span::current();
     Ok(ws.on_upgrade(move |mut socket| {
@@ -246,8 +333,8 @@ pub async fn upgrade(
                 outbox_rx,
                 registry,
                 store,
-                translators,
                 approval_relay,
+                ingest,
             )
             .await
             {
@@ -279,7 +366,7 @@ impl From<AuthError> for ActivationAuthError {
 }
 
 async fn revalidate_ws_ticket_auth(
-    store: &sqlx::SqlitePool,
+    store: &impl AsStorePool,
     claims: &crate::auth::jwt::WsTicketClaims,
 ) -> Result<(), ActivationAuthError> {
     let device_id = Uuid::parse_str(&claims.did)
@@ -301,6 +388,20 @@ async fn revalidate_ws_ticket_auth(
             claims.role, resolved_role
         )));
     }
+    if claims.role.is_account_client() && row.account_id.as_deref() != Some(claims.sub.as_str()) {
+        return Err(ActivationAuthError::Unauthorized(
+            "device account changed during websocket activation".to_string(),
+        ));
+    }
+    if claims.role == DeviceRole::AgentHost && claims.sub != claims.did {
+        return Err(ActivationAuthError::Unauthorized(
+            "host ws_ticket subject mismatch".to_string(),
+        ));
+    }
+
+    if claims.role == DeviceRole::AgentHost {
+        return Ok(());
+    }
 
     match auth::classify(Some(row), None, claims.role)? {
         Classification::FirstConnect => Err(ActivationAuthError::Unauthorized(
@@ -311,7 +412,7 @@ async fn revalidate_ws_ticket_auth(
 }
 
 async fn revalidate_live_session_auth(
-    store: &sqlx::SqlitePool,
+    store: &impl AsStorePool,
     device_id: DeviceId,
     expected_role: DeviceRole,
     requested_role: Option<DeviceRole>,
@@ -346,6 +447,10 @@ async fn revalidate_live_session_auth(
 }
 
 async fn close_socket(ws: &mut WebSocket, code: u16, reason: &'static str) {
+    // Pre-activation closes don't have a SessionHandle yet — record
+    // the close under a synthetic "preauth" role so dashboards see the
+    // pre-upgrade rejection rate.
+    crate::telemetry::record_ws_close("preauth", reason);
     let _ = ws
         .send(Message::Close(Some(CloseFrame {
             code,
@@ -365,7 +470,7 @@ async fn close_socket(ws: &mut WebSocket, code: u16, reason: &'static str) {
 /// reconnect succeeds without a checkpoint, and the daemon will get a
 /// fresh one on the next reconnect.
 async fn push_ingest_checkpoint(
-    store: &sqlx::SqlitePool,
+    store: &impl AsStorePool,
     handle: &SessionHandle,
     device_id: DeviceId,
 ) {
@@ -421,7 +526,7 @@ fn activate_live_session(registry: &SessionRegistry, handle: &SessionHandle) {
     // Register only once the upgrade callback is running with the live
     // socket. Reconnects still revoke the prior live session.
     if let Some(prev) = registry.insert(handle.clone()) {
-        prev.revoke();
+        prev.revoke(SessionRevocation::Superseded);
         tracing::info!(
             target: "minos_backend::http",
             device_id = %handle.device_id,
@@ -584,9 +689,10 @@ mod tests {
             .changed()
             .await
             .expect("replacement should revoke the prior live session");
-        assert!(
+        assert_eq!(
             *revoked.borrow(),
-            "prior live session should be marked revoked"
+            Some(SessionRevocation::Superseded),
+            "prior live session should be marked revoked as a reconnect supersede"
         );
 
         match replacement_rx

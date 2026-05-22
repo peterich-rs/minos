@@ -1,10 +1,8 @@
-//! `/v1/me/*` caller-scoped views on a POST-first query surface.
+//! Retired legacy `/v1/me/*` transport.
 //!
-//! Post ADR-0020 `/v1/me/hosts` lists every Mac paired to the caller's
-//! account on the bearer-authenticated mobile rail. The host-authenticated
-//! `/v1/me/peer` path remains available for the Mac daemon's post-connect
-//! refresh path and resolves against the newer `account_host_pairings`
-//! table rather than the retired legacy pairings store.
+//! The public router no longer mounts this caller-scoped surface. The
+//! account-side host list moved to `/v1/pairing/list-hosts`, and the host
+//! self view moved to `/v1/host/installations/self`.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -253,7 +251,14 @@ async fn delete_me_peer(
             err_body("internal", e.to_string()),
         )
     })?;
-    crate::ingest::invalidate_peer_targets_for_host(outcome.device_id);
+    crate::ingest::invalidate_peer_targets_for_host(outcome.device_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err_body("internal", e.to_string()),
+            )
+        })?;
 
     if let Some(host_handle) = state.registry.get(outcome.device_id) {
         let _ = state.registry.try_send_current(

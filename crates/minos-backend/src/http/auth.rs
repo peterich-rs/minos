@@ -8,7 +8,6 @@
 
 use axum::http::{HeaderMap, StatusCode};
 use minos_domain::{DeviceId, DeviceRole};
-use sqlx::SqlitePool;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -32,8 +31,8 @@ pub struct AuthOutcome {
     pub role: DeviceRole,
     /// `Some(secret)` if the request supplied `X-Device-Secret` AND the
     /// stored row had a hash that verified. `None` for first-connect or
-    /// existing-but-no-hash rows. Used by handlers that need to decide
-    /// whether to allow secret-less calls (e.g. `/v1/pairing/consume`).
+    /// existing-but-no-hash rows. Used by handlers that need to distinguish
+    /// steady-state host auth from first-connect bootstrap traffic.
     pub authenticated_with_secret: bool,
 }
 
@@ -59,7 +58,7 @@ impl AuthError {
 /// connect, and return the resolved `(device_id, role)`. Side-effecting:
 /// may insert into `devices`.
 pub async fn authenticate(
-    pool: &SqlitePool,
+    store: &impl store::AsStorePool,
     headers: &HeaderMap,
 ) -> Result<AuthOutcome, AuthError> {
     let device_id = extract_device_id(headers)?;
@@ -72,7 +71,7 @@ pub async fn authenticate(
         .clone()
         .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.into());
 
-    let existing = store::devices::get_device(pool, device_id)
+    let existing = store::devices::get_device(store, device_id)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
     let should_backfill_display_name = existing.as_ref().is_some_and(|row| {
@@ -86,7 +85,7 @@ pub async fn authenticate(
 
     if matches!(classification, Classification::FirstConnect) {
         let now = chrono::Utc::now().timestamp_millis();
-        if let Err(e) = insert_device(pool, device_id, &display_name, role, now).await {
+        if let Err(e) = insert_device(store, device_id, &display_name, role, now).await {
             tracing::warn!(
                 target: "minos_backend::http::auth",
                 error = %e,
@@ -97,7 +96,7 @@ pub async fn authenticate(
     } else if should_backfill_display_name {
         if let Some(new_display_name) = provided_display_name.as_deref() {
             if let Err(e) =
-                store::devices::set_display_name(pool, &device_id, new_display_name).await
+                store::devices::set_display_name(store, &device_id, new_display_name).await
             {
                 tracing::warn!(
                     target: "minos_backend::http::auth",
@@ -119,11 +118,11 @@ pub async fn authenticate(
 /// Same as [`authenticate`] but also asserts the resolved role equals
 /// `expected`. Used by handlers that are role-gated.
 pub async fn authenticate_role(
-    pool: &SqlitePool,
+    store: &impl store::AsStorePool,
     headers: &HeaderMap,
     expected: DeviceRole,
 ) -> Result<AuthOutcome, AuthError> {
-    let outcome = authenticate(pool, headers).await?;
+    let outcome = authenticate(store, headers).await?;
     if outcome.role != expected {
         return Err(AuthError::Unauthorized(format!(
             "role required: {expected}, got {}",
@@ -301,6 +300,7 @@ mod tests {
             display_name: "mac".to_string(),
             role: DeviceRole::AgentHost,
             secret_hash: None,
+            public_key: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
@@ -337,6 +337,7 @@ mod tests {
             display_name: "x".to_string(),
             role: DeviceRole::MobileClient,
             secret_hash: None,
+            public_key: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
@@ -352,6 +353,7 @@ mod tests {
             display_name: "x".to_string(),
             role: DeviceRole::MobileClient,
             secret_hash: Some("$argon2id$v=19$m=19456,t=2,p=1$abc$def".to_string()),
+            public_key: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
@@ -372,6 +374,7 @@ mod tests {
             display_name: "x".to_string(),
             role: DeviceRole::MobileClient,
             secret_hash: Some(hash),
+            public_key: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
@@ -389,6 +392,7 @@ mod tests {
             display_name: "x".to_string(),
             role: DeviceRole::MobileClient,
             secret_hash: Some(hash),
+            public_key: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
@@ -449,6 +453,7 @@ mod tests {
             display_name: "x".to_string(),
             role: DeviceRole::MobileClient,
             secret_hash: None,
+            public_key: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
@@ -464,6 +469,7 @@ mod tests {
             display_name: "mac".to_string(),
             role: DeviceRole::AgentHost,
             secret_hash: Some("$argon2id$v=19$m=19456,t=2,p=1$abc$def".to_string()),
+            public_key: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,

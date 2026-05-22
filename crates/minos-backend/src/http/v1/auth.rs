@@ -10,8 +10,6 @@
 //! the act of revoking a refresh token must be authenticated by the
 //! account that owns it.
 
-use std::sync::OnceLock;
-
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -21,28 +19,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::auth::rate_limit::RateLimiter;
-use crate::auth::{bearer, jwt, passwords};
-use crate::error::BackendError;
+use crate::auth::bearer;
+use crate::auth::use_case::{AuthSession, AuthUseCaseError, RefreshSession};
 use crate::http::auth::authenticate;
 use crate::http::error_response::{err_json, ErrorEnvelope};
 use crate::http::BackendState;
-use crate::store::{accounts, refresh_tokens};
-use minos_protocol::WsTicketResponse;
-
-/// Lazily-initialised argon2id PHC string used to burn the same compute
-/// time on `find_by_email → None` as on `find_by_email → Some` followed
-/// by a wrong-password verify. Without this, "unknown email" returned in
-/// <1 ms while "valid email + wrong password" took ~50 ms — a timing
-/// oracle for email enumeration. The plaintext is irrelevant; we only
-/// rely on `passwords::verify` doing the same kdf work either way.
-fn dummy_password_hash() -> &'static str {
-    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
-    DUMMY_HASH.get_or_init(|| {
-        passwords::hash("dummy_for_constant_time_check_xxxxxxx")
-            .expect("argon2id default params must hash a static string")
-    })
-}
 
 #[derive(Deserialize)]
 pub struct RegisterReq {
@@ -112,28 +93,6 @@ fn err(code: &'static str) -> Json<ErrorEnvelope> {
     err_json(code, code)
 }
 
-async fn bind_device_to_account(
-    state: &BackendState,
-    device_id: minos_domain::DeviceId,
-    account_id: &str,
-) -> Result<(), BackendError> {
-    let previous_account_id = crate::store::devices::get_device(&state.store, device_id)
-        .await?
-        .and_then(|device| device.account_id);
-
-    crate::store::devices::set_account_id(&state.store, &device_id, account_id).await?;
-
-    if let Some(previous_account_id) = previous_account_id.as_deref() {
-        crate::ingest::invalidate_peer_targets_for_account(&state.store, previous_account_id)
-            .await?;
-    }
-    if previous_account_id.as_deref() != Some(account_id) {
-        crate::ingest::invalidate_peer_targets_for_account(&state.store, account_id).await?;
-    }
-
-    Ok(())
-}
-
 /// Pull the client IP from `X-Forwarded-For`. We trust the upstream
 /// reverse proxy to set this — direct internet exposure of the backend
 /// is not a supported deployment per the spec. When missing, fall back
@@ -160,15 +119,59 @@ fn rate_limited_response(retry: u32) -> Response {
     resp
 }
 
-/// Apply a single bucket and return a 429 response on overflow.
-///
-/// Returns the response in `Some(_)` on overflow so the caller can
-/// `if let Some(resp) = check_bucket(..) { return resp; }`. The clippy
-/// `result_large_err` lint pushed us off `Result<(), Response>` because
-/// `Response` is ≈128 bytes and the success path doesn't allocate.
-#[must_use]
-fn check_bucket(limiter: &RateLimiter, key: &str) -> Option<Response> {
-    limiter.check(key).err().map(rate_limited_response)
+fn auth_error_response(error: AuthUseCaseError) -> Response {
+    match error {
+        AuthUseCaseError::AccountNotFound => {
+            (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response()
+        }
+        AuthUseCaseError::EmailTaken => (StatusCode::CONFLICT, err("email_taken")).into_response(),
+        AuthUseCaseError::InvalidCredentials => {
+            (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response()
+        }
+        AuthUseCaseError::InvalidRefresh => {
+            (StatusCode::UNAUTHORIZED, err("invalid_refresh")).into_response()
+        }
+        AuthUseCaseError::WsTicketAccountMismatch => {
+            (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response()
+        }
+        AuthUseCaseError::Internal => {
+            (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response()
+        }
+        AuthUseCaseError::RateLimited { retry_after_secs } => {
+            rate_limited_response(retry_after_secs)
+        }
+        AuthUseCaseError::UnsupportedWsTicketRole => {
+            (StatusCode::BAD_REQUEST, err("ws_ticket_unsupported_role")).into_response()
+        }
+        AuthUseCaseError::WeakPassword => {
+            (StatusCode::BAD_REQUEST, err("weak_password")).into_response()
+        }
+    }
+}
+
+fn auth_session_response(session: AuthSession) -> Response {
+    (
+        StatusCode::OK,
+        Json(AuthResp {
+            account: AccountSummary {
+                account_id: session.account_id,
+                email: session.email,
+            },
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+            expires_in: session.expires_in,
+        }),
+    )
+        .into_response()
+}
+
+fn refresh_session_response(session: RefreshSession) -> Response {
+    Json(RefreshResp {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in: session.expires_in,
+    })
+    .into_response()
 }
 
 #[tracing::instrument(skip_all, fields(email = %req.email))]
@@ -177,68 +180,22 @@ pub async fn post_register(
     headers: HeaderMap,
     Json(req): Json<RegisterReq>,
 ) -> Response {
-    if let Some(resp) = check_bucket(&state.auth_register_per_ip, &client_ip(&headers)) {
-        return resp;
-    }
-    if req.password.len() < 8 || req.password.chars().count() < 8 {
-        return (StatusCode::BAD_REQUEST, err("weak_password")).into_response();
-    }
     let Ok(outcome) = authenticate(&state.store, &headers).await else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
-    let device_id = outcome.device_id;
-
-    let Ok(hash) = passwords::hash(&req.password) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    };
-    let account = match accounts::create(&state.store, &req.email, &hash).await {
-        Ok(a) => a,
-        Err(BackendError::EmailTaken) => {
-            return (StatusCode::CONFLICT, err("email_taken")).into_response()
-        }
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
-    };
-
-    if bind_device_to_account(&state, device_id, &account.account_id)
+    match state
+        .auth
+        .register(
+            outcome.device_id,
+            &req.email,
+            &req.password,
+            &client_ip(&headers),
+        )
         .await
-        .is_err()
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+        Ok(session) => auth_session_response(session),
+        Err(error) => auth_error_response(error),
     }
-
-    let Ok(access) = jwt::sign(
-        state.jwt_secret.as_bytes(),
-        &account.account_id,
-        &device_id.to_string(),
-    ) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    };
-    let refresh_plain = refresh_tokens::generate_plaintext();
-    if refresh_tokens::insert(
-        &state.store,
-        &refresh_plain,
-        &account.account_id,
-        &device_id.to_string(),
-    )
-    .await
-    .is_err()
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    }
-
-    (
-        StatusCode::OK,
-        Json(AuthResp {
-            account: AccountSummary {
-                account_id: account.account_id,
-                email: account.email,
-            },
-            access_token: access,
-            refresh_token: refresh_plain,
-            expires_in: jwt::ACCESS_TTL_SECS,
-        }),
-    )
-        .into_response()
 }
 
 #[tracing::instrument(skip_all, fields(email = %req.email))]
@@ -247,89 +204,22 @@ pub async fn post_login(
     headers: HeaderMap,
     Json(req): Json<LoginReq>,
 ) -> Response {
-    // Bucket ordering: IP-keyed buckets fire pre-`authenticate` because
-    // the IP is the abuse axis we want to throttle even on bogus requests.
-    // Identity-keyed buckets (per-email here) fire post-`authenticate` so
-    // an attacker spamming `email=victim@x.com` with garbage device
-    // headers cannot lock the victim's bucket.
-    if let Some(resp) = check_bucket(&state.auth_login_per_ip, &client_ip(&headers)) {
-        return resp;
-    }
     let Ok(outcome) = authenticate(&state.store, &headers).await else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
-    let device_id = outcome.device_id;
-    if let Some(resp) = check_bucket(&state.auth_login_per_email, &req.email.to_lowercase()) {
-        return resp;
-    }
-
-    let account = match accounts::find_by_email(&state.store, &req.email).await {
-        Ok(Some(a)) => a,
-        Ok(None) => {
-            // Burn the same argon2id verify time as the wrong-password
-            // path so an attacker can't tell unknown emails apart from
-            // valid-email-wrong-password by timing alone. Result is
-            // ignored; we always return `invalid_credentials`.
-            let _ = passwords::verify(&req.password, dummy_password_hash());
-            return (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response();
-        }
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
-    };
-    let Ok(ok) = passwords::verify(&req.password, &account.password_hash) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    };
-    if !ok {
-        return (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response();
-    }
-
-    // Login should rotate only this device's refresh tokens. Other mobile
-    // devices on the same account remain signed in and keep their live WS
-    // sessions so one Mac can be paired with multiple clients.
-    let _ = refresh_tokens::revoke_all_for_device(&state.store, &device_id.to_string()).await;
-
-    if accounts::touch_last_login(&state.store, &account.account_id)
+    match state
+        .auth
+        .login(
+            outcome.device_id,
+            &req.email,
+            &req.password,
+            &client_ip(&headers),
+        )
         .await
-        .is_err()
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+        Ok(session) => auth_session_response(session),
+        Err(error) => auth_error_response(error),
     }
-    if bind_device_to_account(&state, device_id, &account.account_id)
-        .await
-        .is_err()
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    }
-
-    let Ok(access) = jwt::sign(
-        state.jwt_secret.as_bytes(),
-        &account.account_id,
-        &device_id.to_string(),
-    ) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    };
-    let refresh_plain = refresh_tokens::generate_plaintext();
-    if refresh_tokens::insert(
-        &state.store,
-        &refresh_plain,
-        &account.account_id,
-        &device_id.to_string(),
-    )
-    .await
-    .is_err()
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    }
-
-    Json(AuthResp {
-        account: AccountSummary {
-            account_id: account.account_id,
-            email: account.email,
-        },
-        access_token: access,
-        refresh_token: refresh_plain,
-        expires_in: jwt::ACCESS_TTL_SECS,
-    })
-    .into_response()
 }
 
 #[tracing::instrument(skip_all)]
@@ -341,57 +231,14 @@ pub async fn post_refresh(
     let Ok(outcome) = authenticate(&state.store, &headers).await else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
-    let device_id = outcome.device_id;
-
-    let row = match refresh_tokens::find_active(&state.store, &req.refresh_token).await {
-        Ok(Some(r)) => r,
-        Ok(_) => return (StatusCode::UNAUTHORIZED, err("invalid_refresh")).into_response(),
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
-    };
-
-    if row.device_id != device_id.to_string() {
-        return (StatusCode::UNAUTHORIZED, err("invalid_refresh")).into_response();
-    }
-
-    // Per-account bucket sits between the lookup and the rotation: we
-    // already know the account binding once the row is loaded, so
-    // limiting on `row.account_id` is more accurate than IP-keying for
-    // refresh.
-    if let Some(resp) = check_bucket(&state.auth_refresh_per_acc, &row.account_id) {
-        return resp;
-    }
-
-    // Atomic rotate: revoke old + insert new in one transaction.
-    // If another concurrent request already consumed this token, we get
-    // None back and return invalid_refresh.
-    let new_plain = refresh_tokens::generate_plaintext();
-    match refresh_tokens::rotate(
-        &state.store,
-        &req.refresh_token,
-        &new_plain,
-        &row.account_id,
-        &row.device_id,
-    )
-    .await
+    match state
+        .auth
+        .refresh(outcome.device_id, &req.refresh_token)
+        .await
     {
-        Ok(Some(_)) => {} // success
-        Ok(None) => {
-            // CAS failure: token was already consumed by a concurrent request.
-            return (StatusCode::UNAUTHORIZED, err("invalid_refresh")).into_response();
-        }
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
+        Ok(session) => refresh_session_response(session),
+        Err(error) => auth_error_response(error),
     }
-
-    let Ok(access) = jwt::sign(state.jwt_secret.as_bytes(), &row.account_id, &row.device_id) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    };
-
-    Json(RefreshResp {
-        access_token: access,
-        refresh_token: new_plain,
-        expires_in: jwt::ACCESS_TTL_SECS,
-    })
-    .into_response()
 }
 
 #[tracing::instrument(skip_all)]
@@ -406,69 +253,17 @@ pub async fn post_logout(
     let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
-    // Per-account bucket sits between bearer-success and `revoke_one` so a
-    // compromised access token can't spam logout to revoke arbitrary
-    // candidate refresh tokens. Reuses the refresh bucket — both write
-    // refresh_tokens, both should share the same per-account budget.
-    if let Some(resp) = check_bucket(&state.auth_refresh_per_acc, &bearer_outcome.account_id) {
-        return resp;
-    }
-    // Verify the refresh token belongs to the caller's account before
-    // revoking. This prevents an authenticated user from revoking another
-    // user's token if they somehow obtained the plaintext.
-    match refresh_tokens::find_active(&state.store, &req.refresh_token).await {
-        Ok(Some(row)) if row.account_id == bearer_outcome.account_id => {
-            // Token belongs to this account — proceed with revocation.
-        }
-        Ok(Some(_) | None) => {
-            // Token belongs to a different account or not found/already
-            // revoked — idempotent success either way.
-            return StatusCode::NO_CONTENT.into_response();
-        }
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-        }
-    }
-    if refresh_tokens::revoke_one(&state.store, &req.refresh_token)
+    match state
+        .auth
+        .logout(&bearer_outcome.account_id, &req.refresh_token)
         .await
-        .is_err()
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => auth_error_response(error),
     }
-    StatusCode::NO_CONTENT.into_response()
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn post_ws_ticket(State(state): State<BackendState>, headers: HeaderMap) -> Response {
-    let Ok(outcome) = authenticate(&state.store, &headers).await else {
-        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
-    };
-    if !outcome.role.is_account_client() {
-        return (StatusCode::BAD_REQUEST, err("ws_ticket_unsupported_role")).into_response();
-    }
-    let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
-    };
-    let _ = bind_device_to_account(&state, outcome.device_id, &bearer_outcome.account_id).await;
-
-    let Ok(ticket) = jwt::sign_ws_ticket(
-        state.jwt_secret.as_bytes(),
-        &bearer_outcome.account_id,
-        &outcome.device_id.to_string(),
-        outcome.role,
-    ) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    };
-
-    Json(WsTicketResponse {
-        ticket,
-        expires_in: jwt::WS_TICKET_TTL_SECS,
-        device_id: outcome.device_id.to_string(),
-        device_role: outcome.role,
-    })
-    .into_response()
-}
-
 /// `POST /v1/auth/change-password`
 ///
 /// Requires both the device rail (`X-Device-Id`/secret) and a valid bearer
@@ -489,40 +284,18 @@ pub async fn post_change_password(
     let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
-    if req.new_password.len() < 8 || req.new_password.chars().count() < 8 {
-        return (StatusCode::BAD_REQUEST, err("weak_password")).into_response();
-    }
-    // Reuse the per-account refresh bucket: change-password writes
-    // refresh_tokens (revokes all) and mutates account credentials, so
-    // rate-limiting it alongside refresh/logout keeps credential writes
-    // capped per account.
-    if let Some(resp) = check_bucket(&state.auth_refresh_per_acc, &bearer_outcome.account_id) {
-        return resp;
-    }
-    let account = match accounts::find_by_id(&state.store, &bearer_outcome.account_id).await {
-        Ok(Some(row)) => row,
-        Ok(None) => return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response(),
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response(),
-    };
-    let Ok(ok) = passwords::verify(&req.current_password, &account.password_hash) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    };
-    if !ok {
-        return (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response();
-    }
-    let Ok(next_hash) = passwords::hash(&req.new_password) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-    };
-    if accounts::set_password_hash(&state.store, &account.account_id, &next_hash)
+    match state
+        .auth
+        .change_password(
+            &bearer_outcome.account_id,
+            &req.current_password,
+            &req.new_password,
+        )
         .await
-        .is_err()
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => auth_error_response(error),
     }
-    // Invalidate every active refresh token for this account. Callers
-    // must re-login on other devices.
-    let _ = refresh_tokens::revoke_all_for_account(&state.store, &account.account_id).await;
-    StatusCode::NO_CONTENT.into_response()
 }
 
 pub fn router() -> Router<BackendState> {
@@ -533,7 +306,6 @@ pub fn router() -> Router<BackendState> {
         .route("/auth/login", post(post_login))
         .route("/auth/refresh", post(post_refresh))
         .route("/auth/logout", post(post_logout))
-        .route("/auth/ws-ticket", post(post_ws_ticket))
         .route("/auth/change-password", post(post_change_password))
 }
 

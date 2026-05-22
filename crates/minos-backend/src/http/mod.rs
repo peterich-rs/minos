@@ -1,12 +1,11 @@
 //! HTTP surface: axum `Router` + shared state + header extraction helpers.
 //!
-//! The backend exposes exactly two HTTP-level endpoints:
+//! The backend exposes the health probe set plus the formal realtime upgrades:
 //!
-//! - `GET /health` — plaintext liveness probe ([`health::get`]). Body carries
-//!   the crate name and version so a deploy smoke can assert both.
-//! - `GET /devices` — WebSocket upgrade for the envelope hub
-//!   ([`ws_devices::upgrade`]). Headers authenticate the device; the
-//!   post-upgrade loop lives in [`crate::envelope::run_session`].
+//! - `GET /health/live`, `GET /health/ready`, `GET /health/info`.
+//! - `GET /ws/client`, `GET /ws/host` — WebSocket upgrades for the envelope
+//!   hub. The upgrade handlers live in [`ws_devices`]; the post-upgrade loop
+//!   lives in [`crate::envelope::run_session`].
 //!
 //! # State plumbing
 //!
@@ -29,7 +28,7 @@
 //! "401 pre-upgrade" contract (see [`ws_devices`]) is easy to read at the
 //! call site.
 
-use std::{sync::Arc, time::Duration};
+use std::{ops::Deref, sync::Arc, time::Duration};
 
 use axum::extract::MatchedPath;
 use axum::http::{
@@ -47,7 +46,9 @@ use tower_http::request_id::{
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    auth::rate_limit::RateLimiter, ingest::translate::ThreadTranslators, pairing::PairingService,
+    pairing::PairingService,
+    realtime::{MessageBusBackend, PeerTargetCacheBackend},
+    runtime::{AppContext, AppRuntimeConfig},
     session::SessionRegistry,
 };
 
@@ -78,46 +79,525 @@ impl MakeRequestId for MakeRequestUuid {
 
 /// Shared state for every HTTP handler.
 ///
-/// Cheap to clone: the service types are `Arc`-wrapped, and [`SqlitePool`]
-/// is itself an `Arc` internally.
+/// Cheap to clone: the transport shell only owns an [`Arc<AppContext>`], the
+/// parsed CORS policy, and the version string. The runtime services themselves
+/// live behind [`AppContext`], keeping handler state aligned with the runtime
+/// shell instead of duplicating ad-hoc wiring in each composition root.
 #[derive(Clone)]
 pub struct BackendState {
-    /// In-memory map of live WS sessions.
-    pub registry: Arc<SessionRegistry>,
-    /// Pairing business logic (token issue / consume / forget).
-    pub pairing: Arc<PairingService>,
-    /// SQLite pool with migrations already applied.
-    pub store: SqlitePool,
-    /// Configured pairing-token TTL for live `request_pairing_token` RPCs.
-    pub token_ttl: Duration,
-    /// Per-thread translator-state cache for the live ingest path.
-    pub translators: Arc<ThreadTranslators>,
-    /// Approval relay state: server-side tracking plus timeout/disconnect cleanup.
-    pub approval_relay: Arc<crate::approval_relay::ApprovalRelay>,
-    /// HS256 secret used by the bearer-token rail (`crate::auth::jwt`).
-    /// `Arc<String>` because every signed/verified bearer borrows the
-    /// bytes — sharing one heap copy across the request lifecycle keeps
-    /// `BackendState::clone` cheap.
-    pub jwt_secret: Arc<String>,
-    /// Per-email login bucket (10 / minute, spec §5.6).
-    pub auth_login_per_email: Arc<RateLimiter>,
-    /// Per-IP login bucket (5 / minute, spec §5.6).
-    pub auth_login_per_ip: Arc<RateLimiter>,
-    /// Per-IP register bucket (3 / hour, spec §5.6).
-    pub auth_register_per_ip: Arc<RateLimiter>,
-    /// Per-account refresh bucket (60 / hour, spec §5.6).
-    pub auth_refresh_per_acc: Arc<RateLimiter>,
+    app: Arc<AppContext>,
     /// Parsed CORS origins from config. `None` means allow-all (dev mode).
     pub cors_origins: Option<Vec<HeaderValue>>,
-    /// Per-process identifier surfaced in health checks and startup logs.
-    pub instance_id: String,
-    /// Crate version string; exposed via `/health`.
+    /// Crate version string; exposed via the health endpoints.
     ///
     /// Stored here rather than read from `env!("CARGO_PKG_VERSION")` at the
     /// handler so tests can substitute a fixed value without reaching into
     /// proc-macros.
     pub version: &'static str,
 }
+
+impl Deref for BackendState {
+    type Target = AppContext;
+
+    fn deref(&self) -> &Self::Target {
+        self.app.as_ref()
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct RouteContract {
+    pub method: &'static str,
+    pub path: &'static str,
+    pub probe_path: &'static str,
+    pub surface: &'static str,
+    pub auth: &'static str,
+}
+
+impl RouteContract {
+    const fn new(
+        method: &'static str,
+        path: &'static str,
+        probe_path: &'static str,
+        surface: &'static str,
+        auth: &'static str,
+    ) -> Self {
+        Self {
+            method,
+            path,
+            probe_path,
+            surface,
+            auth,
+        }
+    }
+}
+
+const ROUTE_INVENTORY: &[RouteContract] = &[
+    RouteContract::new("GET", "/health/live", "/health/live", "platform", "public"),
+    RouteContract::new(
+        "GET",
+        "/health/ready",
+        "/health/ready",
+        "platform",
+        "public",
+    ),
+    RouteContract::new("GET", "/health/info", "/health/info", "platform", "public"),
+    RouteContract::new("GET", "/metrics", "/metrics", "platform", "public"),
+    RouteContract::new(
+        "GET",
+        "/ws/client",
+        "/ws/client",
+        "client_gateway",
+        "realtime_ticket",
+    ),
+    RouteContract::new(
+        "GET",
+        "/ws/host",
+        "/ws/host",
+        "host_gateway",
+        "realtime_ticket",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/approvals/respond",
+        "/v1/approvals/respond",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/agent-sessions/list",
+        "/v1/agent-sessions/list",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/agent-sessions/read-turns",
+        "/v1/agent-sessions/read-turns",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/auth/register",
+        "/v1/auth/register",
+        "account_api",
+        "public",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/auth/login",
+        "/v1/auth/login",
+        "account_api",
+        "public",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/auth/refresh",
+        "/v1/auth/refresh",
+        "account_api",
+        "public",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/auth/logout",
+        "/v1/auth/logout",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/auth/change-password",
+        "/v1/auth/change-password",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/host/bootstrap/nonce",
+        "/v1/host/bootstrap/nonce",
+        "host_api",
+        "host_bootstrap",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/host/pairing/request-code",
+        "/v1/host/pairing/request-code",
+        "host_api",
+        "host_bootstrap",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/host/pairing/redeem",
+        "/v1/host/pairing/redeem",
+        "host_api",
+        "host_bootstrap",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/host/installations/self",
+        "/v1/host/installations/self",
+        "host_api",
+        "host_installation",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/host/realtime/ws-ticket",
+        "/v1/host/realtime/ws-ticket",
+        "host_api",
+        "host_installation",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/pairing/confirm",
+        "/v1/pairing/confirm",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/pairing/revoke",
+        "/v1/pairing/revoke",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/pairing/list-hosts",
+        "/v1/pairing/list-hosts",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "DELETE",
+        "/v1/pairings/:host_device_id",
+        "/v1/pairings/00000000-0000-0000-0000-000000000001",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects",
+        "/v1/projects",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/create",
+        "/v1/projects/create",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/query",
+        "/v1/projects/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/list",
+        "/v1/projects/list",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/update",
+        "/v1/projects/update",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/rename",
+        "/v1/projects/rename",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/delete",
+        "/v1/projects/delete",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "DELETE",
+        "/v1/projects/:project_id",
+        "/v1/projects/proj_probe",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/link-conversation",
+        "/v1/projects/link-conversation",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/conversations/link",
+        "/v1/projects/conversations/link",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/agent-sessions/link",
+        "/v1/projects/agent-sessions/link",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/projects/agent-sessions/query",
+        "/v1/projects/agent-sessions/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/realtime/ws-ticket",
+        "/v1/realtime/ws-ticket",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/me/profile/query",
+        "/v1/me/profile/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/me/profile/minos-id",
+        "/v1/me/profile/minos-id",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/me/profile/display-name",
+        "/v1/me/profile/display-name",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/users/search/query",
+        "/v1/users/search/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/friends/query",
+        "/v1/friends/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/friend-requests",
+        "/v1/friend-requests",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/friend-requests/query",
+        "/v1/friend-requests/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/friend-requests/:request_id/accept",
+        "/v1/friend-requests/request_probe/accept",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/friend-requests/:request_id/reject",
+        "/v1/friend-requests/request_probe/reject",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/query",
+        "/v1/conversations/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/list",
+        "/v1/conversations/list",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/direct",
+        "/v1/conversations/direct",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/group",
+        "/v1/conversations/group",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/members/query",
+        "/v1/conversations/conv_probe/members/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/read",
+        "/v1/conversations/conv_probe/read",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/messages",
+        "/v1/conversations/conv_probe/messages",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/send-message",
+        "/v1/conversations/send-message",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/messages/query",
+        "/v1/conversations/conv_probe/messages/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/messages/:message_id/recall",
+        "/v1/conversations/conv_probe/messages/msg_probe/recall",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/agents",
+        "/v1/agents",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/agents/query",
+        "/v1/agents/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/agents/:agent_id/delete",
+        "/v1/agents/agent_probe/delete",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/members/add",
+        "/v1/conversations/conv_probe/members/add",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/agents",
+        "/v1/conversations/conv_probe/agents",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/agents/add",
+        "/v1/conversations/conv_probe/agents/add",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/agents/remove",
+        "/v1/conversations/conv_probe/agents/remove",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/conversations/:conversation_id/agents/message",
+        "/v1/conversations/conv_probe/agents/message",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/threads",
+        "/v1/threads",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/threads/query",
+        "/v1/threads/query",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/threads/:thread_id/events",
+        "/v1/threads/thread_probe/events",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/threads/read",
+        "/v1/threads/read",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/threads/:thread_id/last_seq",
+        "/v1/threads/thread_probe/last_seq",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/threads/last-seq",
+        "/v1/threads/last-seq",
+        "account_api",
+        "account_bearer",
+    ),
+];
 
 impl BackendState {
     /// Construct a state bundle with the crate's `CARGO_PKG_VERSION`.
@@ -134,25 +614,71 @@ impl BackendState {
         cors_origins: Option<Vec<HeaderValue>>,
         instance_id: String,
     ) -> Self {
-        let approval_relay =
-            crate::approval_relay::ApprovalRelay::new(store.clone(), Arc::clone(&registry));
-        Self {
+        Self::new_with_runtime(
             registry,
             pairing,
             store,
             token_ttl,
-            translators: ThreadTranslators::new(),
-            approval_relay,
-            jwt_secret: Arc::new(jwt_secret),
-            auth_login_per_email: default_login_per_email(),
-            auth_login_per_ip: default_login_per_ip(),
-            auth_register_per_ip: default_register_per_ip(),
-            auth_refresh_per_acc: default_refresh_per_acc(),
+            jwt_secret,
             cors_origins,
             instance_id,
-            version: env!("CARGO_PKG_VERSION"),
+            MessageBusBackend::inline(),
+            PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
+        )
+    }
+
+    #[must_use]
+    pub fn from_app_context(
+        app: Arc<AppContext>,
+        cors_origins: Option<Vec<HeaderValue>>,
+        version: &'static str,
+    ) -> Self {
+        Self {
+            app,
+            cors_origins,
+            version,
         }
     }
+
+    #[must_use]
+    pub fn new_with_runtime(
+        registry: Arc<SessionRegistry>,
+        pairing: Arc<PairingService>,
+        store: SqlitePool,
+        token_ttl: Duration,
+        jwt_secret: String,
+        cors_origins: Option<Vec<HeaderValue>>,
+        instance_id: String,
+        message_bus: MessageBusBackend,
+        peer_target_cache: PeerTargetCacheBackend,
+    ) -> Self {
+        let app = AppContext::compose(
+            AppRuntimeConfig {
+                environment: crate::config::Environment::Dev,
+                storage_mode: crate::config::StorageMode::Sqlite,
+                runtime_mode: crate::config::RuntimeMode::Monolith,
+                cache_backend: crate::realtime::CacheBackendKind::InMemory,
+                message_bus_backend: crate::realtime::MessageBusBackendKind::Inline,
+                db_max_connections: 1,
+                token_ttl_secs: u64::try_from(token_ttl.as_secs()).unwrap_or(u64::MAX),
+                cluster_channel: crate::config::DEFAULT_CLUSTER_CHANNEL.to_string(),
+            },
+            registry,
+            pairing,
+            store.into(),
+            token_ttl,
+            jwt_secret,
+            instance_id,
+            message_bus,
+            peer_target_cache,
+        );
+        Self::from_app_context(app, cors_origins, env!("CARGO_PKG_VERSION"))
+    }
+}
+
+#[must_use]
+pub fn formal_route_inventory() -> &'static [RouteContract] {
+    ROUTE_INVENTORY
 }
 
 /// Parse the `--cors-origins` / `MINOS_CORS_ORIGINS` config string into
@@ -181,30 +707,6 @@ pub fn parse_cors_origins(raw: &str) -> Option<Vec<HeaderValue>> {
     }
 }
 
-/// 10 logins per minute, keyed by email. Spec §5.6.
-#[must_use]
-pub fn default_login_per_email() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(10, Duration::from_mins(1)))
-}
-
-/// 5 logins per minute, keyed by IP. Spec §5.6.
-#[must_use]
-pub fn default_login_per_ip() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(5, Duration::from_mins(1)))
-}
-
-/// 3 register calls per hour, keyed by IP. Spec §5.6.
-#[must_use]
-pub fn default_register_per_ip() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(3, Duration::from_hours(1)))
-}
-
-/// 60 refreshes per hour, keyed by account. Spec §5.6.
-#[must_use]
-pub fn default_refresh_per_acc() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(60, Duration::from_hours(1)))
-}
-
 /// Build the backend's top-level axum `Router`.
 ///
 /// Includes request-id propagation, tracing, and Prometheus metrics.
@@ -213,11 +715,20 @@ pub fn router(state: BackendState) -> Router {
     crate::telemetry::set_session_registry_size(state.registry.len());
 
     let cors = cors_layer(state.cors_origins.clone());
-    Router::new()
-        .route("/health", axum::routing::get(health::get))
+    let is_sqlite = state.store.is_sqlite();
+    let router = Router::new()
+        .route("/health/live", axum::routing::get(health::live))
+        .route("/health/ready", axum::routing::get(health::ready))
+        .route("/health/info", axum::routing::get(health::info))
         .route("/metrics", axum::routing::get(metrics::get))
-        .route("/devices", axum::routing::get(ws_devices::upgrade))
-        .nest("/v1", v1::router())
+        .route("/ws/client", axum::routing::get(ws_devices::upgrade_client))
+        .route("/ws/host", axum::routing::get(ws_devices::upgrade_host));
+    let router = if is_sqlite {
+        router.nest("/v1", v1::router())
+    } else {
+        router.nest("/v1", v1::external_sql_router())
+    };
+    router
         .layer(cors)
         .layer(from_fn(record_http_metrics))
         .layer(PropagateRequestIdLayer::new(x_request_id_header()))
@@ -316,23 +827,300 @@ pub mod test_support {
         let pool = memory_pool().await;
         let registry = Arc::new(SessionRegistry::new());
         let pairing = Arc::new(PairingService::new(pool.clone()));
-        let approval_relay =
-            crate::approval_relay::ApprovalRelay::new(pool.clone(), Arc::clone(&registry));
-        BackendState {
+        BackendState::new(
             registry,
             pairing,
-            store: pool,
-            token_ttl: Duration::from_mins(5),
-            translators: crate::ingest::translate::ThreadTranslators::new(),
-            approval_relay,
-            jwt_secret: Arc::new(TEST_JWT_SECRET.to_string()),
-            auth_login_per_email: super::default_login_per_email(),
-            auth_login_per_ip: super::default_login_per_ip(),
-            auth_register_per_ip: super::default_register_per_ip(),
-            auth_refresh_per_acc: super::default_refresh_per_acc(),
-            cors_origins: None,
-            instance_id: "test-instance".to_string(),
-            version: env!("CARGO_PKG_VERSION"),
+            pool,
+            Duration::from_mins(5),
+            TEST_JWT_SECRET.to_string(),
+            None,
+            "test-instance".to_string(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{formal_route_inventory, router};
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tower::util::ServiceExt;
+
+    use crate::config::{Environment, RuntimeMode, StorageMode, DEFAULT_CLUSTER_CHANNEL};
+    use crate::pairing::PairingService;
+    use crate::realtime::{
+        CacheBackendKind, MessageBusBackend, MessageBusBackendKind, PeerTargetCacheBackend,
+    };
+    use crate::runtime::{AppContext, AppRuntimeConfig};
+    use crate::session::SessionRegistry;
+
+    #[tokio::test]
+    async fn route_inventory_matches_router() {
+        let state = super::test_support::backend_state().await;
+        let app = router(state);
+
+        for route in formal_route_inventory() {
+            let method = Method::from_bytes(route.method.as_bytes())
+                .unwrap_or_else(|_| panic!("invalid method in route inventory: {}", route.method));
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(route.probe_path)
+                        .body(Body::empty())
+                        .expect("request builder"),
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "router call failed for {} {}: {error}",
+                        route.method, route.path
+                    )
+                });
+
+            assert_ne!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "route inventory drifted: {} {} is not mounted",
+                route.method,
+                route.path,
+            );
+            assert_ne!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "route inventory drifted: {} {} resolved to a different method",
+                route.method,
+                route.path,
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn external_sql_router_mounts_v1_surface_without_top_level_fallback() {
+        let opts = PgConnectOptions::from_str("postgres://minos:secret@127.0.0.1:1/minos").unwrap();
+        let pool = PgPoolOptions::new().connect_lazy_with(opts);
+        let app = AppContext::compose(
+            AppRuntimeConfig {
+                environment: Environment::Dev,
+                storage_mode: StorageMode::ExternalSql,
+                runtime_mode: RuntimeMode::Monolith,
+                cache_backend: CacheBackendKind::InMemory,
+                message_bus_backend: MessageBusBackendKind::Inline,
+                db_max_connections: 1,
+                token_ttl_secs: 300,
+                cluster_channel: DEFAULT_CLUSTER_CHANNEL.to_string(),
+            },
+            Arc::new(SessionRegistry::new()),
+            Arc::new(PairingService::new(pool.clone())),
+            pool.into(),
+            Duration::from_mins(5),
+            "test-jwt-secret-32-bytes-padding".to_string(),
+            "external-sql-test-instance".to_string(),
+            MessageBusBackend::inline(),
+            PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
+        );
+        let app = router(super::BackendState::from_app_context(app, None, "test"));
+
+        let live = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/health/live")
+                    .body(Body::empty())
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(live.status(), StatusCode::OK);
+
+        let auth_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/auth/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"email":"alice@example.com","password":"testpass1"}"#,
+                    ))
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(auth_route.status(), StatusCode::UNAUTHORIZED);
+
+        let host_nonce_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/host/bootstrap/nonce")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"installation_id":"00000000-0000-0000-0000-000000000001"}"#,
+                    ))
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(host_nonce_route.status(), StatusCode::OK);
+
+        let confirm_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/pairing/confirm")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"pairing_code":"PAIR1234"}"#))
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(confirm_route.status(), StatusCode::UNAUTHORIZED);
+
+        let realtime_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/realtime/ws-ticket")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"installation_id":"00000000-0000-0000-0000-000000000001"}"#,
+                    ))
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(realtime_route.status(), StatusCode::UNAUTHORIZED);
+
+        let host_realtime_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/host/realtime/ws-ticket")
+                    .body(Body::empty())
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(host_realtime_route.status(), StatusCode::UNAUTHORIZED);
+
+        let client_ws_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/ws/client")
+                    .header("connection", "upgrade")
+                    .header("upgrade", "websocket")
+                    .header("sec-websocket-version", "13")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .body(Body::empty())
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_ne!(client_ws_route.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_ne!(client_ws_route.status(), StatusCode::NOT_FOUND);
+        assert_ne!(client_ws_route.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let host_ws_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/ws/host")
+                    .header("connection", "upgrade")
+                    .header("upgrade", "websocket")
+                    .header("sec-websocket-version", "13")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .body(Body::empty())
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_ne!(host_ws_route.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_ne!(host_ws_route.status(), StatusCode::NOT_FOUND);
+        assert_ne!(host_ws_route.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let approvals_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/approvals/respond")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_ne!(approvals_route.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_ne!(approvals_route.status(), StatusCode::NOT_FOUND);
+        assert_ne!(approvals_route.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let social_route = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/conversations/query")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(social_route.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn external_sql_ready_returns_503_when_postgres_is_unreachable() {
+        let opts = PgConnectOptions::from_str("postgres://minos:secret@127.0.0.1:1/minos").unwrap();
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(50))
+            .connect_lazy_with(opts);
+        let app = AppContext::compose(
+            AppRuntimeConfig {
+                environment: Environment::Dev,
+                storage_mode: StorageMode::ExternalSql,
+                runtime_mode: RuntimeMode::Monolith,
+                cache_backend: CacheBackendKind::InMemory,
+                message_bus_backend: MessageBusBackendKind::Inline,
+                db_max_connections: 1,
+                token_ttl_secs: 300,
+                cluster_channel: DEFAULT_CLUSTER_CHANNEL.to_string(),
+            },
+            Arc::new(SessionRegistry::new()),
+            Arc::new(PairingService::new(pool.clone())),
+            pool.into(),
+            Duration::from_mins(5),
+            "test-jwt-secret-32-bytes-padding".to_string(),
+            "external-sql-test-instance".to_string(),
+            MessageBusBackend::inline(),
+            PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
+        );
+        let app = router(super::BackendState::from_app_context(app, None, "test"));
+
+        let ready = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .expect("request builder"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
