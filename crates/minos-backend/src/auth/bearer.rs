@@ -46,28 +46,36 @@ impl BearerError {
     }
 }
 
+/// Verify only the `Authorization: Bearer <jwt>` header and return the
+/// account principal carried by the token.
+///
+/// This is the extractor for the formal account rail where `/v1/*` handlers
+/// should not depend on the legacy `X-Device-*` header bundle for business
+/// identity. The token still contains a `did` claim, but handlers that care
+/// about a specific installation must validate it from request data.
+pub fn require_account(
+    state: &BackendState,
+    headers: &HeaderMap,
+) -> Result<AccountAuthOutcome, BearerError> {
+    let claims = verify_authorization_header(state, headers)?;
+    Ok(AccountAuthOutcome {
+        account_id: claims.sub.clone(),
+        device_id: claims.did.clone(),
+        claims,
+    })
+}
+
 /// Verify the `Authorization: Bearer <jwt>` header and bind it to the
 /// `X-Device-Id` header. Returns `Ok(AccountAuthOutcome)` only when:
 ///
 /// - Header is present and starts with `Bearer ` (case-insensitive).
-/// - JWT signature + exp validate against `state.jwt_secret`.
+/// - JWT signature + exp validate against `state.auth.jwt_secret()`.
 /// - JWT `did` claim equals the `X-Device-Id` header (replay defence).
 pub fn require(
     state: &BackendState,
     headers: &HeaderMap,
 ) -> Result<AccountAuthOutcome, BearerError> {
-    let raw = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(BearerError::Missing)?;
-    let tok = raw
-        .strip_prefix("Bearer ")
-        .or_else(|| raw.strip_prefix("bearer "))
-        .ok_or(BearerError::Missing)?;
-    let claims = jwt::verify(state.jwt_secret.as_bytes(), tok).map_err(|e| match e {
-        BackendError::JwtVerify { message } => BearerError::Invalid(message),
-        _ => BearerError::Invalid("verify failed".into()),
-    })?;
+    let claims = verify_authorization_header(state, headers)?;
     let device_id = extract_device_id(headers).map_err(|_| BearerError::MissingDeviceHeader)?;
     if claims.did != device_id.to_string() {
         return Err(BearerError::DeviceMismatch);
@@ -77,6 +85,25 @@ pub fn require(
         device_id: device_id.to_string(),
         claims,
     })
+}
+
+fn verify_authorization_header(
+    state: &BackendState,
+    headers: &HeaderMap,
+) -> Result<Claims, BearerError> {
+    let raw = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(BearerError::Missing)?;
+    let tok = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))
+        .ok_or(BearerError::Missing)?;
+    let claims = jwt::verify(state.auth.jwt_secret(), tok).map_err(|e| match e {
+        BackendError::JwtVerify { message } => BearerError::Invalid(message),
+        _ => BearerError::Invalid("verify failed".into()),
+    })?;
+    Ok(claims)
 }
 
 #[cfg(test)]
@@ -108,6 +135,21 @@ mod tests {
         headers.insert("authorization", auth_header(&token).parse().unwrap());
         headers.insert("x-device-id", device_id.to_string().parse().unwrap());
         let outcome = require(&state, &headers).unwrap();
+        assert_eq!(outcome.account_id, "acct-1");
+        assert_eq!(outcome.device_id, device_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn require_account_does_not_require_device_header() {
+        let state = backend_state().await;
+        let device_id = DeviceId::new();
+        let token =
+            jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &device_id.to_string()).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", auth_header(&token).parse().unwrap());
+
+        let outcome = require_account(&state, &headers).unwrap();
+
         assert_eq!(outcome.account_id, "acct-1");
         assert_eq!(outcome.device_id, device_id.to_string());
     }

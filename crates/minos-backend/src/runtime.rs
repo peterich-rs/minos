@@ -1,0 +1,317 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::http::HeaderValue;
+use serde::Serialize;
+use tokio::task::JoinHandle;
+
+use crate::approval_relay::ApprovalRelay;
+use crate::auth::host_bootstrap::BootstrapNonceStore;
+use crate::auth::use_case::AuthUseCase;
+use crate::config::{
+    Config, Environment, RuntimeMode, StorageMode, DEFAULT_CLUSTER_CHANNEL,
+    DEFAULT_DB_MAX_CONNECTIONS, DEFAULT_TOKEN_TTL_SECS,
+};
+use crate::host_command_runtime::HostCommandRuntime;
+use crate::http::{self, BackendState, RouteContract};
+use crate::ingest::{translate::ThreadTranslators, use_case::IngestUseCase};
+use crate::pairing::PairingService;
+use crate::project::ProjectService;
+use crate::realtime::{
+    configure_peer_target_cache, CacheBackendKind, MessageBusBackend, MessageBusBackendKind,
+    PeerTargetCacheBackend, RealtimeFanout,
+};
+use crate::session::SessionRegistry;
+use crate::store::{self, StoreHandle};
+
+const TOKEN_GC_INTERVAL: Duration = Duration::from_mins(1);
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AppRuntimeConfig {
+    pub environment: Environment,
+    pub storage_mode: StorageMode,
+    pub runtime_mode: RuntimeMode,
+    pub cache_backend: CacheBackendKind,
+    pub message_bus_backend: MessageBusBackendKind,
+    pub db_max_connections: u32,
+    pub token_ttl_secs: u64,
+    pub cluster_channel: String,
+}
+
+impl From<&Config> for AppRuntimeConfig {
+    fn from(cfg: &Config) -> Self {
+        Self {
+            environment: cfg.environment,
+            storage_mode: cfg.storage_mode,
+            runtime_mode: cfg.runtime_mode,
+            cache_backend: cfg.cache_backend,
+            message_bus_backend: cfg.message_bus_backend,
+            db_max_connections: cfg.db_max_connections,
+            token_ttl_secs: cfg.token_ttl_secs,
+            cluster_channel: cfg.cluster_channel.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackendPlatformContract {
+    pub service: &'static str,
+    pub version: &'static str,
+    pub runtime_modes: Vec<String>,
+    pub storage_modes: Vec<String>,
+    pub external_sql: ExternalSqlContract,
+    pub cache_backends: Vec<String>,
+    pub message_bus_backends: Vec<String>,
+    pub defaults: BackendPlatformDefaults,
+    pub prod_guards: Vec<&'static str>,
+    pub routes: Vec<RouteContract>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExternalSqlContract {
+    pub supported_drivers: Vec<String>,
+    pub boot_capabilities: Vec<&'static str>,
+    pub runtime_blockers: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackendPlatformDefaults {
+    pub environment: &'static str,
+    pub storage_mode: &'static str,
+    pub runtime_mode: &'static str,
+    pub db_max_connections: u32,
+    pub token_ttl_secs: u64,
+    pub cache_backend: &'static str,
+    pub message_bus_backend: &'static str,
+    pub cluster_channel: &'static str,
+}
+
+pub struct AppContext {
+    pub config: Arc<AppRuntimeConfig>,
+    pub registry: Arc<SessionRegistry>,
+    pub pairing: Arc<PairingService>,
+    pub auth: Arc<AuthUseCase>,
+    pub bootstrap_nonces: Arc<BootstrapNonceStore>,
+    pub projects: Arc<ProjectService>,
+    pub store: StoreHandle,
+    pub token_ttl: Duration,
+    pub ingest: Arc<IngestUseCase>,
+    pub realtime: Arc<RealtimeFanout>,
+    pub host_command_runtime: Arc<HostCommandRuntime>,
+    pub approval_relay: Arc<ApprovalRelay>,
+    pub instance_id: String,
+}
+
+impl AppContext {
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose(
+        runtime_config: AppRuntimeConfig,
+        registry: Arc<SessionRegistry>,
+        pairing: Arc<PairingService>,
+        store: StoreHandle,
+        token_ttl: Duration,
+        jwt_secret: String,
+        instance_id: String,
+        message_bus: MessageBusBackend,
+        peer_target_cache: PeerTargetCacheBackend,
+    ) -> Arc<Self> {
+        let translators = ThreadTranslators::new();
+        configure_peer_target_cache(peer_target_cache);
+        let realtime = RealtimeFanout::new(Arc::clone(&registry), message_bus, instance_id.clone());
+        let run_workers = runtime_config.runtime_mode.runs_supervised_workers();
+        let host_command_runtime = HostCommandRuntime::new_with_timeout_worker(
+            store.clone(),
+            Arc::clone(&registry),
+            run_workers,
+        );
+        let approval_relay = ApprovalRelay::new_with_timeout_worker(
+            store.clone(),
+            Arc::clone(&registry),
+            Arc::clone(&host_command_runtime),
+            run_workers,
+        );
+        let ingest = IngestUseCase::new(
+            store.clone(),
+            Arc::clone(&registry),
+            Arc::clone(&translators),
+            Arc::clone(&approval_relay),
+            Arc::clone(&realtime),
+        );
+        let auth = AuthUseCase::new(store.clone(), jwt_secret);
+        let bootstrap_nonces = Arc::new(BootstrapNonceStore::default());
+        let projects = ProjectService::new(store.clone());
+        Arc::new(Self {
+            config: Arc::new(runtime_config),
+            registry,
+            pairing,
+            auth,
+            bootstrap_nonces,
+            projects,
+            store,
+            token_ttl,
+            ingest,
+            realtime,
+            host_command_runtime,
+            approval_relay,
+            instance_id,
+        })
+    }
+}
+
+pub struct RuntimeShell {
+    pub app: Arc<AppContext>,
+    cors_origins: Option<Vec<HeaderValue>>,
+    cluster_listener: Option<JoinHandle<()>>,
+    token_gc_task: Option<JoinHandle<()>>,
+}
+
+impl RuntimeShell {
+    pub fn from_config(
+        cfg: &Config,
+        store: StoreHandle,
+        jwt_secret: String,
+        cors_origins: Option<Vec<HeaderValue>>,
+    ) -> Result<Self, crate::error::BackendError> {
+        let registry = Arc::new(SessionRegistry::new());
+        let pairing = Arc::new(PairingService::new(store.clone()));
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        let redis_url = cfg.redis_url.as_deref().unwrap_or_default();
+        let message_bus = match cfg.message_bus_backend {
+            MessageBusBackendKind::Inline => MessageBusBackend::inline(),
+            MessageBusBackendKind::Redis => {
+                MessageBusBackend::redis(redis_url, cfg.cluster_channel.clone())?
+            }
+        };
+        let peer_target_cache = match cfg.cache_backend {
+            CacheBackendKind::InMemory => PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
+            CacheBackendKind::Redis => {
+                PeerTargetCacheBackend::redis(redis_url, Duration::from_secs(5))?
+            }
+        };
+        let run_workers = cfg.runtime_mode.runs_supervised_workers();
+        let app = AppContext::compose(
+            AppRuntimeConfig::from(cfg),
+            registry,
+            pairing,
+            store,
+            cfg.token_ttl(),
+            jwt_secret,
+            instance_id,
+            message_bus,
+            peer_target_cache,
+        );
+        let cluster_listener = if cfg.runtime_mode.serves_http() {
+            app.realtime.spawn_listener()
+        } else {
+            None
+        };
+        let token_gc_task = if run_workers {
+            Some(spawn_token_gc(app.store.clone()))
+        } else {
+            None
+        };
+        Ok(Self {
+            app,
+            cors_origins,
+            cluster_listener,
+            token_gc_task,
+        })
+    }
+
+    #[must_use]
+    pub fn backend_state(&self) -> BackendState {
+        BackendState::from_app_context(
+            Arc::clone(&self.app),
+            self.cors_origins.clone(),
+            env!("CARGO_PKG_VERSION"),
+        )
+    }
+
+    pub async fn shutdown(mut self) {
+        if let Some(task) = self.token_gc_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.cluster_listener.take() {
+            task.abort();
+        }
+        self.app.store.close().await;
+    }
+}
+
+#[must_use]
+pub fn platform_contract_snapshot() -> BackendPlatformContract {
+    BackendPlatformContract {
+        service: "minos-backend",
+        version: env!("CARGO_PKG_VERSION"),
+        runtime_modes: enum_names::<RuntimeMode>(),
+        storage_modes: store::compiled_storage_modes(),
+        external_sql: ExternalSqlContract {
+            supported_drivers: store::supported_external_sql_drivers(),
+            boot_capabilities: vec![
+                "Validates postgres:// and postgresql:// URLs during config parsing",
+                "Opens a real sqlx Postgres pool for the runtime store handle",
+                "Queries current_database() and version() for boot diagnostics",
+                "Serves /health/* and /metrics against the live external SQL pool",
+                "Mounts the full /v1 route tree instead of a reduced external-sql-only router",
+                "Serves /ws/client and /ws/host for realtime ticket auth, session activation, forwarding, regular ingest persistence, and UI fanout",
+            ],
+            runtime_blockers: vec![
+                "Most remaining /v1 handlers plus approval-driven realtime flows still rely on SQLite-only services and store queries",
+                "Many store modules under crates/minos-backend/src/store still use SQLite-specific SQL placeholders and transactions",
+                "The embedded migration set under crates/minos-backend/migrations is SQLite-only",
+            ],
+        },
+        cache_backends: enum_names::<CacheBackendKind>(),
+        message_bus_backends: enum_names::<MessageBusBackendKind>(),
+        defaults: BackendPlatformDefaults {
+            environment: Environment::Dev.as_str(),
+            storage_mode: StorageMode::Sqlite.as_str(),
+            runtime_mode: RuntimeMode::Monolith.as_str(),
+            db_max_connections: DEFAULT_DB_MAX_CONNECTIONS,
+            token_ttl_secs: DEFAULT_TOKEN_TTL_SECS,
+            cache_backend: "in-memory",
+            message_bus_backend: "inline",
+            cluster_channel: DEFAULT_CLUSTER_CHANNEL,
+        },
+        prod_guards: vec![
+            "MINOS_STORAGE_MODE must not remain sqlite in prod",
+            "MINOS_CORS_ORIGINS must not be wildcard for HTTP-serving prod nodes",
+            "MINOS_CACHE_BACKEND must be redis for HTTP-serving prod nodes",
+            "MINOS_MESSAGE_BUS_BACKEND must be redis for HTTP-serving prod nodes",
+            "MINOS_REDIS_URL is required whenever redis runtime adapters are selected",
+            "MINOS_STORAGE_MODE=external-sql now mounts the full /v1 route tree and admits regular /ws traffic; unported handlers must fail at their own surface boundary instead of the top-level router",
+        ],
+        routes: http::formal_route_inventory().to_vec(),
+    }
+}
+
+fn enum_names<T: clap::ValueEnum>() -> Vec<String> {
+    T::value_variants()
+        .iter()
+        .filter_map(|value| {
+            value
+                .to_possible_value()
+                .map(|name| name.get_name().to_string())
+        })
+        .collect()
+}
+
+fn spawn_token_gc(store: StoreHandle) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(TOKEN_GC_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let now = chrono::Utc::now().timestamp_millis();
+            match crate::store::tokens::gc_expired(&store, now).await {
+                Ok(rows) if rows > 0 => {
+                    tracing::info!(rows, "token GC removed expired rows");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, "token GC failed");
+                }
+            }
+        }
+    })
+}

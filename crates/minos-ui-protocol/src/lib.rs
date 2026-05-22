@@ -6,8 +6,8 @@
 //! format onto this shape; the backend runs them on ingest and on
 //! history read.
 //!
-//! See `docs/superpowers/specs/mobile-migration-and-ui-protocol-design.md`
-//! §6.4 for the authoritative type definition.
+//! The Rust types in this crate are the authoritative definition of the
+//! UI event contract.
 
 #![forbid(unsafe_code)]
 

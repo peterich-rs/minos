@@ -52,13 +52,13 @@ use std::time::Duration;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures::StreamExt;
 use minos_protocol::Envelope;
-use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
 use crate::{
     error::BackendError,
-    ingest::translate::ThreadTranslators,
-    session::{ServerFrame, SessionHandle, SessionRegistry},
+    ingest::use_case::{IngestCommand, IngestUseCase},
+    session::{ServerFrame, SessionHandle, SessionRegistry, SessionRevocation},
+    store::{AsStorePool, StoreHandle},
 };
 
 /// Cadence of the heartbeat tick. Spec / plan §8 name 15s as the ping
@@ -86,6 +86,212 @@ const CLOSE_CODE_NORMAL: u16 = 1000;
 /// or unsupported versions (per plan §8).
 const CLOSE_CODE_BAD_REQUEST: u16 = 4400;
 
+/// WS close code used when a live session's auth backing was revoked.
+const CLOSE_CODE_AUTH_FAILURE: u16 = 4401;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionExit {
+    OutboxClosed,
+    ClientClose,
+    StreamEnded,
+    SessionSuperseded,
+    AuthRevoked,
+    EnvelopeDecode,
+    BinaryUnsupported,
+    VersionUnsupported,
+    ClientSentServerFrame,
+    IngestForbiddenRole,
+    HeartbeatTimeout { elapsed_ms: u64, limit_ms: u64 },
+    ReadError,
+    WriteFailed,
+}
+
+impl SessionExit {
+    fn metric_reason(self) -> &'static str {
+        match self {
+            Self::OutboxClosed => "outbox_closed",
+            Self::ClientClose => "client_close",
+            Self::StreamEnded => "stream_ended",
+            Self::SessionSuperseded => "session_superseded",
+            Self::AuthRevoked => "auth_revoked",
+            Self::EnvelopeDecode => "envelope_decode",
+            Self::BinaryUnsupported => "binary_unsupported",
+            Self::VersionUnsupported => "version_unsupported",
+            Self::ClientSentServerFrame => "client_sent_server_frame",
+            Self::IngestForbiddenRole => "ingest_forbidden_role",
+            Self::HeartbeatTimeout { .. } => "heartbeat_timeout",
+            Self::ReadError => "read_error",
+            Self::WriteFailed => "write_failed",
+        }
+    }
+
+    fn close_frame(self) -> Option<(u16, &'static str)> {
+        match self {
+            Self::SessionSuperseded => Some((CLOSE_CODE_NORMAL, "session_superseded")),
+            Self::AuthRevoked => Some((CLOSE_CODE_AUTH_FAILURE, "auth_revoked")),
+            Self::EnvelopeDecode => Some((CLOSE_CODE_BAD_REQUEST, "envelope_decode")),
+            Self::BinaryUnsupported => Some((CLOSE_CODE_BAD_REQUEST, "binary_unsupported")),
+            Self::VersionUnsupported => Some((CLOSE_CODE_BAD_REQUEST, "version_unsupported")),
+            Self::ClientSentServerFrame => {
+                Some((CLOSE_CODE_BAD_REQUEST, "client_sent_server_frame"))
+            }
+            Self::IngestForbiddenRole => Some((CLOSE_CODE_BAD_REQUEST, "ingest_forbidden_role")),
+            Self::HeartbeatTimeout { .. } => Some((CLOSE_CODE_INTERNAL_ERROR, "heartbeat_timeout")),
+            Self::OutboxClosed
+            | Self::ClientClose
+            | Self::StreamEnded
+            | Self::ReadError
+            | Self::WriteFailed => None,
+        }
+    }
+}
+
+fn session_exit_for_revocation(session: &SessionHandle, reason: SessionRevocation) -> SessionExit {
+    match reason {
+        SessionRevocation::Superseded => {
+            tracing::info!(
+                target: "minos_backend::envelope",
+                device = %session.device_id,
+                "session superseded by reconnect; closing old socket"
+            );
+            SessionExit::SessionSuperseded
+        }
+        SessionRevocation::AuthRevoked => {
+            tracing::info!(
+                target: "minos_backend::envelope",
+                device = %session.device_id,
+                "session auth/token revoked; closing socket"
+            );
+            SessionExit::AuthRevoked
+        }
+    }
+}
+
+struct SessionReader<'a> {
+    session: &'a SessionHandle,
+    registry: &'a SessionRegistry,
+    store: &'a StoreHandle,
+    ingest: &'a IngestUseCase,
+}
+
+impl<'a> SessionReader<'a> {
+    fn new(
+        session: &'a SessionHandle,
+        registry: &'a SessionRegistry,
+        store: &'a StoreHandle,
+        ingest: &'a IngestUseCase,
+    ) -> Self {
+        Self {
+            session,
+            registry,
+            store,
+            ingest,
+        }
+    }
+
+    async fn on_message(
+        &self,
+        ws: &mut WebSocket,
+        maybe_msg: Option<Result<Message, axum::Error>>,
+    ) -> Result<(), SessionExit> {
+        match maybe_msg {
+            Some(Ok(Message::Text(text))) => match serde_json::from_str::<Envelope>(&text) {
+                Ok(env) => {
+                    dispatch_envelope(
+                        ws,
+                        self.session,
+                        self.registry,
+                        self.store,
+                        self.ingest,
+                        env,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_backend::envelope",
+                        error = %e,
+                        "malformed envelope; closing 4400"
+                    );
+                    Err(SessionExit::EnvelopeDecode)
+                }
+            },
+            Some(Ok(Message::Binary(_))) => {
+                tracing::warn!(
+                    target: "minos_backend::envelope",
+                    "binary frame rejected; closing 4400"
+                );
+                Err(SessionExit::BinaryUnsupported)
+            }
+            Some(Ok(Message::Ping(payload))) => ws
+                .send(Message::Pong(payload))
+                .await
+                .map(|()| ())
+                .map_err(|_| SessionExit::WriteFailed),
+            Some(Ok(Message::Pong(_))) => {
+                *self.session.last_pong_at.write().await = std::time::Instant::now();
+                Ok(())
+            }
+            Some(Ok(Message::Close(_))) => Err(SessionExit::ClientClose),
+            None => Err(SessionExit::StreamEnded),
+            Some(Err(e)) => {
+                tracing::warn!(
+                    target: "minos_backend::envelope",
+                    error = %e,
+                    "ws read error; closing"
+                );
+                Err(SessionExit::ReadError)
+            }
+        }
+    }
+}
+
+struct SessionWriter;
+
+impl SessionWriter {
+    async fn send_frame(ws: &mut WebSocket, frame: &ServerFrame) -> Result<(), SessionExit> {
+        send_envelope(ws, frame).await
+    }
+}
+
+struct HeartbeatPolicy {
+    limit: Duration,
+}
+
+impl HeartbeatPolicy {
+    fn new(limit: Duration) -> Self {
+        Self { limit }
+    }
+
+    async fn on_tick(
+        &self,
+        ws: &mut WebSocket,
+        session: &SessionHandle,
+    ) -> Result<(), SessionExit> {
+        let elapsed = session.last_pong_at.read().await.elapsed();
+        if elapsed > self.limit {
+            let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+            let limit_ms = u64::try_from(self.limit.as_millis()).unwrap_or(u64::MAX);
+            tracing::info!(
+                target: "minos_backend::envelope",
+                device = %session.device_id,
+                elapsed_ms,
+                limit_ms,
+                "heartbeat timeout; closing 1011"
+            );
+            return Err(SessionExit::HeartbeatTimeout {
+                elapsed_ms,
+                limit_ms,
+            });
+        }
+
+        ws.send(Message::Ping(Vec::new()))
+            .await
+            .map(|()| ())
+            .map_err(|_| SessionExit::WriteFailed)
+    }
+}
+
 /// Main per-connection loop.
 ///
 /// Takes ownership of `ws` and the outbox receiver `outbox_rx`, holds the
@@ -104,20 +310,27 @@ pub async fn run_session(
     session: SessionHandle,
     mut outbox_rx: mpsc::Receiver<ServerFrame>,
     registry: Arc<SessionRegistry>,
-    store: SqlitePool,
-    translators: Arc<ThreadTranslators>,
+    store: StoreHandle,
     approval_relay: Arc<crate::approval_relay::ApprovalRelay>,
+    ingest: Arc<IngestUseCase>,
 ) -> Result<(), BackendError> {
-    let result = run_session_inner(
+    let role_label = role_metric_label(session.role);
+    crate::telemetry::record_ws_connect(role_label, crate::telemetry::OUTCOME_OK);
+    crate::telemetry::record_session_role_open(role_label);
+
+    let exit = run_session_inner(
         &mut ws,
         &session,
         &mut outbox_rx,
         &registry,
         &store,
-        &translators,
-        approval_relay.as_ref(),
+        ingest.as_ref(),
     )
     .await;
+
+    finalize_session_exit(&mut ws, &session, exit).await;
+
+    crate::telemetry::record_session_role_close(role_label);
 
     // Cleanup on any exit path: remove only if this is still the live
     // registry entry. A reconnect may already have replaced it.
@@ -127,7 +340,7 @@ pub async fn run_session(
     // `paired_with` peer here; that field no longer exists.
     let _ = registry.remove_current(&session);
 
-    if session.role.is_account_client() {
+    if session.role.is_account_client() && store.is_sqlite() {
         if let Some(account_id) = session.account_id() {
             if let Err(error) = approval_relay
                 .resolve_disconnected_for_account(&account_id)
@@ -149,7 +362,7 @@ pub async fn run_session(
     outbox_rx.close();
     while outbox_rx.recv().await.is_some() {}
 
-    result
+    Ok(())
 }
 
 /// Inner loop kept separate so `run_session` can guarantee cleanup on
@@ -160,39 +373,30 @@ async fn run_session_inner(
     session: &SessionHandle,
     outbox_rx: &mut mpsc::Receiver<ServerFrame>,
     registry: &SessionRegistry,
-    store: &SqlitePool,
-    translators: &ThreadTranslators,
-    approval_relay: &crate::approval_relay::ApprovalRelay,
-) -> Result<(), BackendError> {
+    store: &StoreHandle,
+    ingest: &IngestUseCase,
+) -> SessionExit {
     let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
     let mut revocation_rx = session.subscribe_revocation();
+    let reader = SessionReader::new(session, registry, store, ingest);
+    let heartbeat_policy = HeartbeatPolicy::new(PAIRED_TIMEOUT);
     // First tick fires immediately; skip it so we don't ping right after
     // accepting the socket.
     heartbeat.tick().await;
 
     loop {
-        if *revocation_rx.borrow() {
-            tracing::info!(
-                target: "minos_backend::envelope",
-                device = %session.device_id,
-                "session superseded by reconnect; closing old socket"
-            );
-            close_with(ws, CLOSE_CODE_NORMAL, "session_superseded").await;
-            break;
+        if let Some(reason) = *revocation_rx.borrow() {
+            return session_exit_for_revocation(session, reason);
         }
 
         tokio::select! {
             biased;
 
             changed = revocation_rx.changed() => {
-                if matches!(changed, Ok(())) && *revocation_rx.borrow_and_update() {
-                    tracing::info!(
-                        target: "minos_backend::envelope",
-                        device = %session.device_id,
-                        "session superseded by reconnect; closing old socket"
-                    );
-                    close_with(ws, CLOSE_CODE_NORMAL, "session_superseded").await;
-                    break;
+                if matches!(changed, Ok(())) {
+                    if let Some(reason) = *revocation_rx.borrow_and_update() {
+                        return session_exit_for_revocation(session, reason);
+                    }
                 }
             }
 
@@ -200,110 +404,46 @@ async fn run_session_inner(
             maybe_frame = outbox_rx.recv() => {
                 let Some(frame) = maybe_frame else {
                     // Outbox sender side has been dropped — shut down.
-                    break;
+                    return SessionExit::OutboxClosed;
                 };
-                if !send_envelope(ws, &frame).await {
-                    break;
+                if let Err(exit) = SessionWriter::send_frame(ws, &frame).await {
+                    return exit;
                 }
             }
 
             // Inbound: message from the client (or socket end).
             maybe_msg = ws.next() => {
-                match maybe_msg {
-                    Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<Envelope>(&text) {
-                            Ok(env) => {
-                                if !dispatch_envelope(
-                                    ws,
-                                    session,
-                                    registry,
-                                    store,
-                                    translators,
-                                    approval_relay,
-                                    env,
-                                )
-                                .await
-                                {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    target: "minos_backend::envelope",
-                                    error = %e,
-                                    "malformed envelope; closing 4400"
-                                );
-                                close_with(ws, CLOSE_CODE_BAD_REQUEST, "envelope_decode").await;
-                                break;
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Binary(_))) => {
-                        tracing::warn!(
-                            target: "minos_backend::envelope",
-                            "binary frame rejected; closing 4400"
-                        );
-                        close_with(ws, CLOSE_CODE_BAD_REQUEST, "binary_unsupported").await;
-                        break;
-                    }
-                    Some(Ok(Message::Ping(payload))) => {
-                        // axum auto-replies to control-frame pings if we
-                        // do nothing, but being explicit keeps us honest
-                        // if the default changes.
-                        let _ = ws.send(Message::Pong(payload)).await;
-                    }
-                    Some(Ok(Message::Pong(_))) => {
-                        *session.last_pong_at.write().await = std::time::Instant::now();
-                    }
-                    Some(Ok(Message::Close(_))) | None => {
-                        break;
-                    }
-                    Some(Err(e)) => {
-                        tracing::warn!(
-                            target: "minos_backend::envelope",
-                            error = %e,
-                            "ws read error; closing"
-                        );
-                        break;
-                    }
+                if let Err(exit) = reader.on_message(ws, maybe_msg).await {
+                    return exit;
                 }
             }
 
             // Heartbeat: periodic liveness probe + timeout check.
             _ = heartbeat.tick() => {
-                let elapsed = session.last_pong_at.read().await.elapsed();
                 // ADR-0020: there is no per-session "paired" boolean
                 // anymore. Treat any authenticated session as engaged-class
                 // (longer timeout); truly anonymous (FirstConnect) sockets
                 // close on the AUTH timeout before reaching the heartbeat
                 // path.
-                let limit = PAIRED_TIMEOUT;
-
-                if elapsed > limit {
-                    tracing::info!(
-                        target: "minos_backend::envelope",
-                        device = %session.device_id,
-                        elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
-                        limit_ms = u64::try_from(limit.as_millis()).unwrap_or(u64::MAX),
-                        "heartbeat timeout; closing 1011"
-                    );
-                    close_with(ws, CLOSE_CODE_INTERNAL_ERROR, "heartbeat_timeout").await;
-                    break;
+                if let Err(exit) = heartbeat_policy.on_tick(ws, session).await {
+                    return exit;
                 }
-                let _ = ws.send(Message::Ping(Vec::new())).await;
             }
         }
     }
-
-    Ok(())
 }
 
 /// Serialise an envelope and send it as a text frame.
 ///
-/// Returns `false` if the send failed (caller breaks out of the loop).
-async fn send_envelope(ws: &mut WebSocket, env: &Envelope) -> bool {
+/// Returns [`SessionExit::WriteFailed`] if the send failed.
+async fn send_envelope(ws: &mut WebSocket, env: &Envelope) -> Result<(), SessionExit> {
+    crate::telemetry::record_envelope_out(envelope_kind_label(env), envelope_version(env));
     match serde_json::to_string(env) {
-        Ok(json) => ws.send(Message::Text(json)).await.is_ok(),
+        Ok(json) => ws
+            .send(Message::Text(json))
+            .await
+            .map(|()| ())
+            .map_err(|_| SessionExit::WriteFailed),
         Err(e) => {
             tracing::error!(
                 target: "minos_backend::envelope",
@@ -312,8 +452,26 @@ async fn send_envelope(ws: &mut WebSocket, env: &Envelope) -> bool {
             );
             // Serialise failures are internal bugs, not peer problems —
             // keep the socket alive so the next outbound frame has a shot.
-            true
+            Ok(())
         }
+    }
+}
+
+fn envelope_kind_label(env: &Envelope) -> &'static str {
+    match env {
+        Envelope::Forward { .. } => crate::telemetry::KIND_FORWARD,
+        Envelope::Forwarded { .. } => crate::telemetry::KIND_FORWARDED,
+        Envelope::Event { .. } => crate::telemetry::KIND_EVENT,
+        Envelope::Ingest { .. } => crate::telemetry::KIND_INGEST,
+    }
+}
+
+fn envelope_version(env: &Envelope) -> u8 {
+    match env {
+        Envelope::Forward { version, .. }
+        | Envelope::Forwarded { version, .. }
+        | Envelope::Event { version, .. }
+        | Envelope::Ingest { version, .. } => *version,
     }
 }
 
@@ -322,11 +480,11 @@ async fn dispatch_envelope(
     ws: &mut WebSocket,
     session: &SessionHandle,
     registry: &SessionRegistry,
-    store: &SqlitePool,
-    translators: &ThreadTranslators,
-    approval_relay: &crate::approval_relay::ApprovalRelay,
+    store: &StoreHandle,
+    ingest: &IngestUseCase,
     env: Envelope,
-) -> bool {
+) -> Result<(), SessionExit> {
+    crate::telemetry::record_envelope_in(envelope_kind_label(&env), envelope_version(&env));
     match env {
         Envelope::Forward {
             version,
@@ -334,15 +492,14 @@ async fn dispatch_envelope(
             payload,
         } => {
             if version != 1 {
-                close_with(ws, CLOSE_CODE_BAD_REQUEST, "version_unsupported").await;
-                return false;
+                return Err(SessionExit::VersionUnsupported);
             }
             if let Some(back_frame) =
                 handle_forward(session, registry, store, target_device_id, payload).await
             {
-                return send_envelope(ws, &back_frame).await;
+                send_envelope(ws, &back_frame).await?;
             }
-            true
+            Ok(())
         }
         // The following two variants are server → client only; a client
         // that sends one is behaving incorrectly. Treat them as malformed
@@ -352,8 +509,7 @@ async fn dispatch_envelope(
                 target: "minos_backend::envelope",
                 "server-only envelope kind from client; closing 4400"
             );
-            close_with(ws, CLOSE_CODE_BAD_REQUEST, "client_sent_server_frame").await;
-            false
+            Err(SessionExit::ClientSentServerFrame)
         }
         // Host → backend raw event stream. Only agent-host role is
         // permitted; anyone else is a protocol violation and the socket
@@ -370,8 +526,7 @@ async fn dispatch_envelope(
             ts_ms,
         } => {
             if version != 1 {
-                close_with(ws, CLOSE_CODE_BAD_REQUEST, "version_unsupported").await;
-                return false;
+                return Err(SessionExit::VersionUnsupported);
             }
             if session.role != minos_domain::DeviceRole::AgentHost {
                 tracing::warn!(
@@ -379,23 +534,17 @@ async fn dispatch_envelope(
                     role = ?session.role,
                     "ingest from non-agent-host role; closing 4400"
                 );
-                close_with(ws, CLOSE_CODE_BAD_REQUEST, "ingest_forbidden_role").await;
-                return false;
+                return Err(SessionExit::IngestForbiddenRole);
             }
-            if let Err(e) = crate::ingest::dispatch(
-                store,
-                registry,
-                translators,
-                approval_relay,
+            let command = IngestCommand {
                 agent,
-                &thread_id,
+                thread_id: thread_id.clone(),
                 seq,
-                &payload,
+                payload,
                 ts_ms,
-                session.device_id,
-            )
-            .await
-            {
+                owner_device_id: session.device_id,
+            };
+            if let Err(e) = ingest.execute(command).await {
                 tracing::warn!(
                     target: "minos_backend::envelope",
                     error = ?e,
@@ -404,8 +553,47 @@ async fn dispatch_envelope(
                     "ingest dispatch failed; keeping session open"
                 );
             }
-            true
+            Ok(())
         }
+    }
+}
+
+async fn finalize_session_exit(ws: &mut WebSocket, session: &SessionHandle, exit: SessionExit) {
+    let role = role_metric_label(session.role);
+    let close = exit.close_frame();
+
+    match exit {
+        SessionExit::HeartbeatTimeout {
+            elapsed_ms,
+            limit_ms,
+        } => {
+            tracing::info!(
+                target: "minos_backend::envelope",
+                device_id = %session.device_id,
+                role,
+                reason = exit.metric_reason(),
+                close_code = ?close.map(|(code, _)| code),
+                elapsed_ms,
+                limit_ms,
+                "websocket session exiting"
+            );
+        }
+        _ => {
+            tracing::info!(
+                target: "minos_backend::envelope",
+                device_id = %session.device_id,
+                role,
+                reason = exit.metric_reason(),
+                close_code = ?close.map(|(code, _)| code),
+                "websocket session exiting"
+            );
+        }
+    }
+
+    crate::telemetry::record_ws_close(role, exit.metric_reason());
+
+    if let Some((code, reason)) = close {
+        close_with(ws, code, reason).await;
     }
 }
 
@@ -426,13 +614,20 @@ async fn dispatch_envelope(
 pub async fn handle_forward(
     session: &SessionHandle,
     registry: &SessionRegistry,
-    store: &SqlitePool,
+    store: &impl AsStorePool,
     target_device_id: minos_domain::DeviceId,
     payload: serde_json::Value,
 ) -> Option<Envelope> {
     if session.role == minos_domain::DeviceRole::AgentHost {
         if let Some(reply_id) = json_rpc_id(&payload) {
-            if crate::forward_rpc::resolve_pending_forward_rpc(session.device_id, reply_id, payload.clone()) {
+            if crate::host_command_runtime::resolve_pending_host_command(
+                store,
+                session.device_id,
+                reply_id,
+                payload.clone(),
+            )
+            .await
+            {
                 return None;
             }
             // Try the reply-target mapping first; if found, prefer it
@@ -588,6 +783,17 @@ async fn close_with(ws: &mut WebSocket, code: u16, reason: &'static str) {
             reason: reason.into(),
         })))
         .await;
+}
+
+/// Stable metric label for a device role — `to_string()` returns
+/// kebab-case which keeps the label cardinality matched with the
+/// existing wire shape.
+pub(crate) fn role_metric_label(role: minos_domain::DeviceRole) -> &'static str {
+    match role {
+        minos_domain::DeviceRole::AgentHost => "agent-host",
+        minos_domain::DeviceRole::MobileClient => "mobile-client",
+        minos_domain::DeviceRole::BrowserAdmin => "browser-admin",
+    }
 }
 
 #[cfg(test)]

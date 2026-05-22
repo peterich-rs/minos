@@ -3,6 +3,7 @@
 use minos_protocol::{ReadThreadParams, ReadThreadResponse};
 
 use crate::http::BackendState;
+use crate::store::{AsStorePool, StorePoolRef};
 
 /// Errors surfaced by [`read_thread`]. Mapped to HTTP status codes by the
 /// caller (`http/v1/threads.rs`).
@@ -26,6 +27,8 @@ pub async fn read_thread(
     account_id: &str,
     params: ReadThreadParams,
 ) -> Result<ReadThreadResponse, HistoryError> {
+    let store = &state.store;
+
     // ADR-0020: scope by account_id, not owner device_id. The thread row's
     // owner_device_id is dereferenced through the devices table to get the
     // owning account; if it doesn't match the caller's bearer-resolved
@@ -35,16 +38,30 @@ pub async fn read_thread(
     // returns `Option<Option<String>>`:
     //   outer Option = thread row exists
     //   inner Option = devices.account_id is non-NULL
-    let owner_account_id: Option<Option<String>> = match sqlx::query_scalar(
-        "SELECT d.account_id
-           FROM threads t
-           LEFT JOIN devices d ON d.device_id = t.owner_device_id
-          WHERE t.thread_id = ?1",
-    )
-    .bind(&params.thread_id)
-    .fetch_optional(&state.store)
-    .await
-    {
+    let owner_account_id: Option<Option<String>> = match match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar(
+                "SELECT d.account_id
+                   FROM threads t
+                   LEFT JOIN devices d ON d.device_id = t.owner_device_id
+                  WHERE t.thread_id = ?1",
+            )
+            .bind(&params.thread_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar(
+                "SELECT d.account_id
+                   FROM threads t
+                   LEFT JOIN devices d ON d.device_id = t.owner_device_id
+                  WHERE t.thread_id = $1",
+            )
+            .bind(&params.thread_id)
+            .fetch_optional(pool)
+            .await
+        }
+    } {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(
@@ -66,7 +83,7 @@ pub async fn read_thread(
     let from_seq = params.from_seq.unwrap_or(0);
     let limit = params.limit.min(2000);
     let rows = match crate::store::raw_events::read_range(
-        &state.store,
+        store,
         &params.thread_id,
         from_seq,
         limit,
@@ -135,11 +152,20 @@ pub async fn read_thread(
         })
     {
         let stored_title: Option<Option<String>> =
-            match sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = ?1")
-                .bind(&params.thread_id)
-                .fetch_optional(&state.store)
-                .await
-            {
+            match match store.as_store_pool() {
+                StorePoolRef::Sqlite(pool) => {
+                    sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = ?1")
+                        .bind(&params.thread_id)
+                        .fetch_optional(pool)
+                        .await
+                }
+                StorePoolRef::Postgres(pool) => {
+                    sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = $1")
+                        .bind(&params.thread_id)
+                        .fetch_optional(pool)
+                        .await
+                }
+            } {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!(
@@ -172,11 +198,20 @@ pub async fn read_thread(
 
     // Look up end_reason (may be present even if rows are empty).
     let end_reason_json: Option<Option<String>> =
-        match sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = ?1")
-            .bind(&params.thread_id)
-            .fetch_optional(&state.store)
-            .await
-        {
+        match match store.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = ?1")
+                    .bind(&params.thread_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = $1")
+                    .bind(&params.thread_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+        } {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(

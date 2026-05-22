@@ -74,6 +74,15 @@ pub const OUTBOX_CAPACITY: usize = 256;
 /// send-timestamp) it becomes a newtype around `Envelope`.
 pub type ServerFrame = Envelope;
 
+/// Why a live session was actively revoked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRevocation {
+    /// A newer socket for the same device replaced this one.
+    Superseded,
+    /// The session's auth backing was revoked after the socket was live.
+    AuthRevoked,
+}
+
 /// One live WebSocket session, indexed by its [`DeviceId`].
 ///
 /// Constructed by the WS accept handler (step 8); removed by the same
@@ -93,9 +102,9 @@ pub struct SessionHandle {
     /// Sender end only; the receiver lives inside the writer. `Clone` on
     /// `mpsc::Sender` is a cheap `Arc` bump.
     pub outbox: mpsc::Sender<ServerFrame>,
-    /// Session-local revocation signal used to actively supersede an old
-    /// socket when a reconnect replaces it in the registry.
-    revoked: watch::Sender<bool>,
+    /// Session-local revocation signal used to actively close the socket,
+    /// distinguishing reconnect supersede from auth/token revocation.
+    revoked: watch::Sender<Option<SessionRevocation>>,
     /// Timestamp of the most recent `Pong` frame we received from this
     /// client. Updated by the dispatcher's read branch (step 8); consumed
     /// by the heartbeat tick branch to decide when to close the socket as
@@ -130,7 +139,7 @@ impl SessionHandle {
     #[must_use]
     pub fn new(device_id: DeviceId, role: DeviceRole) -> (Self, mpsc::Receiver<ServerFrame>) {
         let (tx, rx) = mpsc::channel(OUTBOX_CAPACITY);
-        let (revoked, _revoked_rx) = watch::channel(false);
+        let (revoked, _revoked_rx) = watch::channel(None);
         let handle = Self {
             device_id,
             role,
@@ -143,9 +152,9 @@ impl SessionHandle {
         (handle, rx)
     }
 
-    /// Mark this session as superseded and wake any socket loop waiting on it.
-    pub fn revoke(&self) {
-        let _ = self.revoked.send(true);
+    /// Mark this session as revoked and wake any socket loop waiting on it.
+    pub fn revoke(&self, reason: SessionRevocation) {
+        let _ = self.revoked.send(Some(reason));
     }
 
     /// Bind this session to an account (spec §5.5). Called by the iOS WS
@@ -190,7 +199,7 @@ impl SessionHandle {
 
     /// Subscribe to revocation changes for this session.
     #[must_use]
-    pub fn subscribe_revocation(&self) -> watch::Receiver<bool> {
+    pub fn subscribe_revocation(&self) -> watch::Receiver<Option<SessionRevocation>> {
         self.revoked.subscribe()
     }
 
@@ -344,7 +353,7 @@ impl SessionRegistry {
         let mut closed = 0;
         for id in to_close {
             if let Some((_, handle)) = self.0.remove(&id) {
-                handle.revoke();
+                handle.revoke(SessionRevocation::AuthRevoked);
                 closed += 1;
             }
         }
@@ -562,7 +571,7 @@ mod tests {
     // Small outbox variant so we can fill it deterministically in tests.
     fn make_tiny_handle(id: DeviceId, cap: usize) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
         let (tx, rx) = mpsc::channel(cap);
-        let (revoked, _revoked_rx) = watch::channel(false);
+        let (revoked, _revoked_rx) = watch::channel(None);
         (
             SessionHandle {
                 device_id: id,
@@ -669,14 +678,18 @@ mod tests {
         let (handle, _rx) = make_handle(id);
         let mut subscriber = handle.subscribe_revocation();
 
-        assert!(!*subscriber.borrow());
-        handle.revoke();
+        assert_eq!(*subscriber.borrow(), None);
+        handle.revoke(SessionRevocation::Superseded);
         subscriber.changed().await.unwrap();
-        assert!(*subscriber.borrow_and_update());
+        assert_eq!(
+            *subscriber.borrow_and_update(),
+            Some(SessionRevocation::Superseded)
+        );
 
         let late_subscriber = handle.subscribe_revocation();
-        assert!(
+        assert_eq!(
             *late_subscriber.borrow(),
+            Some(SessionRevocation::Superseded),
             "late subscribers must observe the current revoked state"
         );
     }
@@ -945,7 +958,7 @@ mod tests {
         reg.insert(hb.clone());
 
         let mut b_revoked = hb.subscribe_revocation();
-        assert!(!*b_revoked.borrow());
+        assert_eq!(*b_revoked.borrow(), None);
 
         let closed = reg.close_account_sessions("acct-1", Some(&a.to_string()));
         assert_eq!(closed, 1, "only b should be closed");
@@ -959,7 +972,7 @@ mod tests {
             .changed()
             .await
             .expect("close_account_sessions must trigger revoke on b");
-        assert!(*b_revoked.borrow());
+        assert_eq!(*b_revoked.borrow(), Some(SessionRevocation::AuthRevoked));
     }
 
     #[tokio::test]

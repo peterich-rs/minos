@@ -16,4 +16,4 @@
 
 pub mod registry;
 
-pub use registry::{ServerFrame, SessionHandle, SessionRegistry};
+pub use registry::{ServerFrame, SessionHandle, SessionRegistry, SessionRevocation};

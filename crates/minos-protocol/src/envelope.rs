@@ -16,11 +16,9 @@
 //! - `EventKind` flattens into [`Envelope::Event`] with a `type`
 //!   discriminator matching spec §6.
 //!
-//! See `docs/superpowers/specs/minos-relay-backend-design.md` §6 for the
-//! authoritative protocol definition. Any change to the Rust types here
-//! MUST be accompanied by an update to the golden JSON fixtures under
-//! `tests/golden/envelope/` — those fixtures are how we freeze the wire
-//! format across refactors.
+//! The Rust types here plus the golden JSON fixtures under
+//! `tests/golden/envelope/` are the authoritative wire definition.
+//! Any change to these types MUST be accompanied by a fixture update.
 
 use minos_domain::{DeviceId, DeviceSecret};
 use serde::{Deserialize, Serialize};

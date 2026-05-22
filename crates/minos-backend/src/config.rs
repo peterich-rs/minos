@@ -23,12 +23,78 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
+use serde::Serialize;
+
+use crate::realtime::{CacheBackendKind, MessageBusBackendKind};
 
 /// Default pairing-token TTL (5 minutes) per plan §10.
-const DEFAULT_TOKEN_TTL_SECS: u64 = 300;
-const DEFAULT_DB_MAX_CONNECTIONS: u32 = 32;
+pub(crate) const DEFAULT_TOKEN_TTL_SECS: u64 = 300;
+pub(crate) const DEFAULT_DB_MAX_CONNECTIONS: u32 = 32;
+pub(crate) const DEFAULT_CLUSTER_CHANNEL: &str = "minos.backend.cluster";
 
-/// Minos backend: axum WebSocket hub with SQLite state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
+pub enum Environment {
+    Dev,
+    Staging,
+    Prod,
+}
+
+impl Environment {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Staging => "staging",
+            Self::Prod => "prod",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
+pub enum StorageMode {
+    Sqlite,
+    ExternalSql,
+}
+
+impl StorageMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sqlite => "sqlite",
+            Self::ExternalSql => "external-sql",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
+pub enum RuntimeMode {
+    Monolith,
+    HttpOnly,
+    WorkerOnly,
+}
+
+impl RuntimeMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Monolith => "monolith",
+            Self::HttpOnly => "http-only",
+            Self::WorkerOnly => "worker-only",
+        }
+    }
+
+    #[must_use]
+    pub const fn serves_http(self) -> bool {
+        matches!(self, Self::Monolith | Self::HttpOnly)
+    }
+
+    #[must_use]
+    pub const fn runs_supervised_workers(self) -> bool {
+        matches!(self, Self::Monolith | Self::WorkerOnly)
+    }
+}
+
+/// Minos backend: axum WebSocket hub with SQLite-first state.
 #[derive(Debug, Clone, Parser)]
 #[command(version, about)]
 pub struct Config {
@@ -46,6 +112,22 @@ pub struct Config {
     /// `create_if_missing(true)`.
     #[arg(long, env = "MINOS_BACKEND_DB", default_value = "./minos-backend.db")]
     pub db: PathBuf,
+
+    /// Storage adapter profile for the runtime shell.
+    ///
+    /// `sqlite` remains the dev/test path. `external-sql` now performs a real
+    /// Postgres preflight during boot, but the request-serving runtime still
+    /// stops at the SQLite-specific store boundary after that probe.
+    #[arg(long, env = "MINOS_STORAGE_MODE", value_enum, default_value = "sqlite")]
+    pub storage_mode: StorageMode,
+
+    /// Explicit database URL used by the runtime shell.
+    ///
+    /// In `sqlite` mode this may optionally override `--db` with a sqlite://
+    /// URL. In `external-sql` mode it is required and must be a
+    /// `postgres://` or `postgresql://` URL.
+    #[arg(long, env = "MINOS_DATABASE_URL")]
+    pub database_url: Option<String>,
 
     /// Maximum number of SQLite pool connections.
     #[arg(
@@ -92,6 +174,58 @@ pub struct Config {
     /// the frontend URL(s) e.g. `"https://app.minos.dev,https://minos.dev"`.
     #[arg(long, env = "MINOS_CORS_ORIGINS", default_value = "*")]
     pub cors_origins: String,
+
+    /// Deployment environment. Production enables stricter config validation
+    /// such as rejecting wildcard CORS.
+    #[arg(long, env = "MINOS_ENV", value_enum, default_value = "dev")]
+    pub environment: Environment,
+
+    /// Runtime shell topology.
+    ///
+    /// `monolith` runs the HTTP surface plus supervised background workers in
+    /// one process. `http-only` disables worker-plane pollers so API/gateway
+    /// instances can run without duplicate timeout GC. `worker-only` skips the
+    /// listener and only runs the supervised worker plane.
+    #[arg(
+        long,
+        env = "MINOS_RUNTIME_MODE",
+        value_enum,
+        default_value = "monolith"
+    )]
+    pub runtime_mode: RuntimeMode,
+
+    /// Peer-target cache backend. `in-memory` is fine for local dev; use
+    /// `redis` for multi-instance deployments so cache invalidation is not
+    /// process-local only.
+    #[arg(
+        long,
+        env = "MINOS_CACHE_BACKEND",
+        value_enum,
+        default_value = "in-memory"
+    )]
+    pub cache_backend: CacheBackendKind,
+
+    /// Cross-instance event bus backend for realtime fan-out.
+    #[arg(
+        long,
+        env = "MINOS_MESSAGE_BUS_BACKEND",
+        value_enum,
+        default_value = "inline"
+    )]
+    pub message_bus_backend: MessageBusBackendKind,
+
+    /// Redis endpoint shared by the cache and message-bus adapters when
+    /// either backend is configured as `redis`.
+    #[arg(long, env = "MINOS_REDIS_URL")]
+    pub redis_url: Option<String>,
+
+    /// Redis pub/sub channel name used for cluster fan-out.
+    #[arg(
+        long,
+        env = "MINOS_CLUSTER_CHANNEL",
+        default_value = DEFAULT_CLUSTER_CHANNEL
+    )]
+    pub cluster_channel: String,
 }
 
 impl Config {
@@ -110,6 +244,18 @@ impl Config {
         self.log_dir.clone().unwrap_or_else(default_log_dir)
     }
 
+    #[must_use]
+    pub fn resolved_database_url(&self) -> String {
+        match self.storage_mode {
+            StorageMode::Sqlite => self
+                .database_url
+                .clone()
+                .filter(|url| url.starts_with("sqlite:"))
+                .unwrap_or_else(|| format!("sqlite://{}?mode=rwc", self.db.display())),
+            StorageMode::ExternalSql => self.database_url.clone().unwrap_or_default(),
+        }
+    }
+
     /// Validate startup configuration. CF Access service tokens and the
     /// public backend URL are now exclusively client-side build config —
     /// they no longer enter QR payloads or backend state — so this only
@@ -126,6 +272,82 @@ impl Config {
             .ok_or_else(|| "MINOS_JWT_SECRET is required".to_string())?;
         if secret.len() < 32 {
             return Err("MINOS_JWT_SECRET must be >=32 bytes".into());
+        }
+        if self.storage_mode == StorageMode::ExternalSql {
+            if !crate::store::postgres_backend_enabled() {
+                return Err(
+                    "MINOS_STORAGE_MODE=external-sql requires the backend-postgres cargo feature"
+                        .into(),
+                );
+            }
+            let url = self
+                .database_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    "MINOS_DATABASE_URL is required when MINOS_STORAGE_MODE=external-sql"
+                        .to_string()
+                })?;
+            if url.starts_with("sqlite:") {
+                return Err(
+                    "MINOS_STORAGE_MODE=external-sql cannot use a sqlite:// database URL".into(),
+                );
+            }
+            if crate::store::detect_external_sql_driver(url).is_none() {
+                return Err(
+                    "MINOS_STORAGE_MODE=external-sql currently supports only postgres:// or postgresql:// MINOS_DATABASE_URL values"
+                        .into(),
+                );
+            }
+        } else {
+            if !crate::store::sqlite_backend_enabled() {
+                return Err(
+                    "MINOS_STORAGE_MODE=sqlite requires the backend-sqlite cargo feature".into(),
+                );
+            }
+            let database_url = self.resolved_database_url();
+            if !database_url.starts_with("sqlite:") {
+                return Err(
+                    "MINOS_STORAGE_MODE=sqlite requires a sqlite:// database URL or --db path"
+                        .into(),
+                );
+            }
+        }
+        if self.environment == Environment::Prod {
+            if self.runtime_mode.serves_http() {
+                let cors = self.cors_origins.trim();
+                if cors.is_empty() || cors == "*" {
+                    return Err("MINOS_CORS_ORIGINS must not be wildcard in prod".into());
+                }
+                if self.cache_backend != CacheBackendKind::Redis {
+                    return Err("MINOS_CACHE_BACKEND must be redis in prod".into());
+                }
+                if self.message_bus_backend != MessageBusBackendKind::Redis {
+                    return Err("MINOS_MESSAGE_BUS_BACKEND must be redis in prod".into());
+                }
+            }
+            if self.storage_mode == StorageMode::Sqlite {
+                return Err(
+                    "embedded SQLite is not supported in prod yet; set MINOS_STORAGE_MODE=external-sql with a Postgres-class MINOS_DATABASE_URL before setting MINOS_ENV=prod"
+                        .into(),
+                );
+            }
+        }
+        if self.cache_backend == CacheBackendKind::Redis
+            || self.message_bus_backend == MessageBusBackendKind::Redis
+        {
+            if self
+                .redis_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            {
+                return Err(
+                    "MINOS_REDIS_URL is required when using redis cache/message bus".into(),
+                );
+            }
         }
         Ok(())
     }
@@ -171,10 +393,18 @@ mod tests {
         for key in [
             "MINOS_BACKEND_LISTEN",
             "MINOS_BACKEND_DB",
+            "MINOS_DATABASE_URL",
             "MINOS_BACKEND_DB_MAX_CONNECTIONS",
             "MINOS_BACKEND_LOG_DIR",
             "MINOS_BACKEND_TOKEN_TTL",
             "MINOS_JWT_SECRET",
+            "MINOS_ENV",
+            "MINOS_STORAGE_MODE",
+            "MINOS_RUNTIME_MODE",
+            "MINOS_CACHE_BACKEND",
+            "MINOS_MESSAGE_BUS_BACKEND",
+            "MINOS_REDIS_URL",
+            "MINOS_CLUSTER_CHANNEL",
             "RUST_LOG",
         ] {
             std::env::remove_var(key);
@@ -202,11 +432,24 @@ mod tests {
             "default --listen must match plan §10"
         );
         assert_eq!(cfg.db, PathBuf::from("./minos-backend.db"));
+        assert_eq!(cfg.storage_mode, StorageMode::Sqlite);
         assert_eq!(cfg.db_max_connections, 32);
         assert_eq!(cfg.log_level, "info");
         assert_eq!(cfg.token_ttl_secs, DEFAULT_TOKEN_TTL_SECS);
         assert!(!cfg.exit_after_migrate);
         assert!(cfg.log_dir.is_none());
+        assert_eq!(cfg.environment, Environment::Dev);
+        assert_eq!(cfg.runtime_mode, RuntimeMode::Monolith);
+    }
+
+    #[test]
+    fn runtime_mode_helpers_reflect_worker_and_http_toggles() {
+        assert!(RuntimeMode::Monolith.serves_http());
+        assert!(RuntimeMode::Monolith.runs_supervised_workers());
+        assert!(RuntimeMode::HttpOnly.serves_http());
+        assert!(!RuntimeMode::HttpOnly.runs_supervised_workers());
+        assert!(!RuntimeMode::WorkerOnly.serves_http());
+        assert!(RuntimeMode::WorkerOnly.runs_supervised_workers());
     }
 
     #[test]
@@ -352,5 +595,133 @@ mod tests {
             .validate()
             .expect_err("short MINOS_JWT_SECRET must fail");
         assert!(err.contains(">=32"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_wildcard_cors_in_prod() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
+
+        let cfg = Config::try_parse_from(["minos-backend", "--environment", "prod"]).unwrap();
+        let err = cfg.validate().expect_err("wildcard CORS must fail in prod");
+        assert!(err.contains("MINOS_CORS_ORIGINS"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_embedded_sqlite_even_with_explicit_cors_in_prod() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
+
+        let cfg = Config::try_parse_from([
+            "minos-backend",
+            "--environment",
+            "prod",
+            "--cors-origins",
+            "https://app.minos.dev",
+            "--cache-backend",
+            "redis",
+            "--message-bus-backend",
+            "redis",
+            "--redis-url",
+            "redis://127.0.0.1:6379/",
+        ])
+        .unwrap();
+
+        let err = cfg
+            .validate()
+            .expect_err("embedded sqlite must still fail in prod");
+        assert!(err.contains("embedded SQLite"), "{err}");
+    }
+
+    #[test]
+    fn validate_requires_database_url_when_external_sql_mode_is_selected() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
+
+        let cfg =
+            Config::try_parse_from(["minos-backend", "--storage-mode", "external-sql"]).unwrap();
+
+        let err = cfg
+            .validate()
+            .expect_err("external sql mode without url must fail");
+        assert!(err.contains("MINOS_DATABASE_URL"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_sqlite_url_in_external_sql_mode() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
+
+        let cfg = Config::try_parse_from([
+            "minos-backend",
+            "--storage-mode",
+            "external-sql",
+            "--database-url",
+            "sqlite://./wrong.db?mode=rwc",
+        ])
+        .unwrap();
+
+        let err = cfg
+            .validate()
+            .expect_err("external sql mode must reject sqlite urls");
+        assert!(err.contains("cannot use a sqlite://"), "{err}");
+    }
+
+    #[test]
+    fn validate_allows_postgres_url_in_external_sql_mode() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
+
+        let cfg = Config::try_parse_from([
+            "minos-backend",
+            "--storage-mode",
+            "external-sql",
+            "--database-url",
+            "postgres://minos:secret@localhost/minos",
+        ])
+        .unwrap();
+
+        cfg.validate()
+            .expect("postgres urls should pass config validation");
+    }
+
+    #[test]
+    fn validate_rejects_unsupported_external_sql_driver_urls() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
+
+        let cfg = Config::try_parse_from([
+            "minos-backend",
+            "--storage-mode",
+            "external-sql",
+            "--database-url",
+            "mysql://minos:secret@localhost/minos",
+        ])
+        .unwrap();
+
+        let err = cfg
+            .validate()
+            .expect_err("unsupported external sql drivers must fail validation");
+        assert!(err.contains("postgres://"), "{err}");
+    }
+
+    #[test]
+    fn validate_requires_redis_url_when_redis_runtime_is_selected() {
+        let _g = env_scope();
+        std::env::set_var("MINOS_JWT_SECRET", TEST_JWT_SECRET);
+
+        let cfg = Config::try_parse_from([
+            "minos-backend",
+            "--cache-backend",
+            "redis",
+            "--message-bus-backend",
+            "redis",
+        ])
+        .unwrap();
+
+        let err = cfg
+            .validate()
+            .expect_err("redis runtime without redis url must fail");
+        assert!(err.contains("MINOS_REDIS_URL"), "{err}");
     }
 }

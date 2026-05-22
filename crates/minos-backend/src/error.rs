@@ -120,4 +120,10 @@ pub enum BackendError {
 
     #[error("forwarded rpc `{method}` timed out after {timeout_ms}ms")]
     ForwardRpcTimeout { method: String, timeout_ms: u64 },
+
+    #[error("cache `{operation}` failed: {message}")]
+    Cache { operation: String, message: String },
+
+    #[error("message bus `{operation}` failed: {message}")]
+    MessageBus { operation: String, message: String },
 }

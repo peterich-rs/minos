@@ -22,87 +22,66 @@
 
 pub mod history;
 pub mod translate;
+pub mod use_case;
 
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-
-use dashmap::DashMap;
 use minos_domain::AgentName;
 use minos_protocol::{Envelope, EventKind};
 use serde_json::Value;
-use sqlx::SqlitePool;
 
 use crate::approval_relay::ApprovalRelay;
 use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
+use crate::realtime::{peer_target_cache_backend, RealtimeFanout};
 use crate::session::SessionRegistry;
-use crate::store::{raw_events, threads};
+use crate::store::{raw_events, threads, AsStorePool, StorePoolRef};
 
-const PEER_TARGET_CACHE_TTL: Duration = Duration::from_secs(5);
-
-fn peer_target_cache(
-) -> &'static DashMap<minos_domain::DeviceId, (Vec<minos_domain::DeviceId>, Instant)> {
-    static CACHE: OnceLock<
-        DashMap<minos_domain::DeviceId, (Vec<minos_domain::DeviceId>, Instant)>,
-    > = OnceLock::new();
-    CACHE.get_or_init(DashMap::new)
-}
-
-pub fn invalidate_peer_targets_for_host(host_device_id: minos_domain::DeviceId) {
-    let _ = peer_target_cache().remove(&host_device_id);
-}
-
-pub async fn invalidate_peer_targets_for_account(
-    pool: &SqlitePool,
-    account_id: &str,
+pub async fn invalidate_peer_targets_for_host(
+    host_device_id: minos_domain::DeviceId,
 ) -> Result<(), BackendError> {
-    let pairs =
-        crate::store::account_host_pairings::list_hosts_for_account(pool, account_id).await?;
+    peer_target_cache_backend().invalidate(host_device_id).await
+}
+
+pub async fn invalidate_peer_targets_for_account<S>(
+    store: &S,
+    account_id: &str,
+) -> Result<(), BackendError>
+where
+    S: AsStorePool,
+{
+    let pairs = crate::store::account_host_pairings::list_hosts_for_account(store, account_id).await?;
     for pair in pairs {
-        invalidate_peer_targets_for_host(pair.host_device_id);
+        invalidate_peer_targets_for_host(pair.host_device_id).await?;
     }
     Ok(())
 }
 
 async fn peer_targets_for_host(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     host_device_id: minos_domain::DeviceId,
 ) -> Result<Vec<minos_domain::DeviceId>, BackendError> {
-    let now = Instant::now();
-    if let Some(entry) = peer_target_cache().get(&host_device_id) {
-        let (device_ids, cached_at) = entry.value();
-        if now.duration_since(*cached_at) < PEER_TARGET_CACHE_TTL {
-            return Ok(device_ids.clone());
-        }
-        drop(entry);
-        let _ = peer_target_cache().remove(&host_device_id);
+    if let Some(device_ids) = peer_target_cache_backend().get(host_device_id).await? {
+        return Ok(device_ids);
     }
 
-    let pairs =
-        crate::store::account_host_pairings::list_accounts_for_host(pool, host_device_id).await?;
-    let mut targets = Vec::new();
-    for pair in pairs {
-        let devices = crate::store::devices::list_by_account(pool, &pair.mobile_account_id).await?;
-        targets.extend(
-            devices
-                .into_iter()
-                .filter(|device| device.role.is_account_client())
-                .map(|device| device.device_id),
-        );
-    }
-    targets.sort_unstable_by_key(|device_id| device_id.to_string());
-    targets.dedup();
-    peer_target_cache().insert(host_device_id, (targets.clone(), now));
+    let targets = crate::store::account_host_pairings::list_account_client_targets_for_host(
+        store,
+        host_device_id,
+    )
+    .await?;
+    peer_target_cache_backend()
+        .set(host_device_id, &targets)
+        .await?;
     Ok(targets)
 }
 
 /// Process one `Envelope::Ingest` frame.
 #[allow(clippy::too_many_arguments)] // Single-site dispatcher; splitting obscures the 4-step pipeline.
 pub async fn dispatch(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     registry: &SessionRegistry,
     translators: &ThreadTranslators,
     approval_relay: &ApprovalRelay,
+    realtime: &RealtimeFanout,
     agent: AgentName,
     thread_id: &str,
     seq: u64,
@@ -111,12 +90,12 @@ pub async fn dispatch(
     owner_device_id: minos_domain::DeviceId,
 ) -> Result<(), BackendError> {
     // 1. Upsert the thread row (creates on first ingest, bumps last_ts_ms otherwise).
-    threads::upsert(pool, thread_id, agent, &owner_device_id.to_string(), ts_ms).await?;
+    threads::upsert(store, thread_id, agent, &owner_device_id.to_string(), ts_ms).await?;
 
     // 2. Persist raw. The backend may assign a fresh seq when the daemon
     // resumes an existing thread with a process-local counter reset.
     let Some(persisted_seq) =
-        raw_events::insert_assigning_seq(pool, thread_id, seq, agent, payload, ts_ms).await?
+        raw_events::insert_assigning_seq(store, thread_id, seq, agent, payload, ts_ms).await?
     else {
         tracing::debug!(
             target: "minos_backend::ingest",
@@ -125,12 +104,21 @@ pub async fn dispatch(
         return Ok(());
     };
 
+    if should_skip_external_sql_approval_event(store, payload) {
+        tracing::info!(
+            target: "minos_backend::ingest",
+            thread_id,
+            "skipping approval realtime event because external-sql approval runtime is still unavailable"
+        );
+        return Ok(());
+    }
+
     if let Some(event) =
         special_event_from_payload(approval_relay, thread_id, payload, ts_ms, owner_device_id)
             .await?
     {
         let env = Envelope::Event { version: 1, event };
-        broadcast_to_peers_of(pool, registry, owner_device_id, &env).await;
+        broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
         return Ok(());
     }
 
@@ -157,9 +145,9 @@ pub async fn dispatch(
             minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { .. }
         )
     });
-    if !has_explicit_title && thread_title_is_missing(pool, thread_id).await {
+    if !has_explicit_title && thread_title_is_missing(store, thread_id).await {
         if let Some(title) = derive_fallback_title(payload, &translated) {
-            let _ = threads::update_title(pool, thread_id, &title).await;
+            let _ = threads::update_title(store, thread_id, &title).await;
             translated.insert(
                 0,
                 minos_ui_protocol::UiEventMessage::ThreadTitleUpdated {
@@ -172,7 +160,7 @@ pub async fn dispatch(
 
     // 4. Fan out each UI event to every live peer paired with owner_device_id.
     let suppress_social_fanout =
-        match crate::store::social::suppress_live_ui_fanout_for_session(pool, thread_id).await {
+        match crate::store::social::suppress_live_ui_fanout_for_session(store, thread_id).await {
             Ok(value) => value,
             Err(error) => {
                 tracing::warn!(
@@ -188,13 +176,13 @@ pub async fn dispatch(
         // Side effects on DB when the UI event implies a thread mutation.
         match &ui {
             minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { title, .. } => {
-                let _ = threads::update_title(pool, thread_id, title).await;
+                let _ = threads::update_title(store, thread_id, title).await;
             }
             minos_ui_protocol::UiEventMessage::MessageStarted { .. } => {
-                let _ = threads::increment_message_count(pool, thread_id).await;
+                let _ = threads::increment_message_count(store, thread_id).await;
             }
             minos_ui_protocol::UiEventMessage::ThreadClosed { reason, .. } => {
-                let _ = threads::mark_ended(pool, thread_id, reason, ts_ms).await;
+                let _ = threads::mark_ended(store, thread_id, reason, ts_ms).await;
                 translators.drop_thread(thread_id);
             }
             _ => {}
@@ -213,10 +201,20 @@ pub async fn dispatch(
                 ts_ms,
             },
         };
-        broadcast_to_peers_of(pool, registry, owner_device_id, &env).await;
+        broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
     }
 
     Ok(())
+}
+
+fn should_skip_external_sql_approval_event(store: &impl AsStorePool, payload: &Value) -> bool {
+    if !matches!(store.as_store_pool(), StorePoolRef::Postgres(_)) {
+        return false;
+    }
+    matches!(
+        payload.get("method").and_then(Value::as_str),
+        Some("approval/request" | "approval/timeout")
+    )
 }
 
 async fn special_event_from_payload(
@@ -302,12 +300,22 @@ async fn special_event_from_payload(
     }
 }
 
-async fn thread_title_is_missing(pool: &SqlitePool, thread_id: &str) -> bool {
-    match sqlx::query_scalar::<_, Option<String>>("SELECT title FROM threads WHERE thread_id = ?1")
-        .bind(thread_id)
-        .fetch_optional(pool)
-        .await
-    {
+async fn thread_title_is_missing(store: &impl AsStorePool, thread_id: &str) -> bool {
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, Option<String>>("SELECT title FROM threads WHERE thread_id = ?1")
+                .bind(thread_id)
+                .fetch_optional(pool)
+                .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, Option<String>>("SELECT title FROM threads WHERE thread_id = $1")
+                .bind(thread_id)
+                .fetch_optional(pool)
+                .await
+        }
+    };
+    match result {
         Ok(Some(None)) => true,
         Ok(Some(Some(_)) | None) => false,
         Err(e) => {
@@ -398,12 +406,13 @@ fn sanitize_title(text: &str) -> Option<String> {
 /// `(host_device_id, mobile_account_id)`, so we walk
 /// account_host_pairings → devices(account_id) → live registry.
 async fn broadcast_to_peers_of(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     registry: &SessionRegistry,
+    realtime: &RealtimeFanout,
     host_device_id: minos_domain::DeviceId,
     env: &Envelope,
 ) {
-    let targets = match peer_targets_for_host(pool, host_device_id).await {
+    let targets = match peer_targets_for_host(store, host_device_id).await {
         Ok(v) if !v.is_empty() => v,
         Ok(_) => {
             tracing::debug!(
@@ -424,31 +433,8 @@ async fn broadcast_to_peers_of(
         }
     };
 
-    for device_id in targets {
-        let Some(handle) = registry.get(device_id) else {
-            tracing::debug!(
-                target: "minos_backend::ingest",
-                peer = %device_id,
-                "peer not live; dropping ui event"
-            );
-            continue;
-        };
-
-        // Route through `try_send_current` so a reconnect race
-        // (peer reconnects between `get` and the send) cannot let a
-        // superseded socket consume the live UI event. The
-        // replacement session will catch up via list/read_thread on
-        // its own (re)attach.
-        if let Err(e) = registry.try_send_current(&handle, env.clone()) {
-            crate::telemetry::increment_ingest_outbox_dropped();
-            tracing::warn!(
-                target: "minos_backend::ingest",
-                peer = %device_id,
-                error = ?e,
-                "peer outbox full or superseded; dropping ui event"
-            );
-        }
-    }
+    let _ = registry;
+    realtime.fanout_ui_event(&targets, env).await;
 }
 
 #[cfg(test)]
@@ -489,7 +475,7 @@ mod tests {
             "cached peer targets should remain stable until invalidated"
         );
 
-        invalidate_peer_targets_for_host(host);
+        invalidate_peer_targets_for_host(host).await.unwrap();
         let refreshed = peer_targets_for_host(&pool, host).await.unwrap();
         assert_eq!(refreshed.len(), 2);
         assert!(refreshed.contains(&ios_a));

@@ -9,9 +9,7 @@
 //! Phase C retired the single-session `AgentRuntime` (lived in `runtime.rs`)
 //! and the legacy `AgentState` value object (lived in `state.rs`). The
 //! replacement is a multi-workspace `AgentManager` that owns one
-//! `AppServerInstance` per workspace and N `ThreadHandle`s per instance. See
-//! `docs/superpowers/specs/2026-05-01-agent-session-manager-and-minos-home-design.md`
-//! for the design intent.
+//! `AppServerInstance` per workspace and N `ThreadHandle`s per instance.
 //!
 //! ## Dependency rule
 //!

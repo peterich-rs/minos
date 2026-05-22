@@ -4,7 +4,8 @@
 //! places that drift independently. Any new fallback that needs to be
 //! identical between client crates belongs here.
 //!
-//! See `docs/superpowers/specs/unified-config-pipeline-design.md` §4.3.
+//! See `docs/adr/0018-just-config-pipeline.md` for the build-through-just
+//! policy that keeps these defaults aligned across clients.
 
 /// Local backend URL used when `MINOS_BACKEND_URL` is unset at compile time.
 /// Matches `--listen 127.0.0.1:8787` plus the `/devices` WebSocket path.

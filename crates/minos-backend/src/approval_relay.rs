@@ -4,37 +4,84 @@ use std::time::Duration;
 use minos_domain::DeviceId;
 use minos_protocol::{ApprovalDecisionRequest, Envelope, EventKind};
 use serde_json::{json, Value};
-use sqlx::SqlitePool;
 use tokio::sync::Notify;
 
 use crate::error::BackendError;
-use crate::forward_rpc;
+use crate::host_command_runtime::HostCommandRuntime;
 use crate::session::SessionRegistry;
-use crate::store::{account_host_pairings, pending_approvals};
+use crate::store::{account_host_pairings, pending_approvals, StoreHandle};
 
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
 const EXPIRED_BATCH_SIZE: u32 = 32;
 const POLLER_RETRY_DELAY: Duration = Duration::from_secs(1);
+const APPROVAL_COMMAND_METHOD: &str = "minos_approval_decision";
+
+#[derive(Debug, Clone)]
+pub(crate) struct ApprovalDecisionInput {
+    request_id: String,
+    decision: Value,
+    client_request_id: Option<String>,
+}
+
+impl ApprovalDecisionInput {
+    pub(crate) fn new(
+        request_id: String,
+        decision: Value,
+        client_request_id: Option<String>,
+    ) -> Self {
+        Self {
+            request_id,
+            decision,
+            client_request_id,
+        }
+    }
+
+    fn into_host_request(self, thread_id: String) -> ApprovalDecisionRequest {
+        ApprovalDecisionRequest {
+            request_id: self.request_id,
+            thread_id,
+            decision: self.decision,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ApprovalRelay {
-    store: SqlitePool,
+    store: StoreHandle,
     registry: Arc<SessionRegistry>,
+    host_command_runtime: Arc<HostCommandRuntime>,
     notify: Notify,
 }
 
 impl ApprovalRelay {
-    pub fn new(store: SqlitePool, registry: Arc<SessionRegistry>) -> Arc<Self> {
+    pub fn new(
+        store: impl Into<StoreHandle>,
+        registry: Arc<SessionRegistry>,
+        host_command_runtime: Arc<HostCommandRuntime>,
+    ) -> Arc<Self> {
+        Self::new_with_timeout_worker(store, registry, host_command_runtime, true)
+    }
+
+    pub fn new_with_timeout_worker(
+        store: impl Into<StoreHandle>,
+        registry: Arc<SessionRegistry>,
+        host_command_runtime: Arc<HostCommandRuntime>,
+        enable_timeout_worker: bool,
+    ) -> Arc<Self> {
+        let store = store.into();
         let relay = Arc::new(Self {
             store,
             registry,
+            host_command_runtime,
             notify: Notify::new(),
         });
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let weak = Arc::downgrade(&relay);
-            runtime.spawn(async move {
-                timeout_poller(weak).await;
-            });
+        if enable_timeout_worker {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                let weak = Arc::downgrade(&relay);
+                runtime.spawn(async move {
+                    timeout_poller(weak).await;
+                });
+            }
         }
         relay
     }
@@ -80,10 +127,10 @@ impl ApprovalRelay {
         Ok(())
     }
 
-    pub async fn submit_decision(
+    pub(crate) async fn submit_decision(
         &self,
         account_id: &str,
-        req: ApprovalDecisionRequest,
+        req: ApprovalDecisionInput,
     ) -> Result<bool, BackendError> {
         let Some(row) = pending_approvals::get(&self.store, &req.request_id).await? else {
             return Ok(false);
@@ -95,14 +142,10 @@ impl ApprovalRelay {
             return Ok(false);
         }
 
-        forward_rpc::call_host::<_, ()>(
-            &self.registry,
-            row.host_device_id,
-            "minos_approval_decision",
-            &req,
-            FORWARD_TIMEOUT,
-        )
-        .await?;
+        let _client_request_id = req.client_request_id.as_deref();
+        let request = req.into_host_request(row.thread_id.clone());
+        self.dispatch_host_decision(row.host_device_id, Some(account_id), &request)
+            .await?;
 
         pending_approvals::resolve(
             &self.store,
@@ -201,14 +244,9 @@ impl ApprovalRelay {
                 thread_id: row.thread_id.clone(),
                 decision,
             };
-            if let Err(error) = forward_rpc::call_host::<_, ()>(
-                &self.registry,
-                row.host_device_id,
-                "minos_approval_decision",
-                &request,
-                FORWARD_TIMEOUT,
-            )
-            .await
+            if let Err(error) = self
+                .dispatch_host_decision(row.host_device_id, None, &request)
+                .await
             {
                 tracing::warn!(
                     target: "minos_backend::approval_relay",
@@ -263,6 +301,47 @@ impl ApprovalRelay {
                 );
             }
         }
+    }
+
+    async fn dispatch_host_decision(
+        &self,
+        host_device_id: DeviceId,
+        requested_by_account_id: Option<&str>,
+        request: &ApprovalDecisionRequest,
+    ) -> Result<(), BackendError> {
+        let created_at_ms = chrono::Utc::now().timestamp_millis();
+        let command_id = approval_command_id(&request.request_id);
+        let command_params =
+            serde_json::to_value(request).map_err(|error| BackendError::StoreQuery {
+                operation: "approval_relay::dispatch_host_decision.serialize".into(),
+                message: error.to_string(),
+            })?;
+        let deadline_at_ms = created_at_ms
+            .saturating_add(i64::try_from(FORWARD_TIMEOUT.as_millis()).unwrap_or(i64::MAX));
+        self.host_command_runtime
+            .enqueue_if_missing(
+                &command_id,
+                host_device_id,
+                None,
+                APPROVAL_COMMAND_METHOD,
+                &command_params,
+                requested_by_account_id,
+                deadline_at_ms,
+                created_at_ms,
+            )
+            .await?;
+
+        self.host_command_runtime
+            .dispatch::<_, ()>(
+                &command_id,
+                host_device_id,
+                APPROVAL_COMMAND_METHOD,
+                request,
+                FORWARD_TIMEOUT,
+            )
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -332,4 +411,8 @@ fn auto_reject_decision(method: &str) -> Option<Value> {
         })),
         _ => None,
     }
+}
+
+fn approval_command_id(request_id: &str) -> String {
+    format!("cmd-approval-{request_id}")
 }

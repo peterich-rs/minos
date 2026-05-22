@@ -23,7 +23,7 @@
 //!   Tuned for "brute-force resistant if the DB is stolen".
 //! - `sha2::Sha256` hex digest for `PairingToken`. Deterministic for PK
 //!   lookup; safe because tokens carry 256 bits of entropy and expire in
-//!   5 minutes. See [`migrations/0003_pairing_tokens.sql`] and spec §6.1.
+//!   5 minutes.
 //!
 //! # Atomicity
 //!
@@ -35,14 +35,20 @@
 
 use std::time::Duration;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret, PairingToken};
+use minos_protocol::{Envelope, EventKind};
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
+use sqlx::{PgPool, Postgres, SqlitePool};
 
 use crate::{
     error::BackendError,
-    store::{devices, tokens},
+    session::{SessionRegistry, SessionRevocation},
+    store::{
+        account_host_pairings, devices, host_installation_tokens, pairing_codes, tokens,
+        AsStorePool, StoreHandle, StorePoolRef,
+    },
 };
 
 pub mod secret;
@@ -61,21 +67,64 @@ pub struct PairingOutcome {
     pub issuer_secret: DeviceSecret,
 }
 
+#[derive(Debug, Clone)]
+pub struct PairingCompletion {
+    pub peer_device_id: DeviceId,
+    pub peer_name: String,
+}
+
+#[derive(Debug)]
+pub enum ConsumePairingError {
+    DeliveryFailed,
+    Internal(BackendError),
+    IssuerOffline,
+    PairingStateMismatch { actual: String },
+    PairingTokenInvalid,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormalPairingConfirm {
+    pub host_installation_id: DeviceId,
+    pub already_confirmed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostInstallationToken {
+    pub host_installation_id: DeviceId,
+    pub account_id: String,
+    pub token: String,
+    pub issued_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormalRevokeOutcome {
+    pub host_installation_id: DeviceId,
+    pub remaining_link_count: i64,
+    pub revoked_token_count: u64,
+}
+
+#[derive(Debug)]
+pub enum FormalPairingError {
+    Internal(BackendError),
+    PairingCodeInvalid,
+    PairingStateMismatch { actual: String },
+}
+
 /// Stateless facade around the pairing-related store helpers.
 ///
 /// Cheap to clone — just holds a `SqlitePool` handle. Usually instantiated
 /// once in `main.rs` and shared via `Arc`.
 #[derive(Debug, Clone)]
 pub struct PairingService {
-    pool: SqlitePool,
+    pool: StoreHandle,
 }
 
 impl PairingService {
     /// Construct a service backed by `pool`. The pool must already have
     /// migrations applied (use [`crate::store::connect`]).
     #[must_use]
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: impl Into<StoreHandle>) -> Self {
+        Self { pool: pool.into() }
     }
 
     /// Mint a fresh pairing token for `issuer`.
@@ -89,6 +138,16 @@ impl PairingService {
     /// - [`BackendError::StoreQuery`] — the underlying `INSERT` failed (for
     ///   example an FK violation if `issuer` has not been inserted yet).
     pub async fn request_token(
+        &self,
+        issuer: DeviceId,
+        ttl: Duration,
+    ) -> Result<(PairingToken, DateTime<Utc>), BackendError> {
+        let result = self.request_token_inner(issuer, ttl).await;
+        crate::telemetry::record_pairing_token_issue(pairing_token_issue_outcome(&result));
+        result
+    }
+
+    async fn request_token_inner(
         &self,
         issuer: DeviceId,
         ttl: Duration,
@@ -114,6 +173,624 @@ impl PairingService {
         .await?;
 
         Ok((plain, expires))
+    }
+
+    /// Mint a formal pairing code in the `pending` state.
+    pub async fn request_code(
+        &self,
+        host_installation_id: DeviceId,
+        ttl: Duration,
+    ) -> Result<(String, DateTime<Utc>), BackendError> {
+        let now = Utc::now();
+        let expires = now
+            + chrono::Duration::from_std(ttl).map_err(|e| BackendError::PairingHash {
+                message: format!("ttl out of range: {e}"),
+            })?;
+        let code = generate_pairing_code();
+        let digest = sha256_hex(&code);
+        pairing_codes::insert_code(
+            &self.pool,
+            &digest,
+            host_installation_id,
+            now.timestamp_millis(),
+            expires.timestamp_millis(),
+        )
+        .await?;
+        Ok((code, expires))
+    }
+
+    pub async fn confirm_pairing_code(
+        &self,
+        pairing_code: &str,
+        account_id: &str,
+        linked_via_installation_id: DeviceId,
+        client_request_id: Option<&str>,
+    ) -> Result<FormalPairingConfirm, FormalPairingError> {
+        match self.pool.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                self.confirm_pairing_code_sqlite(
+                    pool,
+                    pairing_code,
+                    account_id,
+                    linked_via_installation_id,
+                    client_request_id,
+                )
+                .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                self.confirm_pairing_code_postgres(
+                    pool,
+                    pairing_code,
+                    account_id,
+                    linked_via_installation_id,
+                    client_request_id,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn confirm_pairing_code_sqlite(
+        &self,
+        pool: &SqlitePool,
+        pairing_code: &str,
+        account_id: &str,
+        linked_via_installation_id: DeviceId,
+        client_request_id: Option<&str>,
+    ) -> Result<FormalPairingConfirm, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let digest = sha256_hex(pairing_code);
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+            FormalPairingError::Internal(BackendError::StoreQuery {
+                operation: "begin_formal_pairing_confirm".to_string(),
+                message: e.to_string(),
+            })
+        })?;
+
+        let result: Result<FormalPairingConfirm, FormalPairingError> = async {
+            let row = pairing_codes::get_code_with_executor(&mut *tx, &digest)
+                .await
+                .map_err(FormalPairingError::Internal)?
+                .ok_or(FormalPairingError::PairingCodeInvalid)?;
+
+            if row.expires_at_ms <= now {
+                return Err(FormalPairingError::PairingCodeInvalid);
+            }
+
+            match row.status {
+                pairing_codes::PairingCodeStatus::Pending => {
+                    let updated = pairing_codes::confirm_code_with_executor(
+                        &mut *tx,
+                        &digest,
+                        account_id,
+                        linked_via_installation_id,
+                        client_request_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    if updated != 1 {
+                        return Err(FormalPairingError::PairingCodeInvalid);
+                    }
+                    account_host_pairings::insert_pair_with_executor(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    Ok(FormalPairingConfirm {
+                        host_installation_id: row.host_installation_id,
+                        already_confirmed: false,
+                    })
+                }
+                pairing_codes::PairingCodeStatus::Confirmed => {
+                    if row.account_id.as_deref() != Some(account_id) {
+                        return Err(FormalPairingError::PairingStateMismatch {
+                            actual: "confirmed_by_different_account".to_string(),
+                        });
+                    }
+                    account_host_pairings::insert_pair_with_executor(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    Ok(FormalPairingConfirm {
+                        host_installation_id: row.host_installation_id,
+                        already_confirmed: true,
+                    })
+                }
+                pairing_codes::PairingCodeStatus::Redeemed
+                | pairing_codes::PairingCodeStatus::Expired => {
+                    Err(FormalPairingError::PairingCodeInvalid)
+                }
+            }
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_formal_pairing_confirm".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                let _ =
+                    crate::ingest::invalidate_peer_targets_for_host(outcome.host_installation_id)
+                        .await;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_formal_pairing_confirm".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    async fn confirm_pairing_code_postgres(
+        &self,
+        pool: &PgPool,
+        pairing_code: &str,
+        account_id: &str,
+        linked_via_installation_id: DeviceId,
+        client_request_id: Option<&str>,
+    ) -> Result<FormalPairingConfirm, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let digest = sha256_hex(pairing_code);
+        let mut tx = begin_serializable_postgres_tx(pool, "begin_formal_pairing_confirm")
+            .await
+            .map_err(FormalPairingError::Internal)?;
+
+        let result: Result<FormalPairingConfirm, FormalPairingError> = async {
+            let row = pairing_codes::get_code_with_postgres_executor(&mut *tx, &digest)
+                .await
+                .map_err(FormalPairingError::Internal)?
+                .ok_or(FormalPairingError::PairingCodeInvalid)?;
+
+            if row.expires_at_ms <= now {
+                return Err(FormalPairingError::PairingCodeInvalid);
+            }
+
+            match row.status {
+                pairing_codes::PairingCodeStatus::Pending => {
+                    let updated = pairing_codes::confirm_code_with_postgres_executor(
+                        &mut *tx,
+                        &digest,
+                        account_id,
+                        linked_via_installation_id,
+                        client_request_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    if updated != 1 {
+                        return Err(FormalPairingError::PairingCodeInvalid);
+                    }
+                    account_host_pairings::insert_pair_with_postgres_executor(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    Ok(FormalPairingConfirm {
+                        host_installation_id: row.host_installation_id,
+                        already_confirmed: false,
+                    })
+                }
+                pairing_codes::PairingCodeStatus::Confirmed => {
+                    if row.account_id.as_deref() != Some(account_id) {
+                        return Err(FormalPairingError::PairingStateMismatch {
+                            actual: "confirmed_by_different_account".to_string(),
+                        });
+                    }
+                    account_host_pairings::insert_pair_with_postgres_executor(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    Ok(FormalPairingConfirm {
+                        host_installation_id: row.host_installation_id,
+                        already_confirmed: true,
+                    })
+                }
+                pairing_codes::PairingCodeStatus::Redeemed
+                | pairing_codes::PairingCodeStatus::Expired => {
+                    Err(FormalPairingError::PairingCodeInvalid)
+                }
+            }
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_formal_pairing_confirm".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                let _ =
+                    crate::ingest::invalidate_peer_targets_for_host(outcome.host_installation_id)
+                        .await;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_formal_pairing_confirm".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn redeem_host_installation(
+        &self,
+        pairing_code: &str,
+        host_installation_id: DeviceId,
+        _client_request_id: Option<&str>,
+    ) -> Result<HostInstallationToken, FormalPairingError> {
+        match self.pool.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                self.redeem_host_installation_sqlite(pool, pairing_code, host_installation_id)
+                    .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                self.redeem_host_installation_postgres(pool, pairing_code, host_installation_id)
+                    .await
+            }
+        }
+    }
+
+    async fn redeem_host_installation_sqlite(
+        &self,
+        pool: &SqlitePool,
+        pairing_code: &str,
+        host_installation_id: DeviceId,
+    ) -> Result<HostInstallationToken, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let digest = sha256_hex(pairing_code);
+        let token = generate_host_installation_token();
+        let token_hash = sha256_hex(&token);
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+            FormalPairingError::Internal(BackendError::StoreQuery {
+                operation: "begin_host_installation_redeem".to_string(),
+                message: e.to_string(),
+            })
+        })?;
+
+        let result: Result<HostInstallationToken, FormalPairingError> = async {
+            let account_id = pairing_codes::redeem_code_with_executor(
+                &mut *tx,
+                &digest,
+                host_installation_id,
+                now,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?
+            .ok_or(FormalPairingError::PairingCodeInvalid)?;
+            host_installation_tokens::insert_token_with_executor(
+                &mut *tx,
+                &token_hash,
+                host_installation_id,
+                now,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
+            Ok(HostInstallationToken {
+                host_installation_id,
+                account_id,
+                token,
+                issued_at_ms: now,
+            })
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_host_installation_redeem".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_host_installation_redeem".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    async fn redeem_host_installation_postgres(
+        &self,
+        pool: &PgPool,
+        pairing_code: &str,
+        host_installation_id: DeviceId,
+    ) -> Result<HostInstallationToken, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let digest = sha256_hex(pairing_code);
+        let token = generate_host_installation_token();
+        let token_hash = sha256_hex(&token);
+        let mut tx = begin_serializable_postgres_tx(pool, "begin_host_installation_redeem")
+            .await
+            .map_err(FormalPairingError::Internal)?;
+
+        let result: Result<HostInstallationToken, FormalPairingError> = async {
+            let account_id = pairing_codes::redeem_code_with_postgres_executor(
+                &mut *tx,
+                &digest,
+                host_installation_id,
+                now,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?
+            .ok_or(FormalPairingError::PairingCodeInvalid)?;
+            host_installation_tokens::insert_token_with_postgres_executor(
+                &mut *tx,
+                &token_hash,
+                host_installation_id,
+                now,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
+            Ok(HostInstallationToken {
+                host_installation_id,
+                account_id,
+                token,
+                issued_at_ms: now,
+            })
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_host_installation_redeem".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_host_installation_redeem".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn revoke_link(
+        &self,
+        registry: &SessionRegistry,
+        host_installation_id: DeviceId,
+        account_id: &str,
+    ) -> Result<Option<FormalRevokeOutcome>, FormalPairingError> {
+        match self.pool.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                self.revoke_link_sqlite(pool, registry, host_installation_id, account_id)
+                    .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                self.revoke_link_postgres(pool, registry, host_installation_id, account_id)
+                    .await
+            }
+        }
+    }
+
+    async fn revoke_link_sqlite(
+        &self,
+        pool: &SqlitePool,
+        registry: &SessionRegistry,
+        host_installation_id: DeviceId,
+        account_id: &str,
+    ) -> Result<Option<FormalRevokeOutcome>, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+            FormalPairingError::Internal(BackendError::StoreQuery {
+                operation: "begin_formal_pairing_revoke".to_string(),
+                message: e.to_string(),
+            })
+        })?;
+
+        let result: Result<Option<FormalRevokeOutcome>, FormalPairingError> = async {
+            let deleted = account_host_pairings::delete_pair_with_executor(
+                &mut *tx,
+                host_installation_id,
+                account_id,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
+            if deleted == 0 {
+                return Ok(None);
+            }
+
+            let remaining_link_count =
+                account_host_pairings::count_accounts_for_host_with_executor(
+                    &mut *tx,
+                    host_installation_id,
+                )
+                .await
+                .map_err(FormalPairingError::Internal)?;
+            let revoked_token_count = if remaining_link_count == 0 {
+                host_installation_tokens::revoke_all_for_host_with_executor(
+                    &mut *tx,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(FormalPairingError::Internal)?
+            } else {
+                0
+            };
+
+            Ok(Some(FormalRevokeOutcome {
+                host_installation_id,
+                remaining_link_count,
+                revoked_token_count,
+            }))
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_formal_pairing_revoke".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                if let Some(outcome) = outcome.as_ref() {
+                    let _ =
+                        crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
+                    if outcome.remaining_link_count == 0 {
+                        if let Some(handle) = registry.remove(host_installation_id) {
+                            handle.revoke(SessionRevocation::AuthRevoked);
+                        }
+                    } else if let Some(host_handle) = registry.get(host_installation_id) {
+                        let _ = registry.try_send_current(
+                            &host_handle,
+                            Envelope::Event {
+                                version: 1,
+                                event: EventKind::Unpaired,
+                            },
+                        );
+                    }
+                }
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_formal_pairing_revoke".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    async fn revoke_link_postgres(
+        &self,
+        pool: &PgPool,
+        registry: &SessionRegistry,
+        host_installation_id: DeviceId,
+        account_id: &str,
+    ) -> Result<Option<FormalRevokeOutcome>, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let mut tx = begin_serializable_postgres_tx(pool, "begin_formal_pairing_revoke")
+            .await
+            .map_err(FormalPairingError::Internal)?;
+
+        let result: Result<Option<FormalRevokeOutcome>, FormalPairingError> = async {
+            let deleted = account_host_pairings::delete_pair_with_postgres_executor(
+                &mut *tx,
+                host_installation_id,
+                account_id,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
+            if deleted == 0 {
+                return Ok(None);
+            }
+
+            let remaining_link_count =
+                account_host_pairings::count_accounts_for_host_with_postgres_executor(
+                    &mut *tx,
+                    host_installation_id,
+                )
+                .await
+                .map_err(FormalPairingError::Internal)?;
+            let revoked_token_count = if remaining_link_count == 0 {
+                host_installation_tokens::revoke_all_for_host_with_postgres_executor(
+                    &mut *tx,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(FormalPairingError::Internal)?
+            } else {
+                0
+            };
+
+            Ok(Some(FormalRevokeOutcome {
+                host_installation_id,
+                remaining_link_count,
+                revoked_token_count,
+            }))
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_formal_pairing_revoke".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                if let Some(outcome) = outcome.as_ref() {
+                    let _ =
+                        crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
+                    if outcome.remaining_link_count == 0 {
+                        if let Some(handle) = registry.remove(host_installation_id) {
+                            handle.revoke(SessionRevocation::AuthRevoked);
+                        }
+                    } else if let Some(host_handle) = registry.get(host_installation_id) {
+                        let _ = registry.try_send_current(
+                            &host_handle,
+                            Envelope::Event {
+                                version: 1,
+                                event: EventKind::Unpaired,
+                            },
+                        );
+                    }
+                }
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_formal_pairing_revoke".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
     }
 
     /// Consume a pairing token and mint the Mac's bearer secret.
@@ -220,13 +897,211 @@ impl PairingService {
             }
         }
     }
+
+    pub async fn consume_pairing(
+        &self,
+        registry: &SessionRegistry,
+        candidate: &PairingToken,
+        consumer: DeviceId,
+        consumer_name: String,
+        account_id: &str,
+    ) -> Result<PairingCompletion, ConsumePairingError> {
+        let result = self
+            .consume_pairing_inner(registry, candidate, consumer, consumer_name, account_id)
+            .await;
+        crate::telemetry::record_pairing_consume(pairing_consume_outcome(&result));
+        result
+    }
+
+    async fn consume_pairing_inner(
+        &self,
+        registry: &SessionRegistry,
+        candidate: &PairingToken,
+        consumer: DeviceId,
+        consumer_name: String,
+        account_id: &str,
+    ) -> Result<PairingCompletion, ConsumePairingError> {
+        let pairing_outcome = match self
+            .consume_token(candidate, consumer, consumer_name.clone())
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(BackendError::PairingTokenInvalid) => {
+                return Err(ConsumePairingError::PairingTokenInvalid)
+            }
+            Err(BackendError::PairingStateMismatch { actual }) => {
+                return Err(ConsumePairingError::PairingStateMismatch { actual })
+            }
+            Err(error) => return Err(ConsumePairingError::Internal(error)),
+        };
+
+        let issuer_id = pairing_outcome.issuer_device_id;
+        if let Err(error) = account_host_pairings::insert_pair(
+            &self.pool,
+            issuer_id,
+            account_id,
+            consumer,
+            Utc::now().timestamp_millis(),
+        )
+        .await
+        {
+            return Err(ConsumePairingError::Internal(error));
+        }
+        let _ = crate::ingest::invalidate_peer_targets_for_host(issuer_id).await;
+
+        if let Err(error) = self
+            .link_account_to_pair_devices(consumer, issuer_id, account_id)
+            .await
+        {
+            self.compensate_pairing(issuer_id, account_id).await;
+            return Err(ConsumePairingError::Internal(error));
+        }
+
+        let mac_name = match devices::get_device(&self.pool, issuer_id).await {
+            Ok(Some(row)) => row.display_name,
+            _ => "Mac".to_string(),
+        };
+
+        let Some(issuer_handle) = registry.get(issuer_id) else {
+            self.compensate_pairing(issuer_id, account_id).await;
+            return Err(ConsumePairingError::IssuerOffline);
+        };
+
+        issuer_handle.set_account_id(account_id.to_string());
+        let frame = Envelope::Event {
+            version: 1,
+            event: EventKind::Paired {
+                peer_device_id: consumer,
+                peer_name: consumer_name,
+                your_device_secret: Some(pairing_outcome.issuer_secret),
+            },
+        };
+        if let Err(error) = registry.try_send_current(&issuer_handle, frame) {
+            tracing::warn!(
+                target: "minos_backend::pairing",
+                error = ?error,
+                issuer = %issuer_id,
+                consumer = %consumer,
+                "failed to deliver pairing event; compensating"
+            );
+            self.compensate_pairing(issuer_id, account_id).await;
+            return Err(ConsumePairingError::DeliveryFailed);
+        }
+
+        Ok(PairingCompletion {
+            peer_device_id: issuer_id,
+            peer_name: mac_name,
+        })
+    }
+
+    pub async fn forget_pairing(
+        &self,
+        registry: &SessionRegistry,
+        host_device_id: DeviceId,
+        account_id: &str,
+    ) -> Result<bool, BackendError> {
+        let result = self
+            .forget_pairing_inner(registry, host_device_id, account_id)
+            .await;
+        crate::telemetry::record_pairing_forget(pairing_forget_outcome(&result));
+        result
+    }
+
+    async fn forget_pairing_inner(
+        &self,
+        registry: &SessionRegistry,
+        host_device_id: DeviceId,
+        account_id: &str,
+    ) -> Result<bool, BackendError> {
+        let deleted =
+            account_host_pairings::delete_pair(&self.pool, host_device_id, account_id).await?;
+        let _ = crate::ingest::invalidate_peer_targets_for_host(host_device_id).await;
+
+        if deleted == 0 {
+            return Ok(false);
+        }
+
+        if let Some(host_handle) = registry.get(host_device_id) {
+            let _ = registry.try_send_current(
+                &host_handle,
+                Envelope::Event {
+                    version: 1,
+                    event: EventKind::Unpaired,
+                },
+            );
+        }
+
+        Ok(true)
+    }
+
+    async fn link_account_to_pair_devices(
+        &self,
+        consumer: DeviceId,
+        issuer: DeviceId,
+        account_id: &str,
+    ) -> Result<(), BackendError> {
+        devices::set_account_id(&self.pool, &consumer, account_id).await?;
+        devices::set_account_id(&self.pool, &issuer, account_id).await?;
+        Ok(())
+    }
+
+    async fn compensate_pairing(&self, issuer_id: DeviceId, account_id: &str) {
+        let _ = account_host_pairings::delete_pair(&self.pool, issuer_id, account_id).await;
+        let _ = crate::ingest::invalidate_peer_targets_for_host(issuer_id).await;
+    }
+}
+
+fn pairing_token_issue_outcome<T>(result: &Result<T, BackendError>) -> &'static str {
+    use crate::telemetry as t;
+    match result {
+        Ok(_) => t::OUTCOME_OK,
+        Err(_) => t::OUTCOME_ERROR,
+    }
+}
+
+fn pairing_consume_outcome<T>(result: &Result<T, ConsumePairingError>) -> &'static str {
+    use crate::telemetry as t;
+    match result {
+        Ok(_) => t::OUTCOME_OK,
+        Err(ConsumePairingError::PairingTokenInvalid) => t::OUTCOME_INVALID,
+        Err(ConsumePairingError::PairingStateMismatch { .. }) => t::OUTCOME_CONFLICT,
+        Err(ConsumePairingError::IssuerOffline) => t::OUTCOME_PEER_OFFLINE,
+        Err(ConsumePairingError::DeliveryFailed) => t::OUTCOME_PEER_BACKPRESSURE,
+        Err(ConsumePairingError::Internal(_)) => t::OUTCOME_ERROR,
+    }
+}
+
+fn pairing_forget_outcome<T>(result: &Result<T, BackendError>) -> &'static str {
+    use crate::telemetry as t;
+    match result {
+        Ok(_) => t::OUTCOME_OK,
+        Err(_) => t::OUTCOME_ERROR,
+    }
+}
+
+async fn begin_serializable_postgres_tx<'a>(
+    pool: &'a PgPool,
+    operation: &'static str,
+) -> Result<sqlx::Transaction<'a, Postgres>, BackendError> {
+    let mut tx = pool.begin().await.map_err(|e| BackendError::StoreQuery {
+        operation: operation.to_string(),
+        message: e.to_string(),
+    })?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: format!("{operation}.set_isolation"),
+            message: e.to_string(),
+        })?;
+    Ok(tx)
 }
 
 /// SHA-256 hex digest of a UTF-8 string.
 ///
 /// Hand-rolled `{:02x}` loop so we don't pull in the `hex` crate just for
 /// a 64-char output.
-fn sha256_hex(input: &str) -> String {
+pub(crate) fn sha256_hex(input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
     let mut out = String::with_capacity(digest.len() * 2);
     for b in digest {
@@ -236,12 +1111,25 @@ fn sha256_hex(input: &str) -> String {
     out
 }
 
+fn generate_pairing_code() -> String {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).expect("OS CSPRNG must be available");
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_host_installation_token() -> String {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).expect("OS CSPRNG must be available");
+    format!("hit_{}", URL_SAFE_NO_PAD.encode(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::test_support::memory_pool;
     use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
+    use sqlx::SqlitePool;
     use std::time::Duration as StdDuration;
 
     const FIVE_MIN: StdDuration = StdDuration::from_mins(5);
