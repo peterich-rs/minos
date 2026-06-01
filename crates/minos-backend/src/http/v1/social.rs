@@ -6,14 +6,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use serde::Deserialize;
 
-/// Maximum time window (in milliseconds) within which a message can be
-/// recalled. 5 minutes matches common IM conventions.
-const RECALL_WINDOW_MS: i64 = 5 * 60 * 1000;
-
-/// Placeholder text for recalled messages (stored in DB).
-#[allow(dead_code)]
-const RECALLED_MESSAGE_TEXT: &str = "[message recalled]";
-
 const AGENT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(5);
 const GROUP_COMPLETION_TIMEOUT: Duration = Duration::from_mins(5);
 const GROUP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -24,68 +16,18 @@ use crate::http::BackendState;
 use axum::{Json, Router};
 use minos_domain::AgentName;
 use minos_protocol::{
-    AddAgentToGroupRequest, AddGroupMemberRequest, AgentDispatchRequest, AgentDispatchResponse,
-    AgentSummary, ChatMessageSummary, ConversationAgentMembersResponse,
-    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
-    ConversationSummary, ConversationsResponse, CreateFriendRequestRequest,
-    CreateGroupConversationRequest, EnsureDirectConversationRequest, Envelope, EventKind,
-    FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse, FriendSummary,
-    FriendsResponse, ListAgentsResponse, ListChatMessagesRequest, ListChatMessagesResponse,
-    MyProfileResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, SearchUsersRequest,
-    SearchUsersResponse, SendAgentMessageRequest, SendChatMessageRequest, SenderType,
-    SetDisplayNameRequest, SetMinosIdRequest, UserSummary,
+    AddAgentToGroupRequest, AgentDispatchRequest, AgentDispatchResponse, AgentSummary,
+    ChatMessageSummary, ConversationAgentMembersResponse, Envelope, EventKind, ListAgentsResponse,
+    RegisterAgentRequest, RemoveAgentFromGroupRequest, SendAgentMessageRequest, SenderType,
+    UserSummary,
 };
 
 pub fn router() -> Router<BackendState> {
     Router::new()
-        .route("/me/profile/query", post(get_my_profile))
-        .route("/me/profile/minos-id", post(set_minos_id))
-        .route("/me/profile/display-name", post(set_display_name))
-        .route("/users/search/query", post(search_users_query))
-        .route("/friends/query", post(list_friends))
-        .route("/friend-requests", post(create_friend_request))
-        .route("/friend-requests/query", post(list_friend_requests))
-        .route(
-            "/friend-requests/:request_id/accept",
-            post(accept_friend_request),
-        )
-        .route(
-            "/friend-requests/:request_id/reject",
-            post(reject_friend_request),
-        )
-        .route("/conversations/query", post(list_conversations))
-        .route("/conversations/list", post(list_conversations))
-        .route("/conversations/direct", post(ensure_direct_conversation))
-        .route("/conversations/group", post(create_group_conversation))
-        .route(
-            "/conversations/:conversation_id/members/query",
-            post(list_conversation_members),
-        )
-        .route(
-            "/conversations/:conversation_id/read",
-            post(mark_conversation_read),
-        )
-        .route(
-            "/conversations/:conversation_id/messages",
-            post(send_message),
-        )
-        .route("/conversations/send-message", post(send_message_command))
-        .route(
-            "/conversations/:conversation_id/messages/query",
-            post(list_messages_query),
-        )
-        .route(
-            "/conversations/:conversation_id/messages/:message_id/recall",
-            post(recall_message),
-        )
         // ─── Agent routes ───
         .route("/agents", post(register_agent))
         .route("/agents/query", post(list_agents))
         .route("/agents/:agent_id/delete", post(delete_agent_handler))
-        .route(
-            "/conversations/:conversation_id/members/add",
-            post(add_group_member),
-        )
         .route(
             "/conversations/:conversation_id/agents",
             post(list_conversation_agents_handler),
@@ -112,20 +54,24 @@ fn err(code: &'static str, message: impl Into<String>) -> (StatusCode, Json<Erro
     err_response(code, message)
 }
 
-fn validate_minos_id(minos_id: &str) -> bool {
-    let len = minos_id.len();
-    (6..=24).contains(&len) && minos_id.bytes().all(|b| b.is_ascii_alphanumeric())
-}
-
 #[derive(Debug, Deserialize)]
-struct SendConversationMessageRequest {
-    conversation_id: String,
-    text: String,
-    reply_to_message_id: Option<String>,
+pub struct SendConversationMessageRequest {
+    pub conversation_id: String,
+    pub text: String,
+    pub reply_to_message_id: Option<String>,
 }
 
 #[allow(clippy::unused_async)]
 async fn require_account_id(
+    state: &BackendState,
+    headers: &HeaderMap,
+) -> Result<String, (StatusCode, Json<ErrorEnvelope>)> {
+    require_account_id_from_state(state, headers)
+}
+
+/// Extract the authenticated account ID from the bearer token in the request headers.
+/// Public so other handler modules (profiles, friends, conversations) can reuse this.
+pub fn require_account_id_from_state(
     state: &BackendState,
     headers: &HeaderMap,
 ) -> Result<String, (StatusCode, Json<ErrorEnvelope>)> {
@@ -142,668 +88,6 @@ async fn require_account_id(
         )
     })?;
     Ok(bearer.account_id)
-}
-
-fn display_name(profile: &crate::store::social::ProfileRow) -> String {
-    if let Some(name) = profile.display_name.as_deref() {
-        let trimmed = name.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-    let email = profile.email.trim();
-    match email.split('@').next() {
-        Some(head) if !head.is_empty() => head.to_string(),
-        _ => profile.minos_id.clone(),
-    }
-}
-
-fn to_user_summary(profile: &crate::store::social::ProfileRow) -> UserSummary {
-    UserSummary {
-        account_id: profile.account_id.clone(),
-        minos_id: profile.minos_id.clone(),
-        display_name: display_name(profile),
-    }
-}
-
-async fn load_profile(
-    state: &BackendState,
-    account_id: &str,
-) -> Result<crate::store::social::ProfileRow, (StatusCode, Json<ErrorEnvelope>)> {
-    crate::store::social::profile_by_account(&state.store, account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-        .ok_or_else(|| err("not_found", format!("account not found: {account_id}")))
-}
-
-async fn get_my_profile(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-) -> Result<Json<MyProfileResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let profile = load_profile(&state, &account_id).await?;
-    Ok(Json(MyProfileResponse {
-        account_id: profile.account_id,
-        email: profile.email,
-        minos_id: profile.minos_id,
-        display_name: profile.display_name,
-    }))
-}
-
-async fn set_minos_id(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<SetMinosIdRequest>,
-) -> Result<Json<MyProfileResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    if !validate_minos_id(&req.minos_id) {
-        return Err(err(
-            "bad_request",
-            "minos_id must be 6-24 ASCII letters or digits",
-        ));
-    }
-    crate::store::social::set_minos_id(&state.store, &account_id, &req.minos_id)
-        .await
-        .map_err(|e| {
-            if matches!(
-                &e,
-                crate::error::BackendError::StoreQuery { operation, message }
-                if operation == "social::set_minos_id" && message == "minos_id_taken"
-            ) {
-                err("conflict", "minos_id already taken")
-            } else {
-                err("internal", e.to_string())
-            }
-        })?;
-    let profile = load_profile(&state, &account_id).await?;
-    Ok(Json(MyProfileResponse {
-        account_id: profile.account_id,
-        email: profile.email,
-        minos_id: profile.minos_id,
-        display_name: profile.display_name,
-    }))
-}
-
-async fn set_display_name(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<SetDisplayNameRequest>,
-) -> Result<Json<MyProfileResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let next_display_name = req
-        .display_name
-        .as_ref()
-        .map(|raw| raw.trim().to_string())
-        .filter(|trimmed| !trimmed.is_empty());
-    if let Some(name) = next_display_name.as_ref() {
-        let char_count = name.chars().count();
-        if !(1..=48).contains(&char_count) {
-            return Err(err(
-                "bad_request",
-                "display_name must be 1-48 characters after trimming",
-            ));
-        }
-    }
-    crate::store::social::set_display_name(&state.store, &account_id, next_display_name.as_deref())
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
-    let profile = load_profile(&state, &account_id).await?;
-    Ok(Json(MyProfileResponse {
-        account_id: profile.account_id,
-        email: profile.email,
-        minos_id: profile.minos_id,
-        display_name: profile.display_name,
-    }))
-}
-
-async fn search_users_query(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(query): Json<SearchUsersRequest>,
-) -> Result<Json<SearchUsersResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    search_users_inner(state, headers, query).await
-}
-
-async fn search_users_inner(
-    state: BackendState,
-    headers: HeaderMap,
-    query: SearchUsersRequest,
-) -> Result<Json<SearchUsersResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    if query.minos_id.trim().is_empty() {
-        return Ok(Json(SearchUsersResponse { users: Vec::new() }));
-    }
-    let users = crate::store::social::search_by_minos_id_prefix(&state.store, &query.minos_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-        .into_iter()
-        .filter(|user| user.account_id != account_id)
-        .map(|user| to_user_summary(&user))
-        .collect();
-    Ok(Json(SearchUsersResponse { users }))
-}
-
-async fn create_friend_request(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<CreateFriendRequestRequest>,
-) -> Result<Json<FriendRequestSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let me = load_profile(&state, &account_id).await?;
-    let Some(target) = crate::store::social::find_by_minos_id(&state.store, &req.target_minos_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    else {
-        return Err(err("not_found", "target user not found"));
-    };
-    if target.account_id == account_id {
-        return Err(err("bad_request", "cannot add yourself"));
-    }
-    if crate::store::social::are_friends(&state.store, &account_id, &target.account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("conflict", "already friends"));
-    }
-    if crate::store::social::has_pending_friend_request_between(
-        &state.store,
-        &account_id,
-        &target.account_id,
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("conflict", "friend request already pending"));
-    }
-    let created_at_ms = chrono::Utc::now().timestamp_millis();
-    let request_id = crate::store::social::create_friend_request(
-        &state.store,
-        &account_id,
-        &target.account_id,
-        created_at_ms,
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
-    Ok(Json(FriendRequestSummary {
-        request_id,
-        from: to_user_summary(&me),
-        to: to_user_summary(&target),
-        status: FriendRequestStatus::Pending,
-        created_at_ms,
-        resolved_at_ms: None,
-    }))
-}
-
-async fn list_friend_requests(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-) -> Result<Json<FriendRequestsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let incoming_rows =
-        crate::store::social::list_incoming_friend_requests(&state.store, &account_id)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
-    let outgoing_rows =
-        crate::store::social::list_outgoing_friend_requests(&state.store, &account_id)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
-    let incoming = hydrate_friend_requests(&state, incoming_rows).await?;
-    let outgoing = hydrate_friend_requests(&state, outgoing_rows).await?;
-    Ok(Json(FriendRequestsResponse { incoming, outgoing }))
-}
-
-async fn accept_friend_request(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Path(request_id): Path<String>,
-) -> Result<Json<FriendRequestSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    resolve_request(state, headers, request_id, FriendRequestStatus::Accepted).await
-}
-
-async fn reject_friend_request(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Path(request_id): Path<String>,
-) -> Result<Json<FriendRequestSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    resolve_request(state, headers, request_id, FriendRequestStatus::Rejected).await
-}
-
-async fn resolve_request(
-    state: BackendState,
-    headers: HeaderMap,
-    request_id: String,
-    status: FriendRequestStatus,
-) -> Result<Json<FriendRequestSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let service = crate::social::SocialService::new(state.store.clone());
-    let row = match service
-        .resolve_friend_request(&account_id, &request_id, status)
-        .await
-    {
-        Ok(row) => row,
-        Err(crate::social::ResolveFriendRequestError::NotFound) => {
-            return Err(err("not_found", "friend request not found"));
-        }
-        Err(crate::social::ResolveFriendRequestError::Unauthorized) => {
-            return Err(err("unauthorized", "not allowed to resolve this request"));
-        }
-        Err(crate::social::ResolveFriendRequestError::AlreadyResolved) => {
-            return Err(err("conflict", "friend request already resolved"));
-        }
-        Err(crate::social::ResolveFriendRequestError::Internal(error)) => {
-            return Err(err("internal", error.to_string()));
-        }
-    };
-    let mut hydrated = hydrate_friend_requests(&state, vec![row]).await?;
-    Ok(Json(hydrated.remove(0)))
-}
-
-async fn list_friends(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-) -> Result<Json<FriendsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let friendships = crate::store::social::list_friendships_for(&state.store, &account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
-
-    // Batch-load all friend profiles in one query.
-    let friend_ids: Vec<String> = friendships
-        .iter()
-        .map(|f| {
-            if f.account_low_id == account_id {
-                f.account_high_id.clone()
-            } else {
-                f.account_low_id.clone()
-            }
-        })
-        .collect();
-    let profiles = crate::store::social::profiles_by_accounts(&state.store, &friend_ids)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
-
-    let mut friends = Vec::with_capacity(friendships.len());
-    for friendship in friendships {
-        let other_id = if friendship.account_low_id == account_id {
-            &friendship.account_high_id
-        } else {
-            &friendship.account_low_id
-        };
-        let profile = profiles
-            .get(other_id)
-            .ok_or_else(|| err("internal", format!("profile not found: {other_id}")))?;
-        let friend_display_name = display_name(profile);
-        friends.push(FriendSummary {
-            account_id: profile.account_id.clone(),
-            minos_id: profile.minos_id.clone(),
-            display_name: friend_display_name,
-            created_at_ms: friendship.created_at_ms,
-        });
-    }
-    Ok(Json(FriendsResponse { friends }))
-}
-
-async fn list_conversations(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-) -> Result<Json<ConversationsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let rows = crate::store::social::list_conversations_for(&state.store, &account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
-    let conversations = hydrate_conversations(&state, &account_id, rows).await?;
-    Ok(Json(ConversationsResponse { conversations }))
-}
-
-async fn ensure_direct_conversation(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<EnsureDirectConversationRequest>,
-) -> Result<Json<ConversationResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    if !crate::store::social::are_friends(&state.store, &account_id, &req.friend_account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("conflict", "users are not friends"));
-    }
-    let conversation = crate::store::social::ensure_direct_conversation(
-        &state.store,
-        &account_id,
-        &account_id,
-        &req.friend_account_id,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
-    Ok(Json(ConversationResponse {
-        conversation_id: conversation.conversation_id,
-    }))
-}
-
-async fn create_group_conversation(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<CreateGroupConversationRequest>,
-) -> Result<Json<ConversationResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let title = req.title.trim();
-    if title.is_empty() {
-        return Err(err("bad_request", "group title is required"));
-    }
-    for member in &req.member_account_ids {
-        if member == &account_id {
-            continue;
-        }
-        if !crate::store::social::are_friends(&state.store, &account_id, member)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?
-        {
-            return Err(err(
-                "conflict",
-                format!("group member is not your friend: {member}"),
-            ));
-        }
-    }
-    let conversation = crate::store::social::create_group_conversation(
-        &state.store,
-        &account_id,
-        title,
-        &req.member_account_ids,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
-    Ok(Json(ConversationResponse {
-        conversation_id: conversation.conversation_id,
-    }))
-}
-
-async fn list_conversation_members(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Path(conversation_id): Path<String>,
-) -> Result<Json<ConversationMembersResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("not_found", "conversation not found"));
-    }
-
-    let members =
-        crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?
-            .into_iter()
-            .map(|profile| to_user_summary(&profile))
-            .collect();
-
-    Ok(Json(ConversationMembersResponse { members }))
-}
-
-async fn mark_conversation_read(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Path(conversation_id): Path<String>,
-) -> Result<Json<ConversationReadResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("not_found", "conversation not found"));
-    }
-
-    let last_read_at_ms = crate::store::social::mark_conversation_read_to_latest(
-        &state.store,
-        &conversation_id,
-        &account_id,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
-
-    Ok(Json(ConversationReadResponse { last_read_at_ms }))
-}
-
-async fn list_messages_query(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Path(conversation_id): Path<String>,
-    Json(query): Json<ListChatMessagesRequest>,
-) -> Result<Json<ListChatMessagesResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    list_messages_inner(state, headers, conversation_id, query).await
-}
-
-async fn list_messages_inner(
-    state: BackendState,
-    headers: HeaderMap,
-    conversation_id: String,
-    query: ListChatMessagesRequest,
-) -> Result<Json<ListChatMessagesResponse>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("not_found", "conversation not found"));
-    }
-    let limit = query.limit.unwrap_or(50);
-    let mut messages = crate::store::social::list_messages(
-        &state.store,
-        &conversation_id,
-        query.before_ts_ms,
-        limit,
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
-    #[allow(clippy::cast_possible_truncation)]
-    let next_before_ts_ms = if messages.len() as u32 == limit.min(200) {
-        messages.last().map(|message| message.created_at_ms)
-    } else {
-        None
-    };
-    messages.reverse();
-    let messages = hydrate_messages(&state, messages).await?;
-    Ok(Json(ListChatMessagesResponse {
-        messages,
-        next_before_ts_ms,
-    }))
-}
-
-#[allow(clippy::too_many_lines)]
-async fn send_message(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Path(conversation_id): Path<String>,
-    Json(req): Json<SendChatMessageRequest>,
-) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    send_message_inner(state, headers, conversation_id, req).await
-}
-
-async fn send_message_command(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<SendConversationMessageRequest>,
-) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    send_message_inner(
-        state,
-        headers,
-        req.conversation_id,
-        SendChatMessageRequest {
-            text: req.text,
-            reply_to_message_id: req.reply_to_message_id,
-        },
-    )
-    .await
-}
-
-async fn send_message_inner(
-    state: BackendState,
-    headers: HeaderMap,
-    conversation_id: String,
-    req: SendChatMessageRequest,
-) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    let trimmed = req.text.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(err("bad_request", "message text is required"));
-    }
-    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("not_found", "conversation not found"));
-    }
-    let reply_target = match req.reply_to_message_id.as_deref() {
-        Some(message_id) => {
-            let Some(reply_target) = crate::store::social::get_message(&state.store, message_id)
-                .await
-                .map_err(|e| err("internal", e.to_string()))?
-            else {
-                return Err(err("bad_request", "reply target not found"));
-            };
-            if reply_target.conversation_id != conversation_id {
-                return Err(err("bad_request", "reply target not in conversation"));
-            }
-            Some(reply_target)
-        }
-        None => None,
-    };
-    let reply_to_message_id = reply_target.as_ref().map(|row| row.message_id.clone());
-    let members =
-        crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
-    let mentioned_account_ids = extract_mentioned_account_ids(&trimmed, &account_id, &members);
-    let row = crate::store::social::insert_message(
-        &state.store,
-        &conversation_id,
-        &account_id,
-        &trimmed,
-        chrono::Utc::now().timestamp_millis(),
-        reply_to_message_id.as_deref(),
-        &mentioned_account_ids,
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
-    let mut hydrated = hydrate_messages(&state, vec![row]).await?;
-    let message = hydrated.remove(0);
-
-    let sender_minos_id = members
-        .iter()
-        .find(|member| member.account_id == account_id)
-        .map(|member| member.minos_id.clone())
-        .unwrap_or_default();
-    let dispatch_plan =
-        build_agent_dispatch_plan(&state, &conversation_id, &trimmed, reply_target.as_ref())
-            .await?;
-
-    fan_out_social_message(&state, &message).await;
-
-    if let Some(plan) = dispatch_plan {
-        match forward_agent_dispatch(
-            &state,
-            &plan.agent,
-            plan.session_id.clone(),
-            &plan.forwarded_text,
-            &conversation_id,
-            &message.message_id,
-        )
-        .await
-        {
-            Ok(response) => {
-                crate::store::social::bind_session_to_message(
-                    &state.store,
-                    &message.message_id,
-                    &response.session_id,
-                )
-                .await
-                .map_err(|e| err("internal", e.to_string()))?;
-
-                spawn_group_completion_watcher(
-                    state.clone(),
-                    conversation_id.clone(),
-                    message.message_id.clone(),
-                    response.session_id,
-                    plan.agent,
-                    plan.watcher_from_seq,
-                    if plan.mention_sender {
-                        Some(account_id.clone())
-                    } else {
-                        None
-                    },
-                    if plan.mention_sender {
-                        Some(sender_minos_id.clone())
-                    } else {
-                        None
-                    },
-                );
-            }
-            Err(error) => {
-                let (code, detail) = agent_error_from_backend_error(&error);
-                fan_out_agent_error(&state, &account_id, plan.session_id, code, detail);
-            }
-        }
-    }
-
-    Ok(Json(message))
-}
-
-async fn recall_message(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Path((conversation_id, message_id)): Path<(String, String)>,
-) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("not_found", "conversation not found"));
-    }
-
-    let Some(existing) = crate::store::social::get_message(&state.store, &message_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    else {
-        return Err(err("not_found", "message not found"));
-    };
-    if existing.conversation_id != conversation_id {
-        return Err(err("not_found", "message not found"));
-    }
-    if existing.sender_account_id != account_id {
-        return Err(err(
-            "bad_request",
-            "only the sender can recall this message",
-        ));
-    }
-
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    if now_ms - existing.created_at_ms > RECALL_WINDOW_MS {
-        return Err(err(
-            "bad_request",
-            "message recall window has expired (5 minutes)",
-        ));
-    }
-
-    let recalled = crate::store::social::recall_message(
-        &state.store,
-        &conversation_id,
-        &message_id,
-        &account_id,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?
-    .ok_or_else(|| err("not_found", "message not found"))?;
-
-    let mut hydrated = hydrate_messages(&state, vec![recalled]).await?;
-    let message = hydrated.remove(0);
-    fan_out_social_message(&state, &message).await;
-    Ok(Json(message))
 }
 
 async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSummary) {
@@ -957,37 +241,27 @@ async fn forward_agent_dispatch(
         origin_message_id: Some(origin_message_id.to_string()),
     };
     let command_id = agent_dispatch_command_id(origin_message_id);
-    let created_at_ms = chrono::Utc::now().timestamp_millis();
-    let deadline_at_ms = created_at_ms
-        .saturating_add(i64::try_from(AGENT_DISPATCH_TIMEOUT.as_millis()).unwrap_or(i64::MAX));
     let params_json =
         serde_json::to_value(&request).map_err(|error| crate::error::BackendError::StoreQuery {
             operation: "social::forward_agent_dispatch.serialize".into(),
             message: error.to_string(),
         })?;
-    state
-        .host_command_runtime
-        .enqueue(
+    let response = state
+        .host_commands
+        .dispatch_json(
             &command_id,
             host_device_id,
             request.session_id.as_deref(),
             AGENT_DISPATCH_COMMAND_METHOD,
             &params_json,
             Some(&agent.owner_account_id),
-            deadline_at_ms,
-            created_at_ms,
-        )
-        .await?;
-    state
-        .host_command_runtime
-        .dispatch(
-            &command_id,
-            host_device_id,
-            AGENT_DISPATCH_COMMAND_METHOD,
-            &request,
             AGENT_DISPATCH_TIMEOUT,
         )
-        .await
+        .await?;
+    serde_json::from_value(response).map_err(|error| crate::error::BackendError::ForwardRpc {
+        method: AGENT_DISPATCH_COMMAND_METHOD.into(),
+        message: format!("invalid host command response: {error}"),
+    })
 }
 
 fn agent_dispatch_command_id(origin_message_id: &str) -> String {
@@ -1237,86 +511,12 @@ async fn post_agent_social_message(
     crate::store::social::bind_session_to_message(&state.store, &row.message_id, session_id)
         .await
         .map_err(|e| err("internal", e.to_string()))?;
-    let mut hydrated = hydrate_messages(state, vec![row]).await?;
+    let mut hydrated = crate::conversations::use_case::hydrate_messages(&state.store, vec![row])
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
     let message = hydrated.remove(0);
     fan_out_social_message(state, &message).await;
     Ok(())
-}
-
-async fn hydrate_friend_requests(
-    state: &BackendState,
-    rows: Vec<crate::store::social::FriendRequestRow>,
-) -> Result<Vec<FriendRequestSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    // Batch-load all referenced profiles in one query to avoid N+1.
-    let mut account_ids: Vec<String> = rows
-        .iter()
-        .flat_map(|r| [r.from_account_id.clone(), r.to_account_id.clone()])
-        .collect();
-    account_ids.sort();
-    account_ids.dedup();
-    let profiles = crate::store::social::profiles_by_accounts(&state.store, &account_ids)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
-
-    let mut output = Vec::with_capacity(rows.len());
-    for row in rows {
-        let from = profiles.get(&row.from_account_id).ok_or_else(|| {
-            err(
-                "internal",
-                format!("profile not found: {}", row.from_account_id),
-            )
-        })?;
-        let to = profiles.get(&row.to_account_id).ok_or_else(|| {
-            err(
-                "internal",
-                format!("profile not found: {}", row.to_account_id),
-            )
-        })?;
-        output.push(FriendRequestSummary {
-            request_id: row.request_id,
-            from: to_user_summary(from),
-            to: to_user_summary(to),
-            status: parse_request_status(&row.status)?,
-            created_at_ms: row.created_at_ms,
-            resolved_at_ms: row.resolved_at_ms,
-        });
-    }
-    Ok(output)
-}
-
-async fn hydrate_conversations(
-    state: &BackendState,
-    account_id: &str,
-    rows: Vec<crate::store::social::ConversationDigestRow>,
-) -> Result<Vec<ConversationSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    crate::social::SocialService::new(state.store.clone())
-        .hydrate_conversations(account_id, rows)
-        .await
-        .map_err(map_social_view_error)
-}
-
-async fn hydrate_messages(
-    state: &BackendState,
-    rows: Vec<crate::store::social::ChatMessageRow>,
-) -> Result<Vec<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    crate::social::SocialService::new(state.store.clone())
-        .hydrate_messages(rows)
-        .await
-        .map_err(map_social_view_error)
-}
-
-fn map_social_view_error(
-    error: crate::social::SocialViewError,
-) -> (StatusCode, Json<ErrorEnvelope>) {
-    match error {
-        crate::social::SocialViewError::MissingProfile(account_id) => {
-            err("internal", format!("profile not found: {account_id}"))
-        }
-        crate::social::SocialViewError::InvalidConversationKind(kind) => {
-            err("internal", format!("unknown conversation kind: {kind}"))
-        }
-        crate::social::SocialViewError::Internal(error) => err("internal", error.to_string()),
-    }
 }
 
 fn extract_mentioned_account_ids(
@@ -1374,21 +574,6 @@ fn collect_mention_tokens(text: &str) -> Vec<&str> {
     tokens
 }
 
-fn parse_request_status(
-    status: &str,
-) -> Result<FriendRequestStatus, (StatusCode, Json<ErrorEnvelope>)> {
-    match status {
-        "pending" => Ok(FriendRequestStatus::Pending),
-        "accepted" => Ok(FriendRequestStatus::Accepted),
-        "rejected" => Ok(FriendRequestStatus::Rejected),
-        "canceled" => Ok(FriendRequestStatus::Canceled),
-        _ => Err(err(
-            "internal",
-            format!("unknown friend request status: {status}"),
-        )),
-    }
-}
-
 // ─── Agent Handlers ────────────────────────────────────────────────────
 
 async fn register_agent(
@@ -1443,49 +628,6 @@ async fn delete_agent_handler(
     if !deleted {
         return Err(err("not_found", "agent not found or not owned by you"));
     }
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn add_group_member(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Path(conversation_id): Path<String>,
-    Json(req): Json<AddGroupMemberRequest>,
-) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
-    let account_id = require_account_id(&state, &headers).await?;
-    // Verify caller is a member
-    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("not_found", "conversation not found"));
-    }
-    // Verify conversation is a group
-    let conversation = crate::store::social::get_conversation(&state.store, &conversation_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-        .ok_or_else(|| err("not_found", "conversation not found"))?;
-    if conversation.kind != "group" {
-        return Err(err(
-            "bad_request",
-            "can only add members to group conversations",
-        ));
-    }
-    // Verify the new member is a friend of the caller
-    if !crate::store::social::are_friends(&state.store, &account_id, &req.member_account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-    {
-        return Err(err("conflict", "new member must be your friend"));
-    }
-    crate::store::social::add_member_to_group(
-        &state.store,
-        &conversation_id,
-        &req.member_account_id,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1652,6 +794,90 @@ async fn send_agent_message(
     };
     fan_out_social_message(&state, &message).await;
     Ok(Json(message))
+}
+
+/// Try to dispatch a message to an agent in the conversation.
+/// Called by the conversations handler after a message is sent.
+/// Returns Ok(()) if no agent was dispatched or if dispatch succeeded,
+/// or Err if something went wrong.
+pub async fn try_agent_dispatch(
+    state: &BackendState,
+    account_id: &str,
+    conversation_id: &str,
+    message: &ChatMessageSummary,
+    reply_to_message_id: Option<&str>,
+    trimmed_text: &str,
+) -> Result<(), crate::error::BackendError> {
+    let reply_target = match reply_to_message_id {
+        Some(message_id) => crate::store::social::get_message(&state.store, message_id).await?,
+        None => None,
+    };
+    let dispatch_plan =
+        build_agent_dispatch_plan(state, conversation_id, trimmed_text, reply_target.as_ref())
+            .await
+            .map_err(|(_, body)| crate::error::BackendError::StoreQuery {
+                operation: "social::try_agent_dispatch.plan".into(),
+                message: body.0.error.message,
+            })?;
+
+    let Some(plan) = dispatch_plan else {
+        return Ok(());
+    };
+
+    let members =
+        crate::store::social::list_conversation_member_profiles(&state.store, conversation_id)
+            .await?;
+    let sender_minos_id = members
+        .iter()
+        .find(|m| m.account_id == account_id)
+        .map(|m| m.minos_id.clone())
+        .unwrap_or_default();
+    let mention_sender = plan.mention_sender;
+
+    match forward_agent_dispatch(
+        state,
+        &plan.agent,
+        plan.session_id.clone(),
+        &plan.forwarded_text,
+        conversation_id,
+        &message.message_id,
+    )
+    .await
+    {
+        Ok(response) => {
+            crate::store::social::bind_session_to_message(
+                &state.store,
+                &message.message_id,
+                &response.session_id,
+            )
+            .await?;
+
+            spawn_group_completion_watcher(
+                state.clone(),
+                conversation_id.to_string(),
+                message.message_id.clone(),
+                response.session_id,
+                plan.agent,
+                plan.watcher_from_seq,
+                if mention_sender {
+                    Some(account_id.to_string())
+                } else {
+                    None
+                },
+                if mention_sender {
+                    Some(sender_minos_id)
+                } else {
+                    None
+                },
+            );
+        }
+        Err(error) => {
+            let (code, detail) = agent_error_from_backend_error(&error);
+            fan_out_agent_error(state, account_id, plan.session_id, code, detail);
+        }
+    }
+
+    Ok(())
 }
 
 fn agent_row_to_summary(row: &crate::store::social::AgentRow) -> AgentSummary {

@@ -24,11 +24,11 @@ pub mod history;
 pub mod translate;
 pub mod use_case;
 
+use crate::approvals::{ApprovalService, RecordApprovalRequestInput};
 use minos_domain::AgentName;
 use minos_protocol::{Envelope, EventKind};
 use serde_json::Value;
 
-use crate::approval_relay::ApprovalRelay;
 use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
 use crate::realtime::{peer_target_cache_backend, RealtimeFanout};
@@ -80,7 +80,7 @@ pub async fn dispatch(
     store: &impl AsStorePool,
     registry: &SessionRegistry,
     translators: &ThreadTranslators,
-    approval_relay: &ApprovalRelay,
+    approvals: &dyn ApprovalService,
     realtime: &RealtimeFanout,
     agent: AgentName,
     thread_id: &str,
@@ -114,7 +114,7 @@ pub async fn dispatch(
     }
 
     if let Some(event) =
-        special_event_from_payload(approval_relay, thread_id, payload, ts_ms, owner_device_id)
+        special_event_from_payload(approvals, thread_id, payload, ts_ms, owner_device_id)
             .await?
     {
         let env = Envelope::Event { version: 1, event };
@@ -218,11 +218,11 @@ fn should_skip_external_sql_approval_event(store: &impl AsStorePool, payload: &V
 }
 
 async fn special_event_from_payload(
-    approval_relay: &ApprovalRelay,
+    approvals: &dyn ApprovalService,
     thread_id: &str,
     payload: &Value,
     ts_ms: i64,
-    owner_device_id: minos_domain::DeviceId,
+    _owner_device_id: minos_domain::DeviceId,
 ) -> Result<Option<EventKind>, BackendError> {
     let Some(method) = payload.get("method").and_then(Value::as_str) else {
         return Ok(None);
@@ -252,17 +252,16 @@ async fn special_event_from_payload(
                 .and_then(Value::as_u64)
                 .unwrap_or_default();
 
-            approval_relay
-                .record_request(
-                    owner_device_id,
-                    &request_id,
-                    thread_id,
-                    &turn_id,
-                    &approval_method,
-                    &approval_params,
-                    ts_ms,
+            approvals
+                .record_request(RecordApprovalRequestInput {
+                    request_id: request_id.clone(),
+                    agent_session_id: thread_id.to_string(),
+                    turn_id: (!turn_id.is_empty()).then_some(turn_id.clone()),
+                    method: approval_method.clone(),
+                    params_json: approval_params.clone(),
+                    created_at_ms: ts_ms,
                     timeout_ms,
-                )
+                })
                 .await?;
 
             Ok(Some(EventKind::ApprovalRequest {
@@ -286,8 +285,8 @@ async fn special_event_from_payload(
                 .unwrap_or("timeout")
                 .to_string();
 
-            approval_relay
-                .handle_host_timeout(thread_id, &request_id, &reason, ts_ms)
+            approvals
+                .handle_host_timeout(&request_id, &reason, ts_ms)
                 .await?;
 
             Ok(Some(EventKind::ApprovalTimeout {

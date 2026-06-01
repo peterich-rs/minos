@@ -45,8 +45,11 @@ use minos_protocol::{Envelope, EventKind};
 use tokio::signal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Drain window after broadcasting `ServerShutdown` (plan §10 step 8).
+/// Default drain window after broadcasting `ServerShutdown` (plan §10 step 8).
 const SHUTDOWN_DRAIN: Duration = Duration::from_millis(500);
+
+/// Default shutdown timeout if `MINOS_SHUTDOWN_TIMEOUT_SECS` is not set.
+const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 
 /// xlog file prefix. Spec §9.4 reserves `backend` for the server process.
 const XLOG_NAME_PREFIX: &str = "backend";
@@ -68,7 +71,7 @@ async fn main() -> Result<()> {
         StorageMode::Sqlite => {
             let db_url = cfg.resolved_database_url();
             tracing::info!(db_url = %db_url, "connecting to sqlite");
-            let pool = store::connect_with_options(&db_url, cfg.db_max_connections)
+            let pool = store::connect_sqlite_with_options(&db_url, cfg.db_max_connections)
                 .await
                 .with_context(|| format!("store::connect {db_url}"))?;
             tracing::info!(
@@ -158,6 +161,16 @@ async fn main() -> Result<()> {
         // this future resolves, so everything that must happen while handlers
         // are still live (broadcast + drain) belongs here.
         let registry_for_shutdown = Arc::clone(&shell.app.registry);
+        let shutdown_timeout = Duration::from_secs(
+            std::env::var("MINOS_SHUTDOWN_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_SECS),
+        );
+        tracing::info!(
+            shutdown_timeout_secs = shutdown_timeout.as_secs(),
+            "graceful shutdown configured"
+        );
         axum::serve(listener, router)
             .with_graceful_shutdown(async move {
                 wait_for_signal().await;
@@ -166,7 +179,10 @@ async fn main() -> Result<()> {
                     version: 1,
                     event: EventKind::ServerShutdown,
                 });
-                tokio::time::sleep(SHUTDOWN_DRAIN).await;
+                // Use the configured shutdown timeout for the drain window,
+                // capped at the configured value.
+                let drain = SHUTDOWN_DRAIN.min(shutdown_timeout);
+                tokio::time::sleep(drain).await;
             })
             .await
             .context("axum::serve")?;

@@ -17,6 +17,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use serde::Serialize;
+use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::PgPool;
@@ -26,11 +27,29 @@ use crate::error::BackendError;
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 32;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+static SQLITE_MIGRATOR: Migrator = sqlx::migrate!("./migrations/sqlite");
+static POSTGRES_MIGRATOR: Migrator = sqlx::migrate!("./migrations/postgres");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum StoreBackend {
     Sqlite,
     Postgres,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum MigrationVariant {
+    Sqlite,
+    Postgres,
+}
+
+impl MigrationVariant {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sqlite => "sqlite",
+            Self::Postgres => "postgres",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +74,14 @@ impl StoreHandle {
         match self {
             Self::Sqlite(_) => StoreBackend::Sqlite,
             Self::Postgres(_) => StoreBackend::Postgres,
+        }
+    }
+
+    #[must_use]
+    pub const fn migration_variant(&self) -> MigrationVariant {
+        match self {
+            Self::Sqlite(_) => MigrationVariant::Sqlite,
+            Self::Postgres(_) => MigrationVariant::Postgres,
         }
     }
 
@@ -187,14 +214,17 @@ pub mod accounts;
 pub mod agent_sessions;
 pub mod agent_turn_events;
 pub mod agent_turns;
+pub mod approval_requests;
 pub mod devices;
 pub mod durable_event_log;
 pub mod host_commands;
 pub mod host_installation_tokens;
+pub mod notification_cooldowns;
+pub mod notification_preferences;
 pub mod outbox_events;
 pub mod pairing_codes;
-pub mod pending_approvals;
 pub mod projects;
+pub mod push_tokens;
 pub mod raw_events;
 pub mod refresh_tokens;
 pub mod social;
@@ -254,11 +284,11 @@ pub fn supported_external_sql_drivers() -> Vec<String> {
 /// or `sqlite::memory:` for tests. Missing files are created on connect
 /// via `SqliteConnectOptions::create_if_missing(true)`.
 pub async fn connect(db_url: &str) -> Result<SqlitePool, BackendError> {
-    connect_with_options(db_url, DEFAULT_MAX_CONNECTIONS).await
+    connect_sqlite_with_options(db_url, DEFAULT_MAX_CONNECTIONS).await
 }
 
 /// Open the SQLite pool with explicit pool sizing and production-tuned pragmas.
-pub async fn connect_with_options(
+pub async fn connect_sqlite_with_options(
     db_url: &str,
     max_connections: u32,
 ) -> Result<SqlitePool, BackendError> {
@@ -292,7 +322,7 @@ pub async fn connect_with_options(
             message: e.to_string(),
         })?;
 
-    sqlx::migrate!("./migrations")
+    SQLITE_MIGRATOR
         .run(&pool)
         .await
         .map_err(|e| BackendError::StoreMigrate {
@@ -344,7 +374,7 @@ pub async fn preflight_external_sql_with_options(
     Ok(preflight)
 }
 
-async fn connect_postgres_with_options(
+pub async fn connect_postgres_with_options(
     db_url: &str,
     max_connections: u32,
 ) -> Result<PgPool, BackendError> {
@@ -359,6 +389,13 @@ async fn connect_postgres_with_options(
         .await
         .map_err(|error| BackendError::StoreConnect {
             url: db_url.to_string(),
+            message: error.to_string(),
+        })?;
+
+    POSTGRES_MIGRATOR
+        .run(&pool)
+        .await
+        .map_err(|error| BackendError::StoreMigrate {
             message: error.to_string(),
         })?;
 
@@ -399,7 +436,7 @@ async fn describe_postgres_pool(
 pub mod test_support {
     use super::{
         SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
-        SQLITE_BUSY_TIMEOUT,
+        SQLITE_BUSY_TIMEOUT, SQLITE_MIGRATOR,
     };
     use minos_domain::{DeviceId, DeviceRole};
 
@@ -424,7 +461,7 @@ pub mod test_support {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        SQLITE_MIGRATOR.run(&pool).await.unwrap();
         pool
     }
 

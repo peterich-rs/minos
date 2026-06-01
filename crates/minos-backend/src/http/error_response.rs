@@ -8,12 +8,12 @@ use axum::Json;
 use serde::Serialize;
 
 /// Standard JSON error envelope: `{ "error": { "code": "...", "message": "..." } }`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ErrorEnvelope {
     pub error: ErrorBody,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ErrorBody {
     pub code: &'static str,
     pub message: String,

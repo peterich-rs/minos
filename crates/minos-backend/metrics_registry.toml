@@ -1,0 +1,182 @@
+# Minos Backend Metrics Registry
+#
+# This file documents all Prometheus metrics exposed by the backend.
+# Each metric is registered in src/telemetry/metrics.rs.
+
+[metrics]
+
+# ── Gauges ─────────────────────────────────────────────────────────────
+
+[metrics.session_registry_size]
+type = "gauge"
+help = "Current number of live websocket sessions in the in-process registry."
+labels = []
+
+[metrics.ws_active_sessions]
+type = "gauge"
+help = "Currently live websocket sessions, partitioned by device role."
+labels = ["role"]
+
+[metrics.agent_sessions_active]
+type = "gauge"
+help = "Currently active agent sessions."
+labels = []
+
+[metrics.approvals_pending]
+type = "gauge"
+help = "Currently pending approval requests."
+labels = []
+
+[metrics.durable_event_log_size]
+type = "gauge"
+help = "Current size of the durable event log, partitioned by topic_kind."
+labels = ["topic_kind"]
+
+# ── Counters ───────────────────────────────────────────────────────────
+
+[metrics.ws_connect_total]
+type = "counter"
+help = "Websocket upgrade attempts, labeled by role and outcome."
+labels = ["role", "outcome"]
+
+[metrics.ws_close_total]
+type = "counter"
+help = "Websocket close events, labeled by role and close-code reason."
+labels = ["role", "reason"]
+
+[metrics.envelope_in_total]
+type = "counter"
+help = "Envelopes received from clients, labeled by kind and protocol version."
+labels = ["kind", "version"]
+
+[metrics.envelope_out_total]
+type = "counter"
+help = "Envelopes sent to clients, labeled by kind and protocol version."
+labels = ["kind", "version"]
+
+[metrics.ingest_events_total]
+type = "counter"
+help = "Raw ingest envelopes processed, labeled by agent and outcome."
+labels = ["agent", "outcome"]
+
+[metrics.ingest_outbox_dropped_total]
+type = "counter"
+help = "Number of ingest fan-out frames dropped because the peer outbox rejected them."
+labels = []
+
+[metrics.auth_register_total]
+type = "counter"
+help = "Account registration attempts, labeled by outcome."
+labels = ["outcome"]
+
+[metrics.auth_login_total]
+type = "counter"
+help = "Login attempts, labeled by outcome."
+labels = ["outcome"]
+
+[metrics.auth_refresh_total]
+type = "counter"
+help = "Refresh-token rotations, labeled by outcome."
+labels = ["outcome"]
+
+[metrics.auth_logout_total]
+type = "counter"
+help = "Logout calls, labeled by outcome."
+labels = ["outcome"]
+
+[metrics.auth_refresh_reuse_total]
+type = "counter"
+help = "Detected refresh-token reuse incidents (security alert)."
+labels = []
+
+[metrics.pairing_token_issue_total]
+type = "counter"
+help = "Pairing token mints, labeled by outcome."
+labels = ["outcome"]
+
+[metrics.pairing_consume_total]
+type = "counter"
+help = "Pairing token consumes, labeled by outcome."
+labels = ["outcome"]
+
+[metrics.pairing_forget_total]
+type = "counter"
+help = "Pairing tear-downs, labeled by outcome."
+labels = ["outcome"]
+
+[metrics.approval_decision_total]
+type = "counter"
+help = "Approval-decision dispatches, labeled by outcome."
+labels = ["outcome"]
+
+[metrics.deprecated_route_total]
+type = "counter"
+help = "Hits to deprecated HTTP routes, labeled by route path."
+labels = ["route"]
+
+[metrics.push_send_total]
+type = "counter"
+help = "Push notification sends, labeled by channel (apns/fcm) and result."
+labels = ["channel", "result"]
+
+[metrics.push_decision_total]
+type = "counter"
+help = "Push notification decisions, labeled by decision (send/skip) and reason."
+labels = ["decision", "reason"]
+
+[metrics.outbox_dispatch_total]
+type = "counter"
+help = "Outbox dispatch attempts, labeled by result (ok/error)."
+labels = ["result"]
+
+[metrics.approval_timeout_resolved_total]
+type = "counter"
+help = "Approval requests resolved due to timeout."
+labels = []
+
+[metrics.host_command_timeout_total]
+type = "counter"
+help = "Host commands that timed out."
+labels = []
+
+[metrics.job_tick_total]
+type = "counter"
+help = "Background job tick attempts, labeled by job name and result."
+labels = ["job", "result"]
+
+# ── Histograms ─────────────────────────────────────────────────────────
+
+[metrics.http_request_duration_seconds]
+type = "histogram"
+unit = "seconds"
+help = "HTTP request latency in seconds, labeled by route, method, and status."
+labels = ["route", "method", "status"]
+
+[metrics.forward_rpc_latency_seconds]
+type = "histogram"
+unit = "seconds"
+help = "Forwarded RPC round-trip latency in seconds, labeled by method and outcome."
+labels = ["method", "outcome"]
+
+[metrics.db_query_duration_seconds]
+type = "histogram"
+unit = "seconds"
+help = "Repository operation duration in seconds, labeled by repo and op."
+labels = ["repo", "op"]
+
+[metrics.ws_outbox_depth]
+type = "histogram"
+help = "Per-frame depth of websocket outbox at enqueue time, by role."
+labels = ["role"]
+
+[metrics.outbox_dispatch_lag_seconds]
+type = "histogram"
+unit = "seconds"
+help = "Lag between event creation and outbox dispatch in seconds."
+labels = []
+
+[metrics.job_tick_duration_seconds]
+type = "histogram"
+unit = "seconds"
+help = "Background job tick duration in seconds, labeled by job name."
+labels = ["job"]

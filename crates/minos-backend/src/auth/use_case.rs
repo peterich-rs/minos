@@ -302,12 +302,25 @@ pub struct AuthUseCase {
 impl AuthUseCase {
     #[must_use]
     pub fn new(store: impl Into<StoreHandle>, jwt_secret: String) -> Arc<Self> {
+        Self::new_with_realtime_tickets(
+            store,
+            jwt_secret,
+            Arc::new(RealtimeTicketStore::default()),
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_realtime_tickets(
+        store: impl Into<StoreHandle>,
+        jwt_secret: String,
+        realtime_tickets: Arc<RealtimeTicketStore>,
+    ) -> Arc<Self> {
         let store = store.into();
         Self::with_repos(
             store.clone(),
             Arc::new(SqlAccountsRepo::new(store.clone())),
             Arc::new(SqlRefreshTokenRepo::new(store)),
-            Arc::new(RealtimeTicketStore::default()),
+            realtime_tickets,
             jwt_secret,
         )
     }
@@ -335,12 +348,13 @@ impl AuthUseCase {
         self.jwt_secret.as_bytes()
     }
 
-    pub fn consume_ws_ticket(
+    pub async fn consume_ws_ticket(
         &self,
         claims: &jwt::WsTicketClaims,
     ) -> Result<(), RealtimeTicketConsumeError> {
         self.realtime_tickets
             .consume(claims, chrono::Utc::now().timestamp())
+            .await
     }
 
     pub async fn register(
@@ -583,9 +597,10 @@ impl AuthUseCase {
         }
 
         self.issue_tracked_ws_ticket(account_id, device_id, device_role)
+            .await
     }
 
-    pub fn issue_host_ws_ticket(
+    pub async fn issue_host_ws_ticket(
         &self,
         host_installation_id: DeviceId,
     ) -> Result<WsTicketSession, AuthUseCaseError> {
@@ -594,9 +609,10 @@ impl AuthUseCase {
             host_installation_id,
             DeviceRole::AgentHost,
         )
+        .await
     }
 
-    fn issue_tracked_ws_ticket(
+    async fn issue_tracked_ws_ticket(
         &self,
         subject: &str,
         device_id: DeviceId,
@@ -608,7 +624,10 @@ impl AuthUseCase {
                 .map_err(|error| Self::log_internal("ws_ticket.sign", error))?;
         let claims = jwt::verify_ws_ticket(self.jwt_secret(), &ticket)
             .map_err(|error| Self::log_internal("ws_ticket.verify_after_sign", error))?;
-        self.realtime_tickets.register(&claims);
+        self.realtime_tickets
+            .register(&claims)
+            .await
+            .map_err(|error| Self::log_internal("ws_ticket.register", error))?;
 
         Ok(WsTicketSession {
             ticket,

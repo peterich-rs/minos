@@ -290,6 +290,24 @@ CREATE TABLE agent_turn_events (
 CREATE INDEX idx_agent_turn_events_turn_created
     ON agent_turn_events(turn_id, created_at_ms);
 
+CREATE TABLE approval_requests (
+    request_id         TEXT PRIMARY KEY,
+    agent_session_id   TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
+    turn_id            TEXT REFERENCES agent_turns(turn_id) ON DELETE SET NULL,
+    method             TEXT NOT NULL,
+    params_json        TEXT NOT NULL,
+    state              TEXT NOT NULL CHECK (state IN ('pending', 'decided', 'timeout', 'disconnected')),
+    deadline_at_ms     INTEGER NOT NULL,
+    created_at_ms      INTEGER NOT NULL,
+    resolved_at_ms     INTEGER,
+    resolution_json    TEXT
+) STRICT;
+
+CREATE INDEX idx_approval_session_state
+    ON approval_requests(agent_session_id, state);
+CREATE INDEX idx_approval_deadline_state
+    ON approval_requests(deadline_at_ms, state);
+
 CREATE TABLE threads (
     thread_id        TEXT PRIMARY KEY,
     agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini')),
@@ -376,32 +394,37 @@ CREATE INDEX idx_host_commands_host_status_deadline
     ON host_commands(host_installation_id, status, deadline_at_ms);
 
 CREATE TABLE durable_event_log (
-    event_id        TEXT PRIMARY KEY,
+    event_id        TEXT NOT NULL,
     topic           TEXT NOT NULL,
+    topic_kind      TEXT NOT NULL,
     topic_seq       INTEGER NOT NULL,
     partition_key   TEXT NOT NULL,
     payload_json    TEXT NOT NULL,
-    created_at_ms   INTEGER NOT NULL
+    created_at_ms   INTEGER NOT NULL,
+    PRIMARY KEY (topic_kind, event_id)
 ) STRICT;
 
 CREATE UNIQUE INDEX idx_durable_event_log_topic_seq
-    ON durable_event_log(topic, topic_seq);
+    ON durable_event_log(topic_kind, topic, topic_seq);
 CREATE INDEX idx_durable_event_log_topic_created
     ON durable_event_log(topic, created_at_ms);
 
 CREATE TABLE outbox_events (
     outbox_id         TEXT PRIMARY KEY,
-    event_id          TEXT NOT NULL REFERENCES durable_event_log(event_id),
+    topic_kind        TEXT NOT NULL,
+    event_id          TEXT NOT NULL,
     status            TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'acked', 'dead')),
     available_at_ms   INTEGER NOT NULL,
     attempts          INTEGER NOT NULL DEFAULT 0,
     claimed_by        TEXT,
     claimed_at_ms     INTEGER,
     ack_at_ms         INTEGER,
-    dead_at_ms        INTEGER
+    dead_at_ms        INTEGER,
+    last_error_json   TEXT,
+    FOREIGN KEY (topic_kind, event_id) REFERENCES durable_event_log(topic_kind, event_id)
 ) STRICT;
 
 CREATE INDEX idx_outbox_events_status_available
     ON outbox_events(status, available_at_ms);
 CREATE INDEX idx_outbox_events_event_id
-    ON outbox_events(event_id);
+    ON outbox_events(topic_kind, event_id);

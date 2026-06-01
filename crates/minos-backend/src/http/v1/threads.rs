@@ -1,5 +1,9 @@
 //! `/v1/threads*` handlers on a POST-first query surface.
 //!
+//! **DEPRECATED**: These routes are superseded by `/v1/agent-sessions/*`.
+//! They will be removed in a future release. Set
+//! `MINOS_ENABLE_DEPRECATED_ROUTES=false` to disable them.
+//!
 //! All three routes require a valid account bearer token. After ADR-0020
 //! the listing/read APIs scope by the
 //! caller's `account_id` (one iOS account may be paired with multiple
@@ -17,6 +21,17 @@ use serde::Deserialize;
 
 use crate::http::error_response::{err_json as err, ErrorEnvelope};
 use crate::http::BackendState;
+
+/// Route paths served by this deprecated module. Used for startup logging
+/// and deprecation metrics.
+pub const DEPRECATED_THREAD_ROUTES: &[&str] = &[
+    "/v1/threads",
+    "/v1/threads/query",
+    "/v1/threads/:thread_id/events",
+    "/v1/threads/read",
+    "/v1/threads/:thread_id/last_seq",
+    "/v1/threads/last-seq",
+];
 
 pub fn router() -> Router<BackendState> {
     Router::new()

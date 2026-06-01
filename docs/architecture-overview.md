@@ -77,13 +77,14 @@
 │                                                                              │
 │   iOS / Android / Web Admin                            macOS Host Daemon     │
 │         │                                                       │            │
-│         │ ① POST /v1/auth/login                                 │            │
+│         │ ① POST /v1/auth/register | /v1/auth/login             │            │
 │         │ ② POST /v1/realtime/ws-ticket                         │            │
 │         │ ③ WSS  /ws/client?ticket=...                          │            │
 │         │       └─ subscribe  account:<id>                      │            │
 │         │                     conversation:<id>                 │            │
 │         │                     agent_session:<id>                │            │
 │         │                     project:<id>                      │            │
+│         │                     POST /v1/agent-sessions/start     │            │
 │         │                                                       │            │
 │         │                              ④ POST /v1/host/bootstrap/nonce       │
 │         │                              ⑤ POST /v1/host/pairing/redeem       │
@@ -155,11 +156,12 @@
 
 ### 3.1 API Gateway 层
 
-- **Public API (`/v1/*`)** ——只接 `AccountPrincipal`（account bearer + installation_id）。账号、配对确认、conversation、agent session 命令、approval 响应、project 全部在此。
+- **Public API (`/v1/*`)** ——只接 `AccountPrincipal`（account bearer + installation_id）。账号、配对确认、conversation、agent session 命令、approval 响应、project 全部在此；关键入口包括 `/v1/auth/register`、`/v1/auth/login`、`/v1/agent-sessions/start`、`/v1/agent-sessions/read-turns`。
 - **Host API (`/v1/host/*`)** ——分两个 sub-surface：
   - bootstrap 子面（`HostBootstrapPrincipal`）：`/v1/host/bootstrap/nonce`、`/v1/host/pairing/request-code`、`/v1/host/pairing/redeem`。
   - steady-state 子面（`HostInstallationPrincipal`）：`/v1/host/installations/self`、`/v1/host/realtime/ws-ticket`。
 - 全部端点 POST-first，统一响应包络 `{ data, meta }` / `{ error }`。CORS、request-id、rate-limit、tracing、metrics 在 tower 中间件层。
+- **Platform probes** —— ingress 之外还暴露 `/health/live`、`/health/ready`、`/health/info` 与 `/metrics`，分别服务 liveness、readiness、运行时信息与 Prometheus 抓取。
 - 输出：OpenAPI 合同 + 类型生成的 SDK；CI 跑 drift gate。
 
 ### 3.2 Realtime Gateway 层

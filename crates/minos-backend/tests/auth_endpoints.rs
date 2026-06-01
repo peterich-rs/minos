@@ -343,7 +343,7 @@ async fn auth_login_keeps_other_iphone_ws_sessions_for_same_account() {
 
     // Simulate device A's live WS by directly inserting a SessionHandle
     // bound to the account. (The HTTP-only test app doesn't go through
-    // /devices, so we model the post-upgrade state manually.)
+    // /ws/client, so we model the post-upgrade state manually.)
     let (handle_a, mut rx_a) = SessionHandle::new(device_a_id, DeviceRole::MobileClient);
     handle_a.set_account_id(account_id.clone());
     state.registry.insert(handle_a.clone());

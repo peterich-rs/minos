@@ -25,7 +25,7 @@ use crate::http::auth::authenticate;
 use crate::http::error_response::{err_json, ErrorEnvelope};
 use crate::http::BackendState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct RegisterReq {
     pub email: String,
     pub password: String,
@@ -43,7 +43,7 @@ impl std::fmt::Debug for RegisterReq {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct LoginReq {
     pub email: String,
     pub password: String,
@@ -58,23 +58,23 @@ impl std::fmt::Debug for LoginReq {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RefreshReq {
     pub refresh_token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct LogoutReq {
     pub refresh_token: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct AccountSummary {
     pub account_id: String,
     pub email: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct AuthResp {
     pub account: AccountSummary,
     pub access_token: String,
@@ -82,7 +82,7 @@ pub struct AuthResp {
     pub expires_in: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct RefreshResp {
     pub access_token: String,
     pub refresh_token: String,
@@ -174,6 +174,20 @@ fn refresh_session_response(session: RefreshSession) -> Response {
     .into_response()
 }
 
+/// Register a new account.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/register",
+    request_body = RegisterReq,
+    responses(
+        (status = 200, description = "Account created", body = AuthResp),
+        (status = 400, description = "Validation error", body = ErrorEnvelope),
+        (status = 401, description = "Unauthorized", body = ErrorEnvelope),
+        (status = 409, description = "Email already taken", body = ErrorEnvelope),
+        (status = 429, description = "Rate limited"),
+    ),
+    tag = "auth"
+)]
 #[tracing::instrument(skip_all, fields(email = %req.email))]
 pub async fn post_register(
     State(state): State<BackendState>,
@@ -198,6 +212,18 @@ pub async fn post_register(
     }
 }
 
+/// Login with email and password.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/login",
+    request_body = LoginReq,
+    responses(
+        (status = 200, description = "Login successful", body = AuthResp),
+        (status = 401, description = "Invalid credentials", body = ErrorEnvelope),
+        (status = 429, description = "Rate limited"),
+    ),
+    tag = "auth"
+)]
 #[tracing::instrument(skip_all, fields(email = %req.email))]
 pub async fn post_login(
     State(state): State<BackendState>,
@@ -222,6 +248,17 @@ pub async fn post_login(
     }
 }
 
+/// Refresh an access token using a refresh token.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/refresh",
+    request_body = RefreshReq,
+    responses(
+        (status = 200, description = "Token refreshed", body = RefreshResp),
+        (status = 401, description = "Invalid refresh token", body = ErrorEnvelope),
+    ),
+    tag = "auth"
+)]
 #[tracing::instrument(skip_all)]
 pub async fn post_refresh(
     State(state): State<BackendState>,
@@ -241,6 +278,17 @@ pub async fn post_refresh(
     }
 }
 
+/// Logout and revoke refresh token.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/logout",
+    request_body = LogoutReq,
+    responses(
+        (status = 204, description = "Logged out"),
+        (status = 401, description = "Unauthorized", body = ErrorEnvelope),
+    ),
+    tag = "auth"
+)]
 #[tracing::instrument(skip_all)]
 pub async fn post_logout(
     State(state): State<BackendState>,
@@ -263,15 +311,18 @@ pub async fn post_logout(
     }
 }
 
-#[tracing::instrument(skip_all)]
-/// `POST /v1/auth/change-password`
-///
-/// Requires both the device rail (`X-Device-Id`/secret) and a valid bearer
-/// token so only the logged-in owner of the account can rotate the password.
-/// On success every active refresh token for the account is revoked,
-/// forcing other devices to sign in again — matching the intuition that a
-/// password change is a credential rotation, not a private-device-only
-/// event.
+/// Change account password. Requires bearer auth.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/change-password",
+    request_body(content = String, description = "JSON with current_password and new_password fields"),
+    responses(
+        (status = 204, description = "Password changed"),
+        (status = 401, description = "Unauthorized", body = ErrorEnvelope),
+        (status = 400, description = "Weak password", body = ErrorEnvelope),
+    ),
+    tag = "auth"
+)]
 #[tracing::instrument(skip_all)]
 pub async fn post_change_password(
     State(state): State<BackendState>,

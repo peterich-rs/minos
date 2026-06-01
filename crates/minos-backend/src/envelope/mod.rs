@@ -49,6 +49,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::approvals::ApprovalService;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures::StreamExt;
 use minos_protocol::Envelope;
@@ -311,7 +312,7 @@ pub async fn run_session(
     mut outbox_rx: mpsc::Receiver<ServerFrame>,
     registry: Arc<SessionRegistry>,
     store: StoreHandle,
-    approval_relay: Arc<crate::approval_relay::ApprovalRelay>,
+    approvals: Arc<dyn ApprovalService>,
     ingest: Arc<IngestUseCase>,
 ) -> Result<(), BackendError> {
     let role_label = role_metric_label(session.role);
@@ -342,7 +343,7 @@ pub async fn run_session(
 
     if session.role.is_account_client() && store.is_sqlite() {
         if let Some(account_id) = session.account_id() {
-            if let Err(error) = approval_relay
+            if let Err(error) = approvals
                 .resolve_disconnected_for_account(&account_id)
                 .await
             {
@@ -620,7 +621,7 @@ pub async fn handle_forward(
 ) -> Option<Envelope> {
     if session.role == minos_domain::DeviceRole::AgentHost {
         if let Some(reply_id) = json_rpc_id(&payload) {
-            if crate::host_command_runtime::resolve_pending_host_command(
+            if crate::host_commands::resolve_pending_host_command(
                 store,
                 session.device_id,
                 reply_id,

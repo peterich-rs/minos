@@ -1,4 +1,4 @@
-//! `/v1/devices/ws` upgrade-time behaviour: the agent-host receives an
+//! Formal host-gateway upgrade behaviour: the agent-host receives an
 //! `Event::IngestCheckpoint` frame as the second server frame (after the
 //! initial `Event::Unpaired` Phase G presence stub) so the daemon can
 //! reconcile its local DB watermark against what the backend has durably
@@ -29,7 +29,6 @@ use tempfile::NamedTempFile;
 use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
 use tokio_tungstenite::{
     tungstenite::{
-        client::ClientRequestBuilder,
         http::{StatusCode, Uri},
         protocol::Message,
         Error as WsError,
@@ -263,7 +262,7 @@ async fn connect_formal_gateway_ws(
         let acct = account_id.expect("account client connect requires an account_id");
         issue_client_ws_ticket(relay, acct, device_id, role).await?
     } else {
-        issue_host_ws_ticket(relay, device_id)?
+        issue_host_ws_ticket(relay, device_id).await?
     };
 
     Ok(connect_gateway_ws_with_ticket(relay, gateway_path_for_role(role), &ticket).await?)
@@ -295,10 +294,11 @@ async fn issue_client_ws_ticket(
         .ticket)
 }
 
-fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
+async fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
     Ok(relay
         .auth
         .issue_host_ws_ticket(host_id)
+        .await
         .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
         .ticket)
 }
@@ -396,7 +396,7 @@ async fn register_agent_host(pool: &SqlitePool) -> (DeviceId, DeviceSecret) {
 #[tokio::test]
 async fn ws_host_emits_checkpoint_after_unpaired_for_agent_host() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
-    let (host_id, host_secret) = register_agent_host(&relay.pool).await;
+    let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
 
     // Seed two threads owned by `host_id` and a few raw events on each so
     // `last_seq_per_owner` returns `{thr_1: 7, thr_2: 3}`.
@@ -467,7 +467,7 @@ async fn ws_host_emits_checkpoint_after_unpaired_for_agent_host() -> anyhow::Res
 #[tokio::test]
 async fn ws_host_emits_empty_checkpoint_when_no_threads() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
-    let (host_id, host_secret) = register_agent_host(&relay.pool).await;
+    let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
 
     let mut ws = connect_formal_gateway_ws(&relay, host_id, DeviceRole::AgentHost, None).await?;
 
@@ -624,7 +624,7 @@ async fn ws_client_rejects_reused_formal_ticket() -> anyhow::Result<()> {
 async fn ws_host_accepts_formal_host_ticket_query_auth() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
-    let ticket = issue_host_ws_ticket(&relay, host_id)?;
+    let ticket = issue_host_ws_ticket(&relay, host_id).await?;
     let mut ws = connect_gateway_ws_with_ticket(&relay, "/ws/host", &ticket).await?;
 
     match recv_envelope(&mut ws).await? {

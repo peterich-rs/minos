@@ -82,9 +82,10 @@ async fn issue_client_ws_ticket(
         .ticket)
 }
 
-fn issue_host_ws_ticket(auth: &AuthUseCase, host_id: DeviceId) -> anyhow::Result<String> {
+async fn issue_host_ws_ticket(auth: &AuthUseCase, host_id: DeviceId) -> anyhow::Result<String> {
     Ok(auth
         .issue_host_ws_ticket(host_id)
+        .await
         .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
         .ticket)
 }
@@ -272,7 +273,7 @@ async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not
         .await
         .unwrap();
 
-    let ticket = issue_host_ws_ticket(&auth, mac_id).unwrap();
+    let ticket = issue_host_ws_ticket(&auth, mac_id).await.unwrap();
     let mut ws = connect_gateway_ws(&base, "/ws/host", &ticket)
         .await
         .expect("authenticated upgrade must succeed");
@@ -310,7 +311,7 @@ async fn ws_client_rejects_host_ticket_with_401() {
         .await
         .unwrap();
 
-    let ticket = issue_host_ws_ticket(&auth, id).unwrap();
+    let ticket = issue_host_ws_ticket(&auth, id).await.unwrap();
     let err = connect_gateway_ws(&base, "/ws/client", &ticket)
         .await
         .expect_err("host ticket on client rail must fail");

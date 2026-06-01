@@ -30,7 +30,19 @@ base64 = { workspace = true }
 # concurrent state
 dashmap = { workspace = true }
 moka = { version = "0.12", features = ["sync"] }
-redis = { version = "1", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "cluster-async"] }
+deadpool-redis = "0.18"
+
+# observability / telemetry
+opentelemetry = "0.27"
+opentelemetry-otlp = { version = "0.27", features = ["tonic"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.28"
+prometheus = "0.13"
+
+# api schema
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+schemars = "0.8"
 
 # cli / config
 clap = { workspace = true }

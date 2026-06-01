@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use crate::approvals::ApprovalService;
 use minos_domain::{AgentName, DeviceId};
 use serde_json::Value;
 
-use crate::approval_relay::ApprovalRelay;
 use crate::error::BackendError;
 use crate::ingest::{dispatch, translate::ThreadTranslators};
 use crate::realtime::RealtimeFanout;
@@ -24,7 +24,7 @@ pub struct IngestUseCase {
     store: StoreHandle,
     registry: Arc<SessionRegistry>,
     translators: Arc<ThreadTranslators>,
-    approval_relay: Arc<ApprovalRelay>,
+    approvals: Arc<dyn ApprovalService>,
     realtime: Arc<RealtimeFanout>,
 }
 
@@ -34,7 +34,7 @@ impl IngestUseCase {
         store: impl Into<StoreHandle>,
         registry: Arc<SessionRegistry>,
         translators: Arc<ThreadTranslators>,
-        approval_relay: Arc<ApprovalRelay>,
+        approvals: Arc<dyn ApprovalService>,
         realtime: Arc<RealtimeFanout>,
     ) -> Arc<Self> {
         let store = store.into();
@@ -42,7 +42,7 @@ impl IngestUseCase {
             store,
             registry,
             translators,
-            approval_relay,
+            approvals,
             realtime,
         })
     }
@@ -52,7 +52,7 @@ impl IngestUseCase {
             &self.store,
             self.registry.as_ref(),
             self.translators.as_ref(),
-            self.approval_relay.as_ref(),
+            self.approvals.as_ref(),
             self.realtime.as_ref(),
             command.agent,
             &command.thread_id,

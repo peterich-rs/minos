@@ -13,7 +13,6 @@ prefer_shorthands:
 
 linter:
   rules:
-    convert_implicit_declaration: true
     # Async / correctness
     unawaited_futures: true
     discarded_futures: true

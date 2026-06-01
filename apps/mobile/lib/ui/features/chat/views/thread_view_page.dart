@@ -475,8 +475,8 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
         ),
         titleSpacing: 0,
         title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: .start,
+          mainAxisSize: .min,
           children: <Widget>[
             Text(
               threadId == null
@@ -564,9 +564,9 @@ class _NewChatEmptyState extends StatelessWidget {
     final shadTheme = ShadTheme.of(context);
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const .all(24),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: .min,
           children: <Widget>[
             Icon(
               LucideIcons.messageCircle,
@@ -577,7 +577,7 @@ class _NewChatEmptyState extends StatelessWidget {
             Text(
               '开始新对话',
               style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
+                fontWeight: .w600,
                 color: shadTheme.colorScheme.foreground,
               ),
             ),
@@ -585,7 +585,7 @@ class _NewChatEmptyState extends StatelessWidget {
             Text(
               '在下方输入消息，Agent 会立刻接管。',
               style: shadTheme.textTheme.muted,
-              textAlign: TextAlign.center,
+              textAlign: .center,
             ),
           ],
         ),
@@ -644,7 +644,7 @@ class _ThreadEventStream extends ConsumerWidget {
           children: [
             ListView.builder(
               controller: scroll,
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: const .symmetric(vertical: 8),
               itemCount: items.length,
               itemBuilder: (_, i) => items[i],
             ),

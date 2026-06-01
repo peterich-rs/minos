@@ -3,9 +3,9 @@
 //! The backend exposes the health probe set plus the formal realtime upgrades:
 //!
 //! - `GET /health/live`, `GET /health/ready`, `GET /health/info`.
-//! - `GET /ws/client`, `GET /ws/host` — WebSocket upgrades for the envelope
-//!   hub. The upgrade handlers live in [`ws_devices`]; the post-upgrade loop
-//!   lives in [`crate::envelope::run_session`].
+//! - `GET /ws/client`, `GET /ws/host` — WebSocket upgrades for the formal
+//!   realtime topic gateway. Legacy envelope compatibility remains an
+//!   implementation detail behind the gateway while Phase 2 is finishing.
 //!
 //! # State plumbing
 //!
@@ -25,8 +25,7 @@
 //! per-header adapter struct for minimal payoff.
 //!
 //! Extraction errors return `(StatusCode, String)` tuples so the plan's
-//! "401 pre-upgrade" contract (see [`ws_devices`]) is easy to read at the
-//! call site.
+//! "401 pre-upgrade" contract stays easy to read at the call site.
 
 use std::{ops::Deref, sync::Arc, time::Duration};
 
@@ -56,8 +55,9 @@ pub mod auth;
 pub mod error_response;
 pub mod health;
 pub mod metrics;
+pub mod openapi;
+pub mod rate_limit;
 pub mod v1;
-pub mod ws_devices;
 
 fn x_request_id_header() -> HeaderName {
     HeaderName::from_static("x-request-id")
@@ -141,7 +141,21 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "public",
     ),
     RouteContract::new("GET", "/health/info", "/health/info", "platform", "public"),
+    RouteContract::new(
+        "GET",
+        "/health/jobs",
+        "/health/jobs",
+        "platform",
+        "public",
+    ),
     RouteContract::new("GET", "/metrics", "/metrics", "platform", "public"),
+    RouteContract::new(
+        "GET",
+        "/openapi.json",
+        "/openapi.json",
+        "platform",
+        "public",
+    ),
     RouteContract::new(
         "GET",
         "/ws/client",
@@ -597,6 +611,41 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "account_api",
         "account_bearer",
     ),
+    RouteContract::new(
+        "POST",
+        "/v1/notifications/tokens/register",
+        "/v1/notifications/tokens/register",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/notifications/tokens/unregister",
+        "/v1/notifications/tokens/unregister",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/notifications/tokens/list",
+        "/v1/notifications/tokens/list",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/notifications/preferences/get",
+        "/v1/notifications/preferences/get",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/notifications/preferences/update",
+        "/v1/notifications/preferences/update",
+        "account_api",
+        "account_bearer",
+    ),
 ];
 
 impl BackendState {
@@ -671,6 +720,7 @@ impl BackendState {
             instance_id,
             message_bus,
             peer_target_cache,
+            Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
         );
         Self::from_app_context(app, cors_origins, env!("CARGO_PKG_VERSION"))
     }
@@ -714,15 +764,41 @@ pub fn router(state: BackendState) -> Router {
     crate::telemetry::init();
     crate::telemetry::set_session_registry_size(state.registry.len());
 
+    // Log deprecation warnings at startup for deprecated routes still enabled.
+    if crate::config::deprecated_routes_enabled() {
+        for route in v1::threads::DEPRECATED_THREAD_ROUTES {
+            tracing::warn!(
+                target: "minos_backend::startup",
+                route,
+                "deprecated route is mounted; set MINOS_ENABLE_DEPRECATED_ROUTES=false to disable"
+            );
+        }
+    }
+
+    // Initialize rate limiter for sensitive endpoints.
+    let rate_limiter = rate_limit::RateLimiter::from_env();
+    tracing::info!(
+        target: "minos_backend::startup",
+        "rate limiter initialized for sensitive endpoints"
+    );
+
     let cors = cors_layer(state.cors_origins.clone());
     let is_sqlite = state.store.is_sqlite();
     let router = Router::new()
         .route("/health/live", axum::routing::get(health::live))
         .route("/health/ready", axum::routing::get(health::ready))
         .route("/health/info", axum::routing::get(health::info))
+        .route("/health/jobs", axum::routing::get(health::jobs))
         .route("/metrics", axum::routing::get(metrics::get))
-        .route("/ws/client", axum::routing::get(ws_devices::upgrade_client))
-        .route("/ws/host", axum::routing::get(ws_devices::upgrade_host));
+        .route("/openapi.json", axum::routing::get(openapi::serve_openapi_json))
+        .route(
+            "/ws/client",
+            axum::routing::get(crate::realtime::gateway::upgrade_client),
+        )
+        .route(
+            "/ws/host",
+            axum::routing::get(crate::realtime::gateway::upgrade_host),
+        );
     let router = if is_sqlite {
         router.nest("/v1", v1::router())
     } else {
@@ -775,6 +851,12 @@ async fn record_http_metrics(request: Request<axum::body::Body>, next: Next) -> 
         response.status().as_u16(),
         started_at.elapsed().as_secs_f64(),
     );
+
+    // Record hits to deprecated routes for operator visibility.
+    if route.starts_with("/v1/threads") {
+        crate::telemetry::record_deprecated_route_hit(&route);
+    }
+
     response
 }
 
@@ -923,6 +1005,7 @@ mod tests {
             "external-sql-test-instance".to_string(),
             MessageBusBackend::inline(),
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
+            Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
         );
         let app = router(super::BackendState::from_app_context(app, None, "test"));
 
@@ -1108,6 +1191,7 @@ mod tests {
             "external-sql-test-instance".to_string(),
             MessageBusBackend::inline(),
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
+            Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
         );
         let app = router(super::BackendState::from_app_context(app, None, "test"));
 

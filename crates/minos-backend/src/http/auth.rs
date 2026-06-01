@@ -1,10 +1,9 @@
 //! Shared header extraction + auth classification for HTTP handlers.
 //!
-//! Both `GET /devices` (WS upgrade) and the `/v1/*` REST routes call
-//! [`authenticate`] to resolve `(device_id, role)` from the
-//! `X-Device-*` header bundle. First-connect devices are inserted into
-//! the `devices` table with `secret_hash = NULL`; existing rows are
-//! verified against the supplied secret if one is stored.
+//! The remaining header-auth flows call [`authenticate`] to resolve
+//! `(device_id, role)` from the `X-Device-*` header bundle. First-connect
+//! devices are inserted into the `devices` table with `secret_hash = NULL`;
+//! existing rows are verified against the supplied secret if one is stored.
 
 use axum::http::{HeaderMap, StatusCode};
 use minos_domain::{DeviceId, DeviceRole};

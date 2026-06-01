@@ -258,8 +258,8 @@ pub async fn read_range(
 /// `owner_device_id`. Threads with zero raw events are omitted (the
 /// `INNER JOIN` excludes them).
 ///
-/// Used by `/v1/devices/ws` to compute the `IngestCheckpoint` frame the
-/// daemon receives on connect (Phase D / spec §9 reconciliation): the
+/// Used by `/ws/host` activation to compute the `IngestCheckpoint` frame the
+/// host receives on connect (Phase D / spec §9 reconciliation): the
 /// daemon compares each backend max against its local watermark and
 /// replays the gap.
 pub async fn last_seq_per_owner(

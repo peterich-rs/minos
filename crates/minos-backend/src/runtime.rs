@@ -5,21 +5,27 @@ use axum::http::HeaderValue;
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
-use crate::approval_relay::ApprovalRelay;
+use crate::agent_sessions::{AgentSessionService, DefaultAgentSessionService};
+use crate::app::context::AppDataContext;
+use crate::approvals::{ApprovalService, DefaultApprovalService};
 use crate::auth::host_bootstrap::BootstrapNonceStore;
+use crate::auth::realtime_ticket::RealtimeTicketStore;
 use crate::auth::use_case::AuthUseCase;
 use crate::config::{
     Config, Environment, RuntimeMode, StorageMode, DEFAULT_CLUSTER_CHANNEL,
     DEFAULT_DB_MAX_CONNECTIONS, DEFAULT_TOKEN_TTL_SECS,
 };
-use crate::host_command_runtime::HostCommandRuntime;
+use crate::host_commands::{HostCommandService, RuntimeHostCommandService};
 use crate::http::{self, BackendState, RouteContract};
 use crate::ingest::{translate::ThreadTranslators, use_case::IngestUseCase};
+use crate::notifications::channels::composite::CompositeChannel;
+use crate::notifications::use_case::DefaultNotificationService;
+use crate::notifications::NotificationService;
 use crate::pairing::PairingService;
 use crate::project::ProjectService;
 use crate::realtime::{
     configure_peer_target_cache, CacheBackendKind, MessageBusBackend, MessageBusBackendKind,
-    PeerTargetCacheBackend, RealtimeFanout,
+    PeerTargetCacheBackend, RealtimeFanout, SubscriptionManager,
 };
 use crate::session::SessionRegistry;
 use crate::store::{self, StoreHandle};
@@ -88,17 +94,21 @@ pub struct BackendPlatformDefaults {
 
 pub struct AppContext {
     pub config: Arc<AppRuntimeConfig>,
+    pub data: AppDataContext,
     pub registry: Arc<SessionRegistry>,
+    pub subscription_mgr: Arc<SubscriptionManager>,
     pub pairing: Arc<PairingService>,
+    pub agent_sessions: Arc<dyn AgentSessionService>,
+    pub approvals: Arc<dyn ApprovalService>,
     pub auth: Arc<AuthUseCase>,
     pub bootstrap_nonces: Arc<BootstrapNonceStore>,
+    pub host_commands: Arc<dyn HostCommandService>,
     pub projects: Arc<ProjectService>,
     pub store: StoreHandle,
     pub token_ttl: Duration,
     pub ingest: Arc<IngestUseCase>,
     pub realtime: Arc<RealtimeFanout>,
-    pub host_command_runtime: Arc<HostCommandRuntime>,
-    pub approval_relay: Arc<ApprovalRelay>,
+    pub notifications: Arc<dyn NotificationService>,
     pub instance_id: String,
 }
 
@@ -114,45 +124,76 @@ impl AppContext {
         instance_id: String,
         message_bus: MessageBusBackend,
         peer_target_cache: PeerTargetCacheBackend,
+        realtime_tickets: Arc<RealtimeTicketStore>,
     ) -> Arc<Self> {
         let translators = ThreadTranslators::new();
+        let data = AppDataContext::new(store.clone());
         configure_peer_target_cache(peer_target_cache);
-        let realtime = RealtimeFanout::new(Arc::clone(&registry), message_bus, instance_id.clone());
+        let subscription_mgr = Arc::new(SubscriptionManager::default());
         let run_workers = runtime_config.runtime_mode.runs_supervised_workers();
-        let host_command_runtime = HostCommandRuntime::new_with_timeout_worker(
-            store.clone(),
+        let realtime = RealtimeFanout::new(
             Arc::clone(&registry),
+            Arc::clone(&subscription_mgr),
+            store.clone(),
+            message_bus,
+            instance_id.clone(),
             run_workers,
         );
-        let approval_relay = ApprovalRelay::new_with_timeout_worker(
+        let host_commands: Arc<dyn HostCommandService> =
+            RuntimeHostCommandService::new_with_timeout_worker(
+                store.clone(),
+                Some(Arc::clone(&registry)),
+                run_workers,
+            );
+        let approvals: Arc<dyn ApprovalService> = DefaultApprovalService::new(
+            Arc::clone(&data.repos),
             store.clone(),
             Arc::clone(&registry),
-            Arc::clone(&host_command_runtime),
+            Arc::clone(&host_commands),
             run_workers,
         );
         let ingest = IngestUseCase::new(
             store.clone(),
             Arc::clone(&registry),
             Arc::clone(&translators),
-            Arc::clone(&approval_relay),
+            Arc::clone(&approvals),
             Arc::clone(&realtime),
         );
-        let auth = AuthUseCase::new(store.clone(), jwt_secret);
+        let auth =
+            AuthUseCase::new_with_realtime_tickets(store.clone(), jwt_secret, realtime_tickets);
         let bootstrap_nonces = Arc::new(BootstrapNonceStore::default());
         let projects = ProjectService::new(store.clone());
+        let agent_sessions: Arc<dyn AgentSessionService> = DefaultAgentSessionService::new(
+            Arc::clone(&data.repos),
+            store.clone(),
+            Arc::clone(&host_commands),
+        );
+        // Build notification service with channels from environment.
+        let composite_channel = CompositeChannel::from_env();
+        let notifications: Arc<dyn NotificationService> = Arc::new(
+            DefaultNotificationService::new(store.clone(), vec![Arc::new(composite_channel)]),
+        );
+        // Spawn push fanout job if runtime supports workers.
+        if run_workers {
+            crate::jobs::push_fanout::spawn(store.clone(), Arc::clone(&notifications), true);
+        }
         Arc::new(Self {
             config: Arc::new(runtime_config),
+            data,
             registry,
+            subscription_mgr,
             pairing,
+            agent_sessions,
+            approvals,
             auth,
             bootstrap_nonces,
+            host_commands,
             projects,
             store,
             token_ttl,
             ingest,
             realtime,
-            host_command_runtime,
-            approval_relay,
+            notifications,
             instance_id,
         })
     }
@@ -163,6 +204,7 @@ pub struct RuntimeShell {
     cors_origins: Option<Vec<HeaderValue>>,
     cluster_listener: Option<JoinHandle<()>>,
     token_gc_task: Option<JoinHandle<()>>,
+    job_supervisor: Option<crate::jobs::JobSupervisor>,
 }
 
 impl RuntimeShell {
@@ -189,6 +231,12 @@ impl RuntimeShell {
             }
         };
         let run_workers = cfg.runtime_mode.runs_supervised_workers();
+        let realtime_tickets = match cfg.redis_url.as_deref() {
+            Some(redis_url) if !redis_url.is_empty() => {
+                Arc::new(RealtimeTicketStore::redis(redis_url)?)
+            }
+            _ => Arc::new(RealtimeTicketStore::default()),
+        };
         let app = AppContext::compose(
             AppRuntimeConfig::from(cfg),
             registry,
@@ -199,6 +247,7 @@ impl RuntimeShell {
             instance_id,
             message_bus,
             peer_target_cache,
+            realtime_tickets,
         );
         let cluster_listener = if cfg.runtime_mode.serves_http() {
             app.realtime.spawn_listener()
@@ -210,11 +259,22 @@ impl RuntimeShell {
         } else {
             None
         };
+        let job_supervisor = if run_workers {
+            let ctx = Arc::new(crate::jobs::JobContext {
+                store: app.store.clone(),
+                instance_id: app.instance_id.clone(),
+            });
+            let jobs = crate::jobs::default_jobs(Some(Arc::clone(&app.realtime)));
+            Some(crate::jobs::JobSupervisor::spawn_all(jobs, ctx, cfg.runtime_mode))
+        } else {
+            None
+        };
         Ok(Self {
             app,
             cors_origins,
             cluster_listener,
             token_gc_task,
+            job_supervisor,
         })
     }
 
@@ -228,6 +288,9 @@ impl RuntimeShell {
     }
 
     pub async fn shutdown(mut self) {
+        if let Some(supervisor) = self.job_supervisor.take() {
+            supervisor.abort_all();
+        }
         if let Some(task) = self.token_gc_task.take() {
             task.abort();
         }

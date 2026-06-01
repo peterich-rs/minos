@@ -287,6 +287,7 @@ async fn post_realtime_ws_ticket(
     let session = match state
         .auth
         .issue_host_ws_ticket(outcome.host_installation_id)
+        .await
     {
         Ok(session) => session,
         Err(error) => {

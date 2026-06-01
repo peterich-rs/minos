@@ -3,7 +3,7 @@ use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
-use minos_backend::store::{account_host_pairings, devices::insert_device};
+use minos_backend::store::{account_host_pairings, devices::insert_device, social};
 use minos_domain::{DeviceId, DeviceRole};
 
 mod common;
@@ -306,4 +306,321 @@ async fn list_sessions_filters_by_conversation_and_project_scope() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["sessions"].as_array().unwrap().len(), 1);
     assert_eq!(body["sessions"][0]["session_id"], "sess_route_list");
+}
+
+#[tokio::test]
+async fn start_session_dispatches_host_command_and_persists_session() {
+    let state = backend_state().await;
+    let (host_id, ios_id, secret, account_id) =
+        paired_pair_with_account(&state, "agent-session-start@example.com").await;
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
+
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &account_id,
+        "Start Session",
+        &[account_id.clone()],
+        1_000,
+    )
+    .await
+    .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &account_id,
+        "Codex",
+        "assistant",
+        "codex",
+        "gpt-5.4",
+        1_001,
+    )
+    .await
+    .unwrap();
+    let pool = state.store.sqlite_pool_cloned().unwrap();
+
+    let mut app = router(state.clone());
+    let req = authed_post(
+        "/v1/agent-sessions/start",
+        ios_id,
+        &secret,
+        &auth_hdr,
+        serde_json::json!({
+            "conversation_id": conversation.conversation_id,
+            "agent_id": agent.agent_id,
+            "initial_user_message": "hello from route",
+            "client_request_id": "route-start-1"
+        }),
+    );
+    let (status, body) = common::send(&mut app, req).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let session_id = body["session_id"].as_str().unwrap().to_string();
+    let host_command_id = body["host_command_id"].as_str().unwrap().to_string();
+    let initial_turn_id = body["initial_turn_id"].as_str().unwrap().to_string();
+    assert!(!session_id.is_empty());
+    assert_eq!(body["conversation_id"], conversation.conversation_id);
+    assert_eq!(body["host_installation_id"], host_id.to_string());
+    assert!(body["started_at_ms"].as_i64().unwrap() >= 1_000);
+    assert_eq!(body["initial_turn_id"], initial_turn_id);
+
+    let session = minos_backend::store::agent_sessions::get(&state.store, &session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let host_id_string = host_id.to_string();
+    assert_eq!(session.conversation_id, conversation.conversation_id);
+    assert_eq!(
+        session.host_device_id.as_deref(),
+        Some(host_id_string.as_str())
+    );
+    assert_eq!(session.agent_id.as_deref(), Some(agent.agent_id.as_str()));
+    assert_eq!(session.status, "pending");
+
+    let turns = minos_backend::store::agent_turns::list_for_session(
+        &state.store,
+        &session_id,
+        None,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].turn_seq, 1);
+    assert_eq!(turns[0].role, "user");
+    assert_eq!(turns[0].turn_id, initial_turn_id);
+    assert_eq!(turns[0].summary_text.as_deref(), Some("hello from route"));
+
+    let host_command = minos_backend::store::host_commands::get(&state.store, &host_command_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(host_command.method, "agent_session.start");
+    assert_eq!(
+        host_command.agent_session_id.as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_eq!(
+        host_command.status,
+        minos_backend::store::host_commands::HostCommandStatus::Pending
+    );
+    assert_eq!(host_command.params_json["session_id"], session_id);
+    assert_eq!(
+        host_command.params_json["conversation_id"],
+        conversation.conversation_id
+    );
+    assert_eq!(host_command.params_json["agent_id"], agent.agent_id);
+    assert_eq!(
+        host_command.params_json["initial_user_message"],
+        "hello from route"
+    );
+
+    let session_events = minos_backend::store::durable_event_log::read_topic_after(
+        &state.store,
+        "agent_session",
+        &format!("agent_session:{session_id}"),
+        0,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(session_events.len(), 1);
+    assert_eq!(session_events[0].payload_json["kind"], "agent_session_started");
+
+    let host_events = minos_backend::store::durable_event_log::read_topic_after(
+        &state.store,
+        "host",
+        &format!("host:{host_id}"),
+        0,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(host_events.len(), 1);
+    assert_eq!(host_events[0].payload_json["kind"], "host_command_issued");
+    assert_eq!(host_events[0].payload_json["command_id"], host_command_id);
+
+    let outbox_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM outbox_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(outbox_count, 2);
+}
+
+#[tokio::test]
+async fn send_input_dispatches_to_existing_session_and_appends_turn() {
+    let state = backend_state().await;
+    let (host_id, ios_id, secret, account_id) =
+        paired_pair_with_account(&state, "agent-session-send@example.com").await;
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
+
+    let (_, session_id) = seed_session(&state, &account_id, host_id, "sess_route_send").await;
+    let agent = social::register_agent(
+        &state.store,
+        &account_id,
+        "Codex",
+        "assistant",
+        "codex",
+        "gpt-5.4",
+        1_001,
+    )
+    .await
+    .unwrap();
+    let pool = state.store.sqlite_pool_cloned().unwrap();
+    sqlx::query("UPDATE agent_sessions SET agent_id = ? WHERE session_id = ?")
+        .bind(&agent.agent_id)
+        .bind(&session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut app = router(state.clone());
+    let req = authed_post(
+        "/v1/agent-sessions/send-input",
+        ios_id,
+        &secret,
+        &auth_hdr,
+        serde_json::json!({
+            "session_id": session_id,
+            "text": "follow-up from route",
+            "client_request_id": "route-send-1"
+        }),
+    );
+    let (status, body) = common::send(&mut app, req).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["session_id"], session_id);
+    let turn_id = body["turn_id"].as_str().unwrap().to_string();
+    assert_eq!(body["turn_seq"], 1);
+    let host_command_id = format!("cmd-agent-session-send-{turn_id}");
+
+    let turns =
+        minos_backend::store::agent_turns::list_for_session(&state.store, &session_id, None, 10)
+            .await
+            .unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].turn_seq, 1);
+    assert_eq!(turns[0].turn_id, turn_id);
+    assert_eq!(
+        turns[0].summary_text.as_deref(),
+        Some("follow-up from route")
+    );
+
+    let host_command = minos_backend::store::host_commands::get(&state.store, &host_command_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(host_command.method, "agent_session.send_input");
+    assert_eq!(
+        host_command.agent_session_id.as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_eq!(host_command.params_json["session_id"], session_id);
+    assert_eq!(host_command.params_json["turn_id"], turn_id);
+    assert_eq!(host_command.params_json["text"], "follow-up from route");
+    assert_eq!(
+        host_command.status,
+        minos_backend::store::host_commands::HostCommandStatus::Pending
+    );
+
+    let session_events = minos_backend::store::durable_event_log::read_topic_after(
+        &state.store,
+        "agent_session",
+        &format!("agent_session:{session_id}"),
+        0,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(session_events.len(), 1);
+    assert_eq!(session_events[0].payload_json["kind"], "agent_turn_appended");
+    assert_eq!(session_events[0].payload_json["turn_id"], turn_id);
+
+    let host_events = minos_backend::store::durable_event_log::read_topic_after(
+        &state.store,
+        "host",
+        &format!("host:{host_id}"),
+        0,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(host_events.len(), 1);
+    assert_eq!(host_events[0].payload_json["kind"], "host_command_issued");
+    assert_eq!(host_events[0].payload_json["command_id"], host_command_id);
+
+    let outbox_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM outbox_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(outbox_count, 2);
+}
+
+#[tokio::test]
+async fn stop_session_dispatches_close_thread_and_marks_session_stopped() {
+    let state = backend_state().await;
+    let (host_id, ios_id, secret, account_id) =
+        paired_pair_with_account(&state, "agent-session-stop@example.com").await;
+    let bearer = bearer_for(&account_id, ios_id);
+    let auth_hdr = format!("Bearer {bearer}");
+
+    let (_, session_id) = seed_session(&state, &account_id, host_id, "sess_route_stop").await;
+    let pool = state.store.sqlite_pool_cloned().unwrap();
+
+    let mut app = router(state.clone());
+    let req = authed_post(
+        "/v1/agent-sessions/stop",
+        ios_id,
+        &secret,
+        &auth_hdr,
+        serde_json::json!({
+            "session_id": session_id,
+        }),
+    );
+    let (status, body) = common::send(&mut app, req).await;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(body, serde_json::Value::Null);
+
+    let session = minos_backend::store::agent_sessions::get(&state.store, &session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.status, "stopping");
+    assert!(session.ended_at_ms.is_none());
+
+    let host_command_id = format!("cmd-agent-session-stop-{session_id}");
+    let host_command = minos_backend::store::host_commands::get(&state.store, &host_command_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(host_command.method, "agent_session.stop");
+    assert_eq!(
+        host_command.agent_session_id.as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_eq!(host_command.params_json["session_id"], session_id);
+    assert_eq!(
+        host_command.status,
+        minos_backend::store::host_commands::HostCommandStatus::Pending
+    );
+
+    let host_events = minos_backend::store::durable_event_log::read_topic_after(
+        &state.store,
+        "host",
+        &format!("host:{host_id}"),
+        0,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(host_events.len(), 1);
+    assert_eq!(host_events[0].payload_json["kind"], "host_command_issued");
+    assert_eq!(host_events[0].payload_json["command_id"], host_command_id);
+
+    let outbox_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM outbox_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(outbox_count, 1);
 }

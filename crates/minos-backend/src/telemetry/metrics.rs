@@ -49,9 +49,23 @@ const AUTH_REFRESH_REUSE_TOTAL: &str = "minos_backend_auth_refresh_reuse_total";
 const PAIRING_TOKEN_ISSUE_TOTAL: &str = "minos_backend_pairing_token_issue_total";
 const PAIRING_CONSUME_TOTAL: &str = "minos_backend_pairing_consume_total";
 const PAIRING_FORGET_TOTAL: &str = "minos_backend_pairing_forget_total";
-const PENDING_APPROVALS_COUNT: &str = "minos_backend_pending_approvals_count";
 const APPROVAL_DECISION_TOTAL: &str = "minos_backend_approval_decision_total";
 const DB_QUERY_DURATION_SECONDS: &str = "minos_backend_db_query_duration_seconds";
+const DEPRECATED_ROUTE_TOTAL: &str = "minos_backend_deprecated_route_total";
+
+// ── P7: notification + job metrics ────────────────────────────────────
+
+const PUSH_SEND_TOTAL: &str = "minos_backend_push_send_total";
+const PUSH_DECISION_TOTAL: &str = "minos_backend_push_decision_total";
+const OUTBOX_DISPATCH_TOTAL: &str = "minos_backend_outbox_dispatch_total";
+const OUTBOX_DISPATCH_LAG_SECONDS: &str = "minos_backend_outbox_dispatch_lag_seconds";
+const APPROVAL_TIMEOUT_RESOLVED_TOTAL: &str = "minos_backend_approval_timeout_resolved_total";
+const HOST_COMMAND_TIMEOUT_TOTAL: &str = "minos_backend_host_command_timeout_total";
+const AGENT_SESSIONS_ACTIVE: &str = "minos_backend_agent_sessions_active";
+const APPROVALS_PENDING: &str = "minos_backend_approvals_pending";
+const DURABLE_EVENT_LOG_SIZE: &str = "minos_backend_durable_event_log_size";
+const JOB_TICK_TOTAL: &str = "minos_backend_job_tick_total";
+const JOB_TICK_DURATION_SECONDS: &str = "minos_backend_job_tick_duration_seconds";
 
 // ── outcome label values (string constants for stable cardinality) ────
 
@@ -102,8 +116,16 @@ fn prometheus_handle() -> &'static PrometheusHandle {
             "Currently live websocket sessions, partitioned by device role."
         );
         metrics::describe_gauge!(
-            PENDING_APPROVALS_COUNT,
-            "Pending (unresolved) approval requests awaiting user decision."
+            AGENT_SESSIONS_ACTIVE,
+            "Currently active agent sessions."
+        );
+        metrics::describe_gauge!(
+            APPROVALS_PENDING,
+            "Currently pending approval requests."
+        );
+        metrics::describe_gauge!(
+            DURABLE_EVENT_LOG_SIZE,
+            "Current size of the durable event log, partitioned by topic_kind."
         );
 
         // Counters
@@ -161,6 +183,34 @@ fn prometheus_handle() -> &'static PrometheusHandle {
             APPROVAL_DECISION_TOTAL,
             "Approval-decision dispatches, labeled by outcome."
         );
+        metrics::describe_counter!(
+            DEPRECATED_ROUTE_TOTAL,
+            "Hits to deprecated HTTP routes, labeled by route path."
+        );
+        metrics::describe_counter!(
+            PUSH_SEND_TOTAL,
+            "Push notification sends, labeled by channel (apns/fcm) and result."
+        );
+        metrics::describe_counter!(
+            PUSH_DECISION_TOTAL,
+            "Push notification decisions, labeled by decision (send/skip) and reason."
+        );
+        metrics::describe_counter!(
+            OUTBOX_DISPATCH_TOTAL,
+            "Outbox dispatch attempts, labeled by result (ok/error)."
+        );
+        metrics::describe_counter!(
+            APPROVAL_TIMEOUT_RESOLVED_TOTAL,
+            "Approval requests resolved due to timeout."
+        );
+        metrics::describe_counter!(
+            HOST_COMMAND_TIMEOUT_TOTAL,
+            "Host commands that timed out."
+        );
+        metrics::describe_counter!(
+            JOB_TICK_TOTAL,
+            "Background job tick attempts, labeled by job name and result."
+        );
 
         // Histograms
         metrics::describe_histogram!(
@@ -182,10 +232,21 @@ fn prometheus_handle() -> &'static PrometheusHandle {
             WS_OUTBOX_DEPTH,
             "Per-frame depth of websocket outbox at enqueue time, by role."
         );
+        metrics::describe_histogram!(
+            OUTBOX_DISPATCH_LAG_SECONDS,
+            metrics::Unit::Seconds,
+            "Lag between event creation and outbox dispatch in seconds."
+        );
+        metrics::describe_histogram!(
+            JOB_TICK_DURATION_SECONDS,
+            metrics::Unit::Seconds,
+            "Background job tick duration in seconds, labeled by job name."
+        );
 
         // Seed gauges so /metrics returns them on a fresh process.
         metrics::gauge!(SESSION_REGISTRY_SIZE).set(0.0);
-        metrics::gauge!(PENDING_APPROVALS_COUNT).set(0.0);
+        metrics::gauge!(AGENT_SESSIONS_ACTIVE).set(0.0);
+        metrics::gauge!(APPROVALS_PENDING).set(0.0);
 
         handle
     })
@@ -213,12 +274,6 @@ pub fn set_session_registry_size(size: usize) {
     metrics::gauge!(SESSION_REGISTRY_SIZE).set(size as f64);
 }
 
-#[allow(clippy::cast_precision_loss)]
-pub fn set_pending_approvals_count(count: usize) {
-    init();
-    metrics::gauge!(PENDING_APPROVALS_COUNT).set(count as f64);
-}
-
 pub fn record_session_role_open(role: &str) {
     init();
     metrics::gauge!(WS_ACTIVE_SESSIONS, "role" => role.to_string()).increment(1.0);
@@ -227,6 +282,24 @@ pub fn record_session_role_open(role: &str) {
 pub fn record_session_role_close(role: &str) {
     init();
     metrics::gauge!(WS_ACTIVE_SESSIONS, "role" => role.to_string()).decrement(1.0);
+}
+
+#[allow(clippy::cast_precision_loss)]
+pub fn set_agent_sessions_active(count: usize) {
+    init();
+    metrics::gauge!(AGENT_SESSIONS_ACTIVE).set(count as f64);
+}
+
+#[allow(clippy::cast_precision_loss)]
+pub fn set_approvals_pending(count: usize) {
+    init();
+    metrics::gauge!(APPROVALS_PENDING).set(count as f64);
+}
+
+#[allow(clippy::cast_precision_loss)]
+pub fn set_durable_event_log_size(topic_kind: &str, size: i64) {
+    init();
+    metrics::gauge!(DURABLE_EVENT_LOG_SIZE, "topic_kind" => topic_kind.to_string()).set(size as f64);
 }
 
 // ── counters ──────────────────────────────────────────────────────────
@@ -335,6 +408,60 @@ pub fn record_approval_decision(outcome: &str) {
     metrics::counter!(APPROVAL_DECISION_TOTAL, "outcome" => outcome.to_string()).increment(1);
 }
 
+pub fn record_deprecated_route_hit(route: &str) {
+    init();
+    metrics::counter!(DEPRECATED_ROUTE_TOTAL, "route" => route.to_string()).increment(1);
+}
+
+/// Record a push notification send attempt.
+/// `channel` is "apns" or "fcm"; `result` is "sent", "token_expired", "rate_limited", or "error".
+pub fn record_push_send(channel: &str, result: &str) {
+    init();
+    metrics::counter!(
+        PUSH_SEND_TOTAL,
+        "channel" => channel.to_string(),
+        "result" => result.to_string(),
+    )
+    .increment(1);
+}
+
+/// Record a push notification decision.
+/// `decision` is "send" or "skip"; `reason` is the decision reason.
+pub fn record_push_decision(decision: &str, reason: &str) {
+    init();
+    metrics::counter!(
+        PUSH_DECISION_TOTAL,
+        "decision" => decision.to_string(),
+        "reason" => reason.to_string(),
+    )
+    .increment(1);
+}
+
+pub fn record_outbox_dispatch(result: &str) {
+    init();
+    metrics::counter!(OUTBOX_DISPATCH_TOTAL, "result" => result.to_string()).increment(1);
+}
+
+pub fn increment_approval_timeout_resolved() {
+    init();
+    metrics::counter!(APPROVAL_TIMEOUT_RESOLVED_TOTAL).increment(1);
+}
+
+pub fn increment_host_command_timeout() {
+    init();
+    metrics::counter!(HOST_COMMAND_TIMEOUT_TOTAL).increment(1);
+}
+
+pub fn record_job_tick(job: &str, result: &str) {
+    init();
+    metrics::counter!(
+        JOB_TICK_TOTAL,
+        "job" => job.to_string(),
+        "result" => result.to_string(),
+    )
+    .increment(1);
+}
+
 // ── histograms ────────────────────────────────────────────────────────
 
 pub fn record_http_request(route: &str, method: &str, status: u16, seconds: f64) {
@@ -372,6 +499,20 @@ pub fn record_db_query(repo: &str, op: &str, seconds: f64) {
 pub fn record_ws_outbox_depth(role: &str, depth: usize) {
     init();
     metrics::histogram!(WS_OUTBOX_DEPTH, "role" => role.to_string()).record(depth as f64);
+}
+
+pub fn record_outbox_dispatch_lag(seconds: f64) {
+    init();
+    metrics::histogram!(OUTBOX_DISPATCH_LAG_SECONDS).record(seconds);
+}
+
+pub fn record_job_tick_duration(job: &str, seconds: f64) {
+    init();
+    metrics::histogram!(
+        JOB_TICK_DURATION_SECONDS,
+        "job" => job.to_string()
+    )
+    .record(seconds);
 }
 
 // ── RAII timer ────────────────────────────────────────────────────────
@@ -438,6 +579,22 @@ mod tests {
         assert!(
             body.contains("minos_backend_session_registry_size"),
             "session_registry_size must show up: {body}"
+        );
+    }
+
+    #[test]
+    fn push_metrics_render() {
+        record_push_send("apns", "sent");
+        record_push_decision("skip", "quiet_hours");
+
+        let body = render();
+        assert!(
+            body.contains("minos_backend_push_send_total"),
+            "push_send_total must show up: {body}"
+        );
+        assert!(
+            body.contains("minos_backend_push_decision_total"),
+            "push_decision_total must show up: {body}"
         );
     }
 }

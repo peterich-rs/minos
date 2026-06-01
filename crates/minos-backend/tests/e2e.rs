@@ -131,10 +131,11 @@ async fn issue_client_ws_ticket(
         .ticket)
 }
 
-fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
+async fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
     Ok(relay
         .auth
         .issue_host_ws_ticket(host_id)
+    .await
         .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
         .ticket)
 }
@@ -149,7 +150,7 @@ async fn connect_client(
         let acct = account_id.expect("account client connect requires an account_id");
         issue_client_ws_ticket(relay, acct, device_id, role).await?
     } else {
-        issue_host_ws_ticket(relay, device_id)?
+        issue_host_ws_ticket(relay, device_id).await?
     };
     let url: Uri = format!(
         "ws://{}{}?ticket={ticket}",

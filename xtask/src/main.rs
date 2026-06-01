@@ -16,7 +16,18 @@ use tokio::sync::broadcast::error::RecvError;
 
 mod backend_platform_schemas;
 mod gen_codex;
+mod lint_conventions;
+mod lint_contract;
+mod lint_docs;
+mod lint_metrics;
 mod lint_naming;
+mod lint_route_inventory;
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum BackendDbDriver {
+    Sqlite,
+    Postgres,
+}
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "Minos build & codegen orchestration")]
@@ -51,8 +62,11 @@ enum Cmd {
     BuildIos,
     /// Generate apps/macos/Minos.xcodeproj from apps/macos/project.yml.
     GenXcode,
-    /// Wipe and recreate the backend SQLite DB at ./minos-backend.db.
-    BackendDbReset,
+    /// Wipe and recreate the backend database using the selected driver.
+    BackendDbReset {
+        #[arg(long, value_enum, default_value = "sqlite")]
+        driver: BackendDbDriver,
+    },
     /// Run the backend binary with dev-friendly defaults.
     BackendRun,
     /// Regenerate `crates/minos-codex-protocol/src/generated/{types,methods}.rs`
@@ -67,6 +81,16 @@ enum Cmd {
     /// Scan protocol/FFI/HTTP/SQL surfaces for `mac_*` / `ios_*` identifiers
     /// (Phase B naming-sweep guard). Fails if any are found.
     LintNaming,
+    /// Check docs files exist and topic/path consistency is valid.
+    LintDocs,
+    /// Check for the "transaction triple" pattern in service code.
+    LintConventions,
+    /// Check metric registry drift.
+    LintMetrics,
+    /// Check OpenAPI contract drift against baseline.
+    LintContract,
+    /// Check route inventory completeness.
+    LintRouteInventory,
 }
 
 fn main() -> Result<()> {
@@ -80,13 +104,18 @@ fn main() -> Result<()> {
         Cmd::BuildMacos { configuration } => build_macos(configuration.as_deref()),
         Cmd::BuildIos => build_ios(),
         Cmd::GenXcode => gen_xcode(),
-        Cmd::BackendDbReset => backend_db_reset(),
+        Cmd::BackendDbReset { driver } => backend_db_reset(driver),
         Cmd::BackendRun => backend_run(),
         Cmd::GenCodexProtocol => gen_codex::run(&workspace_root()?),
         Cmd::GenBackendPlatformContract { check } => {
             backend_platform_schemas::generate(&workspace_root()?, check)
         }
         Cmd::LintNaming => lint_naming::run(&workspace_root()?),
+        Cmd::LintDocs => lint_docs::run(&workspace_root()?),
+        Cmd::LintConventions => lint_conventions::run(&workspace_root()?),
+        Cmd::LintMetrics => lint_metrics::run(&workspace_root()?),
+        Cmd::LintContract => lint_contract::run(&workspace_root()?),
+        Cmd::LintRouteInventory => lint_route_inventory::run(&workspace_root()?),
     }
 }
 
@@ -111,6 +140,15 @@ fn check_all(with_codex: bool) -> Result<()> {
 
     eprintln!("==> cargo xtask lint-naming");
     lint_naming::run(&workspace_root)?;
+
+    eprintln!("==> cargo xtask lint-docs");
+    lint_docs::run(&workspace_root)?;
+
+    eprintln!("==> cargo xtask lint-conventions");
+    lint_conventions::run(&workspace_root)?;
+
+    eprintln!("==> cargo xtask lint-metrics");
+    lint_metrics::run(&workspace_root)?;
 
     eprintln!("==> cargo test");
     run("cargo", &["test", "--workspace"], &workspace_root)?;
@@ -1235,14 +1273,21 @@ fn backend_run() -> Result<()> {
     )
 }
 
+/// Wipe and recreate the backend database for the selected driver.
+fn backend_db_reset(driver: BackendDbDriver) -> Result<()> {
+    let root = workspace_root()?;
+    match driver {
+        BackendDbDriver::Sqlite => backend_db_reset_sqlite(&root),
+        BackendDbDriver::Postgres => backend_db_reset_postgres(&root),
+    }
+}
+
 /// Wipe and recreate the backend SQLite DB at ./minos-backend.db.
 ///
 /// Removes the db file (plus `-shm` / `-wal` sidecars if SQLite is in WAL mode)
 /// and then re-runs migrations via `--exit-after-migrate`. Idempotent — missing
 /// files are ignored.
-fn backend_db_reset() -> Result<()> {
-    let root = workspace_root()?;
-
+fn backend_db_reset_sqlite(root: &Path) -> Result<()> {
     for suffix in ["", "-shm", "-wal"] {
         let path = root.join(format!("minos-backend.db{suffix}"));
         if path.exists() {
@@ -1263,7 +1308,49 @@ fn backend_db_reset() -> Result<()> {
             "./minos-backend.db",
             "--exit-after-migrate",
         ],
-        &root,
+        root,
+    )
+}
+
+fn backend_db_reset_postgres(root: &Path) -> Result<()> {
+    let database_url = std::env::var("MINOS_DATABASE_URL")
+        .or_else(|_| std::env::var("MINOS_BACKEND_POSTGRES_URL"))
+        .context(
+            "MINOS_DATABASE_URL or MINOS_BACKEND_POSTGRES_URL must be set for `cargo xtask backend-db-reset --driver postgres`",
+        )?;
+
+    if which("psql").is_none() {
+        bail!("psql is required for `cargo xtask backend-db-reset --driver postgres`");
+    }
+
+    eprintln!("==> psql $MINOS_DATABASE_URL -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public'");
+    run_owned(
+        "psql",
+        &[
+            database_url.clone(),
+            "-v".to_string(),
+            "ON_ERROR_STOP=1".to_string(),
+            "-c".to_string(),
+            "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;".to_string(),
+        ],
+        root,
+    )?;
+
+    eprintln!("==> cargo run -p minos-backend -- --storage-mode external-sql --database-url $MINOS_DATABASE_URL --exit-after-migrate");
+    run_owned(
+        "cargo",
+        &[
+            "run".to_string(),
+            "-p".to_string(),
+            "minos-backend".to_string(),
+            "--".to_string(),
+            "--storage-mode".to_string(),
+            "external-sql".to_string(),
+            "--database-url".to_string(),
+            database_url,
+            "--exit-after-migrate".to_string(),
+        ],
+        root,
     )
 }
 
@@ -1278,6 +1365,18 @@ fn cargo_bin_dir() -> Result<PathBuf> {
 
 fn run(program: &str, args: &[&str], cwd: &Path) -> Result<()> {
     run_env(program, args, &[], cwd)
+}
+
+fn run_owned(program: &str, args: &[String], cwd: &Path) -> Result<()> {
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .with_context(|| format!("spawning `{program} {args:?}`"))?;
+    if !status.success() {
+        bail!("`{program} {args:?}` exited {status}");
+    }
+    Ok(())
 }
 
 fn run_env(program: &str, args: &[&str], envs: &[(&str, &str)], cwd: &Path) -> Result<()> {

@@ -4,7 +4,7 @@ use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
 use minos_backend::session::SessionHandle;
-use minos_backend::store::{account_host_pairings, devices::insert_device, pending_approvals};
+use minos_backend::store::{account_host_pairings, approval_requests, devices::insert_device};
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::{ApprovalDecisionRequest, Envelope, EventKind, ListThreadsResponse};
 use sqlx::Row;
@@ -105,6 +105,53 @@ fn seed_live_bound_session(
     outbox_rx
 }
 
+async fn seed_approval_session(
+    state: &minos_backend::http::BackendState,
+    account_id: &str,
+    host_id: DeviceId,
+    session_id: &str,
+    turn_id: &str,
+) {
+    let members = vec![account_id.to_string()];
+    let conversation = minos_backend::store::social::create_group_conversation(
+        &state.store,
+        account_id,
+        "Thread Approval",
+        &members,
+        1_000,
+    )
+    .await
+    .unwrap();
+    let host_device_id = host_id.to_string();
+    minos_backend::store::agent_sessions::create(
+        &state.store,
+        session_id,
+        &conversation.conversation_id,
+        None,
+        Some(host_device_id.as_str()),
+        Some("agent_codex"),
+        "running",
+        1_001,
+        None,
+    )
+    .await
+    .unwrap();
+    minos_backend::store::agent_turns::create(
+        &state.store,
+        turn_id,
+        session_id,
+        1,
+        "assistant",
+        "completed",
+        1_002,
+        Some(1_003),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+}
+
 fn spawn_approval_decision_responder(
     registry: Arc<minos_backend::session::SessionRegistry>,
     store: sqlx::SqlitePool,
@@ -149,7 +196,7 @@ async fn assert_approval_host_command(
     host_device_id: DeviceId,
     requested_by_account_id: Option<&str>,
     request_id: &str,
-    thread_id: &str,
+    session_id: &str,
     decision: serde_json::Value,
 ) {
     let command_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM host_commands")
@@ -159,7 +206,7 @@ async fn assert_approval_host_command(
     assert_eq!(command_count, 1);
 
     let row = sqlx::query(
-        "SELECT host_installation_id, method, params_json, requested_by_account_id, status, finished_at_ms
+        "SELECT host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, finished_at_ms
            FROM host_commands",
     )
     .fetch_one(pool)
@@ -169,6 +216,10 @@ async fn assert_approval_host_command(
     assert_eq!(
         row.get::<String, _>("host_installation_id"),
         host_device_id.to_string()
+    );
+    assert_eq!(
+        row.get::<Option<String>, _>("agent_session_id").as_deref(),
+        Some(session_id)
     );
     assert_eq!(row.get::<String, _>("method"), "minos_approval_decision");
     assert_eq!(
@@ -185,7 +236,7 @@ async fn assert_approval_host_command(
         params,
         serde_json::json!({
             "request_id": request_id,
-            "thread_id": thread_id,
+            "thread_id": session_id,
             "decision": decision,
         })
     );
@@ -470,6 +521,7 @@ async fn get_threads_without_bearer_returns_401() {
 async fn approval_request_timeout_broadcasts_timeout_and_auto_rejects() {
     let state = backend_state().await;
     let (mac_id, ios_id, _secret, account_id) = paired_pair(&state).await;
+    seed_approval_session(&state, &account_id, mac_id, "thr-approval-timeout", "turn-1").await;
     let mut mobile_rx =
         seed_live_bound_session(&state, ios_id, DeviceRole::MobileClient, &account_id);
     let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
@@ -573,11 +625,14 @@ async fn approval_request_timeout_broadcasts_timeout_and_auto_rejects() {
         serde_json::json!({ "decision": "decline" })
     );
 
-    let row = pending_approvals::get(&state.store, "req-timeout")
+    let row = approval_requests::get(&state.store, "req-timeout")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(row.resolution.as_deref(), Some("timeout"));
+    assert_eq!(
+        row.state,
+        minos_backend::store::approval_requests::ApprovalRequestState::Timeout
+    );
     assert!(row.resolved_at_ms.is_some());
 
     assert_approval_host_command(
@@ -595,6 +650,7 @@ async fn approval_request_timeout_broadcasts_timeout_and_auto_rejects() {
 async fn approvals_respond_endpoint_accepts_formal_shape_and_persists_command() {
     let state = backend_state().await;
     let (mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
+    seed_approval_session(&state, &account_id, mac_id, "thr-approvals-respond", "turn-1").await;
     let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
     let responder = spawn_approval_decision_responder(
         Arc::clone(&state.registry),
@@ -607,12 +663,11 @@ async fn approvals_respond_endpoint_accepts_formal_shape_and_persists_command() 
     );
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    pending_approvals::insert(
+    approval_requests::insert_pending(
         &state.store,
         "req-approvals-respond",
         "thr-approvals-respond",
-        "turn-1",
-        mac_id,
+        Some("turn-1"),
         "item/commandExecution/requestApproval",
         &serde_json::json!({ "command": "echo hi" }),
         now_ms,
@@ -647,11 +702,14 @@ async fn approvals_respond_endpoint_accepts_formal_shape_and_persists_command() 
         serde_json::json!({ "decision": "approve" })
     );
 
-    let row = pending_approvals::get(&state.store, "req-approvals-respond")
+    let row = approval_requests::get(&state.store, "req-approvals-respond")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(row.resolution.as_deref(), Some("user_decision"));
+    assert_eq!(
+        row.state,
+        minos_backend::store::approval_requests::ApprovalRequestState::Decided
+    );
     assert!(row.resolved_at_ms.is_some());
 
     assert_approval_host_command(
@@ -691,6 +749,7 @@ async fn legacy_approval_decision_endpoint_is_removed() {
 async fn disconnect_resolution_auto_rejects_pending_approval() {
     let state = backend_state().await;
     let (mac_id, _ios_id, _secret, account_id) = paired_pair(&state).await;
+    seed_approval_session(&state, &account_id, mac_id, "thr-disconnect", "turn-1").await;
     let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
     let responder = spawn_approval_decision_responder(
         Arc::clone(&state.registry),
@@ -703,12 +762,11 @@ async fn disconnect_resolution_auto_rejects_pending_approval() {
     );
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    pending_approvals::insert(
+    approval_requests::insert_pending(
         &state.store,
         "req-disconnect",
         "thr-disconnect",
-        "turn-1",
-        mac_id,
+        Some("turn-1"),
         "item/commandExecution/requestApproval",
         &serde_json::json!({ "command": "echo bye" }),
         now_ms,
@@ -718,7 +776,7 @@ async fn disconnect_resolution_auto_rejects_pending_approval() {
     .unwrap();
 
     state
-        .approval_relay
+        .approvals
         .resolve_disconnected_for_account(&account_id)
         .await
         .unwrap();
@@ -731,11 +789,14 @@ async fn disconnect_resolution_auto_rejects_pending_approval() {
         serde_json::json!({ "decision": "decline" })
     );
 
-    let row = pending_approvals::get(&state.store, "req-disconnect")
+    let row = approval_requests::get(&state.store, "req-disconnect")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(row.resolution.as_deref(), Some("disconnected"));
+    assert_eq!(
+        row.state,
+        minos_backend::store::approval_requests::ApprovalRequestState::Disconnected
+    );
     assert!(row.resolved_at_ms.is_some());
 
     assert_approval_host_command(
@@ -754,6 +815,14 @@ async fn disconnect_resolution_skips_hosts_with_another_online_paired_account() 
     let state = backend_state().await;
     let (mac_id, _ios_a, _secret, account_a) =
         paired_pair_with_account(&state, "threads-a@example.com").await;
+    seed_approval_session(
+        &state,
+        &account_a,
+        mac_id,
+        "thr-disconnect-shared-host",
+        "turn-1",
+    )
+    .await;
 
     let ios_b = DeviceId::new();
     insert_device(&state.store, ios_b, "iPhone B", DeviceRole::MobileClient, 0)
@@ -778,12 +847,11 @@ async fn disconnect_resolution_skips_hosts_with_another_online_paired_account() 
     );
 
     let now_ms = chrono::Utc::now().timestamp_millis();
-    pending_approvals::insert(
+    approval_requests::insert_pending(
         &state.store,
         "req-disconnect-shared-host",
         "thr-disconnect-shared-host",
-        "turn-1",
-        mac_id,
+        Some("turn-1"),
         "item/commandExecution/requestApproval",
         &serde_json::json!({ "command": "echo still-online" }),
         now_ms,
@@ -793,17 +861,17 @@ async fn disconnect_resolution_skips_hosts_with_another_online_paired_account() 
     .unwrap();
 
     state
-        .approval_relay
+        .approvals
         .resolve_disconnected_for_account(&account_a)
         .await
         .unwrap();
 
-    let row = pending_approvals::get(&state.store, "req-disconnect-shared-host")
+    let row = approval_requests::get(&state.store, "req-disconnect-shared-host")
         .await
         .unwrap()
         .unwrap();
     assert!(
-        row.resolution.is_none(),
+        row.state == minos_backend::store::approval_requests::ApprovalRequestState::Pending,
         "pending approval must remain unresolved while another paired account stays online"
     );
     assert!(row.resolved_at_ms.is_none());

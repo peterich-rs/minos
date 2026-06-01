@@ -1,3 +1,10 @@
+pub mod auth;
+pub mod event;
+pub mod gateway;
+pub mod subscription;
+pub mod topic;
+pub mod wire;
+
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -7,15 +14,26 @@ use minos_protocol::Envelope;
 use moka::sync::Cache;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::error::BackendError;
 use crate::session::SessionRegistry;
+use crate::store::{durable_event_log, outbox_events, StoreHandle};
+
+pub use event::{ApprovalResolution, DurableEvent, DurableEventEnvelope, SenderRef};
+pub use subscription::{ConnectionId, ConnectionPrincipal, ConnectionState, SubscriptionManager};
+pub use topic::{RealtimeTopic, TopicKind};
+pub use wire::{ClientFrame as GatewayClientFrame, ServerFrame as GatewayServerFrame};
 
 const DEFAULT_PEER_TARGET_CACHE_TTL: Duration = Duration::from_secs(5);
 const CLUSTER_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const REALTIME_WORKER_CAPACITY: usize = 1024;
+const OUTBOX_DISPATCH_BATCH_SIZE: u32 = 64;
+const OUTBOX_IDLE_DELAY: Duration = Duration::from_millis(100);
+const OUTBOX_RETRY_DELAY: Duration = Duration::from_millis(250);
+const OUTBOX_MAX_ATTEMPTS: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
 pub enum CacheBackendKind {
@@ -41,6 +59,14 @@ enum ClusterEvent {
         origin_instance_id: String,
         target_account_ids: Vec<String>,
         envelope: Envelope,
+    },
+    DurableFanout {
+        origin_instance_id: String,
+        topic: String,
+        topic_seq: i64,
+        event_kind: String,
+        payload: Value,
+        event_id: String,
     },
 }
 
@@ -320,8 +346,11 @@ impl MessageBusBackend {
 #[derive(Clone)]
 pub struct RealtimeFanout {
     registry: Arc<SessionRegistry>,
+    subscription_mgr: Arc<SubscriptionManager>,
+    store: StoreHandle,
     bus: MessageBusBackend,
     instance_id: String,
+    outbox_worker_id: String,
     jobs: mpsc::Sender<RealtimeJob>,
 }
 
@@ -329,17 +358,27 @@ impl RealtimeFanout {
     #[must_use]
     pub fn new(
         registry: Arc<SessionRegistry>,
+        subscription_mgr: Arc<SubscriptionManager>,
+        store: StoreHandle,
         bus: MessageBusBackend,
         instance_id: String,
+        enable_outbox_worker: bool,
     ) -> Arc<Self> {
         let (jobs, rx) = mpsc::channel(REALTIME_WORKER_CAPACITY);
+        let outbox_worker_id = format!("realtime-outbox-{instance_id}");
         let realtime = Arc::new(Self {
             registry,
+            subscription_mgr,
+            store,
             bus,
             instance_id,
+            outbox_worker_id,
             jobs,
         });
         Self::spawn_worker(Arc::clone(&realtime), rx);
+        if enable_outbox_worker {
+            Self::spawn_outbox_dispatcher(Arc::clone(&realtime));
+        }
         realtime
     }
 
@@ -383,6 +422,25 @@ impl RealtimeFanout {
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
                 realtime.process_job(job).await;
+            }
+        });
+    }
+
+    fn spawn_outbox_dispatcher(realtime: Arc<Self>) {
+        tokio::spawn(async move {
+            loop {
+                match realtime.dispatch_outbox_batch().await {
+                    Ok(0) => tokio::time::sleep(OUTBOX_IDLE_DELAY).await,
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "minos_backend::realtime",
+                            error = %error,
+                            "realtime outbox dispatcher iteration failed"
+                        );
+                        tokio::time::sleep(OUTBOX_IDLE_DELAY).await;
+                    }
+                }
             }
         });
     }
@@ -434,6 +492,134 @@ impl RealtimeFanout {
         }
     }
 
+    pub async fn dispatch_outbox_batch(&self) -> Result<usize, BackendError> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let claimed = outbox_events::claim_available(
+            &self.store,
+            &self.outbox_worker_id,
+            now_ms,
+            OUTBOX_DISPATCH_BATCH_SIZE,
+        )
+        .await?;
+        let count = claimed.len();
+        for row in claimed {
+            self.dispatch_outbox_row(row).await;
+        }
+        Ok(count)
+    }
+
+    async fn dispatch_outbox_row(&self, row: outbox_events::OutboxEventRow) {
+        let durable =
+            match durable_event_log::get(&self.store, &row.topic_kind, &row.event_id).await {
+                Ok(Some(durable)) => durable,
+                Ok(None) => {
+                    self.dead_letter_outbox_row(&row, "missing durable event")
+                        .await;
+                    return;
+                }
+                Err(error) => {
+                    self.requeue_outbox_row(&row, &error.to_string()).await;
+                    return;
+                }
+            };
+
+        if let Err(error) = self.publish_durable_row(&durable).await {
+            self.requeue_outbox_row(&row, &error.to_string()).await;
+            return;
+        }
+
+        let ack_at_ms = chrono::Utc::now().timestamp_millis();
+        match outbox_events::ack(&self.store, &row.outbox_id, ack_at_ms).await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::warn!(
+                    target: "minos_backend::realtime",
+                    outbox_id = %row.outbox_id,
+                    "realtime outbox dispatcher lost claimed row before ack"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::realtime",
+                    error = %error,
+                    outbox_id = %row.outbox_id,
+                    "realtime outbox dispatcher failed to ack claimed row"
+                );
+            }
+        }
+    }
+
+    async fn publish_durable_row(
+        &self,
+        row: &durable_event_log::DurableEventRow,
+    ) -> Result<(), BackendError> {
+        let topic =
+            RealtimeTopic::parse(&row.topic).map_err(|error| BackendError::StoreDecode {
+                column: "durable_event_log.topic".into(),
+                message: error.to_string(),
+            })?;
+        let (kind, payload) = durable_event_kind_payload(&row.payload_json);
+        self.bus
+            .publish(&ClusterEvent::DurableFanout {
+                origin_instance_id: self.instance_id.clone(),
+                topic: row.topic.clone(),
+                topic_seq: row.topic_seq,
+                event_kind: kind.clone(),
+                payload: payload.clone(),
+                event_id: row.event_id.clone(),
+            })
+            .await?;
+        self.broadcast_durable_event_local(
+            &topic,
+            &row.event_id,
+            wire::ServerFrame::DurableEvent {
+                topic: row.topic.clone(),
+                topic_seq: row.topic_seq,
+                kind,
+                payload,
+                event_id: row.event_id.clone(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn requeue_outbox_row(&self, row: &outbox_events::OutboxEventRow, message: &str) {
+        if row.attempts >= OUTBOX_MAX_ATTEMPTS {
+            self.dead_letter_outbox_row(row, message).await;
+            return;
+        }
+
+        let retry_at_ms = chrono::Utc::now()
+            .timestamp_millis()
+            .saturating_add(i64::try_from(OUTBOX_RETRY_DELAY.as_millis()).unwrap_or(i64::MAX));
+        let error_json = serde_json::json!({ "message": message });
+        if let Err(error) =
+            outbox_events::retry(&self.store, &row.outbox_id, retry_at_ms, &error_json).await
+        {
+            tracing::warn!(
+                target: "minos_backend::realtime",
+                error = %error,
+                outbox_id = %row.outbox_id,
+                "realtime outbox dispatcher failed to requeue claimed row"
+            );
+        }
+    }
+
+    async fn dead_letter_outbox_row(&self, row: &outbox_events::OutboxEventRow, message: &str) {
+        let dead_at_ms = chrono::Utc::now().timestamp_millis();
+        let error_json = serde_json::json!({ "message": message });
+        if let Err(error) =
+            outbox_events::dead_letter(&self.store, &row.outbox_id, dead_at_ms, &error_json).await
+        {
+            tracing::warn!(
+                target: "minos_backend::realtime",
+                error = %error,
+                outbox_id = %row.outbox_id,
+                "realtime outbox dispatcher failed to dead-letter claimed row"
+            );
+        }
+    }
+
     fn apply_cluster_event(&self, event: ClusterEvent) {
         match event {
             ClusterEvent::UiFanout {
@@ -456,6 +642,41 @@ impl RealtimeFanout {
                 }
                 self.broadcast_social_message_local(&target_account_ids, envelope);
             }
+            ClusterEvent::DurableFanout {
+                origin_instance_id,
+                topic,
+                topic_seq,
+                event_kind,
+                payload,
+                event_id,
+            } => {
+                if origin_instance_id == self.instance_id {
+                    return;
+                }
+                let parsed_topic = match RealtimeTopic::parse(&topic) {
+                    Ok(topic) => topic,
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "minos_backend::realtime",
+                            error = %error,
+                            topic = %topic,
+                            "failed to parse clustered durable topic"
+                        );
+                        return;
+                    }
+                };
+                self.broadcast_durable_event_local(
+                    &parsed_topic,
+                    &event_id,
+                    wire::ServerFrame::DurableEvent {
+                        topic,
+                        topic_seq,
+                        kind: event_kind,
+                        payload,
+                        event_id: event_id.clone(),
+                    },
+                );
+            }
         }
     }
 
@@ -476,6 +697,28 @@ impl RealtimeFanout {
         }
     }
 
+    fn broadcast_durable_event_local(
+        &self,
+        topic: &RealtimeTopic,
+        event_id: &str,
+        frame: wire::ServerFrame,
+    ) {
+        for target in self.subscription_mgr.fanout_targets(topic) {
+            if !target.remember_durable_event(event_id) {
+                continue;
+            }
+            if let Err(error) = target.send(frame.clone()) {
+                tracing::warn!(
+                    target: "minos_backend::realtime",
+                    conn_id = %target.conn_id,
+                    topic = %topic.topic_string(),
+                    error = ?error,
+                    "formal gateway durable fanout dropped frame"
+                );
+            }
+        }
+    }
+
     fn broadcast_social_message_local(&self, target_account_ids: &[String], envelope: Envelope) {
         for account_id in target_account_ids {
             let _ = self
@@ -483,4 +726,17 @@ impl RealtimeFanout {
                 .broadcast_mobile_account(account_id, envelope.clone());
         }
     }
+}
+
+fn durable_event_kind_payload(value: &Value) -> (String, Value) {
+    let kind = value
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let mut payload = value.clone();
+    if let Value::Object(map) = &mut payload {
+        map.remove("kind");
+    }
+    (kind, payload)
 }

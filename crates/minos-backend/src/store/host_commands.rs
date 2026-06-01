@@ -4,6 +4,7 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::app::tx::DbTx;
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
@@ -127,6 +128,62 @@ pub async fn enqueue(
         }
     }
     .map_err(store_err("host_commands::enqueue"))?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn enqueue_in_tx(
+    tx: &mut DbTx<'_>,
+    command_id: &str,
+    host_installation_id: DeviceId,
+    agent_session_id: Option<&str>,
+    method: &str,
+    params_json: &Value,
+    requested_by_account_id: Option<&str>,
+    deadline_at_ms: i64,
+    created_at_ms: i64,
+) -> Result<(), BackendError> {
+    let params_json = serialize_json(params_json, "host_commands::enqueue_in_tx.params_json")?;
+
+    match tx {
+        DbTx::Sqlite(tx) => {
+            sqlx::query(
+                "INSERT INTO host_commands
+                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            )
+            .bind(command_id)
+            .bind(host_installation_id.to_string())
+            .bind(agent_session_id)
+            .bind(method)
+            .bind(params_json.as_str())
+            .bind(requested_by_account_id)
+            .bind(deadline_at_ms)
+            .bind(created_at_ms)
+            .execute(&mut **tx)
+            .await
+            .map(|_| ())
+        }
+        DbTx::Postgres(tx) => {
+            sqlx::query(
+                "INSERT INTO host_commands
+                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
+                 VALUES ($1, $2, $3, $4, CAST($5 AS JSONB), $6, 'pending', $7, $8)",
+            )
+            .bind(command_id)
+            .bind(host_installation_id.to_string())
+            .bind(agent_session_id)
+            .bind(method)
+            .bind(params_json.as_str())
+            .bind(requested_by_account_id)
+            .bind(deadline_at_ms)
+            .bind(created_at_ms)
+            .execute(&mut **tx)
+            .await
+            .map(|_| ())
+        }
+    }
+    .map_err(store_err("host_commands::enqueue_in_tx"))?;
     Ok(())
 }
 

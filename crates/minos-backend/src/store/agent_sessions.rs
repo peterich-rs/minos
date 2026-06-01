@@ -338,6 +338,45 @@ pub async fn assign_project_for_account(
     get_for_account(store, session_id, account_id).await
 }
 
+pub async fn update_status(
+    store: &impl AsStorePool,
+    session_id: &str,
+    status: &str,
+    ended_at_ms: Option<i64>,
+) -> Result<Option<AgentSessionRow>, BackendError> {
+    let rows_affected = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE agent_sessions
+                    SET status = ?, ended_at_ms = ?
+                  WHERE session_id = ?",
+        )
+        .bind(status)
+        .bind(ended_at_ms)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE agent_sessions
+                    SET status = $1, ended_at_ms = $2
+                  WHERE session_id = $3",
+        )
+        .bind(status)
+        .bind(ended_at_ms)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(store_err("agent_sessions.update_status"))?;
+
+    if rows_affected == 0 {
+        return Ok(None);
+    }
+
+    get(store, session_id).await
+}
+
 fn store_err(operation: &'static str) -> impl Fn(sqlx::Error) -> BackendError {
     move |e| BackendError::StoreQuery {
         operation: operation.into(),

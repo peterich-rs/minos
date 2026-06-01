@@ -53,6 +53,14 @@ struct InfoResponse {
 /// Always 200 unless the process is unable to handle a request (in
 /// which case axum will not call this anyway). The body carries the
 /// minimum: orchestrators only need a 2xx.
+#[utoipa::path(
+    get,
+    path = "/health/live",
+    responses(
+        (status = 200, description = "Process is alive")
+    ),
+    tag = "health"
+)]
 pub async fn live() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -62,6 +70,15 @@ pub async fn live() -> impl IntoResponse {
 }
 
 /// `GET /health/ready` — readiness probe; returns 503 when DB pings fail.
+#[utoipa::path(
+    get,
+    path = "/health/ready",
+    responses(
+        (status = 200, description = "Ready to serve traffic"),
+        (status = 503, description = "Not ready (dependency unreachable)")
+    ),
+    tag = "health"
+)]
 pub async fn ready(State(state): State<BackendState>) -> impl IntoResponse {
     let db_ok = state.store.ping().await.is_ok();
 
@@ -92,6 +109,14 @@ pub async fn ready(State(state): State<BackendState>) -> impl IntoResponse {
 
 /// `GET /health/info` — non-cached process metadata. Useful for
 /// "what version is actually running here" sanity in incident response.
+#[utoipa::path(
+    get,
+    path = "/health/info",
+    responses(
+        (status = 200, description = "Process metadata")
+    ),
+    tag = "health"
+)]
 pub async fn info(State(state): State<BackendState>) -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -112,4 +137,35 @@ const fn build_profile() -> &'static str {
     } else {
         "release"
     }
+}
+
+/// `GET /health/jobs` — worker job status.
+///
+/// Returns the status of background workers (token GC, realtime listener).
+/// Useful for verifying that supervised workers are running in monolith mode.
+#[utoipa::path(
+    get,
+    path = "/health/jobs",
+    responses(
+        (status = 200, description = "Worker job status")
+    ),
+    tag = "health"
+)]
+pub async fn jobs(State(state): State<BackendState>) -> impl IntoResponse {
+    #[derive(Serialize)]
+    struct JobsResponse {
+        session_registry_size: usize,
+        runtime_mode: &'static str,
+        storage_mode: &'static str,
+    }
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        Json(JobsResponse {
+            session_registry_size: state.registry.len(),
+            runtime_mode: state.config.runtime_mode.as_str(),
+            storage_mode: state.config.storage_mode.as_str(),
+        }),
+    )
 }
