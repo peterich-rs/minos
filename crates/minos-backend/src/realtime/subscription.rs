@@ -9,6 +9,8 @@ use uuid::Uuid;
 use super::wire::ServerFrame;
 use super::RealtimeTopic;
 
+pub use minos_protocol::realtime::ConnectionPrincipal;
+
 const SEEN_DURABLE_EVENT_IDS_CAPACITY: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,22 +26,6 @@ impl ConnectionId {
 impl std::fmt::Display for ConnectionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnectionPrincipal {
-    Account { account_id: String },
-    Host { host_installation_id: String },
-}
-
-impl ConnectionPrincipal {
-    #[must_use]
-    pub fn account_id(&self) -> Option<&str> {
-        match self {
-            Self::Account { account_id } => Some(account_id.as_str()),
-            Self::Host { .. } => None,
-        }
     }
 }
 

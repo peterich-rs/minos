@@ -1,8 +1,7 @@
 use crate::error::BackendError;
 use crate::store::{self, AsStorePool};
 
-use super::subscription::ConnectionPrincipal;
-use super::RealtimeTopic;
+use minos_protocol::realtime::{ConnectionPrincipal, RealtimeTopic};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SubscriptionDenied {

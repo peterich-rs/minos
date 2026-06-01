@@ -22,8 +22,7 @@ use crate::error::BackendError;
 use crate::http::BackendState;
 use crate::realtime::auth::{self, SubscriptionAuthError, SubscriptionDenied};
 use crate::realtime::subscription::ConnectionState;
-use crate::realtime::wire::{ClientFrame, ServerFrame};
-use crate::realtime::{ConnectionPrincipal, RealtimeTopic};
+use minos_protocol::realtime::{ClientFrame, ConnectionPrincipal, RealtimeTopic, ServerFrame};
 use crate::session::{SessionHandle, SessionRevocation};
 use crate::store::{
     agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands,
