@@ -7,13 +7,13 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WsTicketRequest {
+pub struct RealtimeWsTicketRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WsTicketResponse {
+pub struct RealtimeWsTicketResponse {
     pub ticket: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_url: Option<String>,
@@ -24,23 +24,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ws_ticket_response_round_trip() {
-        let resp = WsTicketResponse {
+    fn realtime_ws_ticket_response_round_trip() {
+        let resp = RealtimeWsTicketResponse {
             ticket: "jwt-token-here".into(),
             gateway_url: Some("wss://minos.example.com/ws/client".into()),
         };
         let json = serde_json::to_string(&resp).unwrap();
-        let back: WsTicketResponse = serde_json::from_str(&json).unwrap();
+        let back: RealtimeWsTicketResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
     }
 
     #[test]
-    fn ws_ticket_request_empty_round_trip() {
-        let req = WsTicketRequest {
+    fn realtime_ws_ticket_request_empty_round_trip() {
+        let req = RealtimeWsTicketRequest {
             installation_id: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        let back: WsTicketRequest = serde_json::from_str(&json).unwrap();
+        let back: RealtimeWsTicketRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
     }
 }

@@ -36,8 +36,9 @@ use minos_protocol::{
     GetThreadLastSeqParams, GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse,
     ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
     ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
-    RefreshResponse, RemoveAgentFromGroupRequest, SendChatMessageRequest, SendUserMessageRequest,
-    SetMinosIdRequest, UserSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    RefreshResponse, RemoveAgentFromGroupRequest,
+    SendChatMessageRequest, SendUserMessageRequest, SetMinosIdRequest, UserSummary,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -1332,66 +1333,18 @@ impl MobileClient {
             })
     }
 
-    fn build_websocket_request(
-        url: &str,
-        device_id: &DeviceId,
-        self_name: &str,
-        access_token: Option<&str>,
-    ) -> Result<Request<RequestBody>, MinosError> {
-        let mut request = Request::builder()
+    fn build_websocket_url(base_url: &str, ticket: &str) -> String {
+        let ws_url = base_url
+            .replace("https://", "wss://")
+            .replace("http://", "ws://");
+        format!("{ws_url}/ws/client?ticket={ticket}")
+    }
+
+    async fn open_backend_websocket(url: &str) -> Result<WebSocket, WebSocketError> {
+        let request = Request::builder()
             .method(Method::GET)
             .uri(url)
             .body(RequestBody::empty())
-            .map_err(|e| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: format!("invalid backend URL: {e}"),
-            })?;
-
-        let headers = request.headers_mut();
-        headers.insert(
-            "X-Device-Id",
-            device_id
-                .to_string()
-                .parse()
-                .map_err(|_| MinosError::ConnectFailed {
-                    url: url.to_string(),
-                    message: "device_id is not a valid header value".into(),
-                })?,
-        );
-        headers.insert(
-            "X-Device-Role",
-            "mobile-client"
-                .parse()
-                .expect("static header value is valid"),
-        );
-        headers.insert(
-            "X-Device-Name",
-            self_name.parse().map_err(|_| MinosError::ConnectFailed {
-                url: url.to_string(),
-                message: "self_name is not a valid header value".into(),
-            })?,
-        );
-        if let Some(tok) = access_token {
-            headers.insert(
-                "Authorization",
-                format!("Bearer {tok}")
-                    .parse()
-                    .map_err(|_| MinosError::ConnectFailed {
-                        url: url.to_string(),
-                        message: "access_token is not a valid header value".into(),
-                    })?,
-            );
-        }
-        Ok(request)
-    }
-
-    async fn open_backend_websocket(
-        url: &str,
-        device_id: &DeviceId,
-        self_name: &str,
-        access_token: Option<&str>,
-    ) -> Result<WebSocket, WebSocketError> {
-        let request = Self::build_websocket_request(url, device_id, self_name, access_token)
             .map_err(|error| WebSocketError::Io(WireError::invalid_request(error.to_string())))?;
         let client = Self::build_websocket_client().map_err(|error| {
             WebSocketError::Io(WireError::new(WireErrorKind::Internal, error.to_string()))
@@ -1419,11 +1372,12 @@ impl MobileClient {
             bearer_present,
             "mobile: opening backend WebSocket"
         );
+        let ws_url = self.fetch_ticket_and_build_ws_url(url, access_token).await?;
         let websocket =
-            Self::open_backend_websocket(url, &self.device_id, &self.self_name, access_token)
+            Self::open_backend_websocket(&ws_url)
                 .await
                 .map_err(|error| {
-                    connect_error_to_minos(url, error, &self.device_id, bearer_present)
+                    connect_error_to_minos(&ws_url, error, &self.device_id, bearer_present)
                 })?;
         let (write, read) = websocket.split();
 
@@ -1464,6 +1418,35 @@ impl MobileClient {
         tasks.push(send_handle);
         tasks.push(recv_handle);
         Ok(())
+    }
+
+    async fn fetch_ticket_and_build_ws_url(
+        &self,
+        base_url: &str,
+        access_token: Option<&str>,
+    ) -> Result<String, MinosError> {
+        let access = access_token.ok_or(MinosError::NotConnected)?;
+        let http = self.http_client_no_secret()?;
+        let ticket_resp = http
+            .fetch_ws_ticket(access, &self.device_id.to_string())
+            .await?;
+        let ticket = ticket_resp.ticket;
+        if let Some(gateway_url) = ticket_resp.gateway_url {
+            // The backend returns a relative gateway URL like "/ws/client?ticket=..."
+            if gateway_url.starts_with('/') {
+                Ok(format!(
+                    "{}{}",
+                    base_url
+                        .replace("https://", "wss://")
+                        .replace("http://", "ws://"),
+                    gateway_url
+                ))
+            } else {
+                Ok(gateway_url)
+            }
+        } else {
+            Ok(Self::build_websocket_url(base_url, &ticket))
+        }
     }
 
     async fn shutdown_outbound(&self) {
@@ -2071,6 +2054,37 @@ async fn clear_auth_session_and_disconnect_ctx(ctx: &ReconnectContext) {
     let _ = ctx.state_tx.send(ConnectionState::Disconnected);
 }
 
+async fn fetch_ticket_and_build_ws_url_ctx(
+    ctx: &ReconnectContext,
+    base_url: &str,
+    access_token: Option<&str>,
+) -> Result<String, MinosError> {
+    let access = access_token.ok_or(MinosError::NotConnected)?;
+    let http = crate::http::MobileHttpClient::new(base_url, ctx.device_id, ctx.self_name.clone())
+        .map_err(|e| MinosError::BackendInternal {
+            message: format!("build http client for ws-ticket: {e}"),
+        })?;
+    let ticket_resp = http
+        .fetch_ws_ticket(access, &ctx.device_id.to_string())
+        .await?;
+    let ticket = ticket_resp.ticket;
+    if let Some(gateway_url) = ticket_resp.gateway_url {
+        if gateway_url.starts_with('/') {
+            Ok(format!(
+                "{}{}",
+                base_url
+                    .replace("https://", "wss://")
+                    .replace("http://", "ws://"),
+                gateway_url
+            ))
+        } else {
+            Ok(gateway_url)
+        }
+    } else {
+        Ok(MobileClient::build_websocket_url(base_url, &ticket))
+    }
+}
+
 /// Standalone connect helper that takes the same handle bundle as the
 /// reconnect loop. Mirrors [`MobileClient::connect`] but doesn't borrow
 /// `&self` so we can call it from a task that doesn't hold a reference
@@ -2081,10 +2095,11 @@ async fn connect_with_handles(
     access_token: Option<&str>,
 ) -> Result<(), MinosError> {
     let bearer_present = access_token.is_some();
+    let ws_url = fetch_ticket_and_build_ws_url_ctx(ctx, url, access_token).await?;
     let websocket =
-        MobileClient::open_backend_websocket(url, &ctx.device_id, &ctx.self_name, access_token)
+        MobileClient::open_backend_websocket(&ws_url)
             .await
-            .map_err(|error| connect_error_to_minos(url, error, &ctx.device_id, bearer_present))?;
+            .map_err(|error| connect_error_to_minos(&ws_url, error, &ctx.device_id, bearer_present))?;
     let (write, read) = websocket.split();
     let (tx, mut rx) = mpsc::channel::<Envelope>(256);
     let send_handle = tokio::spawn(async move {

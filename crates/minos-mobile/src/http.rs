@@ -27,6 +27,7 @@ use minos_protocol::{
     MyProfileResponse, PairConsumeRequest, PairResponse, ReadThreadParams, ReadThreadResponse,
     RefreshRequest, RefreshResponse, RemoveAgentFromGroupRequest, SearchUsersRequest,
     SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest, UpdateProjectRequest,
+    RealtimeWsTicketRequest, RealtimeWsTicketResponse,
 };
 use minos_ui_protocol::ThreadEndReason;
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -46,6 +47,17 @@ struct ErrorEnvelope {
 struct ErrorBody {
     code: String,
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WsTicketEnvelope {
+    data: WsTicketData,
+}
+
+#[derive(Debug, Deserialize)]
+struct WsTicketData {
+    ticket: String,
+    gateway_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1226,6 +1238,41 @@ impl MobileHttpClient {
                 Some(conversation_id.into()),
             );
             Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    /// `POST /v1/realtime/ws-ticket` — obtain a short-lived ticket for the
+    /// `/ws/client` WebSocket upgrade. The ticket replaces header-based auth.
+    pub async fn fetch_ws_ticket(
+        &self,
+        access_token: &str,
+        installation_id: &str,
+    ) -> Result<RealtimeWsTicketResponse, MinosError> {
+        let path = "/v1/realtime/ws-ticket";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, Some("ws-ticket".into()));
+        let body = RealtimeWsTicketRequest {
+            installation_id: Some(installation_id.to_string()),
+        };
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let envelope: WsTicketEnvelope = decode_success_json(resp, "WsTicketEnvelope").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("ws-ticket obtained".into()),
+                None,
+            );
+            Ok(RealtimeWsTicketResponse {
+                ticket: envelope.data.ticket,
+                gateway_url: Some(envelope.data.gateway_url),
+            })
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
