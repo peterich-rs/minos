@@ -1,30 +1,25 @@
-//! Envelope-aware mobile client.
+//! Topic-based realtime mobile client.
 //!
-//! Plan 05 replaces the jsonrpsee-backed client with a bespoke envelope
-//! WebSocket loop (spec §6) so the mobile side can consume
-//! `EventKind::UiEventMessage` frames live; pairing and history reads now
-//! ride the backend's HTTP `/v1/*` control plane via [`crate::http`].
+//! Uses [`RealtimeSession`] for the WebSocket connection (ClientFrame/
+//! ServerFrame protocol) and REST HTTP for all outbound operations
+//! (agent sessions, social, projects, etc.) via [`crate::http`].
 //!
 //! Responsibilities:
 //!
 //! - Parse a scanned QR v2 payload (`PairingQrPayload` from
 //!   `minos_protocol::messages`) and persist its fields into the
-//!   [`MobilePairingStore`]: the active-Mac DeviceId returned by
-//!   `/v1/pairing/consume` (no secret — ADR-0020 made the iOS rail
-//!   bearer-only).
-//! - Maintain a single outbound WebSocket; expose `ConnectionState` via a
-//!   `watch::Receiver` and live `UiEventFrame` over a `broadcast::Sender`.
+//!   [`MobilePairingStore`].
+//! - Maintain a single WebSocket via [`RealtimeSession`]; expose
+//!   `ConnectionState` via a `watch::Receiver` and live `UiEventFrame`
+//!   over a `broadcast::Sender`.
 //!
 //! For FFI use, [`MobileClient::new_with_in_memory_store`] avoids exposing
 //! the `Arc<dyn MobilePairingStore>` trait object across the frb boundary
 //! (real Keychain persistence lives on the Dart side; see plan D5).
 
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dashmap::DashMap;
-use futures_util::StreamExt;
 use http::{Method, Request};
 use minos_domain::{ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
@@ -32,24 +27,23 @@ use minos_protocol::{
     ChatMessageSummary, ConversationAgentMembersResponse, ConversationMembersResponse,
     ConversationReadResponse, ConversationResponse, ConversationsResponse,
     CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
-    Envelope, EventKind, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
-    GetThreadLastSeqParams, GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse,
-    ListClisResponse, ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
-    RefreshResponse, RemoveAgentFromGroupRequest,
-    SendChatMessageRequest, SendUserMessageRequest, SetMinosIdRequest, UserSummary,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    FriendRequestSummary, FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams,
+    GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse, ListClisResponse,
+    ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse, MyProfileResponse,
+    PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
+    RemoveAgentFromGroupRequest, SendChatMessageRequest, SetMinosIdRequest, UserSummary,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
 use openwire::{Client as OpenwireClient, RequestBody, WireError, WireErrorKind};
-use openwire_core::websocket::{HandshakeFailure, Message, WebSocketEngineError, WebSocketError};
-use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, RwLock};
+use openwire_core::websocket::{HandshakeFailure, WebSocketEngineError, WebSocketError};
+use tokio::sync::{broadcast, watch, Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::auth::{AuthSession, AuthStateFrame};
 use crate::openwire_trace::OpenwireTraceFactory;
-use crate::rpc::{drain_pending, forward_rpc, RpcReply, RpcTraceContext};
+use crate::realtime::{RealtimeSession, SubscriptionManager};
 use crate::store::{InMemoryPairingStore, MobilePairingStore, PersistedPairingState};
 use crate::ReconnectController;
 
@@ -83,7 +77,7 @@ pub struct SocialEventFrame {
     pub message: ChatMessageSummary,
 }
 
-/// Envelope-speaking mobile client. One instance per iPhone process.
+/// Topic-based realtime mobile client. One instance per iPhone process.
 ///
 /// Several fields are `Arc<Mutex<...>>` rather than plain `Mutex<...>` so
 /// the reconnect loop spawned by [`MobileClient::ensure_reconnect_loop`]
@@ -96,22 +90,13 @@ pub struct MobileClient {
     state_rx: watch::Receiver<ConnectionState>,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
     social_events_tx: broadcast::Sender<SocialEventFrame>,
-    outbox: Arc<Mutex<Option<mpsc::Sender<Envelope>>>>,
     device_id: DeviceId,
     self_name: String,
-    /// Live send + recv task handles for the current WebSocket. Aborted
-    /// in `connect` / `connect_with_handles` before a fresh pair is
-    /// pushed, so the Vec stays bounded at exactly two entries per live
-    /// connection rather than growing across reconnects.
+    /// Live RealtimeSession task handle. Aborted in `connect` before a
+    /// fresh one is spawned.
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
-    /// Outstanding forward-RPC oneshots, keyed by the JSON-RPC id we
-    /// allocated. The recv-loop drains this on every disconnect via
-    /// [`crate::rpc::drain_pending`].
-    pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>>,
-    /// Monotonic id allocator for outbound forward-RPCs. Process-local;
-    /// re-issued from 1 on each new MobileClient (a fresh client = a
-    /// fresh paired/auth session in practice).
-    next_id: Arc<AtomicU64>,
+    /// Tracks subscribed topics and durable seq cursors across reconnects.
+    subscription_mgr: Arc<SubscriptionManager>,
     /// Watch channel publishing the latest [`AuthStateFrame`] to UI /
     /// reconnect-loop subscribers.
     auth_state_tx: watch::Sender<AuthStateFrame>,
@@ -149,12 +134,10 @@ impl MobileClient {
             state_rx,
             ui_events_tx,
             social_events_tx,
-            outbox: Arc::new(Mutex::new(None)),
             device_id,
             self_name,
             tasks: Arc::new(Mutex::new(Vec::new())),
-            pending: Arc::new(DashMap::new()),
-            next_id: Arc::new(AtomicU64::new(1)),
+            subscription_mgr: SubscriptionManager::new(),
             auth_state_tx,
             auth_state_rx,
             auth_session: Arc::new(RwLock::new(None)),
@@ -226,12 +209,10 @@ impl MobileClient {
             state_rx,
             ui_events_tx,
             social_events_tx,
-            outbox: Arc::new(Mutex::new(None)),
             device_id,
             self_name,
             tasks: Arc::new(Mutex::new(Vec::new())),
-            pending: Arc::new(DashMap::new()),
-            next_id: Arc::new(AtomicU64::new(1)),
+            subscription_mgr: SubscriptionManager::new(),
             auth_state_tx,
             auth_state_rx,
             auth_session: Arc::new(RwLock::new(live_auth)),
@@ -736,9 +717,8 @@ impl MobileClient {
         })
     }
 
-    /// Override the active forward target. Subsequent `Envelope::Forward`
-    /// frames stamp this Mac's id. Persisted so cold-launch restores the
-    /// same target.
+    /// Override the active forward target. Persisted so cold-launch
+    /// restores the same target.
     pub async fn set_active_host(&self, host: DeviceId) -> Result<(), MinosError> {
         self.store.save_active_host(&host).await
     }
@@ -792,28 +772,15 @@ impl MobileClient {
 
     /// Detect the CLI agents available on the paired runtime.
     pub async fn list_clis(&self) -> Result<ListClisResponse, MinosError> {
-        let outbox = self
-            .outbox
-            .lock()
-            .await
-            .clone()
-            .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_host().await?;
-        let resp: ListClisResponse = forward_rpc(
-            &self.pending,
-            &self.next_id,
-            &outbox,
-            target,
-            "minos_list_clis",
-            serde_json::Value::Null,
-            Duration::from_secs(10),
-            Some(RpcTraceContext {
-                thread_id: None,
-                request_summary: Some("detect runtime CLI agents".into()),
-            }),
-        )
-        .await?;
-        Ok(resp)
+        let host_installation_id = self.require_active_host().await?.to_string();
+        auth_http_call!(self, |http, access| {
+            http.list_clis_http(
+                &access,
+                minos_protocol::ListHostClisRequest {
+                    host_installation_id: host_installation_id.clone(),
+                },
+            )
+        })
     }
 
     /// Scan the host-side skills exposed by the selected runtime.
@@ -822,41 +789,27 @@ impl MobileClient {
         host_device_id: Option<String>,
         force_reload: bool,
     ) -> Result<ListHostSkillsResponse, MinosError> {
-        let outbox = self
-            .outbox
-            .lock()
-            .await
-            .clone()
-            .ok_or(MinosError::NotConnected)?;
-        let target = if let Some(host_device_id) = host_device_id {
-            Uuid::parse_str(&host_device_id)
-                .map(DeviceId)
-                .map_err(|_| MinosError::RpcCallFailed {
+        let host_installation_id = if let Some(host_device_id) = host_device_id {
+            if Uuid::parse_str(&host_device_id).is_err() {
+                return Err(MinosError::RpcCallFailed {
                     method: "minos_list_host_skills".into(),
                     message: format!("invalid host_device_id: {host_device_id}"),
-                })?
+                });
+            }
+            host_device_id
         } else {
-            self.require_active_host().await?
+            self.require_active_host().await?.to_string()
         };
-        let req = ListHostSkillsRequest {
-            workspace: String::new(),
-            force_reload,
-        };
-        let resp: ListHostSkillsResponse = forward_rpc(
-            &self.pending,
-            &self.next_id,
-            &outbox,
-            target,
-            "minos_list_host_skills",
-            req,
-            Duration::from_secs(15),
-            Some(RpcTraceContext {
-                thread_id: None,
-                request_summary: Some(format!("force_reload={force_reload}")),
-            }),
-        )
-        .await?;
-        Ok(resp)
+        auth_http_call!(self, |http, access| {
+            http.list_host_skills_http(
+                &access,
+                minos_protocol::ListHostSkillsCommandRequest {
+                    host_installation_id: host_installation_id.clone(),
+                    workspace: String::new(),
+                    force_reload,
+                },
+            )
+        })
     }
 
     /// Enable or disable one host-side skill by path.
@@ -866,74 +819,39 @@ impl MobileClient {
         path: String,
         enabled: bool,
     ) -> Result<WriteHostSkillConfigResponse, MinosError> {
-        let outbox = self
-            .outbox
-            .lock()
-            .await
-            .clone()
-            .ok_or(MinosError::NotConnected)?;
-        let target = if let Some(host_device_id) = host_device_id {
-            Uuid::parse_str(&host_device_id)
-                .map(DeviceId)
-                .map_err(|_| MinosError::RpcCallFailed {
+        let host_installation_id = if let Some(host_device_id) = host_device_id {
+            if Uuid::parse_str(&host_device_id).is_err() {
+                return Err(MinosError::RpcCallFailed {
                     method: "minos_write_host_skill_config".into(),
                     message: format!("invalid host_device_id: {host_device_id}"),
-                })?
+                });
+            }
+            host_device_id
         } else {
-            self.require_active_host().await?
+            self.require_active_host().await?.to_string()
         };
-        let req = WriteHostSkillConfigRequest {
-            workspace: String::new(),
-            path,
-            enabled,
-        };
-        let resp: WriteHostSkillConfigResponse = forward_rpc(
-            &self.pending,
-            &self.next_id,
-            &outbox,
-            target,
-            "minos_write_host_skill_config",
-            req,
-            Duration::from_secs(15),
-            Some(RpcTraceContext {
-                thread_id: None,
-                request_summary: Some(format!("enabled={enabled}")),
-            }),
-        )
-        .await?;
-        Ok(resp)
+        auth_http_call!(self, |http, access| {
+            http.write_host_skill_config_http(
+                &access,
+                minos_protocol::WriteHostSkillConfigCommandRequest {
+                    host_installation_id: host_installation_id.clone(),
+                    workspace: String::new(),
+                    path: path.clone(),
+                    enabled,
+                },
+            )
+        })
     }
 
-    /// Send a user message into an existing agent session. Spec §6.2.
+    /// Send a user message into an existing agent session via REST.
     pub async fn send_user_message(
         &self,
         session_id: String,
         text: String,
     ) -> Result<(), MinosError> {
-        let outbox = self
-            .outbox
-            .lock()
-            .await
-            .clone()
-            .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_host().await?;
-        let thread_id = session_id.clone();
-        let text_len = text.len();
-        let req = SendUserMessageRequest { session_id, text };
-        let _: () = forward_rpc(
-            &self.pending,
-            &self.next_id,
-            &outbox,
-            target,
-            "minos_send_user_message",
-            req,
-            Duration::from_secs(10),
-            Some(RpcTraceContext {
-                thread_id: Some(thread_id),
-                request_summary: Some(format!("text_len={text_len}")),
-            }),
-        )
-        .await?;
+        auth_http_call!(self, |http, access| {
+            http.send_agent_input(&access, &session_id, &text)
+        })?;
         Ok(())
     }
 
@@ -956,63 +874,18 @@ impl MobileClient {
         })
     }
 
-    /// Pause an in-flight turn on the named thread. Best-effort. Replaces
-    /// the legacy `stop_agent` RPC (retired in Phase C task C16).
+    /// Pause an in-flight turn on the named thread via REST.
     pub async fn interrupt_thread(&self, thread_id: String) -> Result<(), MinosError> {
-        let outbox = self
-            .outbox
-            .lock()
-            .await
-            .clone()
-            .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_host().await?;
-        let req = minos_protocol::InterruptThreadRequest {
-            thread_id: thread_id.clone(),
-        };
-        let _: () = forward_rpc(
-            &self.pending,
-            &self.next_id,
-            &outbox,
-            target,
-            "minos_interrupt_thread",
-            req,
-            Duration::from_secs(10),
-            Some(RpcTraceContext {
-                thread_id: Some(thread_id),
-                request_summary: Some("interrupt thread".into()),
-            }),
-        )
-        .await?;
-        Ok(())
+        auth_http_call!(self, |http, access| {
+            http.stop_agent_session(&access, &thread_id)
+        })
     }
 
-    /// Permanently close the named thread. Idempotent.
+    /// Permanently close the named thread via REST. Idempotent.
     pub async fn close_thread(&self, thread_id: String) -> Result<(), MinosError> {
-        let outbox = self
-            .outbox
-            .lock()
-            .await
-            .clone()
-            .ok_or(MinosError::NotConnected)?;
-        let target = self.require_active_host().await?;
-        let req = minos_protocol::CloseThreadRequest {
-            thread_id: thread_id.clone(),
-        };
-        let _: () = forward_rpc(
-            &self.pending,
-            &self.next_id,
-            &outbox,
-            target,
-            "minos_close_thread",
-            req,
-            Duration::from_secs(10),
-            Some(RpcTraceContext {
-                thread_id: Some(thread_id),
-                request_summary: Some("close thread".into()),
-            }),
-        )
-        .await?;
-        Ok(())
+        auth_http_call!(self, |http, access| {
+            http.stop_agent_session(&access, &thread_id)
+        })
     }
 
     // ─────────────────────────── project rpcs ──────────────────────────────
@@ -1204,8 +1077,7 @@ impl MobileClient {
             state_tx: self.state_tx.clone(),
             ui_events_tx: self.ui_events_tx.clone(),
             social_events_tx: self.social_events_tx.clone(),
-            pending: self.pending.clone(),
-            outbox: self.outbox.clone(),
+            subscription_mgr: self.subscription_mgr.clone(),
             tasks: self.tasks.clone(),
             device_id: self.device_id,
             self_name: self.self_name.clone(),
@@ -1359,10 +1231,6 @@ impl MobileClient {
             .await
     }
 
-    // The body is mostly header-stamping boilerplate that mirrors
-    // `connect_with_handles`; deduplicating across them is deferred to
-    // I2 (post-Wave-2 cleanup), so allow the line count for now.
-    #[allow(clippy::too_many_lines)]
     async fn connect(&self, url: &str, access_token: Option<&str>) -> Result<(), MinosError> {
         let bearer_present = access_token.is_some();
         tracing::info!(
@@ -1372,51 +1240,39 @@ impl MobileClient {
             bearer_present,
             "mobile: opening backend WebSocket"
         );
-        let ws_url = self.fetch_ticket_and_build_ws_url(url, access_token).await?;
-        let websocket =
-            Self::open_backend_websocket(&ws_url)
-                .await
-                .map_err(|error| {
-                    connect_error_to_minos(&ws_url, error, &self.device_id, bearer_present)
-                })?;
-        let (write, read) = websocket.split();
+        let ws_url = self
+            .fetch_ticket_and_build_ws_url(url, access_token)
+            .await?;
+        let websocket = Self::open_backend_websocket(&ws_url)
+            .await
+            .map_err(|error| {
+                connect_error_to_minos(&ws_url, error, &self.device_id, bearer_present)
+            })?;
 
-        let (tx, mut rx) = mpsc::channel::<Envelope>(256);
+        let account_id = self
+            .auth_session
+            .read()
+            .await
+            .as_ref()
+            .map(|s| s.account.account_id.clone())
+            .unwrap_or_default();
 
-        let send_handle = tokio::spawn(async move {
-            while let Some(env) = rx.recv().await {
-                let text = match serde_json::to_string(&env) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!(?e, "mobile: envelope serialise failed");
-                        continue;
-                    }
-                };
-                if let Err(e) = write.send_text(text).await {
-                    tracing::warn!(?e, "mobile: WS write failed; send loop exiting");
-                    break;
-                }
-            }
-        });
-
-        let recv_handle = tokio::spawn(recv_loop(
-            read,
+        let (_frame_tx, frame_rx) = tokio::sync::mpsc::channel(1);
+        let session_handle = tokio::spawn(RealtimeSession::run(
+            websocket,
+            account_id,
+            self.subscription_mgr.clone(),
             self.ui_events_tx.clone(),
             self.social_events_tx.clone(),
             self.state_tx.clone(),
-            self.pending.clone(),
+            frame_rx,
         ));
 
-        *self.outbox.lock().await = Some(tx);
         let mut tasks = self.tasks.lock().await;
-        // Abort any handles from a prior connect/reconnect before pushing
-        // the new pair — otherwise the Vec grows unboundedly across long
-        // reconnect-heavy sessions (2 handles per attempt × N reconnects).
         for h in tasks.drain(..) {
             h.abort();
         }
-        tasks.push(send_handle);
-        tasks.push(recv_handle);
+        tasks.push(session_handle);
         Ok(())
     }
 
@@ -1450,206 +1306,10 @@ impl MobileClient {
     }
 
     async fn shutdown_outbound(&self) {
-        let mut guard = self.outbox.lock().await;
-        *guard = None; // drops the Sender; send task exits when channel closes
-                       // Drain pending so any in-flight forward_rpc callers see
-                       // RequestDropped instead of waiting until their per-call timeout.
-        drain_pending(&self.pending);
-    }
-}
-
-/// Inbound read loop. Decodes each text frame as `Envelope` and surfaces
-/// `UiEventMessage` events to the broadcast channel; presence and
-/// pairing-state events update the connection-state watch.
-///
-/// Always drains `pending` and publishes `Disconnected` on exit, regardless
-/// of how the read loop terminated. The `Close`/error arms break out of the
-/// loop, and a TCP reset that produces no Close frame falls through the
-/// `while let Some(...)` and hits the post-loop drain. Without this,
-/// in-flight `forward_rpc` callers would hang until per-call timeout.
-async fn recv_loop<S>(
-    mut read: S,
-    ui_events_tx: broadcast::Sender<UiEventFrame>,
-    social_events_tx: broadcast::Sender<SocialEventFrame>,
-    state_tx: watch::Sender<ConnectionState>,
-    pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>>,
-) where
-    S: StreamExt<Item = Result<Message, WebSocketError>> + Unpin,
-{
-    while let Some(msg) = read.next().await {
-        match msg {
-            Ok(Message::Text(t)) => {
-                let text: &str = t.as_ref();
-                handle_text_frame(text, &ui_events_tx, &social_events_tx, &state_tx, &pending);
-            }
-            Ok(Message::Close { .. }) => {
-                break;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(?e, "mobile: WS read error; inbound loop exiting");
-                break;
-            }
+        let mut tasks = self.tasks.lock().await;
+        for h in tasks.drain(..) {
+            h.abort();
         }
-    }
-    let _ = state_tx.send(ConnectionState::Disconnected);
-    drain_pending(&pending);
-}
-
-#[allow(clippy::too_many_lines)]
-fn handle_text_frame(
-    text: &str,
-    ui_events_tx: &broadcast::Sender<UiEventFrame>,
-    social_events_tx: &broadcast::Sender<SocialEventFrame>,
-    state_tx: &watch::Sender<ConnectionState>,
-    pending: &DashMap<u64, oneshot::Sender<RpcReply>>,
-) {
-    let env = match serde_json::from_str::<Envelope>(text) {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(?e, text = %text, "mobile: inbound decode error");
-            return;
-        }
-    };
-    match env {
-        Envelope::Event { event, .. } => match event {
-            EventKind::UiEventMessage {
-                thread_id,
-                seq,
-                ui,
-                ts_ms,
-            } => {
-                let _ = ui_events_tx.send(UiEventFrame {
-                    thread_id,
-                    seq,
-                    ui,
-                    ts_ms,
-                });
-            }
-            EventKind::SocialMessage {
-                conversation_id,
-                message,
-            } => {
-                let _ = social_events_tx.send(SocialEventFrame {
-                    conversation_id,
-                    message,
-                });
-            }
-            EventKind::ApprovalRequest {
-                thread_id,
-                turn_id,
-                request_id,
-                method,
-                params,
-                timeout_ms,
-            } => {
-                let payload_json = serde_json::json!({
-                    "thread_id": thread_id,
-                    "turn_id": turn_id,
-                    "request_id": request_id,
-                    "method": method,
-                    "params": params,
-                    "timeout_ms": timeout_ms,
-                })
-                .to_string();
-                let _ = ui_events_tx.send(UiEventFrame {
-                    thread_id,
-                    seq: 0,
-                    ui: UiEventMessage::Raw {
-                        kind: "approval_request".into(),
-                        payload_json,
-                    },
-                    ts_ms: chrono::Utc::now().timestamp_millis(),
-                });
-            }
-            EventKind::ApprovalTimeout {
-                thread_id,
-                request_id,
-                reason,
-            } => {
-                let payload_json = serde_json::json!({
-                    "thread_id": thread_id,
-                    "request_id": request_id,
-                    "reason": reason,
-                })
-                .to_string();
-                let _ = ui_events_tx.send(UiEventFrame {
-                    thread_id,
-                    seq: 0,
-                    ui: UiEventMessage::Raw {
-                        kind: "approval_timeout".into(),
-                        payload_json,
-                    },
-                    ts_ms: chrono::Utc::now().timestamp_millis(),
-                });
-            }
-            EventKind::AgentError {
-                session_id: Some(thread_id),
-                code,
-                message,
-            } => {
-                let _ = ui_events_tx.send(UiEventFrame {
-                    thread_id,
-                    seq: 0,
-                    ui: UiEventMessage::Error {
-                        code,
-                        message,
-                        message_id: None,
-                    },
-                    ts_ms: chrono::Utc::now().timestamp_millis(),
-                });
-            }
-            EventKind::ServerShutdown => {
-                let _ = state_tx.send(ConnectionState::Disconnected);
-                drain_pending(pending);
-            }
-            EventKind::Unpaired => {
-                // ADR-0020 / Phase G: the backend now emits Unpaired as
-                // the initial activation frame for every iOS WS upgrade
-                // (and on subsequent multi-mac account state changes).
-                // Treat it as an advisory "refresh paired-mac list"
-                // signal rather than a "tear-down everything" — dropping
-                // pending here would race forward_rpc callers issued
-                // immediately after pair_with_qr_json returned.
-                tracing::debug!(target: "minos_mobile::client", "ignoring Unpaired event (advisory)");
-            }
-            _ => tracing::debug!(?event, "mobile: ignored event"),
-        },
-        Envelope::Forwarded { payload, .. } => {
-            // Spec §6.2: JSON-RPC `{id, method, params/result/error}` rides
-            // inside Envelope::Forwarded.payload; correlation id is the
-            // inner `id`, not the envelope.
-            let Some(id) = payload.get("id").and_then(serde_json::Value::as_u64) else {
-                tracing::debug!(?payload, "mobile: Forwarded missing inner JSON-RPC id");
-                return;
-            };
-            let Some((_, tx)) = pending.remove(&id) else {
-                tracing::debug!(id, "mobile: Forwarded with no pending entry");
-                return;
-            };
-            let reply = if let Some(result) = payload.get("result") {
-                RpcReply::Ok(result.clone())
-            } else if let Some(err) = payload.get("error") {
-                let code = err
-                    .get("code")
-                    .and_then(serde_json::Value::as_i64)
-                    .and_then(|v| i32::try_from(v).ok())
-                    .unwrap_or(-32000);
-                let message = err
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                RpcReply::Err { code, message }
-            } else {
-                RpcReply::Err {
-                    code: -32700,
-                    message: "malformed jsonrpc reply".into(),
-                }
-            };
-            let _ = tx.send(reply);
-        }
-        other => tracing::debug!(?other, "mobile: ignored inbound envelope"),
     }
 }
 
@@ -1843,8 +1503,7 @@ struct ReconnectContext {
     state_tx: watch::Sender<ConnectionState>,
     ui_events_tx: broadcast::Sender<UiEventFrame>,
     social_events_tx: broadcast::Sender<SocialEventFrame>,
-    pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>>,
-    outbox: Arc<Mutex<Option<mpsc::Sender<Envelope>>>>,
+    subscription_mgr: Arc<SubscriptionManager>,
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     device_id: DeviceId,
     self_name: String,
@@ -1910,9 +1569,9 @@ async fn reconnect_loop(ctx: ReconnectContext) {
 
         match connect_with_handles(&ctx, backend_url, Some(&access)).await {
             Ok(()) => {
-                // Subscribe BEFORE publishing `Connected` so the recv_loop
-                // can't fire `Disconnected` between the send and the
-                // subscribe and leave us hanging on the next `changed()`.
+                // Subscribe BEFORE publishing `Connected` so the
+                // RealtimeSession can't fire `Disconnected` between the
+                // send and the subscribe and leave us hanging.
                 // The borrow_and_update() right after subscribe handles the
                 // case where Disconnected lands inside the very-narrow
                 // window between subscribe and Connected publishing.
@@ -2045,8 +1704,6 @@ async fn clear_auth_session_and_disconnect_ctx(ctx: &ReconnectContext) {
     *ctx.auth_session.write().await = None;
     let _ = ctx.store.clear_auth().await;
     let _ = ctx.auth_state_tx.send(AuthStateFrame::Unauthenticated);
-    *ctx.outbox.lock().await = None;
-    drain_pending(&ctx.pending);
     let mut tasks = ctx.tasks.lock().await;
     for handle in tasks.drain(..) {
         handle.abort();
@@ -2062,8 +1719,8 @@ async fn fetch_ticket_and_build_ws_url_ctx(
     let access = access_token.ok_or(MinosError::NotConnected)?;
     let http = crate::http::MobileHttpClient::new(base_url, ctx.device_id, ctx.self_name.clone())
         .map_err(|e| MinosError::BackendInternal {
-            message: format!("build http client for ws-ticket: {e}"),
-        })?;
+        message: format!("build http client for ws-ticket: {e}"),
+    })?;
     let ticket_resp = http
         .fetch_ws_ticket(access, &ctx.device_id.to_string())
         .await?;
@@ -2096,50 +1753,39 @@ async fn connect_with_handles(
 ) -> Result<(), MinosError> {
     let bearer_present = access_token.is_some();
     let ws_url = fetch_ticket_and_build_ws_url_ctx(ctx, url, access_token).await?;
-    let websocket =
-        MobileClient::open_backend_websocket(&ws_url)
-            .await
-            .map_err(|error| connect_error_to_minos(&ws_url, error, &ctx.device_id, bearer_present))?;
-    let (write, read) = websocket.split();
-    let (tx, mut rx) = mpsc::channel::<Envelope>(256);
-    let send_handle = tokio::spawn(async move {
-        while let Some(env) = rx.recv().await {
-            let text = match serde_json::to_string(&env) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(?e, "mobile: envelope serialise failed");
-                    continue;
-                }
-            };
-            if let Err(e) = write.send_text(text).await {
-                tracing::warn!(?e, "mobile: WS write failed; send loop exiting");
-                break;
-            }
-        }
-    });
-    let recv_handle = tokio::spawn(recv_loop(
-        read,
+    let websocket = MobileClient::open_backend_websocket(&ws_url)
+        .await
+        .map_err(|error| connect_error_to_minos(&ws_url, error, &ctx.device_id, bearer_present))?;
+
+    let account_id = ctx
+        .auth_session
+        .read()
+        .await
+        .as_ref()
+        .map(|s| s.account.account_id.clone())
+        .unwrap_or_default();
+
+    let (_frame_tx, frame_rx) = tokio::sync::mpsc::channel(1);
+    let session_handle = tokio::spawn(RealtimeSession::run(
+        websocket,
+        account_id,
+        ctx.subscription_mgr.clone(),
         ctx.ui_events_tx.clone(),
         ctx.social_events_tx.clone(),
         ctx.state_tx.clone(),
-        ctx.pending.clone(),
+        frame_rx,
     ));
-    *ctx.outbox.lock().await = Some(tx);
+
     let mut tasks = ctx.tasks.lock().await;
-    // Abort any handles from a prior connect/reconnect before pushing the
-    // new pair — see the matching comment in `MobileClient::connect`.
     for h in tasks.drain(..) {
         h.abort();
     }
-    tasks.push(send_handle);
-    tasks.push(recv_handle);
+    tasks.push(session_handle);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use minos_protocol::SenderType;
-
     use super::*;
 
     #[test]
@@ -2364,101 +2010,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_text_frame_routes_forwarded_result_to_pending_oneshot() {
-        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
-        let (tx, rx) = oneshot::channel::<RpcReply>();
-        pending.insert(42, tx);
-        let (ui_tx, _ui_rx) = broadcast::channel(8);
-        let (social_tx, _social_rx) = broadcast::channel(8);
-        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
-
-        let from = DeviceId::new();
-        let env = Envelope::Forwarded {
-            version: 1,
-            from,
-            payload: serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 42,
-                "result": {"session_id": "thr_1", "cwd": "/workdir"}
-            }),
-        };
-        let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
-
-        let reply = rx.await.unwrap();
-        match reply {
-            RpcReply::Ok(value) => {
-                assert_eq!(value["session_id"], "thr_1");
-                assert_eq!(value["cwd"], "/workdir");
-            }
-            other => panic!("expected Ok, got {other:?}"),
-        }
-        assert!(pending.is_empty(), "pending entry must be removed");
-    }
-
-    #[tokio::test]
-    async fn handle_text_frame_routes_forwarded_error_to_pending_oneshot() {
-        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
-        let (tx, rx) = oneshot::channel::<RpcReply>();
-        pending.insert(7, tx);
-        let (ui_tx, _ui_rx) = broadcast::channel(8);
-        let (social_tx, _social_rx) = broadcast::channel(8);
-        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
-
-        let env = Envelope::Forwarded {
-            version: 1,
-            from: DeviceId::new(),
-            payload: serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 7,
-                "error": {"code": -32002, "message": "agent already running"}
-            }),
-        };
-        let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
-
-        let reply = rx.await.unwrap();
-        match reply {
-            RpcReply::Err { code, message } => {
-                assert_eq!(code, -32002);
-                assert_eq!(message, "agent already running");
-            }
-            other => panic!("expected Err, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn handle_text_frame_drops_forwarded_with_unknown_id() {
-        // Pending starts empty: a Forwarded with id=99 must be a no-op.
-        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
-        let (ui_tx, _ui_rx) = broadcast::channel(8);
-        let (social_tx, _social_rx) = broadcast::channel(8);
-        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
-
-        let env = Envelope::Forwarded {
-            version: 1,
-            from: DeviceId::new(),
-            payload: serde_json::json!({"jsonrpc": "2.0", "id": 99, "result": {}}),
-        };
-        let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
-        assert!(pending.is_empty());
-    }
-
-    #[tokio::test]
-    async fn send_user_message_returns_not_connected_when_disconnected() {
+    async fn send_user_message_requires_authentication() {
         let client = MobileClient::new_with_in_memory_store("iPhone".into());
         let res = client
             .send_user_message("thr_1".into(), "ping".into())
             .await;
-        assert!(matches!(res, Err(MinosError::NotConnected)));
+        assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
     }
 
     #[tokio::test]
-    async fn close_thread_returns_not_connected_when_disconnected() {
+    async fn close_thread_requires_authentication() {
         let client = MobileClient::new_with_in_memory_store("iPhone".into());
         let res = client.close_thread("thr".into()).await;
-        assert!(matches!(res, Err(MinosError::NotConnected)));
+        assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
     }
 
     #[tokio::test]
@@ -2472,72 +2036,6 @@ mod tests {
             )
             .await;
         assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
-    }
-
-    #[test]
-    fn handle_text_frame_converts_approval_request_to_raw_ui_event() {
-        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
-        let (ui_tx, mut ui_rx) = broadcast::channel(8);
-        let (social_tx, _social_rx) = broadcast::channel(8);
-        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
-
-        let env = Envelope::Event {
-            version: 1,
-            event: EventKind::ApprovalRequest {
-                thread_id: "thr-approval".into(),
-                turn_id: "turn-7".into(),
-                request_id: "req-7".into(),
-                method: "execCommandApproval".into(),
-                params: serde_json::json!({ "command": "git status" }),
-                timeout_ms: 120_000,
-            },
-        };
-        let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
-
-        let frame = ui_rx.try_recv().expect("approval request should fan out");
-        assert_eq!(frame.thread_id, "thr-approval");
-        assert_eq!(frame.seq, 0);
-        match frame.ui {
-            UiEventMessage::Raw { kind, payload_json } => {
-                assert_eq!(kind, "approval_request");
-                let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
-                assert_eq!(payload["request_id"], "req-7");
-                assert_eq!(payload["params"]["command"], "git status");
-            }
-            other => panic!("expected UiEventMessage::Raw, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn handle_text_frame_converts_approval_timeout_to_raw_ui_event() {
-        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
-        let (ui_tx, mut ui_rx) = broadcast::channel(8);
-        let (social_tx, _social_rx) = broadcast::channel(8);
-        let (state_tx, _state_rx) = watch::channel(ConnectionState::Disconnected);
-
-        let env = Envelope::Event {
-            version: 1,
-            event: EventKind::ApprovalTimeout {
-                thread_id: "thr-timeout".into(),
-                request_id: "req-timeout".into(),
-                reason: "timeout".into(),
-            },
-        };
-        let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
-
-        let frame = ui_rx.try_recv().expect("approval timeout should fan out");
-        assert_eq!(frame.thread_id, "thr-timeout");
-        match frame.ui {
-            UiEventMessage::Raw { kind, payload_json } => {
-                assert_eq!(kind, "approval_timeout");
-                let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
-                assert_eq!(payload["request_id"], "req-timeout");
-                assert_eq!(payload["reason"], "timeout");
-            }
-            other => panic!("expected UiEventMessage::Raw, got {other:?}"),
-        }
     }
 
     #[tokio::test]
@@ -2587,123 +2085,4 @@ mod tests {
         assert!(res.is_ok(), "logout from unauthenticated must be Ok");
     }
 
-    #[tokio::test]
-    async fn handle_text_frame_unpaired_event_is_advisory_does_not_drain() {
-        // ADR-0020 / Phase G: the backend emits an initial Unpaired
-        // frame on every iOS WS activation. Dropping pending RPCs on
-        // that signal would race forward_rpc callers fired immediately
-        // after pair_with_qr_json returned. Verify the iPhone client
-        // ignores Unpaired (treats it as advisory).
-        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
-        let (tx, _rx) = oneshot::channel::<RpcReply>();
-        pending.insert(1, tx);
-        let (ui_tx, _ui_rx) = broadcast::channel(8);
-        let (social_tx, _social_rx) = broadcast::channel(8);
-        let (state_tx, _state_rx) = watch::channel(ConnectionState::Connected);
-
-        let env = Envelope::Event {
-            version: 1,
-            event: EventKind::Unpaired,
-        };
-        let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
-
-        // Pending entry must survive the Unpaired event.
-        assert_eq!(pending.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn handle_text_frame_server_shutdown_event_drains_pending() {
-        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
-        let (tx, rx) = oneshot::channel::<RpcReply>();
-        pending.insert(1, tx);
-        let (ui_tx, _ui_rx) = broadcast::channel(8);
-        let (social_tx, _social_rx) = broadcast::channel(8);
-        let (state_tx, _state_rx) = watch::channel(ConnectionState::Connected);
-
-        let env = Envelope::Event {
-            version: 1,
-            event: EventKind::ServerShutdown,
-        };
-        let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
-
-        let reply = rx.await.unwrap();
-        match reply {
-            RpcReply::Err { code, .. } => assert_eq!(code, crate::rpc::REQUEST_DROPPED_CODE),
-            other => panic!("expected RequestDropped err, got {other:?}"),
-        }
-        assert!(pending.is_empty());
-    }
-
-    #[tokio::test]
-    async fn handle_text_frame_social_message_event_is_broadcast() {
-        let pending: DashMap<u64, oneshot::Sender<RpcReply>> = DashMap::new();
-        let (ui_tx, _ui_rx) = broadcast::channel(8);
-        let (social_tx, mut social_rx) = broadcast::channel(8);
-        let (state_tx, _state_rx) = watch::channel(ConnectionState::Connected);
-
-        let env = Envelope::Event {
-            version: 1,
-            event: EventKind::SocialMessage {
-                conversation_id: "conv-1".into(),
-                message: ChatMessageSummary {
-                    message_id: "msg-1".into(),
-                    conversation_id: "conv-1".into(),
-                    sender: UserSummary {
-                        account_id: "acct-1".into(),
-                        minos_id: "alice01".into(),
-                        display_name: "Alice".into(),
-                    },
-                    text: "hello".into(),
-                    created_at_ms: 123,
-                    reply_to: None,
-                    recalled_at_ms: None,
-                    mentioned_account_ids: Vec::new(),
-                    sender_type: SenderType::User,
-                },
-            },
-        };
-        let text = serde_json::to_string(&env).unwrap();
-        handle_text_frame(&text, &ui_tx, &social_tx, &state_tx, &pending);
-
-        let frame = social_rx.recv().await.unwrap();
-        assert_eq!(frame.conversation_id, "conv-1");
-        assert_eq!(frame.message.message_id, "msg-1");
-        assert_eq!(frame.message.sender.display_name, "Alice");
-    }
-
-    /// Regression for the "TCP reset without WS Close" path: when the read
-    /// stream returns `None` immediately (no Close frame, no error) the
-    /// recv loop must still drain `pending` and publish `Disconnected`.
-    /// Otherwise an in-flight `forward_rpc` caller would hang until the
-    /// per-call timeout fires.
-    #[tokio::test]
-    async fn recv_loop_drains_pending_on_stream_end_without_close() {
-        let pending: Arc<DashMap<u64, oneshot::Sender<RpcReply>>> = Arc::new(DashMap::new());
-        let (rpc_tx, rpc_rx) = oneshot::channel::<RpcReply>();
-        pending.insert(1, rpc_tx);
-
-        let (ui_tx, _ui_rx) = broadcast::channel(8);
-        let (social_tx, _social_rx) = broadcast::channel(8);
-        let (state_tx, mut state_rx) = watch::channel(ConnectionState::Connected);
-
-        // An empty stream models a transport that closed without an
-        // explicit WS Close frame — `next()` returns None on the first poll.
-        let read = futures_util::stream::iter(Vec::<Result<Message, WebSocketError>>::new());
-        recv_loop(read, ui_tx, social_tx, state_tx, pending.clone()).await;
-
-        // Pending must be drained.
-        assert!(pending.is_empty(), "pending must be drained on stream end");
-        let reply = rpc_rx.await.expect("oneshot must have been resolved");
-        match reply {
-            RpcReply::Err { code, .. } => assert_eq!(code, crate::rpc::REQUEST_DROPPED_CODE),
-            other => panic!("expected RequestDropped err, got {other:?}"),
-        }
-        // And the connection-state watch transitioned to Disconnected.
-        assert!(matches!(
-            *state_rx.borrow_and_update(),
-            ConnectionState::Disconnected
-        ));
-    }
 }

@@ -13,9 +13,9 @@ pub mod http;
 pub mod log_capture;
 pub mod logging;
 mod openwire_trace;
+pub mod realtime;
 mod reconnect;
 pub mod request_trace;
-pub mod rpc;
 pub mod store;
 mod tls;
 

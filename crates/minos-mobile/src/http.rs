@@ -22,16 +22,19 @@ use minos_protocol::{
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest,
     EnsureDirectConversationRequest, FriendRequestsResponse, FriendsResponse,
     GetThreadLastSeqParams, GetThreadLastSeqResponse, ListChatMessagesRequest,
-    ListChatMessagesResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
+    ListChatMessagesResponse, ListHostClisRequest, ListHostSkillsCommandRequest,
+    ListHostSkillsResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
     ListProjectsResponse, ListThreadsParams, ListThreadsResponse, LogoutRequest, MeHostsResponse,
     MyProfileResponse, PairConsumeRequest, PairResponse, ReadThreadParams, ReadThreadResponse,
-    RefreshRequest, RefreshResponse, RemoveAgentFromGroupRequest, SearchUsersRequest,
-    SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest, UpdateProjectRequest,
-    RealtimeWsTicketRequest, RealtimeWsTicketResponse,
+    RealtimeWsTicketRequest, RealtimeWsTicketResponse, RefreshRequest, RefreshResponse,
+    RemoveAgentFromGroupRequest, SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest,
+    SetMinosIdRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::ThreadEndReason;
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::openwire_trace::{logger_interceptor, OpenwireTraceFactory};
 use crate::request_trace::{self, RequestTransport};
@@ -58,6 +61,25 @@ struct WsTicketEnvelope {
 struct WsTicketData {
     ticket: String,
     gateway_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SendAgentInputRequest {
+    session_id: String,
+    text: String,
+    client_request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SendAgentInputResponse {
+    pub session_id: String,
+    pub turn_id: String,
+    pub turn_seq: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct StopAgentSessionRequest {
+    session_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1254,7 +1276,8 @@ impl MobileHttpClient {
     ) -> Result<RealtimeWsTicketResponse, MinosError> {
         let path = "/v1/realtime/ws-ticket";
         let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(Method::POST.as_str(), path, None, Some("ws-ticket".into()));
+        let trace_id =
+            start_http_trace(Method::POST.as_str(), path, None, Some("ws-ticket".into()));
         let body = RealtimeWsTicketRequest {
             installation_id: Some(installation_id.to_string()),
         };
@@ -1273,6 +1296,179 @@ impl MobileHttpClient {
                 ticket: envelope.data.ticket,
                 gateway_url: Some(envelope.data.gateway_url),
             })
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn list_clis_http(
+        &self,
+        access_token: &str,
+        request_body: ListHostClisRequest,
+    ) -> Result<minos_protocol::ListClisResponse, MinosError> {
+        let path = "/v1/host-commands/list-clis";
+        let url = format!("{}{path}", self.base);
+        let trace_id =
+            start_http_trace(Method::POST.as_str(), path, None, Some("list clis".into()));
+        let request =
+            self.request_with_json(Method::POST, &url, Some(access_token), &request_body)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "ListClisResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("host cli list".into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn list_host_skills_http(
+        &self,
+        access_token: &str,
+        request_body: ListHostSkillsCommandRequest,
+    ) -> Result<ListHostSkillsResponse, MinosError> {
+        let path = "/v1/host-commands/list-host-skills";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!("force_reload={}", request_body.force_reload)),
+        );
+        let request =
+            self.request_with_json(Method::POST, &url, Some(access_token), &request_body)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "ListHostSkillsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("host skills listed".into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn write_host_skill_config_http(
+        &self,
+        access_token: &str,
+        request_body: WriteHostSkillConfigCommandRequest,
+    ) -> Result<WriteHostSkillConfigResponse, MinosError> {
+        let path = "/v1/host-commands/write-host-skill-config";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!("enabled={}", request_body.enabled)),
+        );
+        let request =
+            self.request_with_json(Method::POST, &url, Some(access_token), &request_body)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "WriteHostSkillConfigResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("host skill config updated".into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    // ─────────────────────────── agent session endpoints ──────────────────
+
+    /// `POST /v1/agent-sessions/send-input` — send a user message into an
+    /// active agent session via the backend's durable command queue.
+    pub async fn send_agent_input(
+        &self,
+        access_token: &str,
+        session_id: &str,
+        text: &str,
+    ) -> Result<SendAgentInputResponse, MinosError> {
+        let path = "/v1/agent-sessions/send-input";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!("session={session_id}")),
+        );
+        let body = SendAgentInputRequest {
+            session_id: session_id.into(),
+            text: text.into(),
+            client_request_id: Uuid::new_v4().to_string(),
+        };
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "SendAgentInputResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("agent input sent".into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    /// `POST /v1/agent-sessions/stop` — stop (interrupt or close) an agent
+    /// session via the backend's durable command queue.
+    pub async fn stop_agent_session(
+        &self,
+        access_token: &str,
+        session_id: &str,
+    ) -> Result<(), MinosError> {
+        let path = "/v1/agent-sessions/stop";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!("session={session_id}")),
+        );
+        let body = StopAgentSessionRequest {
+            session_id: session_id.into(),
+        };
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("agent session stopped".into()),
+                None,
+            );
+            Ok(())
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
