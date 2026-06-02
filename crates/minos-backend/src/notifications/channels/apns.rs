@@ -34,8 +34,8 @@ impl ApnsChannel {
         let key_path = std::env::var("MINOS_PUSH_APNS_KEY_PATH").ok()?;
         let key_id = std::env::var("MINOS_PUSH_APNS_KEY_ID").ok()?;
         let team_id = std::env::var("MINOS_PUSH_APNS_TEAM_ID").ok()?;
-        let topic = std::env::var("MINOS_PUSH_APNS_TOPIC")
-            .unwrap_or_else(|_| "com.minos.app".to_string());
+        let topic =
+            std::env::var("MINOS_PUSH_APNS_TOPIC").unwrap_or_else(|_| "com.minos.app".to_string());
         let sandbox = std::env::var("MINOS_PUSH_APNS_SANDBOX")
             .map(|v| v == "true")
             .unwrap_or(true);

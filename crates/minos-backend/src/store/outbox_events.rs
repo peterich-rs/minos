@@ -49,34 +49,30 @@ pub async fn enqueue(
     available_at_ms: i64,
 ) -> Result<(), BackendError> {
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query(
-                "INSERT INTO outbox_events
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "INSERT INTO outbox_events
                     (outbox_id, topic_kind, event_id, status, available_at_ms, attempts)
                  VALUES (?, ?, ?, 'pending', ?, 0)",
-            )
-            .bind(outbox_id)
-            .bind(topic_kind)
-            .bind(event_id)
-            .bind(available_at_ms)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query(
-                "INSERT INTO outbox_events
+        )
+        .bind(outbox_id)
+        .bind(topic_kind)
+        .bind(event_id)
+        .bind(available_at_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "INSERT INTO outbox_events
                     (outbox_id, topic_kind, event_id, status, available_at_ms, attempts)
                  VALUES ($1, $2, $3, 'pending', $4, 0)",
-            )
-            .bind(outbox_id)
-            .bind(topic_kind)
-            .bind(event_id)
-            .bind(available_at_ms)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
+        )
+        .bind(outbox_id)
+        .bind(topic_kind)
+        .bind(event_id)
+        .bind(available_at_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
     }
     .map_err(store_err("outbox_events::enqueue"))?;
     Ok(())
@@ -90,34 +86,30 @@ pub async fn enqueue_in_tx(
     available_at_ms: i64,
 ) -> Result<(), BackendError> {
     match tx {
-        DbTx::Sqlite(tx) => {
-            sqlx::query(
-                "INSERT INTO outbox_events
+        DbTx::Sqlite(tx) => sqlx::query(
+            "INSERT INTO outbox_events
                     (outbox_id, topic_kind, event_id, status, available_at_ms, attempts)
                  VALUES (?, ?, ?, 'pending', ?, 0)",
-            )
-            .bind(outbox_id)
-            .bind(topic_kind)
-            .bind(event_id)
-            .bind(available_at_ms)
-            .execute(&mut **tx)
-            .await
-            .map(|_| ())
-        }
-        DbTx::Postgres(tx) => {
-            sqlx::query(
-                "INSERT INTO outbox_events
+        )
+        .bind(outbox_id)
+        .bind(topic_kind)
+        .bind(event_id)
+        .bind(available_at_ms)
+        .execute(&mut **tx)
+        .await
+        .map(|_| ()),
+        DbTx::Postgres(tx) => sqlx::query(
+            "INSERT INTO outbox_events
                     (outbox_id, topic_kind, event_id, status, available_at_ms, attempts)
                  VALUES ($1, $2, $3, 'pending', $4, 0)",
-            )
-            .bind(outbox_id)
-            .bind(topic_kind)
-            .bind(event_id)
-            .bind(available_at_ms)
-            .execute(&mut **tx)
-            .await
-            .map(|_| ())
-        }
+        )
+        .bind(outbox_id)
+        .bind(topic_kind)
+        .bind(event_id)
+        .bind(available_at_ms)
+        .execute(&mut **tx)
+        .await
+        .map(|_| ()),
     }
     .map_err(store_err("outbox_events::enqueue_in_tx"))?;
     Ok(())
@@ -164,7 +156,9 @@ pub async fn claim_available(
 ) -> Result<Vec<OutboxEventRow>, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => claim_available_sqlite(pool, claimed_by, now_ms, limit).await,
-        StorePoolRef::Postgres(pool) => claim_available_postgres(pool, claimed_by, now_ms, limit).await,
+        StorePoolRef::Postgres(pool) => {
+            claim_available_postgres(pool, claimed_by, now_ms, limit).await
+        }
     }
 }
 
@@ -506,7 +500,9 @@ mod tests {
         .unwrap();
 
         enqueue(&pool, "out-1", "host", "evt-1", T0).await.unwrap();
-        enqueue(&pool, "out-2", "host", "evt-2", T0 + 500).await.unwrap();
+        enqueue(&pool, "out-2", "host", "evt-2", T0 + 500)
+            .await
+            .unwrap();
 
         let claimed = claim_available(&pool, "worker-1", T0, 10).await.unwrap();
         assert_eq!(claimed.len(), 1);
@@ -548,7 +544,10 @@ mod tests {
         let row = get(&pool, "out-1").await.unwrap().unwrap();
         assert_eq!(row.status, OutboxStatus::Acked);
         assert_eq!(row.ack_at_ms, Some(T0 + 301));
-        assert_eq!(row.last_error_json, Some(serde_json::json!({ "kind": "temporary" })));
+        assert_eq!(
+            row.last_error_json,
+            Some(serde_json::json!({ "kind": "temporary" }))
+        );
     }
 
     #[tokio::test]
@@ -582,6 +581,9 @@ mod tests {
         let row = get(&pool, "out-dead").await.unwrap().unwrap();
         assert_eq!(row.status, OutboxStatus::Dead);
         assert_eq!(row.dead_at_ms, Some(T0 + 5));
-        assert_eq!(row.last_error_json, Some(serde_json::json!({ "kind": "orphan" })));
+        assert_eq!(
+            row.last_error_json,
+            Some(serde_json::json!({ "kind": "orphan" }))
+        );
     }
 }

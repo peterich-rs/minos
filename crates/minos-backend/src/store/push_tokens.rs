@@ -45,10 +45,28 @@ where
     let token_hash = hash_token(token);
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            upsert_sqlite(pool, &token_hash, account_id, installation_id, kind, locale, at_ms).await
+            upsert_sqlite(
+                pool,
+                &token_hash,
+                account_id,
+                installation_id,
+                kind,
+                locale,
+                at_ms,
+            )
+            .await
         }
         StorePoolRef::Postgres(pool) => {
-            upsert_postgres(pool, &token_hash, account_id, installation_id, kind, locale, at_ms).await
+            upsert_postgres(
+                pool,
+                &token_hash,
+                account_id,
+                installation_id,
+                kind,
+                locale,
+                at_ms,
+            )
+            .await
         }
     }
 }
@@ -169,7 +187,11 @@ async fn list_for_accounts_sqlite(
     account_ids: &[&str],
 ) -> Result<Vec<PushTokenRow>, BackendError> {
     // Build a parameterized query with the right number of placeholders.
-    let placeholders: Vec<String> = account_ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+    let placeholders: Vec<String> = account_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect();
     let sql = format!(
         "SELECT * FROM push_tokens WHERE account_id IN ({}) AND revoked_at_ms IS NULL",
         placeholders.join(", ")
@@ -178,10 +200,13 @@ async fn list_for_accounts_sqlite(
     for id in account_ids {
         query = query.bind(*id);
     }
-    query.fetch_all(pool).await.map_err(|e| BackendError::StoreQuery {
-        operation: "push_tokens.list_for_accounts".into(),
-        message: e.to_string(),
-    })
+    query
+        .fetch_all(pool)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: "push_tokens.list_for_accounts".into(),
+            message: e.to_string(),
+        })
 }
 
 // ── Postgres implementations ───────────────────────────────────────────

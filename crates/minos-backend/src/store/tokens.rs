@@ -246,20 +246,20 @@ fn decode_consumed_token(
 /// `consumed_at` is permanent).
 pub async fn gc_expired(store: &impl AsStorePool, now: i64) -> Result<u64, BackendError> {
     let result = match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query(r#"DELETE FROM pairing_tokens WHERE expires_at <= ? AND consumed_at IS NULL"#)
-                .bind(now)
-                .execute(pool)
-                .await
-                .map(|result| result.rows_affected())
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query(r#"DELETE FROM pairing_tokens WHERE expires_at <= $1 AND consumed_at IS NULL"#)
-                .bind(now)
-                .execute(pool)
-                .await
-                .map(|result| result.rows_affected())
-        }
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r#"DELETE FROM pairing_tokens WHERE expires_at <= ? AND consumed_at IS NULL"#,
+        )
+        .bind(now)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r#"DELETE FROM pairing_tokens WHERE expires_at <= $1 AND consumed_at IS NULL"#,
+        )
+        .bind(now)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
     }
     .map_err(|e| BackendError::StoreQuery {
         operation: "gc_expired".to_string(),

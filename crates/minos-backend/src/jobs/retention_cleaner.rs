@@ -39,25 +39,23 @@ impl Job for RetentionCleanerJob {
 
         match ctx.store.as_store_pool() {
             crate::store::StorePoolRef::Sqlite(pool) => {
-                let result = sqlx::query(
-                    "DELETE FROM durable_event_log WHERE created_at_ms < ? LIMIT ?",
-                )
-                .bind(cutoff_ms)
-                .bind(i64::from(BATCH_SIZE))
-                .execute(pool)
-                .await
-                .map_err(|e| JobError::Transient(e.to_string()))?;
+                let result =
+                    sqlx::query("DELETE FROM durable_event_log WHERE created_at_ms < ? LIMIT ?")
+                        .bind(cutoff_ms)
+                        .bind(i64::from(BATCH_SIZE))
+                        .execute(pool)
+                        .await
+                        .map_err(|e| JobError::Transient(e.to_string()))?;
                 total_cleaned += result.rows_affected() as u32;
             }
             crate::store::StorePoolRef::Postgres(pool) => {
-                let result = sqlx::query(
-                    "DELETE FROM durable_event_log WHERE created_at_ms < $1 LIMIT $2",
-                )
-                .bind(cutoff_ms)
-                .bind(i64::from(BATCH_SIZE))
-                .execute(pool)
-                .await
-                .map_err(|e| JobError::Transient(e.to_string()))?;
+                let result =
+                    sqlx::query("DELETE FROM durable_event_log WHERE created_at_ms < $1 LIMIT $2")
+                        .bind(cutoff_ms)
+                        .bind(i64::from(BATCH_SIZE))
+                        .execute(pool)
+                        .await
+                        .map_err(|e| JobError::Transient(e.to_string()))?;
                 total_cleaned += result.rows_affected() as u32;
             }
         }

@@ -265,7 +265,11 @@ impl RuntimeShell {
                 instance_id: app.instance_id.clone(),
             });
             let jobs = crate::jobs::default_jobs(Some(Arc::clone(&app.realtime)));
-            Some(crate::jobs::JobSupervisor::spawn_all(jobs, ctx, cfg.runtime_mode))
+            Some(crate::jobs::JobSupervisor::spawn_all(
+                jobs,
+                ctx,
+                cfg.runtime_mode,
+            ))
         } else {
             None
         };

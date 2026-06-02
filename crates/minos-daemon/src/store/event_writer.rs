@@ -33,10 +33,7 @@ struct WriteJob {
 }
 
 impl EventWriter {
-    pub fn spawn(
-        store: Arc<LocalStore>,
-        relay_out: mpsc::Sender<ClientFrame>,
-    ) -> Self {
+    pub fn spawn(store: Arc<LocalStore>, relay_out: mpsc::Sender<ClientFrame>) -> Self {
         let (tx, rx) = mpsc::channel::<WriteJob>(1024);
         tokio::spawn(writer_loop(store, relay_out, rx));
         Self { tx }
@@ -161,7 +158,9 @@ async fn process_batch(
         }
         results.push(Ok(seq));
         let topic = format!("agent_session:{}", job.ingest.thread_id);
-        let kind = job.ingest.payload
+        let kind = job
+            .ingest
+            .payload
             .get("method")
             .and_then(|v| v.as_str())
             .unwrap_or("agent_event")
@@ -283,7 +282,11 @@ mod tests {
         for i in 0..5 {
             let frame = relay_rx.recv().await.unwrap();
             match frame {
-                ClientFrame::HostStreamEvent { topic, kind, payload } => {
+                ClientFrame::HostStreamEvent {
+                    topic,
+                    kind,
+                    payload,
+                } => {
                     assert!(topic.starts_with("agent_session:"));
                     assert!(!kind.is_empty());
                     assert!(payload.is_object());

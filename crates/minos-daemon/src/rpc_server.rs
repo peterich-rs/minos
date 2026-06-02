@@ -259,11 +259,7 @@ pub async fn invoke_host_command(
             };
             server
                 .agent
-                .start_agent_in_project(
-                    start_req,
-                    &req.project_id,
-                    req.workspace_slug.as_deref(),
-                )
+                .start_agent_in_project(start_req, &req.project_id, req.workspace_slug.as_deref())
                 .await
                 .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
                 .map_err(|e| rpc_err_value(e))
@@ -275,9 +271,7 @@ pub async fn invoke_host_command(
     }
 }
 
-fn into_result<T: serde::Serialize>(
-    result: jsonrpsee::core::RpcResult<T>,
-) -> Result<Value, Value> {
+fn into_result<T: serde::Serialize>(result: jsonrpsee::core::RpcResult<T>) -> Result<Value, Value> {
     match result {
         Ok(v) => Ok(serde_json::to_value(v).unwrap_or(Value::Null)),
         Err(e) => Err(json!({

@@ -149,7 +149,9 @@ pub async fn record_in_tx(
             .bind(&topic_string)
             .fetch_one(&mut **tx)
             .await
-            .map_err(store_err("durable_event_log::record_in_tx.next_seq_postgres"))?;
+            .map_err(store_err(
+                "durable_event_log::record_in_tx.next_seq_postgres",
+            ))?;
 
             sqlx::query(
                 "INSERT INTO durable_event_log
@@ -265,8 +267,12 @@ pub async fn delete_ready_for_retention(
     limit: u32,
 ) -> Result<u64, BackendError> {
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => delete_ready_for_retention_sqlite(pool, older_than_ms, limit).await,
-        StorePoolRef::Postgres(pool) => delete_ready_for_retention_postgres(pool, older_than_ms, limit).await,
+        StorePoolRef::Sqlite(pool) => {
+            delete_ready_for_retention_sqlite(pool, older_than_ms, limit).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            delete_ready_for_retention_postgres(pool, older_than_ms, limit).await
+        }
     }
 }
 
@@ -563,7 +569,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(delete_ready_for_retention(&pool, T0 + 100, 10).await.unwrap(), 2);
+        assert_eq!(
+            delete_ready_for_retention(&pool, T0 + 100, 10)
+                .await
+                .unwrap(),
+            2
+        );
         assert!(get(&pool, "host", "evt-acked").await.unwrap().is_none());
         assert!(get(&pool, "host", "evt-free").await.unwrap().is_none());
         assert!(get(&pool, "host", "evt-pending").await.unwrap().is_some());

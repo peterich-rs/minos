@@ -10,7 +10,6 @@ use axum::{
 };
 use futures::StreamExt;
 use minos_domain::{DeviceId, DeviceRole};
-use minos_protocol::Envelope;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -22,18 +21,17 @@ use crate::error::BackendError;
 use crate::http::BackendState;
 use crate::realtime::auth::{self, SubscriptionAuthError, SubscriptionDenied};
 use crate::realtime::subscription::ConnectionState;
-use minos_protocol::realtime::{ClientFrame, ConnectionPrincipal, RealtimeTopic, ServerFrame};
-use crate::session::{SessionHandle, SessionRevocation};
+use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
 use crate::store::{
     agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands,
 };
+use minos_protocol::realtime::{ClientFrame, ConnectionPrincipal, RealtimeTopic, ServerFrame};
 
 const PUSH_CHANNEL_CAPACITY: usize = 256;
 const SUBSCRIBE_LIMIT_PER_REQUEST: usize = 32;
 const LIVE_SUBSCRIPTION_LIMIT: usize = 128;
 const REPLAY_BATCH_SIZE: u32 = 256;
 const HEARTBEAT_INTERVAL_MS: i64 = 25_000;
-const CLOSE_CODE_BAD_REQUEST: u16 = 4400;
 const CLOSE_CODE_AUTH_REVOKED: u16 = 4401;
 const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
 
@@ -299,8 +297,8 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
         .subscription_mgr
         .add_connection(std::sync::Arc::clone(&conn));
 
-    // `forward_rpc` replies still route through SessionRegistry until the
-    // remaining host-command compatibility surface is removed.
+    // The registry still owns per-device replacement/revocation state while
+    // the rest of the backend migrates off legacy envelope-side sessions.
     let (legacy_handle, mut legacy_outbox_rx) = SessionHandle::new(upgrade.device_id, upgrade.role);
     if let Some(account_id) = upgrade.account_id() {
         legacy_handle.set_account_id(account_id.to_string());
@@ -315,7 +313,6 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
         &state,
         &upgrade,
         &conn,
-        &legacy_handle,
         &mut legacy_outbox_rx,
         &mut push_rx,
         &mut revocation_rx,
@@ -334,8 +331,7 @@ async fn run_session_inner(
     state: &BackendState,
     upgrade: &GatewayUpgrade,
     conn: &std::sync::Arc<ConnectionState>,
-    legacy_handle: &SessionHandle,
-    legacy_outbox_rx: &mut mpsc::Receiver<Envelope>,
+    legacy_outbox_rx: &mut mpsc::Receiver<LegacySessionFrame>,
     push_rx: &mut mpsc::Receiver<ServerFrame>,
     revocation_rx: &mut tokio::sync::watch::Receiver<Option<SessionRevocation>>,
 ) -> &'static str {
@@ -384,7 +380,7 @@ async fn run_session_inner(
             maybe_msg = ws.next() => {
                 match maybe_msg {
                     Some(Ok(Message::Text(text))) => {
-                        match handle_text_frame(ws, state, upgrade, conn, legacy_handle, &text).await {
+                        match handle_text_frame(ws, state, upgrade, conn, &text).await {
                             Ok(Some(directive)) => {
                                 close_with_directive(ws, upgrade.role, directive).await;
                                 return directive.reason;
@@ -431,13 +427,16 @@ async fn run_session_inner(
                     return "write_failed";
                 }
             }
-            maybe_env = legacy_outbox_rx.recv() => {
-                let Some(env) = maybe_env else {
+            maybe_legacy_frame = legacy_outbox_rx.recv() => {
+                let Some(legacy_frame) = maybe_legacy_frame else {
                     continue;
                 };
-                if send_legacy_envelope(ws, &env).await.is_err() {
-                    return "write_failed";
-                }
+                tracing::debug!(
+                    target: "minos_backend::realtime",
+                    device_id = %upgrade.device_id,
+                    frame = ?legacy_frame,
+                    "dropping legacy session-registry frame on topic gateway"
+                );
             }
             changed = revocation_rx.changed() => {
                 if changed.is_ok() {
@@ -480,25 +479,21 @@ async fn handle_text_frame(
     state: &BackendState,
     upgrade: &GatewayUpgrade,
     conn: &std::sync::Arc<ConnectionState>,
-    legacy_handle: &SessionHandle,
     text: &str,
 ) -> Result<Option<CloseDirective>, BackendError> {
-    if let Ok(frame) = serde_json::from_str::<ClientFrame>(text) {
-        return handle_formal_frame(ws, state, upgrade, conn, frame).await;
+    match serde_json::from_str::<ClientFrame>(text) {
+        Ok(frame) => handle_formal_frame(ws, state, upgrade, conn, frame).await,
+        Err(_) => {
+            let _ = send_error_frame(
+                ws,
+                conn,
+                "validation_format",
+                "unrecognized websocket frame",
+            )
+            .await;
+            Ok(None)
+        }
     }
-
-    if let Ok(envelope) = serde_json::from_str::<Envelope>(text) {
-        return handle_legacy_envelope(ws, state, upgrade, legacy_handle, envelope).await;
-    }
-
-    let _ = send_error_frame(
-        ws,
-        conn,
-        "validation_format",
-        "unrecognized websocket frame",
-    )
-    .await;
-    Ok(None)
 }
 
 async fn handle_formal_frame(
@@ -863,66 +858,6 @@ async fn on_host_stream_event(
     Ok(())
 }
 
-async fn handle_legacy_envelope(
-    ws: &mut WebSocket,
-    state: &BackendState,
-    upgrade: &GatewayUpgrade,
-    legacy_handle: &SessionHandle,
-    envelope: Envelope,
-) -> Result<Option<CloseDirective>, BackendError> {
-    match envelope {
-        Envelope::Forward {
-            target_device_id,
-            payload,
-            ..
-        } => {
-            if let Some(back_frame) = crate::envelope::handle_forward(
-                legacy_handle,
-                &state.registry,
-                &state.store,
-                target_device_id,
-                payload,
-            )
-            .await
-            {
-                let _ = send_legacy_envelope(ws, &back_frame).await;
-            }
-            Ok(None)
-        }
-        Envelope::Ingest {
-            agent,
-            thread_id,
-            seq,
-            payload,
-            ts_ms,
-            ..
-        } => {
-            if upgrade.role != DeviceRole::AgentHost {
-                return Ok(Some(CloseDirective {
-                    code: CLOSE_CODE_BAD_REQUEST,
-                    reason: "ingest_forbidden_role",
-                }));
-            }
-            state
-                .ingest
-                .execute(crate::ingest::use_case::IngestCommand {
-                    agent,
-                    thread_id,
-                    seq,
-                    payload,
-                    ts_ms,
-                    owner_device_id: upgrade.device_id,
-                })
-                .await?;
-            Ok(None)
-        }
-        Envelope::Event { .. } | Envelope::Forwarded { .. } => Ok(Some(CloseDirective {
-            code: CLOSE_CODE_BAD_REQUEST,
-            reason: "client_sent_server_frame",
-        })),
-    }
-}
-
 fn durable_event_kind_payload(value: &Value) -> (String, Value) {
     let kind = value
         .get("kind")
@@ -938,11 +873,6 @@ fn durable_event_kind_payload(value: &Value) -> (String, Value) {
 
 async fn send_server_frame(ws: &mut WebSocket, frame: &ServerFrame) -> Result<(), axum::Error> {
     let json = serde_json::to_string(frame).map_err(|error| axum::Error::new(error))?;
-    ws.send(Message::Text(json.into())).await
-}
-
-async fn send_legacy_envelope(ws: &mut WebSocket, env: &Envelope) -> Result<(), axum::Error> {
-    let json = serde_json::to_string(env).map_err(|error| axum::Error::new(error))?;
     ws.send(Message::Text(json.into())).await
 }
 

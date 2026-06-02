@@ -302,11 +302,7 @@ pub struct AuthUseCase {
 impl AuthUseCase {
     #[must_use]
     pub fn new(store: impl Into<StoreHandle>, jwt_secret: String) -> Arc<Self> {
-        Self::new_with_realtime_tickets(
-            store,
-            jwt_secret,
-            Arc::new(RealtimeTicketStore::default()),
-        )
+        Self::new_with_realtime_tickets(store, jwt_secret, Arc::new(RealtimeTicketStore::default()))
     }
 
     #[must_use]

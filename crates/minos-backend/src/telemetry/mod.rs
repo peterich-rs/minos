@@ -4,10 +4,10 @@
 //! Re-exports the public API from the previous single-file module so
 //! existing callers (`crate::telemetry::*`) continue to work unchanged.
 
-mod metrics;
-pub mod tracing_setup;
 pub mod logs;
+mod metrics;
 pub mod propagation;
+pub mod tracing_setup;
 
 // Re-export everything from metrics so existing callers don't break.
 pub use metrics::*;

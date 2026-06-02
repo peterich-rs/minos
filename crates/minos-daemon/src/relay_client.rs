@@ -319,10 +319,7 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
     }
 }
 
-async fn run_once(
-    ctx: &mut DispatchCtx,
-    shutdown_rx: &mut oneshot::Receiver<()>,
-) -> CycleOutcome {
+async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>) -> CycleOutcome {
     let secret = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error);
 
     // Fetch a short-lived ws-ticket from the backend.
@@ -614,9 +611,7 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 "subscription acknowledged"
             );
         }
-        ServerFrame::DurableEvent {
-            kind, payload, ..
-        } => {
+        ServerFrame::DurableEvent { kind, payload, .. } => {
             route_durable_event(&kind, &payload, ctx).await;
         }
         ServerFrame::HostForceClose { reason, close_code } => {
@@ -689,10 +684,7 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let params = payload
-                .get("params")
-                .cloned()
-                .unwrap_or(Value::Null);
+            let params = payload.get("params").cloned().unwrap_or(Value::Null);
 
             tracing::debug!(
                 target: "minos_daemon::relay_client",
@@ -880,11 +872,7 @@ fn build_host_command_result(
 }
 
 /// Build a `ClientFrame::HostStreamEvent` for agent ingest data.
-pub fn build_host_stream_event(
-    topic: &str,
-    kind: &str,
-    payload: Value,
-) -> ClientFrame {
+pub fn build_host_stream_event(topic: &str, kind: &str, payload: Value) -> ClientFrame {
     ClientFrame::HostStreamEvent {
         topic: topic.to_string(),
         kind: kind.to_string(),

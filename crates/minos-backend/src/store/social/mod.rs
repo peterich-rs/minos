@@ -177,9 +177,9 @@ pub use conversation_messages::{
 
 // Agent functions
 pub use agents::{
-    add_agent_to_conversation, agents_by_ids, delete_agent, get_agent,
-    insert_agent_message, is_agent_in_conversation, list_agents_for_owner,
-    list_conversation_agents, register_agent, remove_agent_from_conversation,
+    add_agent_to_conversation, agents_by_ids, delete_agent, get_agent, insert_agent_message,
+    is_agent_in_conversation, list_agents_for_owner, list_conversation_agents, register_agent,
+    remove_agent_from_conversation,
 };
 
 // ─── Tests ────────────────────────────────────────────────────────────

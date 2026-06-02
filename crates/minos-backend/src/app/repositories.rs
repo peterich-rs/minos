@@ -342,11 +342,7 @@ pub trait InstallationsRepository: Send + Sync {
 
     async fn find(&self, installation_id: &str) -> Result<Option<InstallationRow>, BackendError>;
 
-    async fn touch_last_seen(
-        &self,
-        installation_id: &str,
-        at_ms: i64,
-    ) -> Result<(), BackendError>;
+    async fn touch_last_seen(&self, installation_id: &str, at_ms: i64) -> Result<(), BackendError>;
 }
 
 #[async_trait]
@@ -368,10 +364,7 @@ pub trait RefreshTokensRepository: Send + Sync {
         at_ms: i64,
     ) -> Result<RefreshTokenRow, BackendError>;
 
-    async fn find_active(
-        &self,
-        plaintext: &str,
-    ) -> Result<Option<RefreshTokenRow>, BackendError>;
+    async fn find_active(&self, plaintext: &str) -> Result<Option<RefreshTokenRow>, BackendError>;
 
     async fn revoke_all_for_account(
         &self,
@@ -382,22 +375,11 @@ pub trait RefreshTokensRepository: Send + Sync {
 
 #[async_trait]
 pub trait HostInstallationTokensRepository: Send + Sync {
-    async fn insert(
-        &self,
-        host_installation_id: &str,
-        at_ms: i64,
-    ) -> Result<String, BackendError>;
+    async fn insert(&self, host_installation_id: &str, at_ms: i64) -> Result<String, BackendError>;
 
-    async fn find_active(
-        &self,
-        token_hash: &str,
-    ) -> Result<Option<HostTokenRow>, BackendError>;
+    async fn find_active(&self, token_hash: &str) -> Result<Option<HostTokenRow>, BackendError>;
 
-    async fn revoke(
-        &self,
-        token_hash: &str,
-        at_ms: i64,
-    ) -> Result<bool, BackendError>;
+    async fn revoke(&self, token_hash: &str, at_ms: i64) -> Result<bool, BackendError>;
 }
 
 #[async_trait]
@@ -411,10 +393,7 @@ pub trait PairingCodesRepository: Send + Sync {
         at_ms: i64,
     ) -> Result<PairingCodeRow, BackendError>;
 
-    async fn find_by_code(
-        &self,
-        code_hash: &str,
-    ) -> Result<Option<PairingCodeRow>, BackendError>;
+    async fn find_by_code(&self, code_hash: &str) -> Result<Option<PairingCodeRow>, BackendError>;
 
     async fn update_status(
         &self,
@@ -444,20 +423,14 @@ pub trait HostLinksRepository: Send + Sync {
         host_installation_id: &str,
     ) -> Result<bool, BackendError>;
 
-    async fn list_for_account(
-        &self,
-        account_id: &str,
-    ) -> Result<Vec<HostLinkRow>, BackendError>;
+    async fn list_for_account(&self, account_id: &str) -> Result<Vec<HostLinkRow>, BackendError>;
 
     async fn list_for_host(
         &self,
         host_installation_id: &str,
     ) -> Result<Vec<HostLinkRow>, BackendError>;
 
-    async fn pick_default_host(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<String>, BackendError>;
+    async fn pick_default_host(&self, account_id: &str) -> Result<Option<String>, BackendError>;
 
     async fn remove(
         &self,
@@ -500,11 +473,7 @@ pub trait ProjectsRepository: Send + Sync {
         at_ms: i64,
     ) -> Result<ProjectRow, BackendError>;
 
-    async fn archive(
-        &self,
-        project_id: &str,
-        at_ms: i64,
-    ) -> Result<bool, BackendError>;
+    async fn archive(&self, project_id: &str, at_ms: i64) -> Result<bool, BackendError>;
 }
 
 #[async_trait]
@@ -518,10 +487,7 @@ pub trait ConversationsRepository: Send + Sync {
         at_ms: i64,
     ) -> Result<ConversationRow, BackendError>;
 
-    async fn find(
-        &self,
-        conversation_id: &str,
-    ) -> Result<Option<ConversationRow>, BackendError>;
+    async fn find(&self, conversation_id: &str) -> Result<Option<ConversationRow>, BackendError>;
 
     async fn find_direct(
         &self,
@@ -542,16 +508,9 @@ pub trait ConversationsRepository: Send + Sync {
         account_id: &str,
     ) -> Result<bool, BackendError>;
 
-    async fn project_id(
-        &self,
-        conversation_id: &str,
-    ) -> Result<Option<String>, BackendError>;
+    async fn project_id(&self, conversation_id: &str) -> Result<Option<String>, BackendError>;
 
-    async fn update_at(
-        &self,
-        conversation_id: &str,
-        at_ms: i64,
-    ) -> Result<(), BackendError>;
+    async fn update_at(&self, conversation_id: &str, at_ms: i64) -> Result<(), BackendError>;
 }
 
 #[async_trait]
@@ -577,11 +536,7 @@ pub trait ConversationMessagesRepository: Send + Sync {
         cursor: Option<&str>,
     ) -> Result<Vec<MessageRow>, BackendError>;
 
-    async fn recall(
-        &self,
-        message_id: &str,
-        at_ms: i64,
-    ) -> Result<bool, BackendError>;
+    async fn recall(&self, message_id: &str, at_ms: i64) -> Result<bool, BackendError>;
 
     async fn insert_mentions(
         &self,
@@ -620,11 +575,7 @@ pub trait OutboxRepository: Send + Sync {
         available_at_ms: i64,
     ) -> Result<String, BackendError>;
 
-    async fn claim(
-        &self,
-        worker_id: &str,
-        batch: u32,
-    ) -> Result<Vec<OutboxRow>, BackendError>;
+    async fn claim(&self, worker_id: &str, batch: u32) -> Result<Vec<OutboxRow>, BackendError>;
 
     async fn ack(&self, outbox_id: &str, at_ms: i64) -> Result<bool, BackendError>;
 
@@ -675,16 +626,9 @@ pub trait PushTokensRepository: Send + Sync {
         at_ms: i64,
     ) -> Result<PushTokenRow, BackendError>;
 
-    async fn revoke(
-        &self,
-        token_hash: &str,
-        at_ms: i64,
-    ) -> Result<bool, BackendError>;
+    async fn revoke(&self, token_hash: &str, at_ms: i64) -> Result<bool, BackendError>;
 
-    async fn list_for_account(
-        &self,
-        account_id: &str,
-    ) -> Result<Vec<PushTokenRow>, BackendError>;
+    async fn list_for_account(&self, account_id: &str) -> Result<Vec<PushTokenRow>, BackendError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -778,9 +722,7 @@ impl RepositorySet {
             audit: Arc::new(StoreBackedAuditRepository {
                 store: store.clone(),
             }),
-            push_tokens: Arc::new(StoreBackedPushTokensRepository {
-                store,
-            }),
+            push_tokens: Arc::new(StoreBackedPushTokensRepository { store }),
         }
     }
 }
@@ -874,8 +816,7 @@ impl AgentTurnEventsRepository for StoreBackedAgentTurnEventsRepository {
         after_event_seq: Option<i64>,
         limit: u32,
     ) -> Result<Vec<store::agent_turn_events::AgentTurnEventRow>, BackendError> {
-        store::agent_turn_events::list_for_turn(&self.store, turn_id, after_event_seq, limit)
-            .await
+        store::agent_turn_events::list_for_turn(&self.store, turn_id, after_event_seq, limit).await
     }
 }
 
@@ -1196,10 +1137,7 @@ impl RefreshTokensRepository for StoreBackedRefreshTokensRepository {
         }
     }
 
-    async fn find_active(
-        &self,
-        plaintext: &str,
-    ) -> Result<Option<RefreshTokenRow>, BackendError> {
+    async fn find_active(&self, plaintext: &str) -> Result<Option<RefreshTokenRow>, BackendError> {
         Ok(store::refresh_tokens::find_active(&self.store, plaintext)
             .await?
             .map(convert_refresh_token_row))
@@ -1236,11 +1174,7 @@ struct StoreBackedHostInstallationTokensRepository {
 
 #[async_trait]
 impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepository {
-    async fn insert(
-        &self,
-        host_installation_id: &str,
-        at_ms: i64,
-    ) -> Result<String, BackendError> {
+    async fn insert(&self, host_installation_id: &str, at_ms: i64) -> Result<String, BackendError> {
         let device_id = Uuid::parse_str(host_installation_id)
             .map(DeviceId)
             .map_err(|e| BackendError::StoreDecode {
@@ -1277,48 +1211,37 @@ impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepos
         Ok(plaintext)
     }
 
-    async fn find_active(
-        &self,
-        token_hash: &str,
-    ) -> Result<Option<HostTokenRow>, BackendError> {
+    async fn find_active(&self, token_hash: &str) -> Result<Option<HostTokenRow>, BackendError> {
         // verify_active_token updates last_used_at_ms as a side effect,
         // which is acceptable for the host authentication flow.
         let now_ms = chrono::Utc::now().timestamp_millis();
         Ok(
-            store::host_installation_tokens::verify_active_token(
-                &self.store,
-                token_hash,
-                now_ms,
-            )
-            .await?
-            .map(convert_host_token_row),
+            store::host_installation_tokens::verify_active_token(&self.store, token_hash, now_ms)
+                .await?
+                .map(convert_host_token_row),
         )
     }
 
     async fn revoke(&self, token_hash: &str, at_ms: i64) -> Result<bool, BackendError> {
         let affected = match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                sqlx::query(
-                    "UPDATE host_installation_tokens SET revoked_at_ms = ? \
+            StorePoolRef::Sqlite(pool) => sqlx::query(
+                "UPDATE host_installation_tokens SET revoked_at_ms = ? \
                      WHERE token_hash = ? AND revoked_at_ms IS NULL",
-                )
-                .bind(at_ms)
-                .bind(token_hash)
-                .execute(pool)
-                .await
-                .map(|r| r.rows_affected())
-            }
-            StorePoolRef::Postgres(pool) => {
-                sqlx::query(
-                    "UPDATE host_installation_tokens SET revoked_at_ms = $1 \
+            )
+            .bind(at_ms)
+            .bind(token_hash)
+            .execute(pool)
+            .await
+            .map(|r| r.rows_affected()),
+            StorePoolRef::Postgres(pool) => sqlx::query(
+                "UPDATE host_installation_tokens SET revoked_at_ms = $1 \
                      WHERE token_hash = $2 AND revoked_at_ms IS NULL",
-                )
-                .bind(at_ms)
-                .bind(token_hash)
-                .execute(pool)
-                .await
-                .map(|r| r.rows_affected())
-            }
+            )
+            .bind(at_ms)
+            .bind(token_hash)
+            .execute(pool)
+            .await
+            .map(|r| r.rows_affected()),
         };
         affected
             .map_err(|e| BackendError::StoreQuery {
@@ -1369,14 +1292,8 @@ impl PairingCodesRepository for StoreBackedPairingCodesRepository {
                 message: e.to_string(),
             })?;
         let expires_at_ms = at_ms + ttl_ms;
-        store::pairing_codes::insert_code(
-            &self.store,
-            code_hash,
-            device_id,
-            at_ms,
-            expires_at_ms,
-        )
-        .await?;
+        store::pairing_codes::insert_code(&self.store, code_hash, device_id, at_ms, expires_at_ms)
+            .await?;
         // Return the constructed row; client_request_id is set later during confirm.
         Ok(PairingCodeRow {
             code_hash: code_hash.to_string(),
@@ -1392,10 +1309,7 @@ impl PairingCodesRepository for StoreBackedPairingCodesRepository {
         })
     }
 
-    async fn find_by_code(
-        &self,
-        code_hash: &str,
-    ) -> Result<Option<PairingCodeRow>, BackendError> {
+    async fn find_by_code(&self, code_hash: &str) -> Result<Option<PairingCodeRow>, BackendError> {
         let row = match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
                 store::pairing_codes::get_code_with_executor(pool, code_hash).await
@@ -1455,26 +1369,22 @@ impl PairingCodesRepository for StoreBackedPairingCodesRepository {
 
     async fn expire_stale(&self, now_ms: i64) -> Result<u64, BackendError> {
         let result = match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                sqlx::query(
-                    "UPDATE pairing_codes SET status = 'expired' \
+            StorePoolRef::Sqlite(pool) => sqlx::query(
+                "UPDATE pairing_codes SET status = 'expired' \
                      WHERE status = 'pending' AND expires_at_ms < ?",
-                )
-                .bind(now_ms)
-                .execute(pool)
-                .await
-                .map(|r| r.rows_affected())
-            }
-            StorePoolRef::Postgres(pool) => {
-                sqlx::query(
-                    "UPDATE pairing_codes SET status = 'expired' \
+            )
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map(|r| r.rows_affected()),
+            StorePoolRef::Postgres(pool) => sqlx::query(
+                "UPDATE pairing_codes SET status = 'expired' \
                      WHERE status = 'pending' AND expires_at_ms < $1",
-                )
-                .bind(now_ms)
-                .execute(pool)
-                .await
-                .map(|r| r.rows_affected())
-            }
+            )
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map(|r| r.rows_affected()),
         }
         .map_err(|e| BackendError::StoreQuery {
             operation: "pairing_codes.expire_stale".into(),
@@ -1524,20 +1434,15 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
                 column: "host_installation_id".into(),
                 message: e.to_string(),
             })?;
-        let via_id = Uuid::parse_str(linked_via)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "linked_via".into(),
-                message: e.to_string(),
-            })?;
-        store::account_host_pairings::insert_pair(
-            &self.store,
-            host_id,
-            account_id,
-            via_id,
-            at_ms,
-        )
-        .await?;
+        let via_id =
+            Uuid::parse_str(linked_via)
+                .map(DeviceId)
+                .map_err(|e| BackendError::StoreDecode {
+                    column: "linked_via".into(),
+                    message: e.to_string(),
+                })?;
+        store::account_host_pairings::insert_pair(&self.store, host_id, account_id, via_id, at_ms)
+            .await?;
         Ok(HostLinkRow {
             pair_id: Uuid::new_v4().to_string(),
             account_id: account_id.to_string(),
@@ -1563,10 +1468,7 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
         store::account_host_pairings::exists(&self.store, host_id, account_id).await
     }
 
-    async fn list_for_account(
-        &self,
-        account_id: &str,
-    ) -> Result<Vec<HostLinkRow>, BackendError> {
+    async fn list_for_account(&self, account_id: &str) -> Result<Vec<HostLinkRow>, BackendError> {
         let rows =
             store::account_host_pairings::list_hosts_for_account(&self.store, account_id).await?;
         Ok(rows
@@ -1593,10 +1495,7 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
             .collect())
     }
 
-    async fn pick_default_host(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<String>, BackendError> {
+    async fn pick_default_host(&self, account_id: &str) -> Result<Option<String>, BackendError> {
         let rows =
             store::account_host_pairings::list_hosts_for_account(&self.store, account_id).await?;
         Ok(rows.first().map(|r| r.host_device_id.to_string()))
@@ -1636,10 +1535,7 @@ impl AgentsRepository for StoreBackedAgentsRepository {
     async fn list_enabled(&self) -> Result<Vec<AgentRow>, BackendError> {
         match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                let rows = sqlx::query_as::<
-                    _,
-                    (String, String, String, Option<String>, i64),
-                >(
+                let rows = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
                     "SELECT agent_id, runtime_agent, name, description, created_at_ms \
                      FROM agents ORDER BY created_at_ms ASC",
                 )
@@ -1651,16 +1547,18 @@ impl AgentsRepository for StoreBackedAgentsRepository {
                 })?;
                 Ok(rows
                     .into_iter()
-                    .map(|(agent_id, runtime_kind, display_name, description, created_at_ms)| {
-                        AgentRow {
-                            agent_id,
-                            runtime_kind,
-                            display_name,
-                            description,
-                            enabled: true,
-                            created_at_ms,
-                        }
-                    })
+                    .map(
+                        |(agent_id, runtime_kind, display_name, description, created_at_ms)| {
+                            AgentRow {
+                                agent_id,
+                                runtime_kind,
+                                display_name,
+                                description,
+                                enabled: true,
+                                created_at_ms,
+                            }
+                        },
+                    )
                     .collect())
             }
             StorePoolRef::Postgres(pool) => {
@@ -1680,7 +1578,14 @@ impl AgentsRepository for StoreBackedAgentsRepository {
                 Ok(rows
                     .into_iter()
                     .map(
-                        |(agent_id, runtime_kind, display_name, description, enabled, created_at_ms)| {
+                        |(
+                            agent_id,
+                            runtime_kind,
+                            display_name,
+                            description,
+                            enabled,
+                            created_at_ms,
+                        )| {
                             AgentRow {
                                 agent_id,
                                 runtime_kind,
@@ -1699,10 +1604,7 @@ impl AgentsRepository for StoreBackedAgentsRepository {
     async fn find(&self, agent_id: &str) -> Result<Option<AgentRow>, BackendError> {
         match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                let row = sqlx::query_as::<
-                    _,
-                    (String, String, String, Option<String>, i64),
-                >(
+                let row = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
                     "SELECT agent_id, runtime_agent, name, description, created_at_ms \
                      FROM agents WHERE agent_id = ?",
                 )
@@ -1740,7 +1642,14 @@ impl AgentsRepository for StoreBackedAgentsRepository {
                     message: e.to_string(),
                 })?;
                 Ok(row.map(
-                    |(agent_id, runtime_kind, display_name, description, enabled, created_at_ms)| {
+                    |(
+                        agent_id,
+                        runtime_kind,
+                        display_name,
+                        description,
+                        enabled,
+                        created_at_ms,
+                    )| {
                         AgentRow {
                             agent_id,
                             runtime_kind,
@@ -1812,7 +1721,15 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
                     message: e.to_string(),
                 })?;
                 Ok(row.map(
-                    |(project_id, account_id, name, workspace_root, created_at_ms, updated_at_ms, archived_at_ms)| {
+                    |(
+                        project_id,
+                        account_id,
+                        name,
+                        workspace_root,
+                        created_at_ms,
+                        updated_at_ms,
+                        archived_at_ms,
+                    )| {
                         ProjectRow {
                             project_id,
                             account_id,
@@ -1841,7 +1758,15 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
                     message: e.to_string(),
                 })?;
                 Ok(row.map(
-                    |(project_id, account_id, name, workspace_root, created_at_ms, updated_at_ms, archived_at_ms)| {
+                    |(
+                        project_id,
+                        account_id,
+                        name,
+                        workspace_root,
+                        created_at_ms,
+                        updated_at_ms,
+                        archived_at_ms,
+                    )| {
                         ProjectRow {
                             project_id,
                             account_id,
@@ -1904,7 +1829,15 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
                 Ok(rows
                     .into_iter()
                     .map(
-                        |(project_id, account_id, name, workspace_root, created_at_ms, updated_at_ms, archived_at_ms)| {
+                        |(
+                            project_id,
+                            account_id,
+                            name,
+                            workspace_root,
+                            created_at_ms,
+                            updated_at_ms,
+                            archived_at_ms,
+                        )| {
                             ProjectRow {
                                 project_id,
                                 account_id,
@@ -1957,7 +1890,15 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
                 Ok(rows
                     .into_iter()
                     .map(
-                        |(project_id, account_id, name, workspace_root, created_at_ms, updated_at_ms, archived_at_ms)| {
+                        |(
+                            project_id,
+                            account_id,
+                            name,
+                            workspace_root,
+                            created_at_ms,
+                            updated_at_ms,
+                            archived_at_ms,
+                        )| {
                             ProjectRow {
                                 project_id,
                                 account_id,
@@ -2047,28 +1988,24 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
 
     async fn archive(&self, project_id: &str, at_ms: i64) -> Result<bool, BackendError> {
         let result = match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                sqlx::query(
-                    "UPDATE projects SET archived_at_ms = ? \
+            StorePoolRef::Sqlite(pool) => sqlx::query(
+                "UPDATE projects SET archived_at_ms = ? \
                      WHERE project_id = ? AND archived_at_ms IS NULL",
-                )
-                .bind(at_ms)
-                .bind(project_id)
-                .execute(pool)
-                .await
-                .map(|r| r.rows_affected())
-            }
-            StorePoolRef::Postgres(pool) => {
-                sqlx::query(
-                    "UPDATE projects SET archived_at_ms = $1 \
+            )
+            .bind(at_ms)
+            .bind(project_id)
+            .execute(pool)
+            .await
+            .map(|r| r.rows_affected()),
+            StorePoolRef::Postgres(pool) => sqlx::query(
+                "UPDATE projects SET archived_at_ms = $1 \
                      WHERE project_id = $2 AND archived_at_ms IS NULL",
-                )
-                .bind(at_ms)
-                .bind(project_id)
-                .execute(pool)
-                .await
-                .map(|r| r.rows_affected())
-            }
+            )
+            .bind(at_ms)
+            .bind(project_id)
+            .execute(pool)
+            .await
+            .map(|r| r.rows_affected()),
         }
         .map_err(|e| BackendError::StoreQuery {
             operation: "projects.archive".into(),
@@ -2138,13 +2075,12 @@ impl ConversationsRepository for StoreBackedConversationsRepository {
         Ok(convert_social_conversation(row))
     }
 
-    async fn find(
-        &self,
-        conversation_id: &str,
-    ) -> Result<Option<ConversationRow>, BackendError> {
-        Ok(store::social::get_conversation(&self.store, conversation_id)
-            .await?
-            .map(convert_social_conversation))
+    async fn find(&self, conversation_id: &str) -> Result<Option<ConversationRow>, BackendError> {
+        Ok(
+            store::social::get_conversation(&self.store, conversation_id)
+                .await?
+                .map(convert_social_conversation),
+        )
     }
 
     async fn find_direct(
@@ -2193,8 +2129,7 @@ impl ConversationsRepository for StoreBackedConversationsRepository {
         _limit: u32,
         _cursor: Option<&str>,
     ) -> Result<Vec<ConversationRow>, BackendError> {
-        let digests =
-            store::social::list_conversations_for(&self.store, account_id).await?;
+        let digests = store::social::list_conversations_for(&self.store, account_id).await?;
         Ok(digests
             .into_iter()
             .map(|d| ConversationRow {
@@ -2219,10 +2154,7 @@ impl ConversationsRepository for StoreBackedConversationsRepository {
         store::social::is_conversation_member(&self.store, conversation_id, account_id).await
     }
 
-    async fn project_id(
-        &self,
-        _conversation_id: &str,
-    ) -> Result<Option<String>, BackendError> {
+    async fn project_id(&self, _conversation_id: &str) -> Result<Option<String>, BackendError> {
         // The social store doesn't track project_id on conversations.
         // This field is used by the agent session pipeline.
         Ok(None)
@@ -2354,8 +2286,8 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
         cursor: Option<&str>,
     ) -> Result<Vec<MessageRow>, BackendError> {
         let before_ts = cursor.and_then(|c| c.parse::<i64>().ok());
-        let rows = store::social::list_messages(&self.store, conversation_id, before_ts, limit)
-            .await?;
+        let rows =
+            store::social::list_messages(&self.store, conversation_id, before_ts, limit).await?;
         Ok(rows.into_iter().map(convert_chat_message).collect())
     }
 
@@ -2432,9 +2364,7 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
 // On SQLite, the WAL-mode write lock serializes naturally.
 // ---------------------------------------------------------------------------
 
-fn convert_durable_event_row(
-    row: store::durable_event_log::DurableEventRow,
-) -> DurableEventRow {
+fn convert_durable_event_row(row: store::durable_event_log::DurableEventRow) -> DurableEventRow {
     DurableEventRow {
         event_id: row.event_id,
         topic: row.topic,
@@ -2561,10 +2491,7 @@ impl DurableEventStore for StoreBackedDurableEventStore {
         limit: u32,
     ) -> Result<Vec<DurableEventRow>, BackendError> {
         // Parse topic to extract kind: "account:abc123" -> kind="account", topic="account:abc123".
-        let topic_kind = topic
-            .split_once(':')
-            .map(|(k, _)| k)
-            .unwrap_or(topic);
+        let topic_kind = topic.split_once(':').map(|(k, _)| k).unwrap_or(topic);
         let rows = store::durable_event_log::read_topic_after(
             &self.store,
             topic_kind,
@@ -2577,10 +2504,7 @@ impl DurableEventStore for StoreBackedDurableEventStore {
     }
 
     async fn retention_floor(&self, topic: &str) -> Result<i64, BackendError> {
-        let topic_kind = topic
-            .split_once(':')
-            .map(|(k, _)| k)
-            .unwrap_or(topic);
+        let topic_kind = topic.split_once(':').map(|(k, _)| k).unwrap_or(topic);
         store::durable_event_log::retention_floor(&self.store, topic_kind, topic).await
     }
 }
@@ -2873,10 +2797,7 @@ impl PushTokensRepository for StubPushTokensRepository {
         })
     }
 
-    async fn list_for_account(
-        &self,
-        _account_id: &str,
-    ) -> Result<Vec<PushTokenRow>, BackendError> {
+    async fn list_for_account(&self, _account_id: &str) -> Result<Vec<PushTokenRow>, BackendError> {
         Err(BackendError::StoreQuery {
             operation: "push_tokens.list_for_account".into(),
             message: "stub: not yet implemented".into(),

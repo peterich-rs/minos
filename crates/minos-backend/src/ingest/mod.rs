@@ -48,7 +48,8 @@ pub async fn invalidate_peer_targets_for_account<S>(
 where
     S: AsStorePool,
 {
-    let pairs = crate::store::account_host_pairings::list_hosts_for_account(store, account_id).await?;
+    let pairs =
+        crate::store::account_host_pairings::list_hosts_for_account(store, account_id).await?;
     for pair in pairs {
         invalidate_peer_targets_for_host(pair.host_device_id).await?;
     }
@@ -114,8 +115,7 @@ pub async fn dispatch(
     }
 
     if let Some(event) =
-        special_event_from_payload(approvals, thread_id, payload, ts_ms, owner_device_id)
-            .await?
+        special_event_from_payload(approvals, thread_id, payload, ts_ms, owner_device_id).await?
     {
         let env = Envelope::Event { version: 1, event };
         broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
@@ -302,16 +302,20 @@ async fn special_event_from_payload(
 async fn thread_title_is_missing(store: &impl AsStorePool, thread_id: &str) -> bool {
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_scalar::<_, Option<String>>("SELECT title FROM threads WHERE thread_id = ?1")
-                .bind(thread_id)
-                .fetch_optional(pool)
-                .await
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT title FROM threads WHERE thread_id = ?1",
+            )
+            .bind(thread_id)
+            .fetch_optional(pool)
+            .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_scalar::<_, Option<String>>("SELECT title FROM threads WHERE thread_id = $1")
-                .bind(thread_id)
-                .fetch_optional(pool)
-                .await
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT title FROM threads WHERE thread_id = $1",
+            )
+            .bind(thread_id)
+            .fetch_optional(pool)
+            .await
         }
     };
     match result {

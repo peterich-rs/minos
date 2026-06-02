@@ -41,10 +41,7 @@ pub trait FriendService: Send + Sync {
         target_minos_id: &str,
     ) -> Result<FriendRequestSummary, FriendError>;
 
-    async fn list_requests(
-        &self,
-        account_id: &str,
-    ) -> Result<FriendRequestsResult, FriendError>;
+    async fn list_requests(&self, account_id: &str) -> Result<FriendRequestsResult, FriendError>;
 
     async fn resolve_request(
         &self,
@@ -53,10 +50,7 @@ pub trait FriendService: Send + Sync {
         status: FriendRequestStatus,
     ) -> Result<FriendRequestSummary, FriendError>;
 
-    async fn list_friends(
-        &self,
-        account_id: &str,
-    ) -> Result<Vec<FriendSummary>, FriendError>;
+    async fn list_friends(&self, account_id: &str) -> Result<Vec<FriendSummary>, FriendError>;
 }
 
 pub struct DefaultFriendService {
@@ -119,14 +113,9 @@ impl FriendService for DefaultFriendService {
         })
     }
 
-    async fn list_requests(
-        &self,
-        account_id: &str,
-    ) -> Result<FriendRequestsResult, FriendError> {
-        let incoming_rows =
-            social::list_incoming_friend_requests(&self.store, account_id).await?;
-        let outgoing_rows =
-            social::list_outgoing_friend_requests(&self.store, account_id).await?;
+    async fn list_requests(&self, account_id: &str) -> Result<FriendRequestsResult, FriendError> {
+        let incoming_rows = social::list_incoming_friend_requests(&self.store, account_id).await?;
+        let outgoing_rows = social::list_outgoing_friend_requests(&self.store, account_id).await?;
         let incoming = hydrate_friend_requests(&self.store, incoming_rows).await?;
         let outgoing = hydrate_friend_requests(&self.store, outgoing_rows).await?;
         Ok(FriendRequestsResult { incoming, outgoing })
@@ -160,10 +149,7 @@ impl FriendService for DefaultFriendService {
         }
     }
 
-    async fn list_friends(
-        &self,
-        account_id: &str,
-    ) -> Result<Vec<FriendSummary>, FriendError> {
+    async fn list_friends(&self, account_id: &str) -> Result<Vec<FriendSummary>, FriendError> {
         let friendships = social::list_friendships_for(&self.store, account_id).await?;
 
         let friend_ids: Vec<String> = friendships
@@ -216,18 +202,18 @@ async fn hydrate_friend_requests(
 
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
-        let from = profiles.get(&row.from_account_id).ok_or_else(|| {
-            BackendError::StoreQuery {
+        let from = profiles
+            .get(&row.from_account_id)
+            .ok_or_else(|| BackendError::StoreQuery {
                 operation: "friends.hydrate_friend_requests".into(),
                 message: format!("profile not found: {}", row.from_account_id),
-            }
-        })?;
-        let to = profiles.get(&row.to_account_id).ok_or_else(|| {
-            BackendError::StoreQuery {
+            })?;
+        let to = profiles
+            .get(&row.to_account_id)
+            .ok_or_else(|| BackendError::StoreQuery {
                 operation: "friends.hydrate_friend_requests".into(),
                 message: format!("profile not found: {}", row.to_account_id),
-            }
-        })?;
+            })?;
         output.push(FriendRequestSummary {
             request_id: row.request_id,
             from: to_user_summary(from),

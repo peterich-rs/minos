@@ -7,11 +7,11 @@ use minos_protocol::{
 
 use crate::{
     error::BackendError,
-    store::StoreHandle,
     store::social::{
         self, AgentRow, ChatMessageRow, ConversationDigestRow, FriendRequestRow, ProfileRow,
         ResolveFriendRequestTxResult,
     },
+    store::StoreHandle,
 };
 
 #[derive(Debug)]

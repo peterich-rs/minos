@@ -28,34 +28,30 @@ pub async fn append(
     })?;
 
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query(
-                "INSERT INTO agent_turn_events (turn_id, event_seq, kind, payload_json, created_at_ms)
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "INSERT INTO agent_turn_events (turn_id, event_seq, kind, payload_json, created_at_ms)
                  VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(turn_id)
-            .bind(event_seq)
-            .bind(kind)
-            .bind(&payload_json)
-            .bind(created_at_ms)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query(
-                "INSERT INTO agent_turn_events (turn_id, event_seq, kind, payload_json, created_at_ms)
+        )
+        .bind(turn_id)
+        .bind(event_seq)
+        .bind(kind)
+        .bind(&payload_json)
+        .bind(created_at_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "INSERT INTO agent_turn_events (turn_id, event_seq, kind, payload_json, created_at_ms)
                  VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(turn_id)
-            .bind(event_seq)
-            .bind(kind)
-            .bind(&payload_json)
-            .bind(created_at_ms)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
+        )
+        .bind(turn_id)
+        .bind(event_seq)
+        .bind(kind)
+        .bind(&payload_json)
+        .bind(created_at_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
     }
     .map_err(store_err("agent_turn_events.append"))?;
 

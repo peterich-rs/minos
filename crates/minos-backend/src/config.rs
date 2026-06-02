@@ -241,11 +241,7 @@ pub struct Config {
     /// Graceful shutdown timeout in seconds. After receiving SIGTERM/SIGINT,
     /// the server waits up to this duration for in-flight requests to complete
     /// before forcibly terminating.
-    #[arg(
-        long,
-        env = "MINOS_SHUTDOWN_TIMEOUT_SECS",
-        default_value_t = 30,
-    )]
+    #[arg(long, env = "MINOS_SHUTDOWN_TIMEOUT_SECS", default_value_t = 30)]
     pub shutdown_timeout_secs: u64,
 }
 

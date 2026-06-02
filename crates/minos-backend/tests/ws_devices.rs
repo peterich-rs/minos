@@ -1,10 +1,8 @@
-//! Formal host-gateway upgrade behaviour: the agent-host receives an
-//! `Event::IngestCheckpoint` frame as the second server frame (after the
-//! initial `Event::Unpaired` Phase G presence stub) so the daemon can
-//! reconcile its local DB watermark against what the backend has durably
-//! persisted (Phase D / spec §9 reconciliation).
+//! Formal realtime gateway handshake/auth coverage for client and host rails.
 //!
-//! Mobile clients ingest no events and MUST NOT receive a checkpoint.
+//! The topic gateway now speaks `Hello`/`ServerFrame` exclusively. These
+//! tests verify the remaining upgrade semantics around ws-tickets, host
+//! revocation, and per-device session replacement.
 
 mod common;
 
@@ -22,7 +20,7 @@ use minos_backend::{
     store,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole, DeviceSecret};
-use minos_protocol::{Envelope, EventKind};
+use minos_protocol::realtime::ServerFrame;
 use serde_json::json;
 use sqlx::SqlitePool;
 use tempfile::NamedTempFile;
@@ -38,6 +36,7 @@ use tokio_tungstenite::{
 
 const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
+const QUIET_TIMEOUT: Duration = Duration::from_millis(200);
 
 type WsClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -315,13 +314,17 @@ async fn connect_gateway_ws_with_ticket(
     Ok(ws)
 }
 
-async fn recv_envelope(ws: &mut WsClient) -> anyhow::Result<Envelope> {
+async fn recv_server_frame(ws: &mut WsClient) -> anyhow::Result<ServerFrame> {
     loop {
         let next = timeout(RECV_TIMEOUT, ws.next())
             .await
-            .map_err(|_| anyhow::anyhow!("timed out waiting for envelope"))?;
+            .map_err(|_| anyhow::anyhow!("timed out waiting for server frame"))?;
         match next {
-            Some(Ok(Message::Text(t))) => return Ok(serde_json::from_str(&t)?),
+            Some(Ok(Message::Text(t))) => {
+                if let Ok(frame) = serde_json::from_str::<ServerFrame>(&t) {
+                    return Ok(frame);
+                }
+            }
             Some(Ok(Message::Ping(p))) => {
                 ws.send(Message::Pong(p)).await?;
             }
@@ -333,6 +336,14 @@ async fn recv_envelope(ws: &mut WsClient) -> anyhow::Result<Envelope> {
             Some(Err(e)) => return Err(anyhow::anyhow!("ws error: {e}")),
             None => return Err(anyhow::anyhow!("stream ended unexpectedly")),
         }
+    }
+}
+
+async fn expect_no_server_frame(ws: &mut WsClient) -> anyhow::Result<()> {
+    match timeout(QUIET_TIMEOUT, recv_server_frame(ws)).await {
+        Err(_) => Ok(()),
+        Ok(Ok(frame)) => Err(anyhow::anyhow!("expected idle socket, got {frame:?}")),
+        Ok(Err(error)) => Err(error),
     }
 }
 
@@ -394,7 +405,7 @@ async fn register_agent_host(pool: &SqlitePool) -> (DeviceId, DeviceSecret) {
 }
 
 #[tokio::test]
-async fn ws_host_emits_checkpoint_after_unpaired_for_agent_host() -> anyhow::Result<()> {
+async fn ws_host_connects_with_hello_for_agent_host() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
 
@@ -437,56 +448,36 @@ async fn ws_host_emits_checkpoint_after_unpaired_for_agent_host() -> anyhow::Res
 
     let mut ws = connect_formal_gateway_ws(&relay, host_id, DeviceRole::AgentHost, None).await?;
 
-    // First server frame: the Phase G activation stub `Unpaired`.
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello {
+            heartbeat_interval_ms,
             ..
-        } => {}
-        other => panic!("expected initial Unpaired, got {other:?}"),
+        } => assert_eq!(heartbeat_interval_ms, 25_000),
+        other => panic!("expected Hello, got {other:?}"),
     }
-
-    // Second frame: IngestCheckpoint with the two seeded thread maxes.
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            version: 1,
-            event: EventKind::IngestCheckpoint {
-                last_seq_per_thread,
-            },
-        } => {
-            assert_eq!(last_seq_per_thread.get("thr_1").copied(), Some(7));
-            assert_eq!(last_seq_per_thread.get("thr_2").copied(), Some(3));
-            assert_eq!(last_seq_per_thread.len(), 2);
-        }
-        other => panic!("expected IngestCheckpoint, got {other:?}"),
-    }
+    expect_no_server_frame(&mut ws).await?;
 
     Ok(())
 }
 
 #[tokio::test]
-async fn ws_host_emits_empty_checkpoint_when_no_threads() -> anyhow::Result<()> {
+async fn ws_host_stays_idle_when_no_host_durable_events() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
 
     let mut ws = connect_formal_gateway_ws(&relay, host_id, DeviceRole::AgentHost, None).await?;
 
-    let _ = recv_envelope(&mut ws).await?; // Unpaired
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::IngestCheckpoint {
-                last_seq_per_thread,
-            },
-            ..
-        } => assert!(last_seq_per_thread.is_empty()),
-        other => panic!("expected empty IngestCheckpoint, got {other:?}"),
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
+    expect_no_server_frame(&mut ws).await?;
 
     Ok(())
 }
 
 #[tokio::test]
-async fn ws_client_does_not_emit_checkpoint_for_mobile_client() -> anyhow::Result<()> {
+async fn ws_client_emits_only_hello_for_mobile_client() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     // Seed an authenticated mobile client (account-bound, no secret hash).
@@ -503,34 +494,11 @@ async fn ws_client_does_not_emit_checkpoint_for_mobile_client() -> anyhow::Resul
     )
     .await?;
 
-    // First (and only) presence frame is `Unpaired`. Anything that smells
-    // of `IngestCheckpoint` here is a regression: mobile clients ingest
-    // no events.
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("expected initial Unpaired, got {other:?}"),
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
-
-    // A second frame is allowed (e.g. a presence event) but it must NOT be
-    // an `IngestCheckpoint`. We tolerate a brief idle window.
-    match timeout(Duration::from_millis(200), recv_envelope(&mut ws)).await {
-        Err(_) => {
-            // Idle within the window → mobile got no checkpoint, as required.
-        }
-        Ok(Ok(env)) => {
-            if let Envelope::Event {
-                event: EventKind::IngestCheckpoint { .. },
-                ..
-            } = env
-            {
-                panic!("mobile client must not receive IngestCheckpoint")
-            }
-        }
-        Ok(Err(e)) => return Err(e),
-    }
+    expect_no_server_frame(&mut ws).await?;
 
     Ok(())
 }
@@ -551,12 +519,9 @@ async fn ws_client_accepts_browser_admin_legacy_ws_ticket_query_auth() -> anyhow
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
     let mut ws = connect_gateway_ws_with_legacy_ticket_query(&relay, "/ws/client", &ticket).await?;
 
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("expected initial Unpaired, got {other:?}"),
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
 
     Ok(())
@@ -578,12 +543,9 @@ async fn ws_client_accepts_formal_ticket_query_auth() -> anyhow::Result<()> {
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
     let mut ws = connect_gateway_ws_with_ticket(&relay, "/ws/client", &ticket).await?;
 
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("expected initial Unpaired, got {other:?}"),
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
 
     Ok(())
@@ -604,12 +566,9 @@ async fn ws_client_rejects_reused_formal_ticket() -> anyhow::Result<()> {
     let ticket =
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
     let mut ws = connect_gateway_ws_with_ticket(&relay, "/ws/client", &ticket).await?;
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("expected initial Unpaired, got {other:?}"),
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
 
     let err = connect_gateway_ws_with_ticket(&relay, "/ws/client", &ticket)
@@ -627,29 +586,17 @@ async fn ws_host_accepts_formal_host_ticket_query_auth() -> anyhow::Result<()> {
     let ticket = issue_host_ws_ticket(&relay, host_id).await?;
     let mut ws = connect_gateway_ws_with_ticket(&relay, "/ws/host", &ticket).await?;
 
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("expected initial Unpaired, got {other:?}"),
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
-
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::IngestCheckpoint {
-                last_seq_per_thread,
-            },
-            ..
-        } => assert!(last_seq_per_thread.is_empty()),
-        other => panic!("expected empty IngestCheckpoint, got {other:?}"),
-    }
+    expect_no_server_frame(&mut ws).await?;
 
     Ok(())
 }
 
 #[tokio::test]
-async fn ws_client_reconnect_supersedes_prior_socket_with_normal_close() -> anyhow::Result<()> {
+async fn ws_client_reconnect_supersedes_prior_socket_with_auth_close() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     let account_id = store::accounts::create(&relay.pool, "reconnect-ws@example.com", "phc")
@@ -664,12 +611,9 @@ async fn ws_client_reconnect_supersedes_prior_socket_with_normal_close() -> anyh
         Some(&account_id),
     )
     .await?;
-    match recv_envelope(&mut first).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("expected initial Unpaired, got {other:?}"),
+    match recv_server_frame(&mut first).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
 
     let mut replacement = connect_formal_gateway_ws(
@@ -679,15 +623,12 @@ async fn ws_client_reconnect_supersedes_prior_socket_with_normal_close() -> anyh
         Some(&account_id),
     )
     .await?;
-    match recv_envelope(&mut replacement).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("expected replacement Unpaired, got {other:?}"),
+    match recv_server_frame(&mut replacement).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
 
-    expect_close_code(&mut first, 1000, "session_superseded").await?;
+    expect_close_code(&mut first, 4401, "session_superseded").await?;
 
     Ok(())
 }
@@ -714,19 +655,9 @@ async fn ws_host_last_link_revoke_closes_live_socket_with_auth_revoked() -> anyh
     let ticket = body["data"]["ticket"].as_str().unwrap().to_string();
 
     let mut ws = connect_gateway_ws_with_ticket(&relay, "/ws/host", &ticket).await?;
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            ..
-        } => {}
-        other => panic!("expected initial Unpaired, got {other:?}"),
-    }
-    match recv_envelope(&mut ws).await? {
-        Envelope::Event {
-            event: EventKind::IngestCheckpoint { .. },
-            ..
-        } => {}
-        other => panic!("expected IngestCheckpoint, got {other:?}"),
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
 
     let (status, body) = post_json(
@@ -742,6 +673,13 @@ async fn ws_host_last_link_revoke_closes_live_socket_with_auth_revoked() -> anyh
     assert_eq!(status, StatusCode::OK, "body={body}");
     assert_eq!(body["data"]["host_installation_token_revoked"], true);
 
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::HostForceClose { reason, close_code } => {
+            assert_eq!(reason, "auth_revoked");
+            assert_eq!(close_code, 4401);
+        }
+        other => panic!("expected HostForceClose, got {other:?}"),
+    }
     expect_close_code(&mut ws, 4401, "auth_revoked").await?;
 
     Ok(())

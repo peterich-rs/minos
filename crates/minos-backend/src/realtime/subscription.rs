@@ -124,7 +124,11 @@ impl SubscriptionManager {
     }
 
     #[must_use]
-    pub fn add_topics(&self, conn_id: ConnectionId, topics: &[RealtimeTopic]) -> Vec<RealtimeTopic> {
+    pub fn add_topics(
+        &self,
+        conn_id: ConnectionId,
+        topics: &[RealtimeTopic],
+    ) -> Vec<RealtimeTopic> {
         let Some(conn) = self.by_conn.get(&conn_id) else {
             return Vec::new();
         };
@@ -172,7 +176,11 @@ impl SubscriptionManager {
         };
         entry
             .iter()
-            .filter_map(|conn_id| self.by_conn.get(conn_id).map(|conn| Arc::clone(conn.value())))
+            .filter_map(|conn_id| {
+                self.by_conn
+                    .get(conn_id)
+                    .map(|conn| Arc::clone(conn.value()))
+            })
             .collect()
     }
 }

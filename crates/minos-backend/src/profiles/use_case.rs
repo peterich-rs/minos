@@ -20,10 +20,7 @@ pub enum ProfileError {
 
 #[async_trait]
 pub trait ProfileService: Send + Sync {
-    async fn get_my_profile(
-        &self,
-        account_id: &str,
-    ) -> Result<ProfileDto, ProfileError>;
+    async fn get_my_profile(&self, account_id: &str) -> Result<ProfileDto, ProfileError>;
 
     async fn set_minos_id(
         &self,
@@ -103,7 +100,11 @@ impl ProfileService for DefaultProfileService {
         Ok(to_profile_dto(&profile))
     }
 
-    async fn set_minos_id(&self, account_id: &str, minos_id: &str) -> Result<ProfileDto, ProfileError> {
+    async fn set_minos_id(
+        &self,
+        account_id: &str,
+        minos_id: &str,
+    ) -> Result<ProfileDto, ProfileError> {
         if !validate_minos_id(minos_id) {
             return Err(ProfileError::ValidationFormat(
                 "minos_id must be 6-24 ASCII letters or digits",

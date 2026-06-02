@@ -44,8 +44,12 @@ fn write_or_check_artifact(
 ) -> Result<()> {
     let output_path = workspace_root.join(artifact.path);
     if check {
-        let existing = fs::read_to_string(&output_path)
-            .with_context(|| format!("read {} for backend platform schema drift check", output_path.display()))?;
+        let existing = fs::read_to_string(&output_path).with_context(|| {
+            format!(
+                "read {} for backend platform schema drift check",
+                output_path.display()
+            )
+        })?;
         if existing != artifact.rendered {
             bail!(
                 "backend platform schema drift detected at {}. Run `cargo xtask gen-backend-platform-contract` and commit the updated artifacts.",
@@ -283,7 +287,11 @@ fn is_websocket_route(route: &minos_backend::http::RouteContract) -> bool {
 fn render_backend_ws_schema(workspace_root: &Path) -> Result<String> {
     let platform = minos_backend::runtime::platform_contract_snapshot();
     let examples = load_envelope_examples(workspace_root)?;
-    let example_names = examples.keys().cloned().map(Value::String).collect::<Vec<_>>();
+    let example_names = examples
+        .keys()
+        .cloned()
+        .map(Value::String)
+        .collect::<Vec<_>>();
     let gateways = minos_backend::http::formal_route_inventory()
         .iter()
         .filter(|route| is_websocket_route(route))
@@ -591,6 +599,12 @@ mod tests {
         assert_eq!(parsed["transport"], "websocket");
         assert_eq!(parsed["gateways"].as_array().unwrap().len(), 2);
         assert!(parsed["examples"].get("event_paired").is_some());
-        assert!(parsed["schemas"]["Envelope"]["oneOf"].as_array().unwrap().len() >= 4);
+        assert!(
+            parsed["schemas"]["Envelope"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .len()
+                >= 4
+        );
     }
 }

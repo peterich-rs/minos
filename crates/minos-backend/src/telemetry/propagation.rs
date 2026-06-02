@@ -35,10 +35,7 @@ impl<'a> Extractor for HeaderExtractor<'a> {
     }
 
     fn keys(&self) -> Vec<&str> {
-        self.headers
-            .keys()
-            .map(|k| k.as_str())
-            .collect()
+        self.headers.keys().map(|k| k.as_str()).collect()
     }
 }
 
@@ -49,9 +46,7 @@ impl<'a> Extractor for HeaderExtractor<'a> {
 #[must_use]
 pub fn extract_from_headers(headers: &axum::http::HeaderMap) -> opentelemetry::Context {
     let extractor = HeaderExtractor::new(headers);
-    opentelemetry::global::get_text_map_propagator(|propagator| {
-        propagator.extract(&extractor)
-    })
+    opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor))
 }
 
 /// Inject the current trace context into HTTP headers (for outgoing requests).

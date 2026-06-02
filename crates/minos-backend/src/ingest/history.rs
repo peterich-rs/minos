@@ -82,13 +82,8 @@ pub async fn read_thread(
 
     let from_seq = params.from_seq.unwrap_or(0);
     let limit = params.limit.min(2000);
-    let rows = match crate::store::raw_events::read_range(
-        store,
-        &params.thread_id,
-        from_seq,
-        limit,
-    )
-    .await
+    let rows = match crate::store::raw_events::read_range(store, &params.thread_id, from_seq, limit)
+        .await
     {
         Ok(v) => v,
         Err(e) => {
@@ -151,32 +146,31 @@ pub async fn read_thread(
             )
         })
     {
-        let stored_title: Option<Option<String>> =
-            match match store.as_store_pool() {
-                StorePoolRef::Sqlite(pool) => {
-                    sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = ?1")
-                        .bind(&params.thread_id)
-                        .fetch_optional(pool)
-                        .await
-                }
-                StorePoolRef::Postgres(pool) => {
-                    sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = $1")
-                        .bind(&params.thread_id)
-                        .fetch_optional(pool)
-                        .await
-                }
-            } {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(
-                        target: "minos_backend::ingest::history",
-                        error = %e,
-                        thread_id = %params.thread_id,
-                        "read_thread.title_probe failed"
-                    );
-                    return Err(HistoryError::Internal("read_thread failed".into()));
-                }
-            };
+        let stored_title: Option<Option<String>> = match match store.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = ?1")
+                    .bind(&params.thread_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = $1")
+                    .bind(&params.thread_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+        } {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::ingest::history",
+                    error = %e,
+                    thread_id = %params.thread_id,
+                    "read_thread.title_probe failed"
+                );
+                return Err(HistoryError::Internal("read_thread failed".into()));
+            }
+        };
         if let Some(Some(title)) = stored_title {
             ui_events.insert(
                 0,
@@ -197,32 +191,31 @@ pub async fn read_thread(
     };
 
     // Look up end_reason (may be present even if rows are empty).
-    let end_reason_json: Option<Option<String>> =
-        match match store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = ?1")
-                    .bind(&params.thread_id)
-                    .fetch_optional(pool)
-                    .await
-            }
-            StorePoolRef::Postgres(pool) => {
-                sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = $1")
-                    .bind(&params.thread_id)
-                    .fetch_optional(pool)
-                    .await
-            }
-        } {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    target: "minos_backend::ingest::history",
-                    error = %e,
-                    thread_id = %params.thread_id,
-                    "read_thread.end_reason_probe failed"
-                );
-                return Err(HistoryError::Internal("read_thread failed".into()));
-            }
-        };
+    let end_reason_json: Option<Option<String>> = match match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = ?1")
+                .bind(&params.thread_id)
+                .fetch_optional(pool)
+                .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar("SELECT end_reason FROM threads WHERE thread_id = $1")
+                .bind(&params.thread_id)
+                .fetch_optional(pool)
+                .await
+        }
+    } {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::ingest::history",
+                error = %e,
+                thread_id = %params.thread_id,
+                "read_thread.end_reason_probe failed"
+            );
+            return Err(HistoryError::Internal("read_thread failed".into()));
+        }
+    };
     let thread_end_reason = end_reason_json
         .flatten()
         .as_ref()

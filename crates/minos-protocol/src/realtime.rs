@@ -239,7 +239,9 @@ pub enum ApprovalResolution {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SenderRef {
-    User { account_id: String },
+    User {
+        account_id: String,
+    },
     Agent {
         agent_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,8 +253,14 @@ pub enum SenderRef {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DurableEvent {
-    AccountRegistered { account_id: String, at_ms: i64 },
-    AccountPasswordChanged { account_id: String, at_ms: i64 },
+    AccountRegistered {
+        account_id: String,
+        at_ms: i64,
+    },
+    AccountPasswordChanged {
+        account_id: String,
+        at_ms: i64,
+    },
     HostLinked {
         account_id: String,
         host_installation_id: String,
@@ -315,7 +323,10 @@ pub enum DurableEvent {
         conversation_id: String,
         at_ms: i64,
     },
-    ProjectArchived { project_id: String, at_ms: i64 },
+    ProjectArchived {
+        project_id: String,
+        at_ms: i64,
+    },
     HostForceClose {
         host_installation_id: String,
         reason: String,
@@ -376,9 +387,7 @@ impl DurableEvent {
             Self::AccountRegistered { account_id, .. }
             | Self::AccountPasswordChanged { account_id, .. }
             | Self::HostLinked { account_id, .. }
-            | Self::HostUnlinked { account_id, .. } => {
-                RealtimeTopic::Account(account_id.clone())
-            }
+            | Self::HostUnlinked { account_id, .. } => RealtimeTopic::Account(account_id.clone()),
             Self::AgentSessionStarted { session_id, .. }
             | Self::AgentSessionEnded { session_id, .. }
             | Self::AgentTurnAppended { session_id, .. }
@@ -386,10 +395,12 @@ impl DurableEvent {
             | Self::ApprovalResolved { session_id, .. } => {
                 RealtimeTopic::AgentSession(session_id.clone())
             }
-            Self::ConversationMessageAppended { conversation_id, .. }
-            | Self::ConversationMessageRecalled { conversation_id, .. } => {
-                RealtimeTopic::Conversation(conversation_id.clone())
+            Self::ConversationMessageAppended {
+                conversation_id, ..
             }
+            | Self::ConversationMessageRecalled {
+                conversation_id, ..
+            } => RealtimeTopic::Conversation(conversation_id.clone()),
             Self::ProjectConversationLinked { project_id, .. }
             | Self::ProjectArchived { project_id, .. } => {
                 RealtimeTopic::Project(project_id.clone())

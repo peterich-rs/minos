@@ -73,8 +73,6 @@ impl JobHealthRegistry {
     /// Get the consecutive failure count for a specific job.
     pub fn consecutive_failures(&self, name: &str) -> u32 {
         let inner = self.inner.read().unwrap();
-        inner
-            .get(name)
-            .map_or(0, |h| h.consecutive_failures)
+        inner.get(name).map_or(0, |h| h.consecutive_failures)
     }
 }

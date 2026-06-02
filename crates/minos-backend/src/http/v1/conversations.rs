@@ -4,8 +4,8 @@ use axum::routing::post;
 use axum::{Json, Router};
 use minos_protocol::{
     ChatMessageSummary, ConversationMembersResponse, ConversationReadResponse,
-    ConversationResponse, ConversationsResponse, EnsureDirectConversationRequest,
-    Envelope, EventKind, CreateGroupConversationRequest, ListChatMessagesRequest,
+    ConversationResponse, ConversationsResponse, CreateGroupConversationRequest,
+    EnsureDirectConversationRequest, Envelope, EventKind, ListChatMessagesRequest,
     ListChatMessagesResponse, SendChatMessageRequest,
 };
 
@@ -147,7 +147,12 @@ async fn list_messages_query(
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let conversations_svc = DefaultConversationService::new(state.store.clone());
     let result = conversations_svc
-        .list_messages(&account_id, &conversation_id, query.before_ts_ms, query.limit.unwrap_or(50))
+        .list_messages(
+            &account_id,
+            &conversation_id,
+            query.before_ts_ms,
+            query.limit.unwrap_or(50),
+        )
         .await
         .map_err(map_conversation_error)?;
     Ok(Json(ListChatMessagesResponse {
@@ -162,7 +167,14 @@ async fn send_message(
     Path(conversation_id): Path<String>,
     Json(req): Json<SendChatMessageRequest>,
 ) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
-    send_message_inner(state, headers, conversation_id, req.text, req.reply_to_message_id).await
+    send_message_inner(
+        state,
+        headers,
+        conversation_id,
+        req.text,
+        req.reply_to_message_id,
+    )
+    .await
 }
 
 async fn send_message_command(
@@ -195,7 +207,12 @@ async fn send_message_inner(
 
     let conversations_svc = DefaultConversationService::new(state.store.clone());
     let (message, _members) = conversations_svc
-        .send_message(&account_id, &conversation_id, &trimmed, reply_to_message_id.as_deref())
+        .send_message(
+            &account_id,
+            &conversation_id,
+            &trimmed,
+            reply_to_message_id.as_deref(),
+        )
         .await
         .map_err(map_conversation_error)?;
 
@@ -268,9 +285,10 @@ async fn add_group_member(
         ));
     }
     // Verify the new member is a friend of the caller
-    let friendships = crate::store::social::are_friends(&state.store, &account_id, &req.member_account_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
+    let friendships =
+        crate::store::social::are_friends(&state.store, &account_id, &req.member_account_id)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
     if !friendships {
         return Err(err("conflict", "new member must be your friend"));
     }

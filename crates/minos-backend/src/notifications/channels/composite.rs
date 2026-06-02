@@ -68,8 +68,7 @@ impl PushChannel for CompositeChannel {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            PushSendError::NotConfigured("no channels available".into())
-        }))
+        Err(last_error
+            .unwrap_or_else(|| PushSendError::NotConfigured("no channels available".into())))
     }
 }

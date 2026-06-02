@@ -24,8 +24,7 @@ impl FcmChannel {
     #[must_use]
     pub fn from_env() -> Option<Self> {
         let project_id = std::env::var("MINOS_PUSH_FCM_PROJECT_ID").ok()?;
-        let service_account_path =
-            std::env::var("MINOS_PUSH_FCM_SERVICE_ACCOUNT_JSON").ok()?;
+        let service_account_path = std::env::var("MINOS_PUSH_FCM_SERVICE_ACCOUNT_JSON").ok()?;
 
         Some(Self {
             project_id,

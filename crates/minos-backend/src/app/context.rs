@@ -77,9 +77,9 @@ impl Default for AppRuntimeConfig {
     fn default() -> Self {
         Self {
             jwt_secret: Vec::new(),
-            access_token_ttl_ms: 15 * 60 * 1000,     // 15 minutes
+            access_token_ttl_ms: 15 * 60 * 1000, // 15 minutes
             refresh_token_ttl_ms: 30 * 24 * 3600 * 1000, // 30 days
-            pairing_code_ttl_ms: 10 * 60 * 1000,      // 10 minutes
+            pairing_code_ttl_ms: 10 * 60 * 1000, // 10 minutes
             db_max_connections: 32,
         }
     }

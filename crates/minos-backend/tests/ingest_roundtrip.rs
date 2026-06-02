@@ -1,10 +1,9 @@
-//! End-to-end ingest roundtrip: agent-host sends `Envelope::Ingest` → backend
-//! persists + translates + fans out → mobile peer receives
-//! `Envelope::Event { UiEventMessage }`.
+//! Retired legacy ingest-over-WebSocket coverage.
 //!
-//! The test pre-seeds a paired (agent-host, ios-client) pair directly in the
-//! DB so we skip the full pairing dance. It then opens two live formal WS
-//! gateway connections and drives one ingest frame through the backend.
+//! These tests exercised the old `Envelope::Ingest` wire path. The topic
+//! gateway no longer accepts legacy envelopes, so the behavior is kept here
+//! only as historical reference and is ignored in favor of the new realtime
+//! gateway coverage.
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
@@ -110,7 +109,7 @@ async fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
     Ok(relay
         .auth
         .issue_host_ws_ticket(host_id)
-    .await
+        .await
         .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
         .ticket)
 }
@@ -195,6 +194,7 @@ async fn recv_ui_event(ws: &mut WsClient) -> anyhow::Result<(String, u64, UiEven
 }
 
 #[tokio::test]
+#[ignore = "legacy Envelope::Ingest websocket path removed from the topic gateway"]
 async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
@@ -283,6 +283,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
 }
 
 #[tokio::test]
+#[ignore = "legacy Envelope::Ingest websocket path removed from the topic gateway"]
 async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
@@ -321,6 +322,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "legacy Envelope::Ingest websocket path removed from the topic gateway"]
 async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_update(
 ) -> anyhow::Result<()> {
     let relay = spawn_relay().await?;

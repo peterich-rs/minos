@@ -4,8 +4,7 @@
 //!
 //! - `GET /health/live`, `GET /health/ready`, `GET /health/info`.
 //! - `GET /ws/client`, `GET /ws/host` — WebSocket upgrades for the formal
-//!   realtime topic gateway. Legacy envelope compatibility remains an
-//!   implementation detail behind the gateway while Phase 2 is finishing.
+//!   realtime topic gateway.
 //!
 //! # State plumbing
 //!

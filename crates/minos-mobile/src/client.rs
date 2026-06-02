@@ -2084,5 +2084,4 @@ mod tests {
         let res = client.logout().await;
         assert!(res.is_ok(), "logout from unauthenticated must be Ok");
     }
-
 }

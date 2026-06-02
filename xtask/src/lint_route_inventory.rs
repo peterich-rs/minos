@@ -23,10 +23,8 @@ pub fn run(repo_root: &Path) -> Result<()> {
         bail!("route-inventory: {} not found", router_path.display());
     }
 
-    let router_src = std::fs::read_to_string(&router_path)
-        .unwrap_or_else(|_| String::new());
-    let v1_src = std::fs::read_to_string(&v1_mod_path)
-        .unwrap_or_else(|_| String::new());
+    let router_src = std::fs::read_to_string(&router_path).unwrap_or_else(|_| String::new());
+    let v1_src = std::fs::read_to_string(&v1_mod_path).unwrap_or_else(|_| String::new());
 
     // Extract .route("...") calls from the router definition.
     let mut registered_routes: Vec<String> = Vec::new();

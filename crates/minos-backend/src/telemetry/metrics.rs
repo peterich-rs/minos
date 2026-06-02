@@ -115,14 +115,8 @@ fn prometheus_handle() -> &'static PrometheusHandle {
             WS_ACTIVE_SESSIONS,
             "Currently live websocket sessions, partitioned by device role."
         );
-        metrics::describe_gauge!(
-            AGENT_SESSIONS_ACTIVE,
-            "Currently active agent sessions."
-        );
-        metrics::describe_gauge!(
-            APPROVALS_PENDING,
-            "Currently pending approval requests."
-        );
+        metrics::describe_gauge!(AGENT_SESSIONS_ACTIVE, "Currently active agent sessions.");
+        metrics::describe_gauge!(APPROVALS_PENDING, "Currently pending approval requests.");
         metrics::describe_gauge!(
             DURABLE_EVENT_LOG_SIZE,
             "Current size of the durable event log, partitioned by topic_kind."
@@ -203,10 +197,7 @@ fn prometheus_handle() -> &'static PrometheusHandle {
             APPROVAL_TIMEOUT_RESOLVED_TOTAL,
             "Approval requests resolved due to timeout."
         );
-        metrics::describe_counter!(
-            HOST_COMMAND_TIMEOUT_TOTAL,
-            "Host commands that timed out."
-        );
+        metrics::describe_counter!(HOST_COMMAND_TIMEOUT_TOTAL, "Host commands that timed out.");
         metrics::describe_counter!(
             JOB_TICK_TOTAL,
             "Background job tick attempts, labeled by job name and result."
@@ -299,7 +290,8 @@ pub fn set_approvals_pending(count: usize) {
 #[allow(clippy::cast_precision_loss)]
 pub fn set_durable_event_log_size(topic_kind: &str, size: i64) {
     init();
-    metrics::gauge!(DURABLE_EVENT_LOG_SIZE, "topic_kind" => topic_kind.to_string()).set(size as f64);
+    metrics::gauge!(DURABLE_EVENT_LOG_SIZE, "topic_kind" => topic_kind.to_string())
+        .set(size as f64);
 }
 
 // ── counters ──────────────────────────────────────────────────────────

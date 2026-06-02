@@ -85,18 +85,21 @@ impl RealtimeTicketStore {
                 Ok(())
             }
             RealtimeTicketBackend::Redis { client } => {
-                let mut conn = client.get_multiplexed_async_connection().await.map_err(|error| {
-                    BackendError::Cache {
-                        operation: "realtime_ticket.redis_connect".into(),
+                let mut conn =
+                    client
+                        .get_multiplexed_async_connection()
+                        .await
+                        .map_err(|error| BackendError::Cache {
+                            operation: "realtime_ticket.redis_connect".into(),
+                            message: error.to_string(),
+                        })?;
+                let payload =
+                    serde_json::to_string(&entry).map_err(|error| BackendError::Cache {
+                        operation: "realtime_ticket.redis_encode".into(),
                         message: error.to_string(),
-                    }
-                })?;
-                let payload = serde_json::to_string(&entry).map_err(|error| BackendError::Cache {
-                    operation: "realtime_ticket.redis_encode".into(),
-                    message: error.to_string(),
-                })?;
-                let ttl_secs = u64::try_from(claims.exp.saturating_sub(claims.iat).max(1))
-                    .unwrap_or(1);
+                    })?;
+                let ttl_secs =
+                    u64::try_from(claims.exp.saturating_sub(claims.iat).max(1)).unwrap_or(1);
                 let _: () = redis::cmd("SET")
                     .arg(ticket_key(&claims.jti))
                     .arg(payload)
@@ -119,9 +122,9 @@ impl RealtimeTicketStore {
         now_secs: i64,
     ) -> Result<(), RealtimeTicketConsumeError> {
         let entry = match &self.backend {
-            RealtimeTicketBackend::InMemory(entries) => entries
-                .remove(&claims.jti)
-                .map(|(_, entry)| entry),
+            RealtimeTicketBackend::InMemory(entries) => {
+                entries.remove(&claims.jti).map(|(_, entry)| entry)
+            }
             RealtimeTicketBackend::Redis { client } => {
                 let mut conn = client
                     .get_multiplexed_async_connection()
@@ -134,9 +137,8 @@ impl RealtimeTicketStore {
                     .map_err(|error| RealtimeTicketConsumeError::Store(error.to_string()))?;
                 payload
                     .map(|payload| {
-                        serde_json::from_str::<RealtimeTicketEntry>(&payload).map_err(|error| {
-                            RealtimeTicketConsumeError::Store(error.to_string())
-                        })
+                        serde_json::from_str::<RealtimeTicketEntry>(&payload)
+                            .map_err(|error| RealtimeTicketConsumeError::Store(error.to_string()))
                     })
                     .transpose()?
             }

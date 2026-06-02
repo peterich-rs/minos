@@ -136,21 +136,19 @@ pub async fn exists(
     project_id: &str,
 ) -> Result<bool, BackendError> {
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT EXISTS(
+        StorePoolRef::Sqlite(pool) => sqlx::query_scalar::<_, i64>(
+            "SELECT EXISTS(
                     SELECT 1
                       FROM projects
                      WHERE project_id = ?1
                        AND account_id = ?2
                 )",
-            )
-            .bind(project_id)
-            .bind(account_id)
-            .fetch_one(pool)
-            .await
-            .map(|exists| exists != 0)
-        }
+        )
+        .bind(project_id)
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .map(|exists| exists != 0),
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(
@@ -180,34 +178,30 @@ pub async fn update_name(
     now_ms: i64,
 ) -> Result<(), BackendError> {
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query(
-                r"UPDATE projects
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r"UPDATE projects
                   SET name = ?1, updated_at_ms = ?2
                   WHERE project_id = ?3 AND account_id = ?4",
-            )
-            .bind(name)
-            .bind(now_ms)
-            .bind(project_id)
-            .bind(account_id)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query(
-                r"UPDATE projects
+        )
+        .bind(name)
+        .bind(now_ms)
+        .bind(project_id)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r"UPDATE projects
                   SET name = $1, updated_at_ms = $2
                   WHERE project_id = $3 AND account_id = $4",
-            )
-            .bind(name)
-            .bind(now_ms)
-            .bind(project_id)
-            .bind(account_id)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
+        )
+        .bind(name)
+        .bind(now_ms)
+        .bind(project_id)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
     }
     .map_err(|e| BackendError::StoreQuery {
         operation: "projects.update_name".into(),
@@ -302,8 +296,8 @@ mod tests {
             5000,
             None,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         crate::store::agent_sessions::create(
             &pool,
             "sess-b",
@@ -315,8 +309,8 @@ mod tests {
             6000,
             None,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         let projects = list(&pool, &account_a).await.unwrap();
         assert_eq!(projects.len(), 1);

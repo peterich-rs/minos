@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use sqlx::{QueryBuilder, Postgres, Sqlite};
+use sqlx::{Postgres, QueryBuilder, Sqlite};
 
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
-use super::{ProfileRow, store_err};
+use super::{store_err, ProfileRow};
 
 pub async fn profile_by_account(
     store: &impl AsStorePool,

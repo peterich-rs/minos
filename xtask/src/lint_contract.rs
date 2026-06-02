@@ -49,8 +49,7 @@ pub fn run(repo_root: &Path) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
 
     // Check paths: every path in baseline must exist in generated.
-    if let (Some(baseline_paths), Some(gen_paths)) =
-        (baseline.get("paths"), generated.get("paths"))
+    if let (Some(baseline_paths), Some(gen_paths)) = (baseline.get("paths"), generated.get("paths"))
     {
         if let (Some(bp), Some(gp)) = (baseline_paths.as_object(), gen_paths.as_object()) {
             for path in bp.keys() {
@@ -126,9 +125,7 @@ fn check_schema_compatibility(
     ) {
         for prop_name in baseline_props.keys() {
             if !gen_props.contains_key(prop_name) {
-                errors.push(format!(
-                    "schema '{name}': property '{prop_name}' removed"
-                ));
+                errors.push(format!("schema '{name}': property '{prop_name}' removed"));
             }
         }
     }

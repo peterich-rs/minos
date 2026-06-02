@@ -24,7 +24,10 @@ pub fn router() -> Router<BackendState> {
         .route("/notifications/tokens/unregister", post(unregister_token))
         .route("/notifications/tokens/list", post(list_tokens))
         .route("/notifications/preferences/get", post(get_preferences))
-        .route("/notifications/preferences/update", post(update_preferences))
+        .route(
+            "/notifications/preferences/update",
+            post(update_preferences),
+        )
 }
 
 // ── Request / Response types ───────────────────────────────────────────
@@ -92,15 +95,12 @@ async fn register_token(
 ) -> Result<Json<RegisterTokenResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let (_caller, account_id) = super::require_authed_session(&state, &headers).await?;
 
-    let kind: PushKind = request
-        .kind
-        .parse()
-        .map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                err("invalid_push_kind", "kind must be 'apns' or 'fcm'"),
-            )
-        })?;
+    let kind: PushKind = request.kind.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            err("invalid_push_kind", "kind must be 'apns' or 'fcm'"),
+        )
+    })?;
 
     state
         .notifications
@@ -194,10 +194,9 @@ async fn update_preferences(
 
 fn map_notification_error(error: NotificationError) -> (StatusCode, Json<ErrorEnvelope>) {
     match error {
-        NotificationError::InvalidToken(msg) => (
-            StatusCode::BAD_REQUEST,
-            err("invalid_push_token", msg),
-        ),
+        NotificationError::InvalidToken(msg) => {
+            (StatusCode::BAD_REQUEST, err("invalid_push_token", msg))
+        }
         NotificationError::TokenNotFound => (
             StatusCode::NOT_FOUND,
             err("token_not_found", "push token not found"),

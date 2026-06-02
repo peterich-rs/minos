@@ -2,7 +2,10 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
-use minos_protocol::{MyProfileResponse, SearchUsersRequest, SearchUsersResponse, SetDisplayNameRequest, SetMinosIdRequest};
+use minos_protocol::{
+    MyProfileResponse, SearchUsersRequest, SearchUsersResponse, SetDisplayNameRequest,
+    SetMinosIdRequest,
+};
 
 use crate::http::error_response::{err_response, ErrorEnvelope};
 use crate::http::BackendState;
@@ -85,10 +88,7 @@ async fn set_display_name(
     let account_id = crate::http::v1::social::require_account_id_from_state(&state, &headers)?;
     let profiles = crate::profiles::DefaultProfileService::new(state.store.clone());
     let profile = profiles
-        .set_display_name(
-            &account_id,
-            req.display_name.as_deref(),
-        )
+        .set_display_name(&account_id, req.display_name.as_deref())
         .await
         .map_err(map_profile_error)?;
     Ok(Json(MyProfileResponse {

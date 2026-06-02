@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::notifications::preferences::NotificationPreferences;
 use crate::notifications::channels::PushPayload;
+use crate::notifications::preferences::NotificationPreferences;
 use crate::realtime::event::{DurableEvent, SenderRef};
 
 /// The outcome of a notification decision.
@@ -51,11 +51,7 @@ const SESSION_ENDED_COOLDOWN_MS: i64 = 60_000;
 /// handled at the dispatch layer, not here, because it requires access
 /// to the session registry which is not available to the pure decision
 /// function. Callers should check presence before or after calling this.
-pub fn decide(
-    event: &DurableEvent,
-    prefs: &NotificationPreferences,
-    now_ms: i64,
-) -> Decision {
+pub fn decide(event: &DurableEvent, prefs: &NotificationPreferences, now_ms: i64) -> Decision {
     let current_minute = ((now_ms / 60_000) % 1440) as i16;
 
     // Check quiet hours first — applies to all event types.
@@ -131,9 +127,7 @@ pub fn decide(
         }
 
         DurableEvent::AgentSessionEnded {
-            session_id,
-            status,
-            ..
+            session_id, status, ..
         } => {
             if !prefs.agent_session_ended_enabled {
                 return Decision::Skip {

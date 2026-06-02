@@ -16,8 +16,8 @@ use tokio::sync::broadcast::error::RecvError;
 
 mod backend_platform_schemas;
 mod gen_codex;
-mod lint_conventions;
 mod lint_contract;
+mod lint_conventions;
 mod lint_docs;
 mod lint_metrics;
 mod lint_naming;

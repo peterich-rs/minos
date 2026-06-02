@@ -147,7 +147,10 @@ impl DefaultNotificationService {
 
     /// Find the matching push channel for a given kind.
     fn channel_for(&self, kind: PushKind) -> Option<&dyn PushChannel> {
-        self.channels.iter().find(|c| c.kind() == kind).map(|c| c.as_ref())
+        self.channels
+            .iter()
+            .find(|c| c.kind() == kind)
+            .map(|c| c.as_ref())
     }
 }
 
@@ -286,8 +289,7 @@ impl NotificationService for DefaultNotificationService {
                     }
 
                     // Get tokens for this account
-                    let tokens =
-                        push_tokens::list_for_account(&self.store, account_id).await?;
+                    let tokens = push_tokens::list_for_account(&self.store, account_id).await?;
                     if tokens.is_empty() {
                         continue;
                     }

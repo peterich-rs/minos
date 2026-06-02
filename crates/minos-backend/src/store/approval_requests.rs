@@ -108,20 +108,18 @@ pub async fn get(
     request_id: &str,
 ) -> Result<Option<ApprovalRequestRow>, BackendError> {
     let row = match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, ApprovalRequestDbRow>(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id, ar.method,
+        StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id, ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json
                    FROM approval_requests ar
                    JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
                   WHERE ar.request_id = ?",
-            )
-            .bind(request_id)
-            .fetch_optional(pool)
-            .await
-        }
+        )
+        .bind(request_id)
+        .fetch_optional(pool)
+        .await,
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ApprovalRequestDbRow>(
                 "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
@@ -158,37 +156,33 @@ pub async fn resolve(
         })?;
 
     let rows_affected = match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query(
-                "UPDATE approval_requests
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE approval_requests
                     SET state = ?, resolved_at_ms = ?, resolution_json = ?
                   WHERE request_id = ?
                     AND state = ?",
-            )
-            .bind(state.as_str())
-            .bind(resolved_at_ms)
-            .bind(resolution_json.as_deref())
-            .bind(request_id)
-            .bind(ApprovalRequestState::Pending.as_str())
-            .execute(pool)
-            .await
-            .map(|result| result.rows_affected())
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query(
-                "UPDATE approval_requests
+        )
+        .bind(state.as_str())
+        .bind(resolved_at_ms)
+        .bind(resolution_json.as_deref())
+        .bind(request_id)
+        .bind(ApprovalRequestState::Pending.as_str())
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE approval_requests
                     SET state = $1::approval_state, resolved_at_ms = $2, resolution_json = $3::jsonb
                   WHERE request_id = $4
                     AND state = 'pending'::approval_state",
-            )
-            .bind(state.as_str())
-            .bind(resolved_at_ms)
-            .bind(resolution_json.as_deref())
-            .bind(request_id)
-            .execute(pool)
-            .await
-            .map(|result| result.rows_affected())
-        }
+        )
+        .bind(state.as_str())
+        .bind(resolved_at_ms)
+        .bind(resolution_json.as_deref())
+        .bind(request_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
     }
     .map_err(store_err("approval_requests::resolve"))?;
 
@@ -201,9 +195,8 @@ pub async fn list_expired_pending(
     limit: u32,
 ) -> Result<Vec<ApprovalRequestRow>, BackendError> {
     let rows = match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, ApprovalRequestDbRow>(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id, ar.method,
+        StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id, ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json
                    FROM approval_requests ar
@@ -213,13 +206,12 @@ pub async fn list_expired_pending(
                     AND ar.deadline_at_ms <= ?
                   ORDER BY ar.deadline_at_ms ASC
                   LIMIT ?",
-            )
-            .bind(ApprovalRequestState::Pending.as_str())
-            .bind(now_ms)
-            .bind(i64::from(limit))
-            .fetch_all(pool)
-            .await
-        }
+        )
+        .bind(ApprovalRequestState::Pending.as_str())
+        .bind(now_ms)
+        .bind(i64::from(limit))
+        .fetch_all(pool)
+        .await,
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ApprovalRequestDbRow>(
                 "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
@@ -300,7 +292,10 @@ pub async fn list_pending_for_hosts(
             }
             builder.push(')');
 
-            builder.build_query_as::<ApprovalRequestDbRow>().fetch_all(pool).await
+            builder
+                .build_query_as::<ApprovalRequestDbRow>()
+                .fetch_all(pool)
+                .await
         }
         StorePoolRef::Postgres(pool) => {
             let mut builder = QueryBuilder::<Postgres>::new(
@@ -321,7 +316,10 @@ pub async fn list_pending_for_hosts(
             }
             builder.push(')');
 
-            builder.build_query_as::<ApprovalRequestDbRow>().fetch_all(pool).await
+            builder
+                .build_query_as::<ApprovalRequestDbRow>()
+                .fetch_all(pool)
+                .await
         }
     }
     .map_err(store_err("approval_requests::list_pending_for_hosts"))?;

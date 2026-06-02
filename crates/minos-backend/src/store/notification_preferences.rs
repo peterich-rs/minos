@@ -20,10 +20,7 @@ pub struct NotificationPreferencesRow {
 }
 
 /// Get preferences for an account. Returns defaults if no row exists.
-pub async fn get<S>(
-    store: &S,
-    account_id: &str,
-) -> Result<NotificationPreferencesRow, BackendError>
+pub async fn get<S>(store: &S, account_id: &str) -> Result<NotificationPreferencesRow, BackendError>
 where
     S: AsStorePool + ?Sized,
 {

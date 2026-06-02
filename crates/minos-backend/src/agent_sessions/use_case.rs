@@ -49,10 +49,8 @@ pub trait AgentSessionService: Send + Sync {
         input: StartAgentSessionInput,
     ) -> Result<StartAgentSessionOutput, AgentSessionError>;
 
-    async fn send_input(
-        &self,
-        input: SendInputInput,
-    ) -> Result<SendInputOutput, AgentSessionError>;
+    async fn send_input(&self, input: SendInputInput)
+        -> Result<SendInputOutput, AgentSessionError>;
 
     async fn stop(&self, input: StopAgentSessionInput) -> Result<(), AgentSessionError>;
 
@@ -61,10 +59,8 @@ pub trait AgentSessionService: Send + Sync {
         input: ListAgentSessionsInput,
     ) -> Result<ListAgentSessionsOutput, AgentSessionError>;
 
-    async fn read_turns(
-        &self,
-        input: ReadTurnsInput,
-    ) -> Result<ReadTurnsOutput, AgentSessionError>;
+    async fn read_turns(&self, input: ReadTurnsInput)
+        -> Result<ReadTurnsOutput, AgentSessionError>;
 }
 
 pub struct DefaultAgentSessionService {
@@ -87,7 +83,10 @@ impl DefaultAgentSessionService {
         })
     }
 
-    async fn select_host_for_account(&self, account_id: &str) -> Result<DeviceId, AgentSessionError> {
+    async fn select_host_for_account(
+        &self,
+        account_id: &str,
+    ) -> Result<DeviceId, AgentSessionError> {
         crate::store::account_host_pairings::list_hosts_for_account(&self.store, account_id)
             .await?
             .into_iter()
@@ -178,7 +177,10 @@ impl AgentSessionService for DefaultAgentSessionService {
                 }
                 host_device_id
             }
-            None => self.select_host_for_account(&input.caller_account_id).await?,
+            None => {
+                self.select_host_for_account(&input.caller_account_id)
+                    .await?
+            }
         };
 
         let started_at_ms = chrono::Utc::now().timestamp_millis();
@@ -306,7 +308,10 @@ impl AgentSessionService for DefaultAgentSessionService {
             .get_for_account(&input.session_id, &input.caller_account_id)
             .await?
             .ok_or(AgentSessionError::NotFound)?;
-        if matches!(session.status.as_str(), "stopping" | "stopped" | "ended" | "failed") {
+        if matches!(
+            session.status.as_str(),
+            "stopping" | "stopped" | "ended" | "failed"
+        ) {
             return Err(AgentSessionError::StateInvalid);
         }
 
@@ -405,7 +410,10 @@ impl AgentSessionService for DefaultAgentSessionService {
             .as_deref()
             .ok_or(AgentSessionError::HostUnavailable)
             .and_then(Self::parse_host_device_id)?;
-        if matches!(session.status.as_str(), "stopping" | "stopped" | "ended" | "failed") {
+        if matches!(
+            session.status.as_str(),
+            "stopping" | "stopped" | "ended" | "failed"
+        ) {
             return Err(AgentSessionError::StateInvalid);
         }
 
@@ -734,32 +742,28 @@ async fn update_agent_session_status_in_tx(
     ended_at_ms: Option<i64>,
 ) -> Result<(), BackendError> {
     match tx {
-        DbTx::Sqlite(tx) => {
-            sqlx::query(
-                "UPDATE agent_sessions
+        DbTx::Sqlite(tx) => sqlx::query(
+            "UPDATE agent_sessions
                     SET status = ?, ended_at_ms = ?
                   WHERE session_id = ?",
-            )
-            .bind(status)
-            .bind(ended_at_ms)
-            .bind(session_id)
-            .execute(&mut **tx)
-            .await
-            .map(|_| ())
-        }
-        DbTx::Postgres(tx) => {
-            sqlx::query(
-                "UPDATE agent_sessions
+        )
+        .bind(status)
+        .bind(ended_at_ms)
+        .bind(session_id)
+        .execute(&mut **tx)
+        .await
+        .map(|_| ()),
+        DbTx::Postgres(tx) => sqlx::query(
+            "UPDATE agent_sessions
                     SET status = $1, ended_at_ms = $2
                   WHERE session_id = $3",
-            )
-            .bind(status)
-            .bind(ended_at_ms)
-            .bind(session_id)
-            .execute(&mut **tx)
-            .await
-            .map(|_| ())
-        }
+        )
+        .bind(status)
+        .bind(ended_at_ms)
+        .bind(session_id)
+        .execute(&mut **tx)
+        .await
+        .map(|_| ()),
     }
     .map_err(|error| BackendError::StoreQuery {
         operation: "agent_sessions.update_status_in_tx".into(),

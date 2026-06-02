@@ -39,20 +39,20 @@ pub fn run(repo_root: &Path) -> Result<()> {
         for m in &missing {
             eprintln!("lint-docs: missing {m}");
         }
-        bail!("lint-docs: {} expected doc file(s) not found", missing.len());
+        bail!(
+            "lint-docs: {} expected doc file(s) not found",
+            missing.len()
+        );
     }
 
     // Verify critical HTTP paths are mentioned in architecture-overview.md.
     let overview_path = repo_root.join("docs/architecture-overview.md");
-    let overview = std::fs::read_to_string(&overview_path)
-        .unwrap_or_else(|_| String::new());
+    let overview = std::fs::read_to_string(&overview_path).unwrap_or_else(|_| String::new());
 
     let mut path_issues: Vec<String> = Vec::new();
     for path in CRITICAL_PATHS {
         if !overview.contains(path) {
-            path_issues.push(format!(
-                "architecture-overview.md does not mention {path}"
-            ));
+            path_issues.push(format!("architecture-overview.md does not mention {path}"));
         }
     }
 

@@ -25,8 +25,6 @@ use crate::store::{durable_event_log, outbox_events, StoreHandle};
 pub use event::{ApprovalResolution, DurableEvent, DurableEventEnvelope, SenderRef};
 pub use subscription::{ConnectionId, ConnectionPrincipal, ConnectionState, SubscriptionManager};
 pub use topic::{RealtimeTopic, TopicKind};
-pub use wire::{ClientFrame as GatewayClientFrame, ServerFrame as GatewayServerFrame};
-
 const DEFAULT_PEER_TARGET_CACHE_TTL: Duration = Duration::from_secs(5);
 const CLUSTER_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const REALTIME_WORKER_CAPACITY: usize = 1024;

@@ -48,7 +48,10 @@ pub(crate) async fn submit_approval_decision_inner(
         )),
         Err(ApprovalError::Forbidden) => Err((
             StatusCode::FORBIDDEN,
-            err("conversation_forbidden", "approval is not visible to this account"),
+            err(
+                "conversation_forbidden",
+                "approval is not visible to this account",
+            ),
         )),
         Err(ApprovalError::ValidationFormat(message)) => {
             Err((StatusCode::BAD_REQUEST, err("validation_format", message)))

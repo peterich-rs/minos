@@ -376,14 +376,10 @@ async fn start_session_dispatches_host_command_and_persists_session() {
     assert_eq!(session.agent_id.as_deref(), Some(agent.agent_id.as_str()));
     assert_eq!(session.status, "pending");
 
-    let turns = minos_backend::store::agent_turns::list_for_session(
-        &state.store,
-        &session_id,
-        None,
-        10,
-    )
-    .await
-    .unwrap();
+    let turns =
+        minos_backend::store::agent_turns::list_for_session(&state.store, &session_id, None, 10)
+            .await
+            .unwrap();
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].turn_seq, 1);
     assert_eq!(turns[0].role, "user");
@@ -424,7 +420,10 @@ async fn start_session_dispatches_host_command_and_persists_session() {
     .await
     .unwrap();
     assert_eq!(session_events.len(), 1);
-    assert_eq!(session_events[0].payload_json["kind"], "agent_session_started");
+    assert_eq!(
+        session_events[0].payload_json["kind"],
+        "agent_session_started"
+    );
 
     let host_events = minos_backend::store::durable_event_log::read_topic_after(
         &state.store,
@@ -533,7 +532,10 @@ async fn send_input_dispatches_to_existing_session_and_appends_turn() {
     .await
     .unwrap();
     assert_eq!(session_events.len(), 1);
-    assert_eq!(session_events[0].payload_json["kind"], "agent_turn_appended");
+    assert_eq!(
+        session_events[0].payload_json["kind"],
+        "agent_turn_appended"
+    );
     assert_eq!(session_events[0].payload_json["turn_id"], turn_id);
 
     let host_events = minos_backend::store::durable_event_log::read_topic_after(

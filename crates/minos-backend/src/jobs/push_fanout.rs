@@ -93,7 +93,9 @@ async fn tick(
         };
 
         // Parse the durable event payload into a DurableEvent
-        let event = match serde_json::from_value::<crate::realtime::event::DurableEvent>(durable.payload_json.clone()) {
+        let event = match serde_json::from_value::<crate::realtime::event::DurableEvent>(
+            durable.payload_json.clone(),
+        ) {
             Ok(event) => event,
             Err(error) => {
                 requeue_or_dead(store, &row, &error.to_string(), now_ms).await;

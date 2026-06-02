@@ -521,7 +521,14 @@ async fn get_threads_without_bearer_returns_401() {
 async fn approval_request_timeout_broadcasts_timeout_and_auto_rejects() {
     let state = backend_state().await;
     let (mac_id, ios_id, _secret, account_id) = paired_pair(&state).await;
-    seed_approval_session(&state, &account_id, mac_id, "thr-approval-timeout", "turn-1").await;
+    seed_approval_session(
+        &state,
+        &account_id,
+        mac_id,
+        "thr-approval-timeout",
+        "turn-1",
+    )
+    .await;
     let mut mobile_rx =
         seed_live_bound_session(&state, ios_id, DeviceRole::MobileClient, &account_id);
     let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
@@ -650,7 +657,14 @@ async fn approval_request_timeout_broadcasts_timeout_and_auto_rejects() {
 async fn approvals_respond_endpoint_accepts_formal_shape_and_persists_command() {
     let state = backend_state().await;
     let (mac_id, ios_id, secret, account_id) = paired_pair(&state).await;
-    seed_approval_session(&state, &account_id, mac_id, "thr-approvals-respond", "turn-1").await;
+    seed_approval_session(
+        &state,
+        &account_id,
+        mac_id,
+        "thr-approvals-respond",
+        "turn-1",
+    )
+    .await;
     let host_rx = seed_live_bound_session(&state, mac_id, DeviceRole::AgentHost, &account_id);
     let responder = spawn_approval_decision_responder(
         Arc::clone(&state.registry),

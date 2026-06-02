@@ -16,7 +16,7 @@ use minos_backend::{
     store,
 };
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
-use minos_protocol::{Envelope, EventKind};
+use minos_protocol::realtime::ServerFrame;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::{
     client::ClientRequestBuilder, http::Uri, protocol::Message, Error as WsError,
@@ -195,10 +195,10 @@ async fn ws_client_missing_ticket_rejects_with_401() {
     assert_http_status(&err, 401, "missing ticket");
 }
 
-// ── /ws/client: valid ticket → Event::Unpaired ──────────────────────────
+// ── /ws/client: valid ticket → ServerFrame::Hello ───────────────────────
 
 #[tokio::test]
-async fn ws_client_ticket_connect_emits_unpaired_event() {
+async fn ws_client_ticket_connect_emits_hello_frame() {
     use futures::StreamExt;
 
     let (base, _task, pool, auth) = spawn_relay().await;
@@ -220,13 +220,13 @@ async fn ws_client_ticket_connect_emits_unpaired_event() {
         Message::Text(t) => t,
         other => panic!("expected text frame, got {other:?}"),
     };
-    let env: Envelope = serde_json::from_str(&text).unwrap();
-    match env {
-        Envelope::Event {
-            event: EventKind::Unpaired,
+    let frame: ServerFrame = serde_json::from_str(&text).unwrap();
+    match frame {
+        ServerFrame::Hello {
+            heartbeat_interval_ms,
             ..
-        } => {}
-        other => panic!("expected Event::Unpaired, got {other:?}"),
+        } => assert_eq!(heartbeat_interval_ms, 25_000),
+        other => panic!("expected Hello, got {other:?}"),
     }
 
     let row = store::devices::get_device(&pool, id)
@@ -241,15 +241,13 @@ async fn ws_client_ticket_connect_emits_unpaired_event() {
     );
 }
 
-// ── /ws/host: paired reconnect → Event::Unpaired (single-peer model removed) ─
+// ── /ws/host: paired reconnect legacy presence model removed ────────────
 
-// ADR-0020 / Phase G: the activate hook now always emits `Unpaired` as the
-// initial frame; the legacy `PeerOffline` based on a single-peer paired_with
-// slot was deleted alongside the device-keyed pairings module. Multi-host
-// account-scoped presence rebuild on connect is deferred to Phase M.
+// The topic gateway now starts with `Hello`; the old single-peer presence
+// bootstrap (`PeerOffline`/`Unpaired`) no longer exists.
 #[tokio::test]
 #[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-host coverage"]
-async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not_live() {
+async fn devices_authenticated_connect_emits_hello_frame_when_peer_is_not_live() {
     use futures::StreamExt;
 
     let (base, _task, pool, auth) = spawn_relay().await;
@@ -283,15 +281,10 @@ async fn devices_authenticated_connect_emits_peer_offline_event_when_peer_is_not
         Message::Text(t) => t,
         other => panic!("expected text frame, got {other:?}"),
     };
-    let env: Envelope = serde_json::from_str(&text).unwrap();
-    match env {
-        Envelope::Event {
-            event: EventKind::PeerOffline { peer_device_id },
-            ..
-        } => {
-            assert_eq!(peer_device_id, ios_id);
-        }
-        other => panic!("expected Event::PeerOffline, got {other:?}"),
+    let frame: ServerFrame = serde_json::from_str(&text).unwrap();
+    match frame {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
     }
 }
 

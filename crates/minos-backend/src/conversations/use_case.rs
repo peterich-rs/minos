@@ -206,8 +206,8 @@ impl ConversationService for DefaultConversationService {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
             return Err(ConversationError::NotFound);
         }
-        let profiles = social::list_conversation_member_profiles(&self.store, conversation_id)
-            .await?;
+        let profiles =
+            social::list_conversation_member_profiles(&self.store, conversation_id).await?;
         Ok(profiles.iter().map(to_user_summary).collect())
     }
 
@@ -326,15 +326,10 @@ impl ConversationService for DefaultConversationService {
                 "message recall window has expired (5 minutes)".into(),
             ));
         }
-        let recalled = social::recall_message(
-            &self.store,
-            conversation_id,
-            message_id,
-            account_id,
-            now_ms,
-        )
-        .await?
-        .ok_or(ConversationError::NotFound)?;
+        let recalled =
+            social::recall_message(&self.store, conversation_id, message_id, account_id, now_ms)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
         let mut hydrated = hydrate_messages(&self.store, vec![recalled]).await?;
         Ok(hydrated.remove(0))
     }
@@ -417,8 +412,8 @@ async fn hydrate_conversations(
             let kind = parse_conversation_kind(&row.kind)?;
             let counterpart = match kind {
                 ConversationKind::Direct => {
-                    let counterpart_id = conversation_counterpart_id(&row, account_id)
-                        .ok_or_else(|| {
+                    let counterpart_id =
+                        conversation_counterpart_id(&row, account_id).ok_or_else(|| {
                             ConversationError::InvalidKind(
                                 "direct conversation missing counterpart".to_string(),
                             )
@@ -463,8 +458,7 @@ pub async fn hydrate_messages(
         .iter()
         .map(|row| row.message_id.clone())
         .collect::<Vec<_>>();
-    let mut mentions_by_message =
-        social::list_message_mentions(store, &message_ids).await?;
+    let mut mentions_by_message = social::list_message_mentions(store, &message_ids).await?;
 
     let mut reply_ids = rows
         .iter()
@@ -507,14 +501,16 @@ pub async fn hydrate_messages(
             .reply_to_message_id
             .as_ref()
             .and_then(|reply_id| reply_rows.get(reply_id))
-            .map(|reply_row| -> Result<ChatMessageReplySummary, ConversationError> {
-                Ok(ChatMessageReplySummary {
-                    message_id: reply_row.message_id.clone(),
-                    sender: sender_summary(reply_row, &profiles, &agents)?,
-                    text: reply_row.text.clone(),
-                    recalled_at_ms: reply_row.recalled_at_ms,
-                })
-            })
+            .map(
+                |reply_row| -> Result<ChatMessageReplySummary, ConversationError> {
+                    Ok(ChatMessageReplySummary {
+                        message_id: reply_row.message_id.clone(),
+                        sender: sender_summary(reply_row, &profiles, &agents)?,
+                        text: reply_row.text.clone(),
+                        recalled_at_ms: reply_row.recalled_at_ms,
+                    })
+                },
+            )
             .transpose()?;
         let sender = sender_summary(&row, &profiles, &agents)?;
         let sender_type = if row.sender_type == "agent" {

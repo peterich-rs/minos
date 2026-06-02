@@ -15,9 +15,9 @@
 //!    second authenticated socket for the same `DeviceId` actively revokes
 //!    the first, and the replacement keeps serving traffic while `/metrics`
 //!    records `reason="session_superseded"`.
-//! 3. `e2e_client_sent_server_frame_records_close_reason_metric` — a mobile
-//!    client sends a server-only envelope kind and the live runtime closes
-//!    the socket while `/metrics` records `reason="client_sent_server_frame"`.
+//! 3. `e2e_legacy_envelope_frame_returns_validation_error` — a mobile
+//!    client sends a legacy `Envelope` payload and the topic gateway rejects
+//!    it with a `validation_format` error while keeping the socket alive.
 //! 4. `e2e_presence_tracks_live_peer_membership` — paired devices observe
 //!    `Event::PeerOnline` / `Event::PeerOffline` on each other's connect
 //!    and disconnect.
@@ -35,6 +35,7 @@ use minos_backend::{
     store,
 };
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
+use minos_protocol::realtime::{ClientFrame, ServerFrame};
 use minos_protocol::{Envelope, EventKind};
 use sqlx::SqlitePool;
 use tempfile::NamedTempFile;
@@ -135,7 +136,7 @@ async fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
     Ok(relay
         .auth
         .issue_host_ws_ticket(host_id)
-    .await
+        .await
         .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
         .ticket)
 }
@@ -186,8 +187,39 @@ async fn recv_envelope(ws: &mut WsClient) -> anyhow::Result<Envelope> {
     }
 }
 
+async fn recv_server_frame(ws: &mut WsClient) -> anyhow::Result<ServerFrame> {
+    loop {
+        let next = timeout(RECV_TIMEOUT, ws.next())
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for server frame"))?;
+        match next {
+            Some(Ok(Message::Text(t))) => {
+                if let Ok(frame) = serde_json::from_str::<ServerFrame>(&t) {
+                    return Ok(frame);
+                }
+            }
+            Some(Ok(Message::Ping(p))) => {
+                ws.send(Message::Pong(p)).await?;
+            }
+            Some(Ok(Message::Pong(_))) => {}
+            Some(Ok(Message::Close(f))) => {
+                return Err(anyhow::anyhow!("unexpected close frame: {f:?}"));
+            }
+            Some(Ok(other)) => return Err(anyhow::anyhow!("unexpected frame: {other:?}")),
+            Some(Err(e)) => return Err(anyhow::anyhow!("ws error: {e}")),
+            None => return Err(anyhow::anyhow!("stream ended unexpectedly")),
+        }
+    }
+}
+
 async fn send_envelope(ws: &mut WsClient, env: &Envelope) -> anyhow::Result<()> {
     let text = serde_json::to_string(env)?;
+    ws.send(Message::Text(text.into())).await?;
+    Ok(())
+}
+
+async fn send_client_frame(ws: &mut WsClient, frame: &ClientFrame) -> anyhow::Result<()> {
+    let text = serde_json::to_string(frame)?;
     ws.send(Message::Text(text.into())).await?;
     Ok(())
 }
@@ -216,14 +248,17 @@ async fn expect_close_frame(ws: &mut WsClient) -> anyhow::Result<()> {
     }
 }
 
-async fn expect_unpaired_event(ws: &mut WsClient) -> anyhow::Result<()> {
-    match recv_envelope(ws).await? {
-        Envelope::Event {
-            event: EventKind::Unpaired,
-            version: 1,
-        } => Ok(()),
+async fn expect_hello_frame(ws: &mut WsClient) -> anyhow::Result<()> {
+    match recv_server_frame(ws).await? {
+        ServerFrame::Hello {
+            heartbeat_interval_ms,
+            ..
+        } => {
+            anyhow::ensure!(heartbeat_interval_ms == 25_000);
+            Ok(())
+        }
         other => Err(anyhow::anyhow!(
-            "expected Event::Unpaired as first frame, got {other:?}"
+            "expected Hello as first frame, got {other:?}"
         )),
     }
 }
@@ -326,11 +361,11 @@ async fn e2e_reconnect_supersedes_old_socket_records_close_reason_metric() -> an
     let id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
 
     let mut first = connect_client(&relay, id, DeviceRole::MobileClient, Some(&account_id)).await?;
-    expect_unpaired_event(&mut first).await?;
+    expect_hello_frame(&mut first).await?;
 
     let mut second =
         connect_client(&relay, id, DeviceRole::MobileClient, Some(&account_id)).await?;
-    expect_unpaired_event(&mut second).await?;
+    expect_hello_frame(&mut second).await?;
 
     expect_close_frame(&mut first).await?;
     assert_metrics_contains(
@@ -340,38 +375,10 @@ async fn e2e_reconnect_supersedes_old_socket_records_close_reason_metric() -> an
     )
     .await?;
 
-    // Confirm the replacement socket is still alive by sending a `Forward`
-    // frame from the unpaired session and asserting the relay synthesises
-    // the spec §7.3 peer-offline JSON-RPC error back over the same socket.
-    let payload_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "list_clis",
-        "id": 7,
-    });
-    // The iOS session has a real account_id from the formal ticket; no Mac is
-    // paired to that account, so the Forward's iOS→Mac path will fail the
-    // `account_host_pairings::exists` gate and the relay should synthesise a
-    // peer_offline error back to the same socket. We use a fresh DeviceId
-    // for the target so it deterministically misses both the pair table and
-    // any live registry slot.
-    let target_mac = DeviceId::new();
-    send_envelope(
-        &mut second,
-        &Envelope::Forward {
-            version: 1,
-            target_device_id: target_mac,
-            payload: payload_req.clone(),
-        },
-    )
-    .await?;
-    match recv_envelope(&mut second).await? {
-        Envelope::Forwarded { from, payload, .. } => {
-            assert_eq!(from, id, "synthesised Forwarded should name the sender");
-            assert_eq!(payload["error"]["code"], -32001);
-            assert_eq!(payload["error"]["message"], "peer offline");
-            assert_eq!(payload["id"], 7);
-        }
-        other => panic!("expected synthesised Forwarded on replacement socket, got {other:?}"),
+    send_client_frame(&mut second, &ClientFrame::Ping { ts: 7 }).await?;
+    match recv_server_frame(&mut second).await? {
+        ServerFrame::Pong { ts, .. } => assert_eq!(ts, 7),
+        other => panic!("expected Pong on replacement socket, got {other:?}"),
     }
 
     second.send(Message::Close(None)).await.ok();
@@ -381,7 +388,7 @@ async fn e2e_reconnect_supersedes_old_socket_records_close_reason_metric() -> an
 }
 
 #[tokio::test]
-async fn e2e_client_sent_server_frame_records_close_reason_metric() -> anyhow::Result<()> {
+async fn e2e_legacy_envelope_frame_returns_validation_error() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     let account_id = store::accounts::create(&relay.pool, "server-frame@example.com", "phc")
@@ -395,7 +402,7 @@ async fn e2e_client_sent_server_frame_records_close_reason_metric() -> anyhow::R
         Some(&account_id),
     )
     .await?;
-    expect_unpaired_event(&mut ws).await?;
+    expect_hello_frame(&mut ws).await?;
 
     send_envelope(
         &mut ws,
@@ -406,16 +413,19 @@ async fn e2e_client_sent_server_frame_records_close_reason_metric() -> anyhow::R
     )
     .await?;
 
-    expect_close_frame(&mut ws).await?;
-    assert_metrics_contains(
-        &relay,
-        "minos_backend_ws_close_total",
-        &[
-            ("role", "mobile-client"),
-            ("reason", "client_sent_server_frame"),
-        ],
-    )
-    .await?;
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Error { code, message, .. } => {
+            assert_eq!(code, "validation_format");
+            assert_eq!(message, "unrecognized websocket frame");
+        }
+        other => panic!("expected validation error, got {other:?}"),
+    }
+
+    send_client_frame(&mut ws, &ClientFrame::Ping { ts: 9 }).await?;
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Pong { ts, .. } => assert_eq!(ts, 9),
+        other => panic!("expected Pong after validation error, got {other:?}"),
+    }
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use sqlx::{QueryBuilder, Postgres, Sqlite};
+use sqlx::{Postgres, QueryBuilder, Sqlite};
 use uuid::Uuid;
 
 use crate::error::BackendError;
