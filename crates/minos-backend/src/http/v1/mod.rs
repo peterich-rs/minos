@@ -17,10 +17,11 @@ use crate::http::error_response::{err_json as err, ErrorEnvelope};
 pub mod agent_sessions;
 pub mod approvals;
 pub mod auth;
-pub mod conversations;
 pub mod contract;
+pub mod conversations;
 pub mod friends;
 pub mod host;
+pub mod host_commands;
 pub mod notifications;
 pub mod pairing;
 pub mod profiles;
@@ -45,6 +46,7 @@ fn router_with_social(social_router: Router<BackendState>) -> Router<BackendStat
         .merge(conversations::router())
         .merge(friends::router())
         .merge(host::router())
+        .merge(host_commands::router())
         .merge(notifications::router())
         .merge(pairing::router())
         .merge(profiles::router())

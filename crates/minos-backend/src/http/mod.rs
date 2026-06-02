@@ -141,13 +141,7 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "public",
     ),
     RouteContract::new("GET", "/health/info", "/health/info", "platform", "public"),
-    RouteContract::new(
-        "GET",
-        "/health/jobs",
-        "/health/jobs",
-        "platform",
-        "public",
-    ),
+    RouteContract::new("GET", "/health/jobs", "/health/jobs", "platform", "public"),
     RouteContract::new("GET", "/metrics", "/metrics", "platform", "public"),
     RouteContract::new(
         "GET",
@@ -253,6 +247,27 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "/v1/host/installations/self",
         "host_api",
         "host_installation",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/host-commands/list-clis",
+        "/v1/host-commands/list-clis",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/host-commands/list-host-skills",
+        "/v1/host-commands/list-host-skills",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/host-commands/write-host-skill-config",
+        "/v1/host-commands/write-host-skill-config",
+        "account_api",
+        "account_bearer",
     ),
     RouteContract::new(
         "POST",
@@ -790,7 +805,10 @@ pub fn router(state: BackendState) -> Router {
         .route("/health/info", axum::routing::get(health::info))
         .route("/health/jobs", axum::routing::get(health::jobs))
         .route("/metrics", axum::routing::get(metrics::get))
-        .route("/openapi.json", axum::routing::get(openapi::serve_openapi_json))
+        .route(
+            "/openapi.json",
+            axum::routing::get(openapi::serve_openapi_json),
+        )
         .route(
             "/ws/client",
             axum::routing::get(crate::realtime::gateway::upgrade_client),

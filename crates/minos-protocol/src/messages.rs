@@ -399,6 +399,12 @@ pub struct HealthResponse {
     pub uptime_secs: u64,
 }
 
+/// Account-side request to target one paired host for a CLI scan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostClisRequest {
+    pub host_installation_id: String,
+}
+
 pub type ListClisResponse = Vec<AgentDescriptor>;
 
 /// Parameters for the `list_host_skills` RPC. `workspace` is optional for
@@ -406,6 +412,15 @@ pub type ListClisResponse = Vec<AgentDescriptor>;
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostSkillsRequest {
+    pub workspace: String,
+    #[serde(default)]
+    pub force_reload: bool,
+}
+
+/// Account-side request to inspect skills on one paired host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostSkillsCommandRequest {
+    pub host_installation_id: String,
     pub workspace: String,
     #[serde(default)]
     pub force_reload: bool,
@@ -451,6 +466,15 @@ pub struct ListHostSkillsResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WriteHostSkillConfigRequest {
+    pub workspace: String,
+    pub path: String,
+    pub enabled: bool,
+}
+
+/// Account-side request to update one host skill toggle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WriteHostSkillConfigCommandRequest {
+    pub host_installation_id: String,
     pub workspace: String,
     pub path: String,
     pub enabled: bool,
@@ -887,6 +911,41 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let back: HealthResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
+    }
+
+    #[test]
+    fn list_host_clis_request_round_trip() {
+        let req = ListHostClisRequest {
+            host_installation_id: "host-123".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ListHostClisRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn list_host_skills_command_request_round_trip() {
+        let req = ListHostSkillsCommandRequest {
+            host_installation_id: "host-123".into(),
+            workspace: "/tmp/workspace".into(),
+            force_reload: true,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ListHostSkillsCommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn write_host_skill_config_command_request_round_trip() {
+        let req = WriteHostSkillConfigCommandRequest {
+            host_installation_id: "host-123".into(),
+            workspace: String::new(),
+            path: "/tmp/skill".into(),
+            enabled: false,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: WriteHostSkillConfigCommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
     }
 
     #[test]
