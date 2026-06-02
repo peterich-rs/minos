@@ -10,6 +10,7 @@
 use crate::store::LocalStore;
 use anyhow::Result;
 use minos_agent_runtime::RawIngest;
+use minos_protocol::realtime::ClientFrame;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -34,7 +35,7 @@ struct WriteJob {
 impl EventWriter {
     pub fn spawn(
         store: Arc<LocalStore>,
-        relay_out: mpsc::Sender<minos_protocol::Envelope>,
+        relay_out: mpsc::Sender<ClientFrame>,
     ) -> Self {
         let (tx, rx) = mpsc::channel::<WriteJob>(1024);
         tokio::spawn(writer_loop(store, relay_out, rx));
@@ -67,7 +68,7 @@ impl EventWriter {
 
 async fn writer_loop(
     store: Arc<LocalStore>,
-    relay_out: mpsc::Sender<minos_protocol::Envelope>,
+    relay_out: mpsc::Sender<ClientFrame>,
     mut rx: mpsc::Receiver<WriteJob>,
 ) {
     use tokio::time::{Duration, Instant};
@@ -91,7 +92,7 @@ async fn writer_loop(
 
 async fn process_batch(
     store: &LocalStore,
-    relay_out: &mpsc::Sender<minos_protocol::Envelope>,
+    relay_out: &mpsc::Sender<ClientFrame>,
     jobs: Vec<WriteJob>,
 ) {
     if jobs.is_empty() {
@@ -108,7 +109,7 @@ async fn process_batch(
         }
     };
     let mut results: Vec<Result<u64>> = Vec::with_capacity(jobs.len());
-    let mut envs: Vec<minos_protocol::Envelope> = Vec::with_capacity(jobs.len());
+    let mut frames: Vec<ClientFrame> = Vec::with_capacity(jobs.len());
     for job in &jobs {
         let prev: Option<i64> =
             match sqlx::query_scalar("SELECT last_seq FROM threads WHERE thread_id = ?")
@@ -159,13 +160,16 @@ async fn process_batch(
             continue;
         }
         results.push(Ok(seq));
-        envs.push(minos_protocol::Envelope::Ingest {
-            version: 1,
-            agent: job.ingest.agent,
-            thread_id: job.ingest.thread_id.clone(),
-            seq,
+        let topic = format!("agent_session:{}", job.ingest.thread_id);
+        let kind = job.ingest.payload
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent_event")
+            .to_string();
+        frames.push(ClientFrame::HostStreamEvent {
+            topic,
+            kind,
             payload: job.ingest.payload.clone(),
-            ts_ms: job.ingest.ts_ms,
         });
     }
     if let Err(e) = tx.commit().await {
@@ -177,8 +181,8 @@ async fn process_batch(
     for (job, r) in jobs.into_iter().zip(results) {
         let _ = job.ack.send(r);
     }
-    for env in envs {
-        let _ = relay_out.send(env).await;
+    for frame in frames {
+        let _ = relay_out.send(frame).await;
     }
 }
 
@@ -277,10 +281,14 @@ mod tests {
         }
 
         for i in 0..5 {
-            let env = relay_rx.recv().await.unwrap();
-            match env {
-                minos_protocol::Envelope::Ingest { seq, .. } => assert_eq!(seq, (i + 1) as u64),
-                _ => panic!("unexpected envelope"),
+            let frame = relay_rx.recv().await.unwrap();
+            match frame {
+                ClientFrame::HostStreamEvent { topic, kind, payload } => {
+                    assert!(topic.starts_with("agent_session:"));
+                    assert!(!kind.is_empty());
+                    assert!(payload.is_object());
+                }
+                other => panic!("unexpected frame: {other:?}"),
             }
         }
     }

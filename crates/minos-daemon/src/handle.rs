@@ -14,7 +14,8 @@ use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
-use minos_protocol::{Envelope, HostPeerSummary};
+use minos_protocol::realtime::ClientFrame;
+use minos_protocol::HostPeerSummary;
 use tokio::sync::mpsc;
 
 use crate::agent::AgentGlue;
@@ -119,7 +120,7 @@ impl DaemonHandle {
         // yet because the relay needs an `RpcServerImpl` that references the
         // agent. Solve the cycle with a local forwarder channel that's wired
         // to the relay's outbound queue once both halves exist.
-        let (agent_out_tx, mut agent_out_rx) = mpsc::channel::<Envelope>(256);
+        let (agent_out_tx, mut agent_out_rx) = mpsc::channel::<ClientFrame>(256);
         let agent = Arc::new(AgentGlue::new(
             paths::minos_home()?.join("workspaces"),
             subprocess_env.clone(),

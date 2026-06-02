@@ -19,6 +19,16 @@ pub struct RealtimeWsTicketResponse {
     pub gateway_url: Option<String>,
 }
 
+/// Host-side ws-ticket response. The backend wraps this inside a
+/// `ResponseEnvelope { data, meta }` so callers should deserialize the
+/// outer envelope first, then extract `data` into this struct.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostWsTicketResponse {
+    pub ticket: String,
+    pub gateway_url: String,
+    pub expires_at_ms: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -31,6 +41,18 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: RealtimeWsTicketResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(resp, back);
+    }
+
+    #[test]
+    fn host_ws_ticket_response_round_trip() {
+        let resp = HostWsTicketResponse {
+            ticket: "jwt-host-token".into(),
+            gateway_url: "/ws/host?ticket=jwt-host-token".into(),
+            expires_at_ms: 1_760_000_060_000,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: HostWsTicketResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
     }
 

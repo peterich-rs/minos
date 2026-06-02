@@ -64,7 +64,7 @@ impl AgentGlue {
         workspace_root: PathBuf,
         subprocess_env: Arc<std::collections::HashMap<String, String>>,
         store: Arc<LocalStore>,
-        relay_out_tx: mpsc::Sender<minos_protocol::Envelope>,
+        relay_out_tx: mpsc::Sender<minos_protocol::realtime::ClientFrame>,
     ) -> Self {
         let mut cfg = AgentRuntimeConfig::new(workspace_root.clone());
         cfg.subprocess_env = subprocess_env;

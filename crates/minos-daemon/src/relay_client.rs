@@ -3,70 +3,49 @@
 //! The Mac daemon runs exactly one `RelayClient` in steady state. It owns
 //! a single background task that:
 //!
-//!   1. opens a WSS handshake to the compile-time `BACKEND_URL`, stamping
-//!      the full auth-header bundle from [`minos_transport::auth::AuthHeaders`];
-//!   2. publishes relay-link transitions onto a `watch::Receiver<RelayLinkState>`
-//!      so UI can react to connect/disconnect / reconnect attempts;
-//!   3. publishes peer-state transitions (`Paired` → `PeerOnline` → `PeerOffline`
-//!      / `Unpaired`) onto a `watch::Receiver<PeerState>`;
-//!   4. relays `Envelope::Forwarded` peer payloads to the local jsonrpsee
-//!      surface (`RpcServerImpl`) and pushes the response back over the
-//!      WebSocket so the iPhone sees a paired-RPC round trip.
+//!   1. fetches a short-lived ws-ticket via `POST /v1/host/realtime/ws-ticket`;
+//!   2. opens a WSS handshake to `/ws/host?ticket=…` (no custom headers);
+//!   3. receives `ServerFrame` messages from the topic-based realtime gateway;
+//!   4. dispatches `DurableEvent::HostCommandIssued` to the local
+//!      [`RpcServerImpl`] and pushes `ClientFrame::HostCommandResult` back;
+//!   5. sends `ClientFrame::HostStreamEvent` for agent ingest data.
 //!
 //! Pairing token issuance and `forget_peer` go through the backend's HTTP
-//! `/v1/*` control plane on a separate [`RelayHttpClient`] handle; this
-//! module no longer carries an in-flight `LocalRpc` correlation table.
-//!
-//! The module intentionally does NOT touch `DaemonHandle`. Plan 05 Phase F
-//! wires the handle to this client; Phase E (this module) only has to stand
-//! on its own with the `relay_client_smoke` integration tests.
+//! `/v1/*` control plane on a separate [`RelayHttpClient`] handle.
 //!
 //! # Error handling
 //!
 //! - A connect-time HTTP 401 is treated as a terminal auth failure:
 //!   `MinosError::Unauthorized` is written into the shared `last_error` slot
-//!   and the task exits with a `Disconnected` link state. The caller must
-//!   call [`RelayClient::stop`] and spawn a fresh client once auth is fixed.
-//! - WS close code `4401` (relay's post-upgrade stale-auth signal) is
-//!   terminal too: `MinosError::DeviceNotTrusted` lands in `last_error`
-//!   and the task exits — re-pairing is required before another connect
-//!   can succeed. Close code `4400` (malformed envelope / version mismatch)
-//!   records `MinosError::EnvelopeVersionUnsupported` but falls back to
-//!   the reconnect backoff, since a bug fix in-flight may re-establish the
-//!   link on the next cycle.
+//!   and the task exits with a `Disconnected` link state.
+//! - WS close code `4401` is terminal too: `MinosError::DeviceNotTrusted`
+//!   lands in `last_error` and the task exits — re-pairing is required.
+//! - WS close code `4400` (malformed frame) records
+//!   `MinosError::EnvelopeVersionUnsupported` but reconnects.
 //! - All other errors fall back to exponential-backoff reconnect
 //!   (1s → 2s → 4s → 8s → 16s → 30s cap, no max attempts).
-//!
-//! # Pairing state on `EventKind::Paired`
-//!
-//! Pairing facts are backend-owned, but the host's `device-secret` must be
-//! retained locally. When the relay finalises a pair and forwards
-//! `your_device_secret`, the dispatch task updates the live reconnect slot,
-//! writes the secret to Keychain, and publishes `PeerState::Paired`.
 
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
-use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, PeerState, RelayLinkState};
-use minos_protocol::envelope::{Envelope, EventKind};
+use minos_domain::{DeviceId, DeviceSecret, MinosError, PeerState, RelayLinkState};
+use minos_protocol::realtime::{ClientFrame, ServerFrame};
 use minos_protocol::HostPeerSummary;
-use minos_transport::auth::AuthHeaders;
 use minos_transport::backoff::delay_for_attempt;
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::client::ClientRequestBuilder;
-use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
 use crate::relay_http::RelayHttpClient;
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
-use crate::rpc_server::{invoke_forwarded, wrap_response_envelope, RpcServerImpl};
+use crate::rpc_server::{invoke_host_command, RpcServerImpl};
 
-/// Bounded queue for outbound envelopes — deep enough to absorb a brief
+/// Bounded queue for outbound client frames — deep enough to absorb a brief
 /// handshake pause without back-pressuring callers. The dispatch loop
 /// drains continuously, so the steady-state depth is effectively zero.
 const OUTBOUND_QUEUE_DEPTH: usize = 64;
@@ -91,10 +70,8 @@ struct Inner {
     /// Cloneable producer side of the dispatcher's outbound queue.
     /// Other in-process producers (e.g. the agent-ingest forwarder) clone
     /// this via [`RelayClient::outbound_sender`] so every host-side WS frame
-    /// goes through the single `/devices` socket the dispatcher owns —
-    /// preventing the device-id collision that two parallel WS clients
-    /// would otherwise trigger on the backend.
-    out_tx: mpsc::Sender<Envelope>,
+    /// goes through the single socket the dispatcher owns.
+    out_tx: mpsc::Sender<ClientFrame>,
 }
 
 pub struct RelayClient {
@@ -130,13 +107,11 @@ impl RelayClient {
             .map_or(PeerState::Unpaired, |p| PeerState::Paired {
                 peer_id: p.device_id,
                 peer_name: p.name.clone(),
-                // We haven't connected yet — the relay will emit PeerOnline
-                // or PeerOffline inside the first authenticated frame.
                 online: false,
             });
         let (peer_tx, peer_rx) = watch::channel(initial_peer);
 
-        let (out_tx, out_rx) = mpsc::channel::<Envelope>(OUTBOUND_QUEUE_DEPTH);
+        let (out_tx, out_rx) = mpsc::channel::<ClientFrame>(OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let secret_store = Arc::new(StdMutex::new(secret));
@@ -149,8 +124,6 @@ impl RelayClient {
                     backend_url = %backend_url,
                     "failed to construct RelayHttpClient; pairing/forget HTTP calls will fail",
                 );
-                // Build a placeholder client against the same URL — every
-                // attempt will surface the same error path.
                 Arc::new(
                     RelayHttpClient::new(
                         "ws://invalid.localhost/devices",
@@ -164,7 +137,6 @@ impl RelayClient {
         let dispatch_ctx = DispatchCtx {
             self_device_id,
             secret: secret_store.clone(),
-            mac_name: mac_name.clone(),
             backend_url: backend_url.clone(),
             link_tx,
             peer_tx,
@@ -194,9 +166,6 @@ impl RelayClient {
 
     /// Issue `request_pairing_qr` against the backend's HTTP control plane
     /// and wrap the response into the Mac-side QR payload shape.
-    ///
-    /// The QR carries only the host display name, the one-shot token, and
-    /// its expiry. Runtime routing/auth config never rides in the QR.
     pub async fn request_pairing_token(&self) -> Result<RelayQrPayload, MinosError> {
         let qr = self
             .inner
@@ -263,21 +232,16 @@ impl RelayClient {
     /// Clone the producer side of the dispatcher's outbound queue.
     ///
     /// Used by in-process forwarders (e.g. `agent_ingest`) to push
-    /// `Envelope::Ingest` / `Envelope::Forward` frames through the same
-    /// `/devices` socket the dispatcher owns. Centralising on a single WS
-    /// per device is required by the backend, whose session registry is
-    /// keyed by `DeviceId` alone and revokes any prior socket on
-    /// reconnect — two parallel WS clients with the same identity would
-    /// supersede each other in a tight loop.
+    /// `ClientFrame::HostStreamEvent` frames through the same socket the
+    /// dispatcher owns.
     #[must_use]
-    pub fn outbound_sender(&self) -> mpsc::Sender<Envelope> {
+    pub fn outbound_sender(&self) -> mpsc::Sender<ClientFrame> {
         self.inner.out_tx.clone()
     }
 
     /// Signal the dispatch task to exit and await its join. Idempotent:
     /// calling twice is a benign no-op after the first success.
     pub async fn stop(&self) {
-        // Take the shutdown sender once; drop it if already taken.
         if let Some(tx) = self.inner.shutdown_tx.lock().await.take() {
             let _ = tx.send(());
         }
@@ -288,92 +252,40 @@ impl RelayClient {
 }
 
 /// Shared persistence handles threaded into the dispatcher.
-///
-/// `DaemonInner` owns the same `Arc`s; the dispatch task updates them when
-/// the relay forwards a `Paired` / `Unpaired` event so warm restarts pick
-/// up the most recent peer + error state.
 pub struct PersistenceCtx {
-    /// In-memory mirror of the persisted `PeerRecord` — same `Arc` as the
-    /// one in `DaemonInner::peer`. Updated on `EventKind::Paired` /
-    /// `Unpaired`; read by `DaemonHandle::current_trusted_device`.
     pub peer_store: Arc<StdMutex<Option<PeerRecord>>>,
-    /// Full host-side view of every paired mobile/account row.
     pub peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
-    /// Same `Arc` as `DaemonInner::last_error`. Populated on fatal-exit
-    /// paths (HTTP 401, WS close 4401/4400). Drained on `DaemonHandle::
-    /// last_error`.
     pub last_error: Arc<StdMutex<Option<MinosError>>>,
-    /// Phase D: dispatched whenever the backend pushes
-    /// `Event::IngestCheckpoint` post-auth. `None` in test fixtures that
-    /// don't exercise reconciliation; production wires the daemon's
-    /// `Reconciliator` here.
     pub reconciliator: Option<Arc<crate::reconciliator::Reconciliator>>,
 }
 
-/// Shared state plumbed into the dispatcher. Built once at spawn time; the
-/// dispatcher holds it until shutdown.
-///
-/// `shutdown_rx` lives as a sibling variable in `run_dispatch` instead of a
-/// field so `tokio::select!` can borrow it independently of `&mut ctx`.
 struct DispatchCtx {
     self_device_id: DeviceId,
     secret: Arc<StdMutex<Option<DeviceSecret>>>,
-    mac_name: String,
     backend_url: String,
     link_tx: watch::Sender<RelayLinkState>,
     peer_tx: watch::Sender<PeerState>,
-    /// Producer side of the outbound queue. Held alongside `out_rx` so
-    /// inbound dispatch (e.g. forwarded RPC responses) can push frames
-    /// without going through the public [`RelayClient`] handle.
-    out_tx: mpsc::Sender<Envelope>,
-    out_rx: mpsc::Receiver<Envelope>,
-    /// HTTP handle for `/v1/me/peer` refreshes after authenticated connects.
+    out_tx: mpsc::Sender<ClientFrame>,
+    out_rx: mpsc::Receiver<ClientFrame>,
     http: Arc<RelayHttpClient>,
-    /// Local jsonrpsee surface invoked when the relay delivers an
-    /// `Envelope::Forwarded`. `None` in tests that don't exercise the
-    /// peer-RPC path; production wires the daemon's `RpcServerImpl` here.
     rpc_server: Option<Arc<RpcServerImpl>>,
-    /// Shared with `DaemonInner::peer`. Updated on every `EventKind::Paired`
-    /// / `Unpaired` so warm reads via `current_trusted_device` see the
-    /// newest record without round-tripping the watch channel.
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
-    /// Shared with `DaemonInner::peers`. Refreshed from `/v1/me/peers`
-    /// on connect and after each peer event.
     peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
-    /// One-shot fatal-error signal drained by `DaemonHandle::last_error`.
     last_error: Arc<StdMutex<Option<MinosError>>>,
-    /// Reconciliator invoked on every `Event::IngestCheckpoint`. `None`
-    /// in test fixtures that don't exercise reconciliation.
+    #[allow(dead_code)]
     reconciliator: Option<Arc<crate::reconciliator::Reconciliator>>,
 }
 
-/// Outcome of a single connect-attempt cycle. Drives the outer
-/// connect → dispatch → reconnect loop.
 enum CycleOutcome {
-    /// Either a WS error, a clean close from the relay, or a server-shutdown
-    /// event. Back off and retry.
     Reconnect,
-    /// Handshake rejected with HTTP 401 (CF Access or the relay's own
-    /// pre-upgrade auth check). Fatal — exit the task so the caller can
-    /// rotate creds and spawn a new client.
     AuthFailed,
-    /// External `stop()` signal. Exit cleanly without notifying further.
     Shutdown,
 }
 
-/// Background task body. Runs the connect → dispatch → reconnect loop
-/// until signaled to exit via `shutdown_rx` or a fatal auth failure.
-///
-/// Shutdown is polled inside each inner awaitable — `run_once` (which
-/// races the connect handshake and dispatch loop against shutdown) and
-/// the backoff sleep — so the outer loop never holds a second borrow of
-/// `shutdown_rx`.
 async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<()>) {
     let mut attempt: u32 = 0;
 
     loop {
-        // Announce the intent to connect (or reconnect). The caller's UI
-        // reads this to show a spinner and surface the retry count.
         let _ = ctx.link_tx.send(RelayLinkState::Connecting { attempt });
 
         let outcome = Box::pin(run_once(&mut ctx, &mut shutdown_rx)).await;
@@ -407,35 +319,47 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
     }
 }
 
-/// One connect + dispatch cycle. Returns `Reconnect` on any transport-level
-/// failure, `AuthFailed` on a pre-upgrade HTTP 401, and `Shutdown` when the
-/// outer `shutdown_rx` fires mid-cycle.
-async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>) -> CycleOutcome {
+async fn run_once(
+    ctx: &mut DispatchCtx,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+) -> CycleOutcome {
     let secret = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error);
-    let headers = build_headers(ctx.self_device_id, secret.as_ref(), &ctx.mac_name);
-    let request = match build_request(&ctx.backend_url, &headers) {
-        Ok(r) => r,
-        Err(e) => {
+
+    // Fetch a short-lived ws-ticket from the backend.
+    let ticket = match &secret {
+        Some(s) => match ctx.http.fetch_host_ws_ticket(s).await {
+            Ok(resp) => resp.ticket,
+            Err(e) => {
+                tracing::error!(
+                    target: "minos_daemon::relay_client",
+                    error = %e,
+                    "failed to fetch host ws-ticket — treating as auth-failure-equivalent"
+                );
+                store_last_error(&ctx.last_error, e);
+                return CycleOutcome::AuthFailed;
+            }
+        },
+        None => {
             tracing::error!(
                 target: "minos_daemon::relay_client",
-                error = %e,
-                "invalid backend URL — treating as auth-failure-equivalent"
+                "no device secret available — cannot fetch ws-ticket"
             );
             store_last_error(
                 &ctx.last_error,
-                MinosError::ConnectFailed {
-                    url: ctx.backend_url.clone(),
-                    message: e.to_string(),
+                MinosError::DeviceNotTrusted {
+                    device_id: ctx.self_device_id.to_string(),
                 },
             );
             return CycleOutcome::AuthFailed;
         }
     };
 
+    let ws_url = build_ws_url(&ctx.backend_url, &ticket);
+
     let ws = tokio::select! {
         biased;
         _ = &mut *shutdown_rx => return CycleOutcome::Shutdown,
-        res = tokio_tungstenite::connect_async(request) => match res {
+        res = tokio_tungstenite::connect_async(&ws_url) => match res {
             Ok((stream, _resp)) => stream,
             Err(WsError::Http(resp)) if resp.status().as_u16() == 401 => {
                 let body = resp
@@ -528,8 +452,7 @@ fn peer_record_from_summary(summary: &HostPeerSummary) -> PeerRecord {
     }
 }
 
-/// Inbound + outbound dispatch pump over an upgraded WebSocket. Returns
-/// when the stream ends, errors, or `shutdown_rx` fires.
+/// Inbound + outbound dispatch pump over an upgraded WebSocket.
 #[allow(clippy::too_many_lines)]
 async fn dispatch_loop(
     ws: tokio_tungstenite::WebSocketStream<
@@ -552,17 +475,16 @@ async fn dispatch_loop(
                 return CycleOutcome::Shutdown;
             }
             out = ctx.out_rx.recv() => {
-                let Some(envelope) = out else {
-                    // `out_tx` dropped — client handle gone. Exit quietly.
+                let Some(frame) = out else {
                     return CycleOutcome::Shutdown;
                 };
-                let text = match serde_json::to_string(&envelope) {
+                let text = match serde_json::to_string(&frame) {
                     Ok(t) => t,
                     Err(e) => {
                         tracing::error!(
                             target: "minos_daemon::relay_client",
                             error = %e,
-                            "failed to serialize outbound envelope"
+                            "failed to serialize outbound ClientFrame"
                         );
                         continue;
                     }
@@ -650,219 +572,195 @@ async fn dispatch_loop(
     }
 }
 
-/// Parse an inbound text frame and route it. Non-fatal parse failures are
-/// logged and swallowed — the dispatch loop stays alive.
+/// Parse an inbound text frame as a `ServerFrame` and route it.
 async fn handle_inbound_text(text: &str, ctx: &DispatchCtx) -> Result<(), serde_json::Error> {
-    let envelope: Envelope = serde_json::from_str(text)?;
-    route_envelope(envelope, ctx).await;
+    let frame: ServerFrame = serde_json::from_str(text)?;
+    route_server_frame(frame, ctx).await;
     Ok(())
 }
 
-/// Route a parsed envelope to the watch channels (events), the local
-/// jsonrpsee surface (forwarded RPC), or the debug log (unexpected kinds).
-async fn route_envelope(envelope: Envelope, ctx: &DispatchCtx) {
-    match envelope {
-        Envelope::Event { event, .. } => route_event(event, ctx).await,
-        Envelope::Forwarded { from, payload, .. } => {
+/// Route a parsed `ServerFrame` to the appropriate handler.
+async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
+    match frame {
+        ServerFrame::Hello {
+            conn_id,
+            heartbeat_interval_ms,
+            ..
+        } => {
+            tracing::info!(
+                target: "minos_daemon::relay_client",
+                conn_id,
+                heartbeat_interval_ms,
+                "received Hello from realtime gateway"
+            );
+            // Auto-subscribe to the host topic.
+            let host_topic = format!("host:{}", ctx.self_device_id);
+            let subscribe = ClientFrame::Subscribe {
+                topics: vec![host_topic],
+                resume_after: None,
+                client_request_id: None,
+            };
+            if ctx.out_tx.send(subscribe).await.is_err() {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    "failed to enqueue host topic subscribe"
+                );
+            }
+        }
+        ServerFrame::SubscribeAck { topics, .. } => {
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                ?topics,
+                "subscription acknowledged"
+            );
+        }
+        ServerFrame::DurableEvent {
+            kind, payload, ..
+        } => {
+            route_durable_event(&kind, &payload, ctx).await;
+        }
+        ServerFrame::HostForceClose { reason, close_code } => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                reason,
+                close_code,
+                "server force-closed the connection"
+            );
+        }
+        ServerFrame::StreamEvent { kind, topic, .. } => {
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                kind,
+                topic,
+                "ignoring stream event on host side"
+            );
+        }
+        ServerFrame::SnapshotRequired { topic, .. } => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                topic,
+                "snapshot required — host needs full state rebuild"
+            );
+        }
+        ServerFrame::SubscriptionDenied { topic, reason } => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                topic,
+                reason,
+                "subscription denied"
+            );
+        }
+        ServerFrame::SubscriptionLimitExceeded { limit, current } => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                limit,
+                current,
+                "subscription limit exceeded"
+            );
+        }
+        ServerFrame::Pong { .. } => {}
+        ServerFrame::Error {
+            code,
+            message,
+            request_id,
+        } => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                code,
+                message,
+                request_id,
+                "server error frame"
+            );
+        }
+    }
+}
+
+/// Route a durable event extracted from a `ServerFrame::DurableEvent`.
+async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
+    match kind {
+        "host_command_issued" => {
+            let command_id = payload
+                .get("command_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let method = payload
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let params = payload
+                .get("params")
+                .cloned()
+                .unwrap_or(Value::Null);
+
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                command_id,
+                method,
+                "received host command"
+            );
+
             let Some(rpc_server) = ctx.rpc_server.clone() else {
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
-                    %from,
-                    "received Forwarded with no rpc_server wired — dropping (test fixture?)"
+                    command_id,
+                    "no rpc_server wired — dropping host command"
                 );
                 return;
             };
-            let response = invoke_forwarded(payload, &rpc_server).await;
-            // ADR-0020: the relay routes Envelope::Forward by
-            // target_device_id. The Mac's response targets the iOS
-            // device that originally called us — captured as `from` of
-            // the inbound Forwarded.
-            let envelope = wrap_response_envelope(response, from);
-            // The relay re-wraps our Forward back to the originating peer
-            // as Forwarded; correlation is the peers' responsibility (the
-            // jsonrpc id is preserved end-to-end inside the payload).
-            if let Err(e) = ctx.out_tx.send(envelope).await {
+
+            let ack = build_host_command_ack(&command_id, chrono::Utc::now().timestamp_millis());
+            let _ = ctx.out_tx.send(ack).await;
+
+            let result = invoke_host_command(&method, params, &rpc_server).await;
+            let finished_at_ms = chrono::Utc::now().timestamp_millis();
+            let response = build_host_command_result(
+                &command_id,
+                result.is_ok(),
+                result.ok(),
+                None,
+                finished_at_ms,
+            );
+            if let Err(e) = ctx.out_tx.send(response).await {
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
                     error = %e,
-                    %from,
-                    "failed to enqueue forwarded RPC response"
+                    command_id,
+                    "failed to enqueue host command result"
                 );
             }
         }
-        Envelope::Forward { .. } | Envelope::Ingest { .. } => {
-            // These are client → relay frames; the relay never emits them
-            // to us. A misbehaving peer is the only way we'd see one.
+        "host_linked" | "host_unlinked" => {
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                kind,
+                "peer state changed, refreshing"
+            );
+            let secret = ctx.secret.lock().ok().and_then(|guard| guard.clone());
+            refresh_peers_from_backend(ctx, secret.as_ref()).await;
+        }
+        "host_force_close" => {
+            let reason = payload
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             tracing::warn!(
                 target: "minos_daemon::relay_client",
-                "unexpected envelope kind from relay — dropping"
+                reason,
+                "host force close durable event"
+            );
+        }
+        other => {
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                kind = other,
+                "ignoring durable event on host side"
             );
         }
     }
 }
 
-#[allow(clippy::too_many_lines)]
-async fn route_event(event: EventKind, ctx: &DispatchCtx) {
-    let mut should_refresh = false;
-
-    match event {
-        EventKind::Paired {
-            peer_device_id,
-            peer_name,
-            your_device_secret: Some(your_device_secret),
-        } => {
-            let record = PeerRecord {
-                device_id: peer_device_id,
-                name: peer_name.clone(),
-                paired_at: Utc::now(),
-            };
-            persist_pairing(&record, &your_device_secret, ctx);
-            should_refresh = true;
-        }
-        EventKind::Paired {
-            your_device_secret: None,
-            ..
-        } => {
-            // ADR-0020: the iOS rail receives Paired events without a
-            // secret because the iOS bearer is the only credential. The
-            // Mac side should always be `Some` per the spec; defensive
-            // log + drop.
-            tracing::warn!(
-                target: "minos_daemon::relay_client",
-                "Paired event delivered without your_device_secret on the Mac rail; ignoring"
-            );
-        }
-        EventKind::PeerOnline { .. } | EventKind::PeerOffline { .. } | EventKind::Unpaired => {
-            should_refresh = true;
-        }
-        EventKind::ServerShutdown => {
-            // The dispatch loop will observe the socket closing next and
-            // fall through to the reconnect path; nothing to do here
-            // beyond noting it for operators.
-            tracing::info!(
-                target: "minos_daemon::relay_client",
-                "relay signalled server_shutdown; awaiting socket close"
-            );
-        }
-        EventKind::UiEventMessage { thread_id, seq, .. } => {
-            // Mobile-only fan-out frame. The host receives these only when
-            // the backend relays a translated event to the paired iPhone,
-            // and the host's role here is observational. Log + drop so
-            // the dispatch loop stays cheap.
-            tracing::debug!(
-                target: "minos_daemon::relay_client",
-                thread_id = %thread_id,
-                seq,
-                "ignoring UiEventMessage on the host side"
-            );
-        }
-        EventKind::ApprovalRequest {
-            thread_id,
-            request_id,
-            ..
-        } => {
-            tracing::debug!(
-                target: "minos_daemon::relay_client",
-                thread_id = %thread_id,
-                request_id = %request_id,
-                "ignoring ApprovalRequest on the host side"
-            );
-        }
-        EventKind::ApprovalTimeout {
-            thread_id,
-            request_id,
-            ..
-        } => {
-            tracing::debug!(
-                target: "minos_daemon::relay_client",
-                thread_id = %thread_id,
-                request_id = %request_id,
-                "ignoring ApprovalTimeout on the host side"
-            );
-        }
-        EventKind::AgentError {
-            session_id, code, ..
-        } => {
-            tracing::debug!(
-                target: "minos_daemon::relay_client",
-                session_id = ?session_id,
-                code = %code,
-                "ignoring AgentError on the host side"
-            );
-        }
-        EventKind::SocialMessage {
-            conversation_id, ..
-        } => {
-            // Browser/mobile social fan-out frame. The host daemon never
-            // consumes it; log at debug and drop.
-            tracing::debug!(
-                target: "minos_daemon::relay_client",
-                conversation_id = %conversation_id,
-                "ignoring SocialMessage on the host side"
-            );
-        }
-        EventKind::IngestCheckpoint {
-            last_seq_per_thread,
-        } => {
-            // Backend → daemon reconciliation checkpoint. Spawn the
-            // on_checkpoint pass off the dispatch loop so DB IO never
-            // back-pressures the WS read; failures are logged and
-            // swallowed (the next reconnect produces a fresh checkpoint).
-            tracing::debug!(
-                target: "minos_daemon::relay_client",
-                threads = last_seq_per_thread.len(),
-                "received IngestCheckpoint"
-            );
-            if let Some(reconciliator) = ctx.reconciliator.clone() {
-                tokio::spawn(async move {
-                    if let Err(e) = reconciliator.on_checkpoint(last_seq_per_thread).await {
-                        tracing::warn!(
-                            target: "minos_daemon::relay_client",
-                            error = %e,
-                            "reconciliation failed"
-                        );
-                    }
-                });
-            } else {
-                tracing::debug!(
-                    target: "minos_daemon::relay_client",
-                    "no Reconciliator wired (test fixture); dropping IngestCheckpoint"
-                );
-            }
-        }
-    }
-
-    if should_refresh {
-        let secret = ctx.secret.lock().ok().and_then(|guard| guard.clone());
-        refresh_peers_from_backend(ctx, secret.as_ref()).await;
-    }
-}
-
-/// Persist the freshly minted host secret and update the live reconnect slot.
-/// The peer record itself remains backend-owned; the in-memory mirror is
-/// updated by the caller after this succeeds best-effort.
-fn persist_pairing(record: &PeerRecord, secret: &DeviceSecret, ctx: &DispatchCtx) {
-    if let Ok(mut guard) = ctx.secret.lock() {
-        *guard = Some(secret.clone());
-    }
-    persist_device_secret(secret, &ctx.last_error);
-    tracing::info!(
-        target: "minos_daemon::relay_client",
-        peer = %record.device_id,
-        "persisted paired device secret for future reconnects",
-    );
-}
-
-/// Map a WS close frame onto the outer `CycleOutcome`, populating
-/// `last_error` when the code is one the spec §7.5 table calls out.
-///
-/// - `4401`: terminal — the relay has revoked our `device-secret`; exit
-///   the task so the caller can prompt re-pair.
-/// - `4400`: non-terminal — malformed / version-mismatched envelope.
-///   Record `EnvelopeVersionUnsupported` so a follow-up UI read surfaces
-///   the hint, but still reconnect: transient bugs may resolve on their
-///   own and the user otherwise gets no signal at all.
-/// - anything else: quiet reconnect (unchanged behaviour).
 fn classify_close(frame: Option<CloseFrame>, ctx: &DispatchCtx) -> CycleOutcome {
     let code: Option<u16> = frame.as_ref().map(|f| f.code.into());
     let reason: Option<String> = frame
@@ -890,8 +788,7 @@ fn classify_close(frame: Option<CloseFrame>, ctx: &DispatchCtx) -> CycleOutcome 
                 target: "minos_daemon::relay_client",
                 code = 4400,
                 ?reason,
-                "relay closed socket with 4400 — envelope rejected; \
-                 will reconnect but recording EnvelopeVersionUnsupported"
+                "relay closed socket with 4400 — frame rejected; will reconnect"
             );
             store_last_error(
                 &ctx.last_error,
@@ -911,10 +808,6 @@ fn classify_close(frame: Option<CloseFrame>, ctx: &DispatchCtx) -> CycleOutcome 
     }
 }
 
-/// Write a fatal error into the shared slot, overwriting any prior
-/// value. Callers drain via [`crate::DaemonHandle::last_error`], so a
-/// second error arriving before the first drain is expected to win —
-/// the more recent signal is more useful to the UI.
 fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
     if let Ok(mut guard) = slot.lock() {
         *guard = Some(err);
@@ -957,48 +850,55 @@ fn secret_snapshot_or_reload(
     }
 }
 
-fn persist_device_secret(secret: &DeviceSecret, last_error: &Arc<StdMutex<Option<MinosError>>>) {
-    if let Err(e) = crate::device_secret_store::write(secret) {
-        tracing::warn!(
-            target: "minos_daemon::relay_client",
-            error = %e,
-            "failed to persist device secret",
-        );
-        store_last_error(last_error, e);
+// ─── ClientFrame builders ──────────────────────────────────────────────
+
+fn build_host_command_ack(command_id: &str, ack_at_ms: i64) -> ClientFrame {
+    ClientFrame::HostCommandAck {
+        command_id: command_id.to_string(),
+        ack_at_ms,
     }
 }
 
-/// Build the outbound auth-header bundle. Role is always `AgentHost` here —
-/// this module is the Mac-side client by construction.
-fn build_headers(
-    device_id: DeviceId,
-    secret: Option<&DeviceSecret>,
-    mac_name: &str,
-) -> AuthHeaders {
-    let mut headers = AuthHeaders::new(device_id, DeviceRole::AgentHost).with_name(mac_name);
-    if let Some(s) = secret {
-        headers = headers.with_secret(s.clone());
-    }
-    headers
-}
-
-/// Assemble the tungstenite request with all auth headers stamped. The URI
-/// is expected to be a `ws://` or `wss://` URL pointing at `/devices`.
-fn build_request(
-    backend_url: &str,
-    headers: &AuthHeaders,
-) -> Result<ClientRequestBuilder, MinosError> {
-    let uri: Uri = backend_url.parse().map_err(
-        |e: tokio_tungstenite::tungstenite::http::uri::InvalidUri| MinosError::ConnectFailed {
-            url: backend_url.into(),
-            message: format!("invalid backend URL: {e}"),
+fn build_host_command_result(
+    command_id: &str,
+    succeeded: bool,
+    result: Option<Value>,
+    error: Option<Value>,
+    finished_at_ms: i64,
+) -> ClientFrame {
+    ClientFrame::HostCommandResult {
+        command_id: command_id.to_string(),
+        status: if succeeded {
+            "succeeded".into()
+        } else {
+            "failed".into()
         },
-    )?;
-    let mut builder = ClientRequestBuilder::new(uri);
-    for (k, v) in headers.iter() {
-        builder = builder.with_header(k, v);
+        result,
+        error,
+        finished_at_ms,
     }
-    Ok(builder)
+}
+
+/// Build a `ClientFrame::HostStreamEvent` for agent ingest data.
+pub fn build_host_stream_event(
+    topic: &str,
+    kind: &str,
+    payload: Value,
+) -> ClientFrame {
+    ClientFrame::HostStreamEvent {
+        topic: topic.to_string(),
+        kind: kind.to_string(),
+        payload,
+    }
+}
+
+// ─── URL helpers ───────────────────────────────────────────────────────
+
+fn build_ws_url(base_url: &str, ticket: &str) -> String {
+    let ws_url = base_url
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+    format!("{ws_url}/ws/host?ticket={ticket}")
 }
 
 #[cfg(test)]
@@ -1007,20 +907,18 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn build_headers_omit_legacy_edge_headers() {
-        let headers = build_headers(DeviceId::new(), None, "my-mac");
-        let keys: Vec<_> = headers.iter().map(|(k, _)| k).collect();
-        assert_eq!(keys, vec!["X-Device-Id", "X-Device-Role", "X-Device-Name"]);
+    fn build_ws_url_ws() {
+        assert_eq!(
+            build_ws_url("ws://127.0.0.1:8787", "ticket-abc"),
+            "ws://127.0.0.1:8787/ws/host?ticket=ticket-abc"
+        );
     }
 
     #[test]
-    fn build_headers_with_secret_includes_x_device_secret() {
-        let secret = DeviceSecret("sentinel-123".into());
-        let headers = build_headers(DeviceId::new(), Some(&secret), "my-mac");
-        let entry = headers
-            .iter()
-            .find(|(k, _)| *k == "X-Device-Secret")
-            .expect("X-Device-Secret stamped");
-        assert_eq!(entry.1, "sentinel-123");
+    fn build_ws_url_wss() {
+        assert_eq!(
+            build_ws_url("wss://example.com", "ticket-xyz"),
+            "wss://example.com/ws/host?ticket=ticket-xyz"
+        );
     }
 }

@@ -15,8 +15,7 @@ use std::time::Instant;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::types::ErrorObjectOwned;
 use minos_cli_detect::{detect_all, CommandRunner};
-use minos_domain::{DeviceId, MinosError};
-use minos_protocol::envelope::Envelope;
+use minos_domain::MinosError;
 use minos_protocol::{
     AgentDispatchRequest, ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams,
     GetThreadResponse, HealthResponse, InterruptThreadRequest, ListClisResponse,
@@ -133,159 +132,114 @@ fn rpc_err(e: MinosError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(code, e.to_string(), None::<()>)
 }
 
-/// JSON-RPC method-not-found code (per spec).
-const RPC_METHOD_NOT_FOUND: i32 = -32601;
-/// JSON-RPC invalid-params code (per spec).
-const RPC_INVALID_PARAMS: i32 = -32602;
-/// JSON-RPC parse-error code (per spec).
-const RPC_PARSE_ERROR: i32 = -32700;
-
-/// Dispatch an opaque `Envelope::Forwarded { payload }` JSON-RPC 2.0
-/// request onto a `RpcServerImpl` and return the matching JSON-RPC 2.0
-/// response value (suitable for wrapping into `Envelope::Forward { payload }`).
+/// Dispatch a host command (method + params) onto the local `RpcServerImpl`.
+///
+/// Returns `Ok(result_json)` on success or `Err(error_json)` on failure.
+/// The caller wraps the result into `ClientFrame::HostCommandResult`.
 ///
 /// Methods are namespaced `minos_*` per the `#[rpc(namespace = "minos")]`
-/// derive on [`MinosRpc`]. The dispatcher is intentionally a small match
-/// rather than a jsonrpsee `RpcModule` round-trip so we don't pull in
-/// the full server runtime; any future method addition needs a new arm
-/// here.
-///
-/// Errors map to JSON-RPC's standard error object (`-32601` for unknown
-/// method, `-32602` for invalid params, `-32700` for malformed envelope).
-/// Method-level errors flow through [`rpc_err`] and surface with the
-/// existing `-3200x` codes.
+/// derive on [`MinosRpc`].
 #[allow(clippy::too_many_lines)]
-pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Value {
-    let id = payload.get("id").cloned().unwrap_or(Value::Null);
-
-    let Some(method) = payload.get("method").and_then(Value::as_str) else {
-        return jsonrpc_error(id, RPC_PARSE_ERROR, "missing 'method'");
-    };
-    let params = payload.get("params").cloned().unwrap_or(Value::Null);
-
+pub async fn invoke_host_command(
+    method: &str,
+    params: Value,
+    server: &Arc<RpcServerImpl>,
+) -> Result<Value, Value> {
     match method {
         "minos_pair" => {
-            let req: PairRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.pair(req).await)
+            let req: PairRequest = parse_params(&params)?;
+            into_result(server.pair(req).await)
         }
-        "minos_health" => into_jsonrpc(id, server.health().await),
-        "minos_list_clis" => into_jsonrpc(id, server.list_clis().await),
+        "minos_health" => into_result(server.health().await),
+        "minos_list_clis" => into_result(server.list_clis().await),
         "minos_list_host_skills" => {
-            let req: ListHostSkillsRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.list_host_skills(req).await)
+            let req: ListHostSkillsRequest = parse_params(&params)?;
+            into_result(server.list_host_skills(req).await)
         }
         "minos_write_host_skill_config" => {
-            let req: WriteHostSkillConfigRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.write_host_skill_config(req).await)
+            let req: WriteHostSkillConfigRequest = parse_params(&params)?;
+            into_result(server.write_host_skill_config(req).await)
         }
         "minos_start_agent" => {
-            let req: StartAgentRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.start_agent(req).await)
+            let req: StartAgentRequest = parse_params(&params)?;
+            into_result(server.start_agent(req).await)
         }
         "minos_send_user_message" => {
-            let req: SendUserMessageRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.send_user_message(req).await)
+            let req: SendUserMessageRequest = parse_params(&params)?;
+            into_result(server.send_user_message(req).await)
         }
         "minos_approval_decision" => {
-            let req: ApprovalDecisionRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.approval_decision(req).await)
+            let req: ApprovalDecisionRequest = parse_params(&params)?;
+            into_result(server.approval_decision(req).await)
         }
         "minos_agent_dispatch" => {
-            let req: AgentDispatchRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(
-                id,
-                server.agent.dispatch_message(req).await.map_err(rpc_err),
-            )
+            let req: AgentDispatchRequest = parse_params(&params)?;
+            server
+                .agent
+                .dispatch_message(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
         }
         "minos_interrupt_thread" => {
-            let req: InterruptThreadRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.interrupt_thread(req).await)
+            let req: InterruptThreadRequest = parse_params(&params)?;
+            into_result(server.interrupt_thread(req).await)
         }
         "minos_close_thread" => {
-            let req: CloseThreadRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.close_thread(req).await)
+            let req: CloseThreadRequest = parse_params(&params)?;
+            into_result(server.close_thread(req).await)
         }
         "minos_list_threads" => {
-            let req: ListThreadsParams = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.list_threads(req).await)
+            let req: ListThreadsParams = parse_params(&params)?;
+            into_result(server.list_threads(req).await)
         }
         "minos_get_thread" => {
-            let req: GetThreadParams = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.get_thread(req).await)
+            let req: GetThreadParams = parse_params(&params)?;
+            into_result(server.get_thread(req).await)
         }
         "minos_create_project" => {
-            let req: minos_protocol::CreateProjectRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.agent.create_project(req).await.map_err(rpc_err))
+            let req: minos_protocol::CreateProjectRequest = parse_params(&params)?;
+            server
+                .agent
+                .create_project(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
         }
-        "minos_list_projects" => {
-            into_jsonrpc(id, server.agent.list_projects().await.map_err(rpc_err))
-        }
+        "minos_list_projects" => server
+            .agent
+            .list_projects()
+            .await
+            .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+            .map_err(|e| rpc_err_value(e)),
         "minos_update_project" => {
-            let req: minos_protocol::UpdateProjectRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.agent.update_project(req).await.map_err(rpc_err))
+            let req: minos_protocol::UpdateProjectRequest = parse_params(&params)?;
+            server
+                .agent
+                .update_project(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
         }
         "minos_delete_project" => {
-            let req: minos_protocol::DeleteProjectRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.agent.delete_project(req).await.map_err(rpc_err))
+            let req: minos_protocol::DeleteProjectRequest = parse_params(&params)?;
+            server
+                .agent
+                .delete_project(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
         }
         "minos_list_project_threads" => {
-            let req: minos_protocol::ListProjectThreadsParams = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(
-                id,
-                server
-                    .agent
-                    .list_project_threads(req)
-                    .await
-                    .map_err(rpc_err),
-            )
+            let req: minos_protocol::ListProjectThreadsParams = parse_params(&params)?;
+            server
+                .agent
+                .list_project_threads(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
         }
         "minos_start_agent_in_project" => {
-            // Expects { agent, workspace, project_id, workspace_slug? }
             #[derive(serde::Deserialize)]
             struct StartInProjectParams {
                 agent: minos_domain::AgentName,
@@ -297,95 +251,57 @@ pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Va
                 #[serde(default)]
                 mode: Option<minos_protocol::AgentLaunchMode>,
             }
-            let req: StartInProjectParams = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
+            let req: StartInProjectParams = parse_params(&params)?;
             let start_req = minos_protocol::StartAgentRequest {
                 agent: req.agent,
                 workspace: req.workspace,
                 mode: req.mode,
             };
-            into_jsonrpc(
-                id,
-                server
-                    .agent
-                    .start_agent_in_project(
-                        start_req,
-                        &req.project_id,
-                        req.workspace_slug.as_deref(),
-                    )
-                    .await
-                    .map_err(rpc_err),
-            )
+            server
+                .agent
+                .start_agent_in_project(
+                    start_req,
+                    &req.project_id,
+                    req.workspace_slug.as_deref(),
+                )
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
         }
-        // `subscribe_events` cannot meaningfully cross a forwarded RPC
-        // boundary — the peer would need a streaming subscription which
-        // the envelope protocol does not model. Reject explicitly.
-        other => jsonrpc_error(
-            id,
-            RPC_METHOD_NOT_FOUND,
-            &format!("method '{other}' is not forwarded-callable"),
-        ),
+        other => Err(json!({
+            "code": -32601,
+            "message": format!("method '{other}' is not host-command-callable"),
+        })),
     }
 }
 
-/// Wrap a successful or failing `RpcResult<T>` into a JSON-RPC 2.0
-/// response object (the shape the relay echoes back to the original peer
-/// inside an [`Envelope::Forward`] payload).
-fn into_jsonrpc<T: serde::Serialize>(id: Value, result: jsonrpsee::core::RpcResult<T>) -> Value {
+fn into_result<T: serde::Serialize>(
+    result: jsonrpsee::core::RpcResult<T>,
+) -> Result<Value, Value> {
     match result {
-        Ok(v) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": serde_json::to_value(v).unwrap_or(Value::Null),
-        }),
-        Err(e) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": {
-                "code": e.code(),
-                "message": e.message(),
-            },
-        }),
+        Ok(v) => Ok(serde_json::to_value(v).unwrap_or(Value::Null)),
+        Err(e) => Err(json!({
+            "code": e.code(),
+            "message": e.message(),
+        })),
     }
 }
 
-fn jsonrpc_error(id: Value, code: i32, message: &str) -> Value {
+fn rpc_err_value(e: MinosError) -> Value {
+    let e = rpc_err(e);
     json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": { "code": code, "message": message },
+        "code": e.code(),
+        "message": e.message(),
     })
 }
 
-/// JSON-RPC params are conventionally either a positional array or a
-/// named object. Our generated client uses the named-object form, so we
-/// accept that as the authoritative shape and reject positional.
-fn parse_params<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, String> {
+fn parse_params<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, Value> {
     if params.is_null() {
-        // Some methods take `()` — try the empty-object decode for them.
         return serde_json::from_value(Value::Object(Map::new()))
-            .map_err(|e| format!("missing params; tried empty object: {e}"));
+            .map_err(|e| json!({"code": -32602, "message": format!("missing params: {e}")}));
     }
-    serde_json::from_value(params.clone()).map_err(|e| format!("invalid params: {e}"))
-}
-
-/// Wrap a fully formed JSON-RPC response into an `Envelope::Forward`
-/// suitable for pushing back through the outbound queue. Kept as a
-/// helper so the dispatch loop and tests share one phrasing.
-///
-/// Post-ADR-0020 `Envelope::Forward` requires a `target_device_id` so
-/// the backend can fan out to the correct iOS peer. The Mac daemon's
-/// response targets the device id that originated the request — pulled
-/// out of the inbound `Envelope::Forwarded { from, .. }` envelope.
-#[must_use]
-pub fn wrap_response_envelope(response: Value, target_device_id: DeviceId) -> Envelope {
-    Envelope::Forward {
-        version: 1,
-        target_device_id,
-        payload: response,
-    }
+    serde_json::from_value(params.clone())
+        .map_err(|e| json!({"code": -32602, "message": format!("invalid params: {e}")}))
 }
 
 #[cfg(test)]
@@ -474,39 +390,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invoke_forwarded_health_returns_jsonrpc_result() {
+    async fn invoke_host_command_health_returns_result() {
         let server = fake_server().await;
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "minos_health",
-            "params": {},
-        });
-        let resp = invoke_forwarded(req, &server).await;
-        assert_eq!(resp["jsonrpc"], "2.0");
-        assert_eq!(resp["id"], 1);
-        let result = &resp["result"];
-        assert!(result["version"].is_string());
-        assert!(result["uptime_secs"].is_number());
+        let result = invoke_host_command("minos_health", json!({}), &server).await;
+        let value = result.unwrap();
+        assert!(value["version"].is_string());
+        assert!(value["uptime_secs"].is_number());
     }
 
     #[tokio::test]
-    async fn invoke_forwarded_pair_returns_unauthorized_error() {
+    async fn invoke_host_command_pair_returns_error() {
         let server = fake_server().await;
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 7,
-            "method": "minos_pair",
-            "params": {
+        let result = invoke_host_command(
+            "minos_pair",
+            json!({
                 "device_id": "00000000-0000-0000-0000-000000000000",
                 "name": "x",
                 "token": "tok",
-            },
-        });
-        let resp = invoke_forwarded(req, &server).await;
-        assert_eq!(resp["id"], 7);
-        let err = &resp["error"];
-        assert!(err.is_object(), "expected error object, got {resp}");
+            }),
+            &server,
+        )
+        .await;
+        let err = result.unwrap_err();
         let msg = err["message"].as_str().unwrap_or_default();
         assert!(
             msg.contains("backend"),
@@ -515,30 +420,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invoke_forwarded_unknown_method_returns_minus_32601() {
+    async fn invoke_host_command_unknown_method_returns_error() {
         let server = fake_server().await;
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 99,
-            "method": "minos_does_not_exist",
-            "params": {},
-        });
-        let resp = invoke_forwarded(req, &server).await;
-        assert_eq!(resp["id"], 99);
-        assert_eq!(resp["error"]["code"], RPC_METHOD_NOT_FOUND);
+        let result = invoke_host_command("minos_does_not_exist", json!({}), &server).await;
+        let err = result.unwrap_err();
+        assert_eq!(err["code"], -32601);
     }
 
     #[tokio::test]
-    async fn invoke_forwarded_missing_method_returns_parse_error() {
-        let server = fake_server().await;
-        let req = json!({ "jsonrpc": "2.0", "id": 5 });
-        let resp = invoke_forwarded(req, &server).await;
-        assert_eq!(resp["id"], 5);
-        assert_eq!(resp["error"]["code"], RPC_PARSE_ERROR);
-    }
-
-    #[tokio::test]
-    async fn invoke_forwarded_agent_dispatch_returns_session_id() {
+    async fn invoke_host_command_agent_dispatch_returns_session_id() {
         let tmp = tempfile::tempdir().unwrap();
         let (fake, url) = FakeCodexBackend::install().await;
         let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
@@ -565,140 +455,23 @@ mod tests {
             )),
         });
 
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 11,
-            "method": "minos_agent_dispatch",
-            "params": {
+        let result = invoke_host_command(
+            "minos_agent_dispatch",
+            json!({
                 "agent": "codex",
-                "text": "hello from forwarded dispatch",
+                "text": "hello from host command",
                 "workspace": "/w-rpc-dispatch"
-            },
-        });
-        let resp = invoke_forwarded(req, &server).await;
+            }),
+            &server,
+        )
+        .await;
 
-        assert_eq!(resp["id"], 11);
-        let session_id = resp["result"]["session_id"]
+        let value = result.unwrap();
+        let session_id = value["session_id"]
             .as_str()
             .expect("session_id should be present");
         assert!(!session_id.is_empty());
 
         fake.stop().await;
-    }
-
-    #[tokio::test]
-    async fn invoke_forwarded_approval_decision_replies_to_codex() {
-        let tmp = tempfile::tempdir().unwrap();
-        let thread_id = "thr-rpc-approval";
-        let turn_id = "turn-rpc-approval";
-        let script = vec![
-            Step::ExpectRequest {
-                method: "thread/start".into(),
-                reply: fake_thread_start_reply(thread_id),
-            },
-            Step::EmitServerRequest {
-                method: "item/commandExecution/requestApproval".into(),
-                params: command_approval_params(thread_id, turn_id),
-            },
-            Step::ExpectResponse {
-                result: json!({ "decision": "decline" }),
-            },
-            Step::Sleep { ms: 20 },
-        ];
-        let (fake, port) = FakeCodexServer::bind(script).await;
-
-        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
-        cfg.test_ws_url = Some(
-            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
-        );
-        cfg.approval_request_timeout = Duration::from_secs(5);
-        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
-        let store = Arc::new(
-            crate::store::LocalStore::open(&tmp.path().join("test.sqlite"))
-                .await
-                .unwrap(),
-        );
-        let (out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
-        let writer = Arc::new(crate::store::event_writer::EventWriter::spawn(
-            store.clone(),
-            out_tx,
-        ));
-        let server = Arc::new(RpcServerImpl {
-            started_at: Instant::now(),
-            runner: Arc::new(NoopRunner),
-            agent: Arc::new(AgentGlue::wire_with(
-                manager,
-                writer,
-                store,
-                tmp.path().to_path_buf(),
-            )),
-        });
-        let mut ingest_rx = server.agent.ingest_stream();
-
-        server
-            .agent
-            .start_agent(StartAgentRequest {
-                agent: minos_domain::AgentName::Codex,
-                workspace: "/w-rpc-approval".into(),
-                mode: None,
-            })
-            .await
-            .unwrap();
-
-        let approval_request = tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let ingest = ingest_rx
-                    .recv()
-                    .await
-                    .expect("ingest stream should stay open");
-                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/request")
-                {
-                    break ingest;
-                }
-            }
-        })
-        .await
-        .expect("approval/request ingest should arrive");
-        let request_id = approval_request.payload["params"]["request_id"]
-            .as_str()
-            .expect("approval/request ingest should carry request_id");
-
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 12,
-            "method": "minos_approval_decision",
-            "params": {
-                "request_id": request_id,
-                "thread_id": thread_id,
-                "decision": {
-                    "decision": "decline"
-                }
-            },
-        });
-        let resp = invoke_forwarded(req, &server).await;
-
-        assert_eq!(resp["id"], 12);
-        assert_eq!(resp["result"], Value::Null);
-
-        fake.stop().await;
-    }
-
-    #[test]
-    fn wrap_response_envelope_uses_forward_variant() {
-        let v = json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}});
-        let target = DeviceId::new();
-        let env = wrap_response_envelope(v.clone(), target);
-        match env {
-            Envelope::Forward {
-                version,
-                target_device_id,
-                payload,
-            } => {
-                assert_eq!(version, 1);
-                assert_eq!(target_device_id, target);
-                assert_eq!(payload, v);
-            }
-            other => panic!("expected Forward, got {other:?}"),
-        }
     }
 }

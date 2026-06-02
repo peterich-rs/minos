@@ -32,7 +32,7 @@ use crate::store::event_writer::EventWriter;
 use crate::store::LocalStore;
 use anyhow::Result;
 use minos_agent_runtime::AgentKind;
-use minos_protocol::Envelope;
+use minos_protocol::realtime::ClientFrame;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,7 +64,7 @@ fn status_priority(status: &str) -> u8 {
 pub struct Reconciliator {
     store: Arc<LocalStore>,
     writer: Arc<EventWriter>,
-    relay_out: mpsc::Sender<Envelope>,
+    relay_out: mpsc::Sender<ClientFrame>,
     /// Optional override for the directory the codex CLI uses as its
     /// "home". Production leaves this `None` so JSONL recovery resolves
     /// against the current user's home dir; tests pass a temp dir to avoid touching the
@@ -76,7 +76,7 @@ impl Reconciliator {
     pub fn new(
         store: Arc<LocalStore>,
         writer: Arc<EventWriter>,
-        relay_out: mpsc::Sender<Envelope>,
+        relay_out: mpsc::Sender<ClientFrame>,
     ) -> Self {
         Self {
             store,
@@ -93,7 +93,7 @@ impl Reconciliator {
     pub fn with_codex_home(
         store: Arc<LocalStore>,
         writer: Arc<EventWriter>,
-        relay_out: mpsc::Sender<Envelope>,
+        relay_out: mpsc::Sender<ClientFrame>,
         codex_home_root: PathBuf,
     ) -> Self {
         Self {
@@ -154,7 +154,7 @@ impl Reconciliator {
         agent_str: &str,
         codex_session_id: Option<&str>,
     ) -> Result<()> {
-        let agent = parse_agent(agent_str)?;
+        let _agent = parse_agent(agent_str)?;
         let mut next = from_seq;
         let mut all_seqs: Vec<u64> = Vec::new();
         while next <= to_seq {
@@ -164,16 +164,19 @@ impl Reconciliator {
                 let seq = u64::try_from(row.seq).unwrap_or(0);
                 all_seqs.push(seq);
                 let payload: serde_json::Value = serde_json::from_slice(&row.payload)?;
-                let env = Envelope::Ingest {
-                    version: 1,
-                    agent,
-                    thread_id: row.thread_id.clone(),
-                    seq,
+                let topic = format!("agent_session:{}", row.thread_id);
+                let kind = payload
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("agent_event")
+                    .to_string();
+                let frame = ClientFrame::HostStreamEvent {
+                    topic,
+                    kind,
                     payload,
-                    ts_ms: row.ts_ms,
                 };
                 self.relay_out
-                    .send(env)
+                    .send(frame)
                     .await
                     .map_err(|_| anyhow::anyhow!("relay_out channel closed"))?;
             }

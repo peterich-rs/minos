@@ -12,8 +12,8 @@ use std::time::Duration;
 use http::{header::CONTENT_TYPE, Method, Request, Response, StatusCode};
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use minos_protocol::{
-    HostPeerSummary, MePeerResponse, MePeersResponse, PairingQrPayload, RequestPairingQrParams,
-    RequestPairingQrResponse,
+    HostPeerSummary, HostWsTicketResponse, MePeerResponse, MePeersResponse, PairingQrPayload,
+    RequestPairingQrParams, RequestPairingQrResponse,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::Deserialize;
@@ -176,6 +176,33 @@ impl RelayHttpClient {
         if status.is_success() {
             let body: MePeersResponse = decode_success_json(resp, "MePeersResponse").await?;
             return Ok(body.peers);
+        }
+        Err(decode_error(resp).await)
+    }
+
+    /// Fetch a short-lived ws-ticket for the host realtime gateway.
+    ///
+    /// Calls `POST /v1/host/realtime/ws-ticket` with the host's device
+    /// headers. The backend returns a `ResponseEnvelope { data, meta }`
+    /// where `data` matches [`HostWsTicketResponse`].
+    pub async fn fetch_host_ws_ticket(
+        &self,
+        secret: &DeviceSecret,
+    ) -> Result<HostWsTicketResponse, MinosError> {
+        let url = format!("{}/v1/host/realtime/ws-ticket", self.base);
+        let request = self.request_without_body(Method::POST, &url, Some(secret), true)?;
+        let resp = self.execute(&url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            // The backend wraps the ticket in ResponseEnvelope { data, meta }.
+            // Deserialize the outer envelope and extract `data`.
+            #[derive(serde::Deserialize)]
+            struct Envelope<T> {
+                data: T,
+            }
+            let envelope: Envelope<HostWsTicketResponse> =
+                decode_success_json(resp, "HostWsTicketResponse").await?;
+            return Ok(envelope.data);
         }
         Err(decode_error(resp).await)
     }
