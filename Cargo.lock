@@ -2817,6 +2817,7 @@ dependencies = [
 name = "minos-ui-protocol"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "minos-domain",
  "pretty_assertions",
  "rstest",

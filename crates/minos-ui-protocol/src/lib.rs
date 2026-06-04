@@ -27,7 +27,7 @@ pub use minos_domain::AgentName as AgentKind;
 
 pub use claude::{translate as translate_claude, ClaudeTranslatorState};
 pub use codex::{translate as translate_codex, CodexTranslatorState};
-pub use gemini::translate as translate_gemini;
+pub use gemini::{translate as translate_gemini, GeminiTranslatorState};
 pub use opencode::{translate as translate_opencode, OpencodeTranslatorState};
 
 /// One-shot dispatch convenience for the backend: given an agent kind
@@ -51,7 +51,10 @@ pub fn translate_stateless(
             let mut s = ClaudeTranslatorState::new(String::new());
             translate_claude(&mut s, raw_payload)
         }
-        AgentKind::Gemini => translate_gemini(raw_payload),
+        AgentKind::Gemini => {
+            let mut s = GeminiTranslatorState::new(String::new());
+            translate_gemini(&mut s, raw_payload)
+        }
         AgentKind::Opencode => {
             let mut s = OpencodeTranslatorState::new(String::new());
             translate_opencode(&mut s, raw_payload)

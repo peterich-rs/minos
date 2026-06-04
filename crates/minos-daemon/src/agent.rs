@@ -18,8 +18,8 @@ use minos_protocol::{
 };
 use minos_ui_protocol::{
     translate_claude, translate_codex, translate_gemini, translate_opencode,
-    ClaudeTranslatorState, CodexTranslatorState, OpencodeTranslatorState, ThreadEndReason,
-    UiEventMessage,
+    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState,
+    ThreadEndReason, UiEventMessage,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -60,7 +60,7 @@ pub enum TranslatorState {
     Codex(CodexTranslatorState),
     Claude(ClaudeTranslatorState),
     Opencode(OpencodeTranslatorState),
-    Gemini,
+    Gemini(GeminiTranslatorState),
 }
 
 impl TranslatorState {
@@ -71,7 +71,7 @@ impl TranslatorState {
             minos_domain::AgentName::Opencode => {
                 Self::Opencode(OpencodeTranslatorState::new(thread_id))
             }
-            minos_domain::AgentName::Gemini => Self::Gemini,
+            minos_domain::AgentName::Gemini => Self::Gemini(GeminiTranslatorState::new(thread_id)),
         }
     }
 
@@ -80,7 +80,7 @@ impl TranslatorState {
             Self::Codex(s) => translate_codex(s, raw),
             Self::Claude(s) => translate_claude(s, raw),
             Self::Opencode(s) => translate_opencode(s, raw),
-            Self::Gemini => translate_gemini(raw),
+            Self::Gemini(s) => translate_gemini(s, raw),
         }
         .unwrap_or_else(|error| {
             vec![UiEventMessage::Error {

@@ -12,8 +12,8 @@ use dashmap::DashMap;
 use minos_domain::AgentName;
 use minos_ui_protocol::{
     translate_claude, translate_codex, translate_gemini, translate_opencode,
-    ClaudeTranslatorState, CodexTranslatorState, OpencodeTranslatorState, TranslationError,
-    UiEventMessage,
+    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState,
+    TranslationError, UiEventMessage,
 };
 use serde_json::Value;
 
@@ -23,6 +23,7 @@ pub struct ThreadTranslators {
     codex: DashMap<String, CodexTranslatorState>,
     claude: DashMap<String, ClaudeTranslatorState>,
     opencode: DashMap<String, OpencodeTranslatorState>,
+    gemini: DashMap<String, GeminiTranslatorState>,
 }
 
 impl ThreadTranslators {
@@ -32,6 +33,7 @@ impl ThreadTranslators {
             codex: DashMap::new(),
             claude: DashMap::new(),
             opencode: DashMap::new(),
+            gemini: DashMap::new(),
         })
     }
 
@@ -60,7 +62,13 @@ impl ThreadTranslators {
                     .or_insert_with(|| ClaudeTranslatorState::new(thread_id.to_string()));
                 translate_claude(&mut state, payload)
             }
-            AgentName::Gemini => translate_gemini(payload),
+            AgentName::Gemini => {
+                let mut state = self
+                    .gemini
+                    .entry(thread_id.to_string())
+                    .or_insert_with(|| GeminiTranslatorState::new(thread_id.to_string()));
+                translate_gemini(&mut state, payload)
+            }
             AgentName::Opencode => {
                 let mut state = self
                     .opencode
@@ -76,5 +84,6 @@ impl ThreadTranslators {
         self.codex.remove(thread_id);
         self.claude.remove(thread_id);
         self.opencode.remove(thread_id);
+        self.gemini.remove(thread_id);
     }
 }

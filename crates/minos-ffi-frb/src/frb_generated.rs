@@ -3746,6 +3746,13 @@ const _: fn() = || {
             let _: String = reason;
         }
         crate::api::minos::MinosError::PairingTokenExpired => {}
+        crate::api::minos::MinosError::GeminiSpawnFailed { message } => {
+            let _: String = message;
+        }
+        crate::api::minos::MinosError::AcpProtocolError { method, message } => {
+            let _: String = method;
+            let _: String = message;
+        }
     }
     {
         let MyProfileResponse = None::<crate::api::minos::MyProfileResponse>.unwrap();
