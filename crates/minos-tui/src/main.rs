@@ -2,6 +2,8 @@ use clap::Parser;
 
 mod backend;
 mod event;
+mod translation;
+mod ui;
 
 #[derive(Parser, Debug)]
 #[command(name = "minos-tui", about = "Minos Agent TUI - local debug console")]
