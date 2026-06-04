@@ -28,12 +28,14 @@
 uniffi::setup_scaffolding!();
 
 pub(crate) mod approvals;
+pub mod claude_driver;
 pub(crate) mod codex_client;
 pub mod config;
 pub mod ingest;
 pub mod instance;
 pub mod manager;
 pub mod manager_event;
+pub mod opencode_driver;
 pub(crate) mod process;
 pub mod pty_agent;
 pub mod state_machine;
@@ -54,3 +56,5 @@ pub use minos_domain::AgentName as AgentKind;
 pub use pty_agent::PtyAgent;
 pub use state_machine::{CloseReason, PauseReason, ThreadState};
 pub use thread_handle::ThreadHandle;
+pub use claude_driver::ClaudeNdjsonSession;
+pub use opencode_driver::OpencodeServerInstance;

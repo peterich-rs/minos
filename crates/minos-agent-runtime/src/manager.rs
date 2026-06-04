@@ -60,6 +60,9 @@ pub struct AgentManager {
     pub(crate) pending_approvals: PendingApprovals,
     pub(crate) events_tx: broadcast::Sender<RawIngest>,
     pub(crate) manager_tx: broadcast::Sender<ManagerEvent>,
+    pub(crate) claude_sessions: Arc<Mutex<HashMap<String, crate::claude_driver::ClaudeNdjsonSession>>>,
+    pub(crate) opencode_instances: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<crate::opencode_driver::OpencodeServerInstance>>>>>,
+    pub(crate) opencode_session_map: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl AgentManager {
@@ -74,6 +77,9 @@ impl AgentManager {
             pending_approvals: Arc::new(DashMap::new()),
             events_tx,
             manager_tx,
+            claude_sessions: Arc::new(Mutex::new(HashMap::new())),
+            opencode_instances: Arc::new(Mutex::new(HashMap::new())),
+            opencode_session_map: Arc::new(Mutex::new(HashMap::new())),
         };
         mgr.spawn_reaper();
         mgr
@@ -257,6 +263,20 @@ impl AgentManager {
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
     ) -> anyhow::Result<StartAgentOutcome> {
+        match agent {
+            AgentName::Codex => self.start_codex_agent(agent, workspace, policies).await,
+            AgentName::Claude => self.start_claude_agent(agent, workspace).await,
+            AgentName::Opencode => self.start_opencode_agent(agent, workspace).await,
+            AgentName::Gemini => self.start_pty_agent(agent, workspace).await,
+        }
+    }
+
+    async fn start_codex_agent(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        policies: Option<SessionPolicies>,
+    ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let instance = self.ensure_instance(&canon, policies.as_ref()).await?;
 
@@ -304,6 +324,106 @@ impl AgentManager {
             thread_id,
             cwd: canon,
         })
+    }
+
+    async fn start_claude_agent(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+    ) -> anyhow::Result<StartAgentOutcome> {
+        let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let handle = ThreadHandle::new(thread_id.clone(), canon.clone(), agent, ThreadState::Starting, 0);
+        self.threads.lock().await.insert(thread_id.clone(), handle);
+        let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
+            thread_id: thread_id.clone(),
+            workspace: canon.clone(),
+            agent,
+        });
+        if let Some(h) = self.threads.lock().await.get(&thread_id) {
+            let _ = h.transition(ThreadState::Idle);
+        }
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.clone(),
+            old: ThreadState::Starting,
+            new: ThreadState::Idle,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        Ok(StartAgentOutcome { thread_id, cwd: canon })
+    }
+
+    async fn start_opencode_agent(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+    ) -> anyhow::Result<StartAgentOutcome> {
+        let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let instance = self.ensure_opencode_instance(&canon).await?;
+        let oc_session_id = instance.lock().await.create_session().await?;
+        self.opencode_session_map.lock().await.insert(thread_id.clone(), oc_session_id);
+        let handle = ThreadHandle::new(thread_id.clone(), canon.clone(), agent, ThreadState::Idle, 0);
+        self.threads.lock().await.insert(thread_id.clone(), handle);
+        let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
+            thread_id: thread_id.clone(),
+            workspace: canon.clone(),
+            agent,
+        });
+        Ok(StartAgentOutcome { thread_id, cwd: canon })
+    }
+
+    async fn start_pty_agent(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+    ) -> anyhow::Result<StartAgentOutcome> {
+        let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let bin_path = PathBuf::from(agent.bin_name());
+        let _pty = crate::pty_agent::PtyAgent::spawn(
+            &bin_path,
+            &canon,
+            agent,
+            thread_id.clone(),
+            self.events_tx.clone(),
+        )?;
+        let handle = ThreadHandle::new(thread_id.clone(), canon.clone(), agent, ThreadState::Idle, 0);
+        self.threads.lock().await.insert(thread_id.clone(), handle);
+        let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
+            thread_id: thread_id.clone(),
+            workspace: canon.clone(),
+            agent,
+        });
+        Ok(StartAgentOutcome { thread_id, cwd: canon })
+    }
+
+    async fn ensure_opencode_instance(
+        &self,
+        workspace: &Path,
+    ) -> anyhow::Result<Arc<Mutex<crate::opencode_driver::OpencodeServerInstance>>> {
+        let mut map = self.opencode_instances.lock().await;
+        if let Some(existing) = map.get(workspace) {
+            return Ok(existing.clone());
+        }
+        let bin = self.config.opencode_bin.clone()
+            .unwrap_or_else(|| PathBuf::from(AgentName::Opencode.bin_name()));
+        let port = pick_free_port(self.config.opencode_port_range.clone())?;
+        let password = uuid::Uuid::new_v4().to_string();
+        let config = crate::opencode_driver::OpencodeServerConfig {
+            opencode_bin: bin,
+            port,
+            password,
+            subprocess_env: self.config.subprocess_env.clone(),
+        };
+        let instance = crate::opencode_driver::OpencodeServerInstance::spawn(workspace, config).await?;
+        let instance = Arc::new(Mutex::new(instance));
+        let inst_guard = instance.lock().await;
+        let sse_url = inst_guard.subscribe_sse_url();
+        let auth = inst_guard.auth_header().to_string();
+        drop(inst_guard);
+        crate::opencode_driver::spawn_sse_pump(sse_url, auth, String::new(), self.events_tx.clone());
+        map.insert(workspace.to_path_buf(), instance.clone());
+        Ok(instance)
     }
 
     async fn ensure_instance(
@@ -623,23 +743,48 @@ impl AgentManager {
                     new: new_state,
                     at_ms: now_ms,
                 });
-                let workspace = handle.workspace.clone();
-                let inst = self
-                    .instances
-                    .lock()
-                    .await
-                    .get(&workspace)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
-                inst.touch().await;
-                // Synthesize the user-message ingest BEFORE forwarding to
-                // codex so the row is durable even if the codex transport
-                // hangs or rejects. Mirrors Remodex's persist-on-insert
-                // semantics — the user always sees their bubble after a
-                // crash, never an empty timeline.
                 self.synth_user_message_ingest(thread_id, &text, handle.agent);
-                let turn_id = inst.send_user_message(thread_id, &text).await?;
-                handle.set_active_turn_id_if_absent(turn_id);
+                match handle.agent {
+                    AgentName::Codex => {
+                        let workspace = handle.workspace.clone();
+                        let inst = self
+                            .instances
+                            .lock()
+                            .await
+                            .get(&workspace)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
+                        inst.touch().await;
+                        let turn_id = inst.send_user_message(thread_id, &text).await?;
+                        handle.set_active_turn_id_if_absent(turn_id);
+                    }
+                    AgentName::Claude => {
+                        let cli_path = self.config.codex_bin.clone()
+                            .unwrap_or_else(|| PathBuf::from("claude"));
+                        let resume_sid = handle.codex_session_id.as_deref();
+                        let session = crate::claude_driver::ClaudeNdjsonSession::start_turn(
+                            &cli_path,
+                            &handle.workspace,
+                            thread_id.to_string(),
+                            &text,
+                            resume_sid,
+                            self.events_tx.clone(),
+                            &self.config.subprocess_env,
+                        ).await?;
+                        self.claude_sessions.lock().await.insert(thread_id.to_string(), session);
+                    }
+                    AgentName::Opencode => {
+                        let oc_session_id = self.opencode_session_map.lock().await
+                            .get(thread_id).cloned()
+                            .ok_or_else(|| anyhow::anyhow!("opencode session not found"))?;
+                        let workspace = handle.workspace.clone();
+                        let instance = self.opencode_instances.lock().await
+                            .get(&workspace).cloned()
+                            .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
+                        instance.lock().await.send_prompt(&oc_session_id, &text).await?;
+                    }
+                    AgentName::Gemini => {}
+                }
                 Ok(())
             }
             ThreadState::Running { .. } => self.steer_turn(thread_id, text).await,
@@ -786,9 +931,33 @@ impl AgentManager {
             let s = handle.current_state();
             anyhow::bail!("interrupt rejected: state={s:?}");
         }
-        let workspace = handle.workspace.clone();
-        if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
-            let _ = inst.interrupt_turn(thread_id).await;
+        match handle.agent {
+            AgentName::Codex => {
+                let workspace = handle.workspace.clone();
+                if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
+                    let _ = inst.interrupt_turn(thread_id).await;
+                }
+            }
+            AgentName::Claude => {
+                if let Some(session) = self.claude_sessions.lock().await.get_mut(thread_id) {
+                    if let Some(child) = session.current_turn_child.as_mut() {
+                        let _ = child.start_kill();
+                    }
+                }
+            }
+            AgentName::Opencode => {
+                let oc_session_id = self.opencode_session_map.lock().await
+                    .get(thread_id).cloned();
+                if let Some(oc_sid) = oc_session_id {
+                    let workspace = handle.workspace.clone();
+                    let instance = self.opencode_instances.lock().await
+                        .get(&workspace).cloned();
+                    if let Some(inst) = instance {
+                        let _ = inst.lock().await.abort_session(&oc_sid).await;
+                    }
+                }
+            }
+            AgentName::Gemini => {}
         }
         let from_state = handle.current_state();
         handle.set_active_turn_id(None);
@@ -844,8 +1013,21 @@ impl AgentManager {
             reason: crate::state_machine::CloseReason::UserClose,
         })?;
         let workspace = handle.workspace.clone();
-        if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
-            inst.remove_thread(thread_id).await;
+        match handle.agent {
+            AgentName::Codex => {
+                if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
+                    inst.remove_thread(thread_id).await;
+                }
+            }
+            AgentName::Claude => {
+                if let Some(session) = self.claude_sessions.lock().await.remove(thread_id) {
+                    session.close(&self.events_tx).await;
+                }
+            }
+            AgentName::Opencode => {
+                self.opencode_session_map.lock().await.remove(thread_id);
+            }
+            AgentName::Gemini => {}
         }
         let _ = self.manager_tx.send(ManagerEvent::ThreadClosed {
             thread_id: thread_id.to_string(),

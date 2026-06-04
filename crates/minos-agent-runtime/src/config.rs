@@ -17,14 +17,13 @@ use url::Url;
 pub struct AgentRuntimeConfig {
     pub workspace_root: PathBuf,
     pub codex_bin: Option<PathBuf>,
+    pub opencode_bin: Option<PathBuf>,
+    pub opencode_port_range: std::ops::RangeInclusive<u16>,
     pub ws_port_range: std::ops::RangeInclusive<u16>,
     pub event_buffer: usize,
     pub handshake_call_timeout: Duration,
     pub approval_request_timeout: Duration,
     pub subprocess_env: Arc<std::collections::HashMap<String, String>>,
-    /// Test-only seam: when `Some`, the manager skips port-probing + codex
-    /// spawn + workspace creation and connects directly to this URL.
-    /// Production code must leave this as `None`.
     #[cfg(feature = "test-support")]
     pub test_ws_url: Option<Url>,
 }
@@ -42,6 +41,8 @@ impl AgentRuntimeConfig {
         Self {
             workspace_root,
             codex_bin: None,
+            opencode_bin: None,
+            opencode_port_range: 4096..=4106,
             ws_port_range: 7879..=7883,
             event_buffer: DEFAULT_EVENT_BUFFER,
             handshake_call_timeout: DEFAULT_HANDSHAKE_CALL_TIMEOUT,
