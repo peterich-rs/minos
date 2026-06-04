@@ -7,7 +7,6 @@ pub mod theme;
 use crate::translation::ChatState;
 use crate::ui::input_bar::InputState;
 use crate::ui::status_bar::StatusBarState;
-use minos_agent_runtime::store_facing::ThreadSnapshot;
 use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
 use ratatui::{
@@ -25,16 +24,6 @@ pub struct ThreadEntry {
     pub agent: AgentName,
     pub workspace: PathBuf,
     pub state: ThreadState,
-}
-
-impl ThreadEntry {
-    pub fn to_snapshot(&self) -> ThreadSnapshot {
-        ThreadSnapshot {
-            thread_id: self.thread_id.clone(),
-            workspace: self.workspace.clone(),
-            state: self.state.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,10 +77,6 @@ impl UiState {
     pub fn set_error(&mut self, msg: String) {
         self.error_flash = Some((msg, Instant::now()));
     }
-
-    pub fn thread_snapshots(&self) -> Vec<ThreadSnapshot> {
-        self.threads.iter().map(|t| t.to_snapshot()).collect()
-    }
 }
 
 pub fn render_ui(f: &mut Frame, state: &mut UiState) {
@@ -111,11 +96,10 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(outer[1]);
 
-    let snapshots = state.thread_snapshots();
     thread_list::render_thread_list(
         f,
         middle[0],
-        &snapshots,
+        &state.threads,
         state.selected_thread,
         &mut state.thread_list_state,
     );
