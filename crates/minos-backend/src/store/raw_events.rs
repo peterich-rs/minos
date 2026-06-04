@@ -28,6 +28,7 @@ fn agent_str(a: AgentName) -> &'static str {
         AgentName::Codex => "codex",
         AgentName::Claude => "claude",
         AgentName::Gemini => "gemini",
+        AgentName::Opencode => "opencode",
     }
 }
 
@@ -36,6 +37,7 @@ fn parse_agent(s: &str) -> Result<AgentName, BackendError> {
         "codex" => Ok(AgentName::Codex),
         "claude" => Ok(AgentName::Claude),
         "gemini" => Ok(AgentName::Gemini),
+        "opencode" => Ok(AgentName::Opencode),
         other => Err(BackendError::StoreDecode {
             column: "raw_events.agent".into(),
             message: other.to_string(),

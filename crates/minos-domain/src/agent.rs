@@ -13,13 +13,14 @@ pub enum AgentName {
     Codex,
     Claude,
     Gemini,
+    Opencode,
 }
 
 impl AgentName {
     /// All known agents, in the order shown to users.
     #[must_use]
     pub const fn all() -> &'static [AgentName] {
-        &[AgentName::Codex, AgentName::Claude, AgentName::Gemini]
+        &[AgentName::Codex, AgentName::Claude, AgentName::Gemini, AgentName::Opencode]
     }
 
     /// The CLI binary name to look for on PATH.
@@ -29,6 +30,7 @@ impl AgentName {
             AgentName::Codex => "codex",
             AgentName::Claude => "claude",
             AgentName::Gemini => "gemini",
+            AgentName::Opencode => "opencode",
         }
     }
 }
@@ -93,7 +95,7 @@ mod tests {
 
     #[test]
     fn agent_name_all_returns_three_in_canonical_order() {
-        assert_eq!(AgentName::all().len(), 3);
+        assert_eq!(AgentName::all().len(), 4);
         assert_eq!(AgentName::all()[0], AgentName::Codex);
     }
 }

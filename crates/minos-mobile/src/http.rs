@@ -1816,6 +1816,7 @@ fn agent_name_from_session_agent_id(agent_id: &str) -> Option<AgentName> {
         "agent_codex" | "codex" => Some(AgentName::Codex),
         "agent_claude" | "claude" => Some(AgentName::Claude),
         "agent_gemini" | "gemini" => Some(AgentName::Gemini),
+        "agent_opencode" | "opencode" => Some(AgentName::Opencode),
         _ => None,
     }
 }

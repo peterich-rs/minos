@@ -34,6 +34,7 @@ fn agent_str(a: AgentName) -> &'static str {
         AgentName::Codex => "codex",
         AgentName::Claude => "claude",
         AgentName::Gemini => "gemini",
+        AgentName::Opencode => "opencode",
     }
 }
 
@@ -404,6 +405,7 @@ fn decode_thread_summary_row(
         "codex" => AgentName::Codex,
         "claude" => AgentName::Claude,
         "gemini" => AgentName::Gemini,
+        "opencode" => AgentName::Opencode,
         other => {
             return Err(BackendError::StoreDecode {
                 column: "threads.agent".into(),

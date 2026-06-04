@@ -476,7 +476,7 @@ async fn find_completed_agent_reply(
             }
             Ok(None)
         }
-        AgentName::Claude | AgentName::Gemini => Ok(None),
+        AgentName::Claude | AgentName::Gemini | AgentName::Opencode => Ok(None),
     }
 }
 

@@ -1422,7 +1422,8 @@ fn parse_agent_name(value: &str) -> Result<AgentName, Box<dyn std::error::Error>
         "codex" => Ok(AgentName::Codex),
         "claude" => Ok(AgentName::Claude),
         "gemini" => Ok(AgentName::Gemini),
-        other => Err(format!("unknown agent {other:?}; want one of codex/claude/gemini").into()),
+        "opencode" => Ok(AgentName::Opencode),
+        other => Err(format!("unknown agent {other:?}; want one of codex/claude/gemini/opencode").into()),
     }
 }
 
@@ -1431,6 +1432,7 @@ fn format_agent_name(agent: AgentName) -> &'static str {
         AgentName::Codex => "codex",
         AgentName::Claude => "claude",
         AgentName::Gemini => "gemini",
+        AgentName::Opencode => "opencode",
     }
 }
 

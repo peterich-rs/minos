@@ -98,15 +98,19 @@ pub async fn read_thread(
     };
 
     // Fresh translator state per call so history stays deterministic.
-    let mut translator_state =
+    let mut codex_state =
         minos_ui_protocol::CodexTranslatorState::new(params.thread_id.clone());
+    let mut claude_state =
+        minos_ui_protocol::ClaudeTranslatorState::new(params.thread_id.clone());
+    let mut opencode_state =
+        minos_ui_protocol::OpencodeTranslatorState::new(params.thread_id.clone());
     let mut ui_events: Vec<minos_ui_protocol::UiEventMessage> = Vec::new();
     let mut last_seq_read = from_seq;
     for row in &rows {
         last_seq_read = u64::try_from(row.seq).unwrap_or(last_seq_read);
         match row.agent {
             minos_domain::AgentName::Codex => {
-                match minos_ui_protocol::translate_codex(&mut translator_state, &row.payload) {
+                match minos_ui_protocol::translate_codex(&mut codex_state, &row.payload) {
                     Ok(v) => ui_events.extend(v),
                     Err(e) => ui_events.push(minos_ui_protocol::UiEventMessage::Error {
                         code: "translation_failed".into(),
@@ -116,7 +120,7 @@ pub async fn read_thread(
                 }
             }
             minos_domain::AgentName::Claude => {
-                match minos_ui_protocol::translate_claude(&row.payload) {
+                match minos_ui_protocol::translate_claude(&mut claude_state, &row.payload) {
                     Ok(v) => ui_events.extend(v),
                     Err(e) => ui_events.push(minos_ui_protocol::UiEventMessage::Error {
                         code: "translation_failed".into(),
@@ -127,6 +131,16 @@ pub async fn read_thread(
             }
             minos_domain::AgentName::Gemini => {
                 match minos_ui_protocol::translate_gemini(&row.payload) {
+                    Ok(v) => ui_events.extend(v),
+                    Err(e) => ui_events.push(minos_ui_protocol::UiEventMessage::Error {
+                        code: "translation_failed".into(),
+                        message: format!("{e}"),
+                        message_id: None,
+                    }),
+                }
+            }
+            minos_domain::AgentName::Opencode => {
+                match minos_ui_protocol::translate_opencode(&mut opencode_state, &row.payload) {
                     Ok(v) => ui_events.extend(v),
                     Err(e) => ui_events.push(minos_ui_protocol::UiEventMessage::Error {
                         code: "translation_failed".into(),

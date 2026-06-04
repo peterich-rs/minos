@@ -17,7 +17,8 @@ use minos_protocol::{
     WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{
-    translate_claude, translate_codex, translate_gemini, CodexTranslatorState, ThreadEndReason,
+    translate_claude, translate_codex, translate_gemini, translate_opencode,
+    ClaudeTranslatorState, CodexTranslatorState, OpencodeTranslatorState, ThreadEndReason,
     UiEventMessage,
 };
 use tokio::sync::{broadcast, mpsc, watch};
@@ -368,8 +369,15 @@ impl AgentGlue {
                 })?;
             let translated = match agent {
                 minos_domain::AgentName::Codex => translate_codex(&mut translator, &payload),
-                minos_domain::AgentName::Claude => translate_claude(&payload),
+                minos_domain::AgentName::Claude => {
+                    let mut cs = ClaudeTranslatorState::new(thread_id.to_string());
+                    translate_claude(&mut cs, &payload)
+                }
                 minos_domain::AgentName::Gemini => translate_gemini(&payload),
+                minos_domain::AgentName::Opencode => {
+                    let mut os = OpencodeTranslatorState::new(thread_id.to_string());
+                    translate_opencode(&mut os, &payload)
+                }
             }
             .unwrap_or_else(|error| {
                 vec![UiEventMessage::Error {
@@ -804,6 +812,7 @@ fn parse_agent_label(agent: &str) -> Result<minos_domain::AgentName, MinosError>
         "codex" => Ok(minos_domain::AgentName::Codex),
         "claude" => Ok(minos_domain::AgentName::Claude),
         "gemini" => Ok(minos_domain::AgentName::Gemini),
+        "opencode" => Ok(minos_domain::AgentName::Opencode),
         other => Err(MinosError::CodexProtocolError {
             method: "local_store.thread_agent".into(),
             message: format!("unknown persisted agent: {other}"),
@@ -816,6 +825,7 @@ fn agent_label(agent: minos_domain::AgentName) -> &'static str {
         minos_domain::AgentName::Codex => "codex",
         minos_domain::AgentName::Claude => "claude",
         minos_domain::AgentName::Gemini => "gemini",
+        minos_domain::AgentName::Opencode => "opencode",
     }
 }
 
