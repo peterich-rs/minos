@@ -2524,6 +2524,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "minos-acp-protocol"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "minos-agent-runtime"
 version = "0.1.0"
 dependencies = [
@@ -2534,6 +2543,7 @@ dependencies = [
  "eventsource-stream",
  "futures-util",
  "libc",
+ "minos-acp-protocol",
  "minos-agent-runtime",
  "minos-codex-protocol",
  "minos-domain",

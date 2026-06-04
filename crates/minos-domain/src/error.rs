@@ -41,6 +41,8 @@ pub enum ErrorKind {
     CodexSpawnFailed,
     CodexConnectFailed,
     CodexProtocolError,
+    GeminiSpawnFailed,
+    AcpProtocolError,
     AgentAlreadyRunning,
     AgentNotRunning,
     AgentNotSupported,
@@ -126,6 +128,10 @@ impl ErrorKind {
             (Self::CodexConnectFailed, Lang::En) => "Could not reach codex app-server",
             (Self::CodexProtocolError, Lang::Zh) => "Codex 返回错误，请查看日志",
             (Self::CodexProtocolError, Lang::En) => "Codex returned an error — see log",
+            (Self::GeminiSpawnFailed, Lang::Zh) => "无法启动 Gemini CLI；请确认已安装",
+            (Self::GeminiSpawnFailed, Lang::En) => "Failed to launch Gemini CLI; is it installed?",
+            (Self::AcpProtocolError, Lang::Zh) => "Gemini ACP 协议错误，请查看日志",
+            (Self::AcpProtocolError, Lang::En) => "Gemini ACP protocol error — see log",
             (Self::AgentAlreadyRunning, Lang::Zh) => "Agent 已在运行",
             (Self::AgentAlreadyRunning, Lang::En) => "An agent session is already running",
             (Self::AgentNotRunning, Lang::Zh) => "当前没有 Agent 会话",
@@ -243,6 +249,12 @@ pub enum MinosError {
     #[error("codex protocol error on {method}: {message}")]
     CodexProtocolError { method: String, message: String },
 
+    #[error("failed to spawn gemini: {message}")]
+    GeminiSpawnFailed { message: String },
+
+    #[error("gemini ACP protocol error on {method}: {message}")]
+    AcpProtocolError { method: String, message: String },
+
     #[error("agent is already running")]
     AgentAlreadyRunning,
 
@@ -330,6 +342,8 @@ impl MinosError {
             Self::CodexSpawnFailed { .. } => ErrorKind::CodexSpawnFailed,
             Self::CodexConnectFailed { .. } => ErrorKind::CodexConnectFailed,
             Self::CodexProtocolError { .. } => ErrorKind::CodexProtocolError,
+            Self::GeminiSpawnFailed { .. } => ErrorKind::GeminiSpawnFailed,
+            Self::AcpProtocolError { .. } => ErrorKind::AcpProtocolError,
             Self::AgentAlreadyRunning => ErrorKind::AgentAlreadyRunning,
             Self::AgentNotRunning => ErrorKind::AgentNotRunning,
             Self::AgentNotSupported { .. } => ErrorKind::AgentNotSupported,
@@ -507,6 +521,19 @@ mod tests {
                 ErrorKind::CodexProtocolError,
             ),
             (
+                MinosError::GeminiSpawnFailed {
+                    message: String::new(),
+                },
+                ErrorKind::GeminiSpawnFailed,
+            ),
+            (
+                MinosError::AcpProtocolError {
+                    method: String::new(),
+                    message: String::new(),
+                },
+                ErrorKind::AcpProtocolError,
+            ),
+            (
                 MinosError::AgentAlreadyRunning,
                 ErrorKind::AgentAlreadyRunning,
             ),
@@ -583,7 +610,7 @@ mod tests {
         ];
         assert_eq!(
             cases.len(),
-            38,
+            40,
             "add a case when you add a MinosError variant"
         );
         for (err, expected_kind) in cases {
@@ -613,6 +640,8 @@ mod tests {
         ErrorKind::CodexSpawnFailed,
         ErrorKind::CodexConnectFailed,
         ErrorKind::CodexProtocolError,
+        ErrorKind::GeminiSpawnFailed,
+        ErrorKind::AcpProtocolError,
         ErrorKind::AgentAlreadyRunning,
         ErrorKind::AgentNotRunning,
         ErrorKind::AgentNotSupported,
@@ -638,7 +667,7 @@ mod tests {
     fn every_error_kind_has_user_message_in_both_langs() {
         assert_eq!(
             ALL_KINDS.len(),
-            38,
+            40,
             "add a kind when you add an ErrorKind variant"
         );
         for k in ALL_KINDS {
