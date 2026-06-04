@@ -56,6 +56,42 @@ pub struct AgentGlue {
     default_workspace: PathBuf,
 }
 
+pub enum TranslatorState {
+    Codex(CodexTranslatorState),
+    Claude(ClaudeTranslatorState),
+    Opencode(OpencodeTranslatorState),
+    Gemini,
+}
+
+impl TranslatorState {
+    fn new(thread_id: String, agent: minos_domain::AgentName) -> Self {
+        match agent {
+            minos_domain::AgentName::Codex => Self::Codex(CodexTranslatorState::new(thread_id)),
+            minos_domain::AgentName::Claude => Self::Claude(ClaudeTranslatorState::new(thread_id)),
+            minos_domain::AgentName::Opencode => {
+                Self::Opencode(OpencodeTranslatorState::new(thread_id))
+            }
+            minos_domain::AgentName::Gemini => Self::Gemini,
+        }
+    }
+
+    fn translate(&mut self, raw: &serde_json::Value) -> Vec<UiEventMessage> {
+        match self {
+            Self::Codex(s) => translate_codex(s, raw),
+            Self::Claude(s) => translate_claude(s, raw),
+            Self::Opencode(s) => translate_opencode(s, raw),
+            Self::Gemini => translate_gemini(raw),
+        }
+        .unwrap_or_else(|error| {
+            vec![UiEventMessage::Error {
+                code: "translation_failed".into(),
+                message: error.to_string(),
+                message_id: None,
+            }]
+        })
+    }
+}
+
 impl AgentGlue {
     /// Construct a new glue and spawn the `RawIngest -> EventWriter` bridge.
     /// `relay_out_tx` is the single `/devices` outbound channel owned by the
@@ -329,6 +365,20 @@ impl AgentGlue {
         &self,
         thread_id: &str,
     ) -> Result<CodexTranslatorState, MinosError> {
+        let translator = self.hydrate_translator(thread_id).await?;
+        match translator {
+            TranslatorState::Codex(s) => Ok(s),
+            _ => Err(MinosError::CodexProtocolError {
+                method: "hydrate_codex_translator".into(),
+                message: "thread is not a codex thread".into(),
+            }),
+        }
+    }
+
+    pub async fn hydrate_translator(
+        &self,
+        thread_id: &str,
+    ) -> Result<TranslatorState, MinosError> {
         let (_, _, translator) = self.load_thread_history(thread_id).await?;
         Ok(translator)
     }
@@ -340,7 +390,7 @@ impl AgentGlue {
         (
             crate::store::ThreadRow,
             Vec<UiEventMessage>,
-            CodexTranslatorState,
+            TranslatorState,
         ),
         MinosError,
     > {
@@ -358,7 +408,7 @@ impl AgentGlue {
             .map_err(|e| map_store_error("read_thread_history", e))?;
         let agent = parse_agent_label(&row.agent)?;
         let mut ui_events = Vec::new();
-        let mut translator = CodexTranslatorState::new(thread_id.to_string());
+        let mut translator = TranslatorState::new(thread_id.to_string(), agent);
         for event in rows {
             let payload: serde_json::Value =
                 serde_json::from_slice(&event.payload).map_err(|e| {
@@ -367,25 +417,7 @@ impl AgentGlue {
                         message: e.to_string(),
                     }
                 })?;
-            let translated = match agent {
-                minos_domain::AgentName::Codex => translate_codex(&mut translator, &payload),
-                minos_domain::AgentName::Claude => {
-                    let mut cs = ClaudeTranslatorState::new(thread_id.to_string());
-                    translate_claude(&mut cs, &payload)
-                }
-                minos_domain::AgentName::Gemini => translate_gemini(&payload),
-                minos_domain::AgentName::Opencode => {
-                    let mut os = OpencodeTranslatorState::new(thread_id.to_string());
-                    translate_opencode(&mut os, &payload)
-                }
-            }
-            .unwrap_or_else(|error| {
-                vec![UiEventMessage::Error {
-                    code: "translation_failed".into(),
-                    message: error.to_string(),
-                    message_id: None,
-                }]
-            });
+            let translated = translator.translate(&payload);
             ui_events.extend(translated);
         }
         Ok((row, ui_events, translator))
@@ -1243,5 +1275,76 @@ mod tests {
             UiEventMessage::TextDelta { message_id, text }
                 if message_id == "a1" && text == "world"
         )));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::cast_possible_wrap)]
+    async fn hydrate_translator_returns_claude_variant_for_claude_thread() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-cl", "claude", 10, 20).await;
+        let payloads = [
+            serde_json::json!({
+                "type":"system",
+                "subtype":"init",
+                "session_id":"sess_1",
+                "tools":[]
+            }),
+            serde_json::json!({
+                "type":"assistant",
+                "message":{"id":"msg_1","content":[]},
+                "delta":{"type":"text_delta","text":"hi"}
+            }),
+        ];
+        for (idx, payload) in payloads.into_iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
+            )
+            .bind("thr-cl")
+            .bind((idx + 1) as i64)
+            .bind(serde_json::to_vec(&payload).unwrap())
+            .bind((idx + 1) as i64)
+            .execute(test.glue.store.pool())
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE threads SET last_seq = 2 WHERE thread_id = 'thr-cl'")
+            .execute(test.glue.store.pool())
+            .await
+            .unwrap();
+
+        let translator = test.glue.hydrate_translator("thr-cl").await.unwrap();
+        assert!(matches!(translator, super::TranslatorState::Claude(_)));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::cast_possible_wrap)]
+    async fn hydrate_translator_returns_opencode_variant_for_opencode_thread() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-oc", "opencode", 10, 20).await;
+        let payloads = [
+            serde_json::json!({
+                "type":"session.created",
+                "session":{"id":"sess_1","title":"Test"}
+            }),
+        ];
+        for (idx, payload) in payloads.into_iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
+            )
+            .bind("thr-oc")
+            .bind((idx + 1) as i64)
+            .bind(serde_json::to_vec(&payload).unwrap())
+            .bind((idx + 1) as i64)
+            .execute(test.glue.store.pool())
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE threads SET last_seq = 1 WHERE thread_id = 'thr-oc'")
+            .execute(test.glue.store.pool())
+            .await
+            .unwrap();
+
+        let translator = test.glue.hydrate_translator("thr-oc").await.unwrap();
+        assert!(matches!(translator, super::TranslatorState::Opencode(_)));
     }
 }

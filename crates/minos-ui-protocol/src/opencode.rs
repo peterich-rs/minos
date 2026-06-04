@@ -531,4 +531,202 @@ mod tests {
             UiEventMessage::Raw { kind, .. } if kind == "opencode/custom_event"
         ));
     }
+
+    #[test]
+    fn full_conversation_flow() {
+        let mut s = OpencodeTranslatorState::new("thr".into());
+
+        let created = translate(
+            &mut s,
+            &val(r#"{
+                "type":"session.created",
+                "session":{"id":"sess_1","title":"Test Session"}
+            }"#),
+        )
+        .unwrap();
+        assert!(matches!(created[0], UiEventMessage::ThreadOpened { .. }));
+
+        let user_msg = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.updated",
+                "message":{"id":"msg_u1","role":"user","parts":[{"type":"text","text":"hello"}]}
+            }"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            &user_msg[0],
+            UiEventMessage::MessageStarted { role: MessageRole::User, .. }
+        ));
+        assert!(matches!(
+            &user_msg[1],
+            UiEventMessage::TextDelta { text, .. } if text == "hello"
+        ));
+
+        let asst_msg = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.updated",
+                "message":{"id":"msg_a1","role":"assistant","parts":[]}
+            }"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            &asst_msg[0],
+            UiEventMessage::MessageStarted { role: MessageRole::Assistant, .. }
+        ));
+
+        let delta = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.part.updated",
+                "part":{"type":"text","text":"world"}
+            }"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            &delta[0],
+            UiEventMessage::TextDelta { text, .. } if text == "world"
+        ));
+
+        let idle = translate(&mut s, &val(r#"{"type":"session.idle"}"#)).unwrap();
+        assert!(matches!(
+            &idle[0],
+            UiEventMessage::MessageCompleted { message_id, .. } if message_id == "msg_a1"
+        ));
+    }
+
+    #[test]
+    fn tool_call_lifecycle_calling_to_complete() {
+        let mut s = OpencodeTranslatorState::new("thr".into());
+        let _ = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.updated",
+                "message":{"id":"msg_t1","role":"assistant","parts":[]}
+            }"#),
+        )
+        .unwrap();
+
+        let calling = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.part.updated",
+                "part":{"type":"tool-call","id":"tc_lifecycle","name":"Read","args":{"path":"/foo"},"state":"calling"}
+            }"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            &calling[0],
+            UiEventMessage::ToolCallPlaced { tool_call_id, name, .. }
+                if tool_call_id == "tc_lifecycle" && name == "Read"
+        ));
+
+        let complete = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.part.updated",
+                "part":{"type":"tool-call","id":"tc_lifecycle","output":"contents of foo","is_error":false,"state":"complete"}
+            }"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            &complete[0],
+            UiEventMessage::ToolCallCompleted { tool_call_id, is_error: false, output, .. }
+                if tool_call_id == "tc_lifecycle" && output == "contents of foo"
+        ));
+    }
+
+    #[test]
+    fn session_error_emits_error() {
+        let mut s = OpencodeTranslatorState::new("thr".into());
+        let _ = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.updated",
+                "message":{"id":"msg_e1","role":"assistant","parts":[]}
+            }"#),
+        )
+        .unwrap();
+
+        let out = translate(
+            &mut s,
+            &val(r#"{
+                "type":"session.error",
+                "error":{"type":"rate_limit","message":"Too many requests"}
+            }"#),
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            UiEventMessage::Error { code, message, message_id } => {
+                assert_eq!(code, "rate_limit");
+                assert_eq!(message, "Too many requests");
+                assert_eq!(message_id.as_deref(), Some("msg_e1"));
+            }
+            _ => panic!("unexpected {:?}", out[0]),
+        }
+    }
+
+    #[test]
+    fn permission_updated_emits_raw() {
+        let mut s = OpencodeTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{
+                "type":"permission.updated",
+                "permission":{"tool":"bash","decision":"allowed"}
+            }"#),
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(matches!(
+            &out[0],
+            UiEventMessage::Raw { kind, .. } if kind == "opencode/permission.updated"
+        ));
+    }
+
+    #[test]
+    fn multiple_messages_in_one_session() {
+        let mut s = OpencodeTranslatorState::new("thr".into());
+
+        let _ = translate(
+            &mut s,
+            &val(r#"{"type":"session.created","session":{"id":"sess_m","title":"Multi"}}"#),
+        )
+        .unwrap();
+
+        let u1 = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.updated",
+                "message":{"id":"msg_u1","role":"user","parts":[{"type":"text","text":"first"}]}
+            }"#),
+        )
+        .unwrap();
+        assert!(u1.iter().any(|e| matches!(e, UiEventMessage::TextDelta { text, .. } if text == "first")));
+
+        let a1 = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.updated",
+                "message":{"id":"msg_a1","role":"assistant","parts":[{"type":"text","text":"reply 1"}]}
+            }"#),
+        )
+        .unwrap();
+        assert!(a1.iter().any(|e| matches!(e, UiEventMessage::TextDelta { text, .. } if text == "reply 1")));
+
+        let _idle = translate(&mut s, &val(r#"{"type":"session.idle"}"#)).unwrap();
+
+        let u2 = translate(
+            &mut s,
+            &val(r#"{
+                "type":"message.updated",
+                "message":{"id":"msg_u2","role":"user","parts":[{"type":"text","text":"second"}]}
+            }"#),
+        )
+        .unwrap();
+        assert!(u2.iter().any(|e| matches!(e, UiEventMessage::MessageStarted { role: MessageRole::User, message_id, .. } if message_id == "msg_u2")));
+        assert!(u2.iter().any(|e| matches!(e, UiEventMessage::TextDelta { text, .. } if text == "second")));
+    }
 }

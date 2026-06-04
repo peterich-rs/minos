@@ -510,4 +510,222 @@ mod tests {
             UiEventMessage::Raw { kind, .. } if kind == "claude/custom_event"
         ));
     }
+
+    #[test]
+    fn full_conversation_flow() {
+        let mut s = ClaudeTranslatorState::new("thr".into());
+
+        let init = translate(
+            &mut s,
+            &val(r#"{"type":"system","subtype":"init","session_id":"sess_1","tools":[]}"#),
+        )
+        .unwrap();
+        assert!(matches!(init[0], UiEventMessage::ThreadOpened { .. }));
+
+        let user = translate(
+            &mut s,
+            &val(r#"{
+                "type":"user",
+                "message":{"id":"msg_u1","content":[{"type":"text","text":"hello"}]}
+            }"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            &user[0],
+            UiEventMessage::MessageStarted { role: MessageRole::User, .. }
+        ));
+        assert!(matches!(
+            &user[1],
+            UiEventMessage::TextDelta { text, .. } if text == "hello"
+        ));
+
+        let assistant = translate(
+            &mut s,
+            &val(r#"{
+                "type":"assistant",
+                "message":{"id":"msg_a1","content":[]},
+                "delta":{"type":"text_delta","text":"Hi there"}
+            }"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            &assistant[0],
+            UiEventMessage::MessageStarted { role: MessageRole::Assistant, .. }
+        ));
+        assert!(matches!(
+            &assistant[1],
+            UiEventMessage::TextDelta { text, .. } if text == "Hi there"
+        ));
+
+        let result = translate(
+            &mut s,
+            &val(r#"{"type":"result","subtype":"success","result":"done","is_error":false}"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            &result[0],
+            UiEventMessage::MessageCompleted { message_id, .. } if message_id == "msg_a1"
+        ));
+    }
+
+    #[test]
+    fn thinking_delta_emits_reasoning_delta() {
+        let mut s = ClaudeTranslatorState::new("thr".into());
+        let _ = translate(
+            &mut s,
+            &val(r#"{
+                "type":"assistant",
+                "message":{"id":"msg_r1","content":[]},
+                "delta":{"type":"text_delta","text":""}
+            }"#),
+        )
+        .unwrap();
+
+        let out = translate(
+            &mut s,
+            &val(r#"{
+                "type":"assistant",
+                "message":{"id":"msg_r1","content":[]},
+                "delta":{"type":"thinking_delta","thinking":"let me think..."}
+            }"#),
+        )
+        .unwrap();
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::ReasoningDelta { text, .. } if text == "let me think..."
+        )));
+    }
+
+    #[test]
+    fn tool_use_and_result_with_real_payloads() {
+        let mut s = ClaudeTranslatorState::new("thr".into());
+
+        let placed = translate(
+            &mut s,
+            &val(r#"{
+                "type":"assistant",
+                "message":{
+                    "id":"msg_t1",
+                    "content":[
+                        {"type":"tool_use","id":"tu_read","name":"Read","input":{"file_path":"/src/main.rs"}}
+                    ]
+                },
+                "delta":{"type":"text_delta","text":""}
+            }"#),
+        )
+        .unwrap();
+        assert!(placed.iter().any(|e| matches!(
+            e,
+            UiEventMessage::ToolCallPlaced { name, args_json, .. }
+                if name == "Read" && args_json.contains("file_path")
+        )));
+
+        let completed = translate(
+            &mut s,
+            &val(r#"{
+                "type":"tool_result",
+                "tool_use_id":"tu_read",
+                "content":{"content":[{"type":"text","text":"fn main() {}"}]},
+                "is_error":false
+            }"#),
+        )
+        .unwrap();
+        assert!(completed.iter().any(|e| matches!(
+            e,
+            UiEventMessage::ToolCallCompleted { tool_call_id, is_error: false, output, .. }
+                if tool_call_id == "tu_read" && output.contains("fn main()")
+        )));
+    }
+
+    #[test]
+    fn error_event_with_nested_error_object() {
+        let mut s = ClaudeTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{
+                "type":"error",
+                "error":{"type":"api_error","message":"Rate limit exceeded","retry_after":30}
+            }"#),
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            UiEventMessage::Error { code, message, .. } => {
+                assert_eq!(code, "api_error");
+                assert_eq!(message, "Rate limit exceeded");
+            }
+            _ => panic!("unexpected {:?}", out[0]),
+        }
+    }
+
+    #[test]
+    fn result_with_is_error_true_emits_error() {
+        let mut s = ClaudeTranslatorState::new("thr".into());
+        let _ = translate(
+            &mut s,
+            &val(r#"{
+                "type":"assistant",
+                "message":{"id":"msg_e1","content":[]},
+                "delta":{"type":"text_delta","text":""}
+            }"#),
+        )
+        .unwrap();
+
+        let out = translate(
+            &mut s,
+            &val(r#"{
+                "type":"result",
+                "subtype":"error_tool_use",
+                "result":"Tool execution failed",
+                "is_error":true
+            }"#),
+        )
+        .unwrap();
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::MessageCompleted { .. }
+        )));
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::Error { code, message, .. }
+                if code == "error_tool_use" && message == "Tool execution failed"
+        )));
+    }
+
+    #[test]
+    fn duplicate_message_id_deduped() {
+        let mut s = ClaudeTranslatorState::new("thr".into());
+
+        let first = translate(
+            &mut s,
+            &val(r#"{
+                "type":"assistant",
+                "message":{"id":"msg_dup","content":[]},
+                "delta":{"type":"text_delta","text":"first"}
+            }"#),
+        )
+        .unwrap();
+        assert!(first.iter().any(|e| matches!(
+            e,
+            UiEventMessage::MessageStarted { message_id, .. } if message_id == "msg_dup"
+        )));
+
+        let second = translate(
+            &mut s,
+            &val(r#"{
+                "type":"assistant",
+                "message":{"id":"msg_dup","content":[]},
+                "delta":{"type":"text_delta","text":"second"}
+            }"#),
+        )
+        .unwrap();
+        assert!(!second.iter().any(|e| matches!(
+            e,
+            UiEventMessage::MessageStarted { .. }
+        )));
+        assert!(second.iter().any(|e| matches!(
+            e,
+            UiEventMessage::TextDelta { text, .. } if text == "second"
+        )));
+    }
 }
