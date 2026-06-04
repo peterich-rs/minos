@@ -1,0 +1,27 @@
+[package]
+name = "minos-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "minos-tui"
+path = "src/main.rs"
+
+[dependencies]
+minos-agent-runtime = { path = "../minos-agent-runtime" }
+minos-ui-protocol = { path = "../minos-ui-protocol" }
+minos-domain = { path = "../minos-domain" }
+minos-cli-detect = { path = "../minos-cli-detect" }
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
