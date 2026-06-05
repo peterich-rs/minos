@@ -2,6 +2,7 @@ use std::env;
 use std::ffi::OsString;
 use std::io::BufRead as _;
 use std::io::Write as _;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +10,7 @@ use std::time::Duration;
 use clap::{Args, Parser, Subcommand};
 use minos_cli_detect::{capture_user_shell_env, detect_all, RealCommandRunner};
 use minos_daemon::{paths, AgentGlue, DaemonHandle, LocalState, RelayConfig};
+use minos_daemon::local_rpc::LocalRpcConfig;
 use minos_domain::{AgentDescriptor, AgentName, AgentStatus, MinosError};
 use minos_ui_protocol::{translate_codex, CodexTranslatorState, MessageRole, UiEventMessage};
 use serde::Serialize;
@@ -68,6 +70,12 @@ struct StartArgs {
     /// Print a fresh pairing QR payload as JSON after startup.
     #[arg(long)]
     print_qr: bool,
+    /// Enable local JSON-RPC server for TUI communication.
+    #[arg(long)]
+    local_rpc: bool,
+    /// Override bind address for the local RPC server (default: 127.0.0.1:0).
+    #[arg(long)]
+    local_rpc_addr: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -818,13 +826,44 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
     println!("device id:  {}", local_state.self_device_id);
     println!("relay:      {}", config.resolved_backend_url());
 
-    let handle =
-        DaemonHandle::start(config, local_state.self_device_id, None, None, mac_name).await?;
+    let local_rpc_config = if args.local_rpc {
+        let addr: SocketAddr = args
+            .local_rpc_addr
+            .as_deref()
+            .unwrap_or("127.0.0.1:0")
+            .parse()
+            .map_err(|e| {
+                std::io::Error::other(format!("invalid --local-rpc-addr: {e}"))
+            })?;
+        let run_dir = paths::run_dir()?;
+        let discovery_path = run_dir.join("tui-daemon-rpc.json");
+        Some(LocalRpcConfig {
+            addr,
+            discovery_path: discovery_path.clone(),
+        })
+    } else {
+        None
+    };
+
+    let handle = DaemonHandle::start_with_local_rpc(
+        config,
+        local_state.self_device_id,
+        None,
+        None,
+        mac_name,
+        local_rpc_config,
+    )
+    .await?;
 
     if args.print_qr {
         let qr = handle.pairing_qr().await?;
         println!("pairing_qr:");
         println!("{}", serde_json::to_string_pretty(&qr)?);
+    }
+
+    if args.local_rpc {
+        let discovery = paths::run_dir()?.join("tui-daemon-rpc.json");
+        println!("local rpc:  {}", discovery.display());
     }
 
     println!("status:     running (Ctrl-C or SIGTERM to stop)");
@@ -1423,7 +1462,9 @@ fn parse_agent_name(value: &str) -> Result<AgentName, Box<dyn std::error::Error>
         "claude" => Ok(AgentName::Claude),
         "gemini" => Ok(AgentName::Gemini),
         "opencode" => Ok(AgentName::Opencode),
-        other => Err(format!("unknown agent {other:?}; want one of codex/claude/gemini/opencode").into()),
+        other => {
+            Err(format!("unknown agent {other:?}; want one of codex/claude/gemini/opencode").into())
+        }
     }
 }
 
