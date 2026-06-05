@@ -11,8 +11,9 @@ use minos_agent_runtime::{
 };
 use minos_domain::{AgentDescriptor, AgentName};
 use minos_protocol::{
-    CloseReason as ProtoCloseReason, ListClisResponse, LocalIngestFrame, LocalManagerEvent,
-    PauseReason as ProtoPauseReason, SendUserMessageRequest, StartAgentRequest,
+    CloseReason as ProtoCloseReason, GetThreadParams, ListClisResponse, LocalIngestFrame,
+    LocalManagerEvent, LocalThreadSnapshot, PauseReason as ProtoPauseReason,
+    ReadThreadParams, ReadThreadRawHistoryResponse, SendUserMessageRequest, StartAgentRequest,
     StartAgentResponse, ThreadState as ProtoThreadState, InterruptThreadRequest,
     CloseThreadRequest,
 };
@@ -210,7 +211,53 @@ impl AgentBackend for DaemonBackend {
     }
 
     async fn list_threads(&self) -> Result<Vec<ThreadSnapshot>> {
-        Ok(Vec::new())
+        let snapshots: Vec<LocalThreadSnapshot> = self
+            .client
+            .request("minos_local_list_local_threads", ArrayParams::new())
+            .await
+            .context("RPC minos_local_list_local_threads failed")?;
+        Ok(snapshots
+            .into_iter()
+            .map(|s| ThreadSnapshot {
+                thread_id: s.thread_id,
+                workspace: PathBuf::from(s.workspace),
+                state: proto_state_to_runtime(&s.state),
+            })
+            .collect())
+    }
+
+    async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentOutcome> {
+        let request = GetThreadParams {
+            thread_id: thread_id.to_owned(),
+        };
+        let response: StartAgentResponse = self
+            .client
+            .request("minos_local_resume_thread", [request])
+            .await
+            .context("RPC minos_local_resume_thread failed")?;
+        Ok(StartAgentOutcome {
+            thread_id: response.session_id,
+            cwd: PathBuf::from(response.cwd),
+        })
+    }
+
+    async fn read_thread_raw_history(
+        &self,
+        thread_id: &str,
+        from_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<LocalIngestFrame>> {
+        let request = ReadThreadParams {
+            thread_id: thread_id.to_owned(),
+            from_seq,
+            limit,
+        };
+        let response: ReadThreadRawHistoryResponse = self
+            .client
+            .request("minos_local_read_thread_raw_history", [request])
+            .await
+            .context("RPC minos_local_read_thread_raw_history failed")?;
+        Ok(response.events)
     }
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {

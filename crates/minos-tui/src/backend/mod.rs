@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use minos_agent_runtime::{ManagerEvent, RawIngest, StartAgentOutcome};
 use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;
+use minos_protocol::local_rpc::LocalIngestFrame;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 
@@ -33,6 +34,15 @@ pub trait AgentBackend: Send + Sync {
     async fn close_thread(&self, thread_id: &str) -> Result<()>;
 
     async fn list_threads(&self) -> Result<Vec<minos_agent_runtime::store_facing::ThreadSnapshot>>;
+
+    async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentOutcome>;
+
+    async fn read_thread_raw_history(
+        &self,
+        thread_id: &str,
+        from_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<LocalIngestFrame>>;
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest>;
 

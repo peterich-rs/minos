@@ -17,9 +17,9 @@ use minos_protocol::{
     WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{
-    translate_claude, translate_codex, translate_gemini, translate_opencode,
-    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState,
-    ThreadEndReason, UiEventMessage,
+    translate_claude, translate_codex, translate_gemini, translate_opencode, ClaudeTranslatorState,
+    CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState, ThreadEndReason,
+    UiEventMessage,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -163,6 +163,55 @@ impl AgentGlue {
             state_rx,
             default_workspace,
         }
+    }
+
+    pub fn store(&self) -> &Arc<LocalStore> {
+        &self.store
+    }
+
+    pub async fn read_thread_raw_history(
+        &self,
+        thread_id: &str,
+        from_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<(Vec<minos_protocol::LocalIngestFrame>, Option<u64>), MinosError> {
+        let row = self
+            .store
+            .get_thread(thread_id)
+            .await
+            .map_err(|e| map_store_error("read_thread_raw_history", e))?
+            .ok_or(MinosError::AgentSessionIdMismatch)?;
+        let max_seq = u64::try_from(row.last_seq.max(0)).unwrap_or(0);
+        let start = from_seq.unwrap_or(0).saturating_add(1);
+        let effective_limit = limit.min(1000);
+        let end = start.saturating_add(u64::from(effective_limit)).saturating_sub(1).min(max_seq);
+        let rows = self
+            .store
+            .read_events(thread_id, start, end)
+            .await
+            .map_err(|e| map_store_error("read_thread_raw_history", e))?;
+        let agent = parse_agent_label(&row.agent)?;
+        let mut events = Vec::with_capacity(rows.len());
+        for event in rows {
+            let payload: serde_json::Value = serde_json::from_slice(&event.payload).map_err(|e| {
+                MinosError::CodexProtocolError {
+                    method: "read_thread_raw_history".into(),
+                    message: e.to_string(),
+                }
+            })?;
+            events.push(minos_protocol::LocalIngestFrame {
+                thread_id: thread_id.to_owned(),
+                agent,
+                payload,
+                ts_ms: event.ts_ms,
+            });
+        }
+        let next_seq = if end < max_seq {
+            Some(end.saturating_add(1))
+        } else {
+            None
+        };
+        Ok((events, next_seq))
     }
 
     pub async fn start_agent(
@@ -375,10 +424,7 @@ impl AgentGlue {
         }
     }
 
-    pub async fn hydrate_translator(
-        &self,
-        thread_id: &str,
-    ) -> Result<TranslatorState, MinosError> {
+    pub async fn hydrate_translator(&self, thread_id: &str) -> Result<TranslatorState, MinosError> {
         let (_, _, translator) = self.load_thread_history(thread_id).await?;
         Ok(translator)
     }
@@ -839,7 +885,7 @@ fn row_state_to_runtime(
     }
 }
 
-fn parse_agent_label(agent: &str) -> Result<minos_domain::AgentName, MinosError> {
+pub(crate) fn parse_agent_label(agent: &str) -> Result<minos_domain::AgentName, MinosError> {
     match agent {
         "codex" => Ok(minos_domain::AgentName::Codex),
         "claude" => Ok(minos_domain::AgentName::Claude),
@@ -1321,12 +1367,10 @@ mod tests {
     async fn hydrate_translator_returns_opencode_variant_for_opencode_thread() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-oc", "opencode", 10, 20).await;
-        let payloads = [
-            serde_json::json!({
-                "type":"session.created",
-                "session":{"id":"sess_1","title":"Test"}
-            }),
-        ];
+        let payloads = [serde_json::json!({
+            "type":"session.created",
+            "session":{"id":"sess_1","title":"Test"}
+        })];
         for (idx, payload) in payloads.into_iter().enumerate() {
             sqlx::query(
                 "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",

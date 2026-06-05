@@ -2,6 +2,20 @@ use jsonrpsee::proc_macros::rpc;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalThreadSnapshot {
+    pub thread_id: String,
+    pub agent: minos_domain::AgentName,
+    pub workspace: String,
+    pub state: crate::ThreadState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadThreadRawHistoryResponse {
+    pub events: Vec<LocalIngestFrame>,
+    pub next_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalIngestFrame {
     pub thread_id: String,
     pub agent: minos_domain::AgentName,
@@ -64,6 +78,21 @@ pub trait LocalDaemonRpc {
         &self,
         req: crate::CloseThreadRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
+
+    #[method(name = "resume_thread")]
+    async fn resume_thread(
+        &self,
+        req: crate::GetThreadParams,
+    ) -> jsonrpsee::core::RpcResult<crate::StartAgentResponse>;
+
+    #[method(name = "list_local_threads")]
+    async fn list_local_threads(&self) -> jsonrpsee::core::RpcResult<Vec<LocalThreadSnapshot>>;
+
+    #[method(name = "read_thread_raw_history")]
+    async fn read_thread_raw_history(
+        &self,
+        req: crate::ReadThreadParams,
+    ) -> jsonrpsee::core::RpcResult<ReadThreadRawHistoryResponse>;
 
     #[subscription(name = "subscribe_ingest", item = LocalIngestFrame)]
     async fn subscribe_ingest(&self) -> jsonrpsee::core::SubscriptionResult;

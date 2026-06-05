@@ -35,6 +35,12 @@ impl App {
         let agents = self.backend.detect_clis().await?;
         self.ui.status.update_agents(agents);
         self.sync_input_agent_picker();
+        if matches!(
+            self.backend.connection_state(),
+            crate::backend::BackendConnectionState::Connected { .. }
+        ) {
+            self.hydrate_daemon_threads().await;
+        }
         Ok(())
     }
 
@@ -94,6 +100,76 @@ impl App {
 
     pub fn ui(&mut self) -> &mut UiState {
         &mut self.ui
+    }
+
+    async fn hydrate_daemon_threads(&mut self) {
+        match self.backend.list_threads().await {
+            Ok(threads) => {
+                for snap in threads {
+                    if self
+                        .ui
+                        .threads
+                        .iter()
+                        .any(|t| t.thread_id == snap.thread_id)
+                    {
+                        continue;
+                    }
+                    let entry = ThreadEntry {
+                        thread_id: snap.thread_id.clone(),
+                        agent: minos_domain::AgentName::Codex,
+                        workspace: snap.workspace.clone(),
+                        state: snap.state,
+                    };
+                    self.ui.threads.push(entry);
+                    self.ui.chat_states.insert(
+                        snap.thread_id.clone(),
+                        ChatState::new(snap.thread_id.clone(), minos_domain::AgentName::Codex),
+                    );
+                }
+                if !self.ui.threads.is_empty() && self.ui.selected_thread.is_none() {
+                    self.select_thread(0);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %e,
+                    "hydrate_daemon_threads failed"
+                );
+            }
+        }
+    }
+
+    async fn replay_thread_history(&mut self, thread_id: &str) {
+        let agent = self
+            .ui
+            .threads
+            .iter()
+            .find(|t| t.thread_id == thread_id)
+            .map(|t| t.agent);
+        let Some(agent) = agent else { return };
+        match self
+            .backend
+            .read_thread_raw_history(thread_id, None, 1000)
+            .await
+        {
+            Ok(frames) => {
+                if let Some(chat) = self.ui.chat_states.get_mut(thread_id) {
+                    for frame in frames {
+                        let events = chat.translation_state.translate(&frame.payload);
+                        chat.apply_ui_events(events);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %e,
+                    thread_id = %thread_id,
+                    "replay_thread_history failed"
+                );
+            }
+        }
     }
 
     async fn handle_manager_event(&mut self, event: ManagerEvent) -> bool {
@@ -671,6 +747,14 @@ impl App {
         if let Some(chat) = self.ui.current_chat_mut() {
             chat.scroll_to_bottom();
         }
+        if let Err(e) = self.backend.resume_thread(&thread_id).await {
+            tracing::debug!(
+                target: "minos_tui::app",
+                error = %e,
+                thread_id = %thread_id,
+                "resume_thread failed or not needed"
+            );
+        }
         if let Err(error) = self.backend.send_message(&thread_id, &text).await {
             self.ui
                 .set_error(format!("Failed to send message: {error}"));
@@ -820,6 +904,7 @@ mod tests {
     use crossterm::event::{KeyEventState, MouseEvent, MouseEventKind};
     use minos_agent_runtime::{RawIngest, StartAgentOutcome};
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
+    use minos_protocol::local_rpc::LocalIngestFrame;
     use ratatui::layout::Rect;
     use tokio::sync::broadcast;
 
@@ -904,6 +989,22 @@ mod tests {
         async fn list_threads(
             &self,
         ) -> Result<Vec<minos_agent_runtime::store_facing::ThreadSnapshot>> {
+            Ok(Vec::new())
+        }
+
+        async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {
+            Ok(StartAgentOutcome {
+                thread_id: String::new(),
+                cwd: PathBuf::new(),
+            })
+        }
+
+        async fn read_thread_raw_history(
+            &self,
+            _thread_id: &str,
+            _from_seq: Option<u64>,
+            _limit: u32,
+        ) -> Result<Vec<LocalIngestFrame>> {
             Ok(Vec::new())
         }
 

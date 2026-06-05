@@ -9,8 +9,9 @@ use minos_agent_runtime::ManagerEvent;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
-    CloseReason, CloseThreadRequest, HealthResponse, InterruptThreadRequest, ListClisResponse,
-    LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent, SendUserMessageRequest,
+    CloseReason, CloseThreadRequest, GetThreadParams, HealthResponse, InterruptThreadRequest,
+    ListClisResponse, LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent,
+    LocalThreadSnapshot, ReadThreadParams, ReadThreadRawHistoryResponse, SendUserMessageRequest,
     StartAgentRequest, StartAgentResponse, ThreadState,
 };
 use serde_json::json;
@@ -18,6 +19,7 @@ use tokio::sync::broadcast;
 use tracing;
 
 use crate::agent::AgentGlue;
+use crate::agent::parse_agent_label;
 use crate::rpc_server::rpc_err;
 
 pub struct LocalRpcConfig {
@@ -69,6 +71,48 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
 
     async fn close_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()> {
         self.agent.close_thread(req).await.map_err(rpc_err)
+    }
+
+    async fn resume_thread(
+        &self,
+        req: GetThreadParams,
+    ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
+        self.agent.resume_thread(&req.thread_id).await.map_err(rpc_err)
+    }
+
+    async fn list_local_threads(&self) -> jsonrpsee::core::RpcResult<Vec<LocalThreadSnapshot>> {
+        let live = self.agent.manager.list_threads().await;
+        let mut result = Vec::with_capacity(live.len());
+        for snap in live {
+            let agent = self
+                .agent
+                .store()
+                .get_thread(&snap.thread_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|row| parse_agent_label(&row.agent).ok())
+                .unwrap_or(minos_domain::AgentName::Codex);
+            result.push(LocalThreadSnapshot {
+                thread_id: snap.thread_id,
+                agent,
+                workspace: snap.workspace.display().to_string(),
+                state: runtime_state_to_proto(&snap.state),
+            });
+        }
+        Ok(result)
+    }
+
+    async fn read_thread_raw_history(
+        &self,
+        req: ReadThreadParams,
+    ) -> jsonrpsee::core::RpcResult<ReadThreadRawHistoryResponse> {
+        let (events, next_seq) = self
+            .agent
+            .read_thread_raw_history(&req.thread_id, req.from_seq, req.limit)
+            .await
+            .map_err(rpc_err)?;
+        Ok(ReadThreadRawHistoryResponse { events, next_seq })
     }
 
     async fn subscribe_ingest(

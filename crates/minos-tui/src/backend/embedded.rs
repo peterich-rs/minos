@@ -7,6 +7,7 @@ use minos_agent_runtime::{
 };
 use minos_cli_detect::{capture_user_shell_env, detect_all, RealCommandRunner};
 use minos_domain::AgentName;
+use minos_protocol::local_rpc::LocalIngestFrame;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::broadcast;
 
@@ -72,6 +73,19 @@ impl AgentBackend for EmbeddedBackend {
 
     async fn list_threads(&self) -> Result<Vec<ThreadSnapshot>> {
         Ok(self.manager.list_threads().await)
+    }
+
+    async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {
+        Err(anyhow::anyhow!("embedded mode does not support thread resumption"))
+    }
+
+    async fn read_thread_raw_history(
+        &self,
+        _thread_id: &str,
+        _from_seq: Option<u64>,
+        _limit: u32,
+    ) -> Result<Vec<LocalIngestFrame>> {
+        Ok(Vec::new())
     }
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {
