@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use minos_acp_protocol::*;
 use minos_domain::MinosError;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
@@ -59,9 +60,22 @@ impl GeminiAcpInstance {
             }
         }
 
-        let child = cmd.spawn().map_err(|e| MinosError::GeminiSpawnFailed {
+        let mut child = cmd.spawn().map_err(|e| MinosError::GeminiSpawnFailed {
             message: format!("failed to spawn gemini --acp: {e}"),
         })?;
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::debug!(
+                        target: "minos_agent_runtime::gemini_driver",
+                        stderr = %line,
+                        "gemini ACP stderr"
+                    );
+                }
+            });
+        }
 
         let client = AcpClient::new(child)?;
 
@@ -78,60 +92,113 @@ impl GeminiAcpInstance {
     }
 
     pub async fn initialize(&self) -> Result<InitializeResponse, MinosError> {
-        self.client.call_typed(InitializeParams {
-            protocol_version: 1,
-            client_capabilities: Some(ClientCapabilities {
-                fs: FsCapabilities { read_text_file: false, write_text_file: false },
-                terminal: false,
-            }),
-            client_info: Some(Implementation {
-                name: "minos".into(),
-                title: Some("Minos Host".into()),
-                version: Some(env!("CARGO_PKG_VERSION").into()),
-            }),
-        }).await
+        self.client
+            .call_typed(InitializeParams {
+                protocol_version: 1,
+                client_capabilities: Some(ClientCapabilities {
+                    fs: FsCapabilities {
+                        read_text_file: false,
+                        write_text_file: false,
+                    },
+                    terminal: false,
+                }),
+                client_info: Some(Implementation {
+                    name: "minos".into(),
+                    title: Some("Minos Host".into()),
+                    version: Some(env!("CARGO_PKG_VERSION").into()),
+                }),
+            })
+            .await
     }
 
     pub async fn authenticate(&self, method_id: &str) -> Result<(), MinosError> {
-        self.client.call_typed(AuthenticateParams { method_id: method_id.to_string() }).await?;
+        self.client
+            .call_typed(AuthenticateParams {
+                method_id: method_id.to_string(),
+            })
+            .await?;
         Ok(())
     }
 
     pub async fn new_session(&self, cwd: &Path) -> Result<NewSessionResponse, MinosError> {
-        let resp = self.client.call_typed(NewSessionParams {
-            cwd: cwd.to_string_lossy().to_string(),
-            mcp_servers: vec![],
-            additional_directories: None,
-        }).await?;
+        let resp = self
+            .client
+            .call_typed(NewSessionParams {
+                cwd: cwd.to_string_lossy().to_string(),
+                mcp_servers: vec![],
+                additional_directories: None,
+            })
+            .await?;
         *self.session_id.lock().await = Some(resp.session_id.clone());
         Ok(resp)
     }
 
+    pub async fn resume_session(
+        &self,
+        session_id: &str,
+        cwd: &Path,
+    ) -> Result<ResumeSessionResponse, MinosError> {
+        let resp = self
+            .client
+            .call_typed(ResumeSessionParams {
+                session_id: session_id.to_string(),
+                cwd: cwd.to_string_lossy().to_string(),
+                mcp_servers: Some(vec![]),
+                additional_directories: None,
+            })
+            .await?;
+        *self.session_id.lock().await = Some(session_id.to_string());
+        Ok(resp)
+    }
+
     pub async fn prompt(&self, text: &str) -> Result<PromptResponse, MinosError> {
-        let session_id = self.session_id.lock().await.clone().ok_or_else(|| MinosError::AcpProtocolError {
-            method: "session/prompt".into(),
-            message: "no active session".into(),
-        })?;
-        self.client.call_typed(PromptParams {
-            session_id,
-            prompt: vec![ContentBlock::Text { text: text.to_string() }],
-        }).await
+        let session_id =
+            self.session_id
+                .lock()
+                .await
+                .clone()
+                .ok_or_else(|| MinosError::AcpProtocolError {
+                    method: "session/prompt".into(),
+                    message: "no active session".into(),
+                })?;
+        self.client
+            .call_typed(PromptParams {
+                session_id,
+                prompt: vec![ContentBlock::Text {
+                    text: text.to_string(),
+                }],
+            })
+            .await
     }
 
     pub async fn cancel(&self) -> Result<(), MinosError> {
-        let session_id = self.session_id.lock().await.clone().ok_or_else(|| MinosError::AcpProtocolError {
-            method: "session/cancel".into(),
-            message: "no active session".into(),
-        })?;
-        self.client.notify_typed(CancelNotification { session_id }).await
+        let session_id =
+            self.session_id
+                .lock()
+                .await
+                .clone()
+                .ok_or_else(|| MinosError::AcpProtocolError {
+                    method: "session/cancel".into(),
+                    message: "no active session".into(),
+                })?;
+        self.client
+            .notify_typed(CancelNotification { session_id })
+            .await
     }
 
     pub async fn close_session(&self) -> Result<(), MinosError> {
-        let session_id = self.session_id.lock().await.clone().ok_or_else(|| MinosError::AcpProtocolError {
-            method: "session/close".into(),
-            message: "no active session".into(),
-        })?;
-        self.client.call_typed(CloseSessionParams { session_id }).await?;
+        let session_id =
+            self.session_id
+                .lock()
+                .await
+                .clone()
+                .ok_or_else(|| MinosError::AcpProtocolError {
+                    method: "session/close".into(),
+                    message: "no active session".into(),
+                })?;
+        self.client
+            .call_typed(CloseSessionParams { session_id })
+            .await?;
         *self.session_id.lock().await = None;
         Ok(())
     }

@@ -65,6 +65,8 @@ pub struct AgentManager {
     pub(crate) opencode_instances:
         Arc<Mutex<HashMap<PathBuf, Arc<Mutex<crate::opencode_driver::OpencodeServerInstance>>>>>,
     pub(crate) opencode_session_map: Arc<Mutex<HashMap<String, String>>>,
+    pub(crate) gemini_instances:
+        Arc<Mutex<HashMap<String, Arc<crate::gemini_driver::GeminiAcpInstance>>>>,
 }
 
 impl AgentManager {
@@ -82,6 +84,7 @@ impl AgentManager {
             claude_sessions: Arc::new(Mutex::new(HashMap::new())),
             opencode_instances: Arc::new(Mutex::new(HashMap::new())),
             opencode_session_map: Arc::new(Mutex::new(HashMap::new())),
+            gemini_instances: Arc::new(Mutex::new(HashMap::new())),
         };
         mgr.spawn_reaper();
         mgr
@@ -176,6 +179,14 @@ impl AgentManager {
         self.threads.lock().await.contains_key(thread_id)
     }
 
+    pub async fn thread_provider_session_id(&self, thread_id: &str) -> Option<String> {
+        self.threads
+            .lock()
+            .await
+            .get(thread_id)
+            .and_then(|handle| handle.codex_session_id.clone())
+    }
+
     pub async fn register_persisted_thread(
         &self,
         thread_id: String,
@@ -225,6 +236,7 @@ impl AgentManager {
                 Ok(DispatchOutcome {
                     session_id: outcome.thread_id,
                     cwd: outcome.cwd,
+                    provider_session_id: outcome.provider_session_id,
                 })
             }
             Some(session_id) => {
@@ -237,7 +249,9 @@ impl AgentManager {
                     .ok_or_else(|| anyhow::anyhow!("thread not found: {session_id}"))?;
                 match handle.current_state() {
                     ThreadState::Idle => self.send_user_message(&session_id, text).await?,
-                    ThreadState::Running { .. } => self.steer_turn(&session_id, text).await?,
+                    ThreadState::Running { .. } => {
+                        self.send_user_message(&session_id, text).await?
+                    }
                     ThreadState::Suspended { .. } => {
                         self.send_user_message(&session_id, text).await?;
                     }
@@ -246,6 +260,7 @@ impl AgentManager {
                 Ok(DispatchOutcome {
                     session_id,
                     cwd: handle.workspace.clone(),
+                    provider_session_id: handle.codex_session_id.clone(),
                 })
             }
         }
@@ -269,7 +284,7 @@ impl AgentManager {
             AgentName::Codex => self.start_codex_agent(agent, workspace, policies).await,
             AgentName::Claude => self.start_claude_agent(agent, workspace).await,
             AgentName::Opencode => self.start_opencode_agent(agent, workspace).await,
-            AgentName::Gemini => self.start_pty_agent(agent, workspace).await,
+            AgentName::Gemini => self.start_gemini_agent(agent, workspace).await,
         }
     }
 
@@ -325,6 +340,7 @@ impl AgentManager {
         Ok(StartAgentOutcome {
             thread_id,
             cwd: canon,
+            provider_session_id: Some(resp.codex_session_id),
         })
     }
 
@@ -335,13 +351,15 @@ impl AgentManager {
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = uuid::Uuid::new_v4().to_string();
-        let handle = ThreadHandle::new(
+        let provider_session_id = uuid::Uuid::new_v4().to_string();
+        let mut handle = ThreadHandle::new(
             thread_id.clone(),
             canon.clone(),
             agent,
             ThreadState::Starting,
             0,
         );
+        handle.codex_session_id = Some(provider_session_id.clone());
         self.threads.lock().await.insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
@@ -360,6 +378,7 @@ impl AgentManager {
         Ok(StartAgentOutcome {
             thread_id,
             cwd: canon,
+            provider_session_id: Some(provider_session_id),
         })
     }
 
@@ -375,14 +394,15 @@ impl AgentManager {
         self.opencode_session_map
             .lock()
             .await
-            .insert(thread_id.clone(), oc_session_id);
-        let handle = ThreadHandle::new(
+            .insert(thread_id.clone(), oc_session_id.clone());
+        let mut handle = ThreadHandle::new(
             thread_id.clone(),
             canon.clone(),
             agent,
             ThreadState::Idle,
             0,
         );
+        handle.codex_session_id = Some(oc_session_id.clone());
         self.threads.lock().await.insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
@@ -392,31 +412,28 @@ impl AgentManager {
         Ok(StartAgentOutcome {
             thread_id,
             cwd: canon,
+            provider_session_id: Some(oc_session_id),
         })
     }
 
-    async fn start_pty_agent(
+    async fn start_gemini_agent(
         &self,
         agent: AgentKind,
         workspace: PathBuf,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = uuid::Uuid::new_v4().to_string();
-        let bin_path = PathBuf::from(agent.bin_name());
-        let _pty = crate::pty_agent::PtyAgent::spawn(
-            &bin_path,
-            &canon,
-            agent,
-            thread_id.clone(),
-            self.events_tx.clone(),
-        )?;
-        let handle = ThreadHandle::new(
+        let provider_session_id = self
+            .ensure_gemini_instance_for_thread(&thread_id, &canon, None)
+            .await?;
+        let mut handle = ThreadHandle::new(
             thread_id.clone(),
             canon.clone(),
             agent,
             ThreadState::Idle,
             0,
         );
+        handle.codex_session_id = Some(provider_session_id.clone());
         self.threads.lock().await.insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
@@ -426,7 +443,86 @@ impl AgentManager {
         Ok(StartAgentOutcome {
             thread_id,
             cwd: canon,
+            provider_session_id: Some(provider_session_id),
         })
+    }
+
+    async fn ensure_gemini_instance_for_thread(
+        &self,
+        thread_id: &str,
+        workspace: &Path,
+        resume_session_id: Option<&str>,
+    ) -> anyhow::Result<String> {
+        if let Some(existing) = self.gemini_instances.lock().await.get(thread_id).cloned() {
+            return existing.get_session_id().await.ok_or_else(|| {
+                anyhow::anyhow!("gemini ACP instance has no active session: {thread_id}")
+            });
+        }
+
+        let bin_path = self
+            .config
+            .gemini_bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(AgentName::Gemini.bin_name()));
+        let (crash_tx, _crash_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let instance = crate::gemini_driver::GeminiAcpInstance::spawn(
+            &bin_path,
+            workspace,
+            &self.config.subprocess_env,
+            crash_tx,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("gemini ACP spawn failed: {error}"))?;
+        let instance = Arc::new(instance);
+        let initialize = instance
+            .initialize()
+            .await
+            .map_err(|error| anyhow::anyhow!("gemini ACP initialize failed: {error}"))?;
+        if initialize.protocol_version != 1 {
+            warn!(
+                target: "minos_agent_runtime::manager",
+                protocol_version = initialize.protocol_version,
+                "gemini ACP returned unexpected protocol version",
+            );
+        }
+        let mut resumed = false;
+        let mut provider_session_id = None;
+        if let Some(session_id) = resume_session_id {
+            match instance.resume_session(session_id, workspace).await {
+                Ok(_) => {
+                    resumed = true;
+                    provider_session_id = Some(session_id.to_string());
+                }
+                Err(error) => {
+                    warn!(
+                        target: "minos_agent_runtime::manager",
+                        thread_id,
+                        session_id,
+                        error = %error,
+                        "gemini ACP session/resume failed; starting a fresh session",
+                    );
+                }
+            }
+        }
+        if !resumed {
+            let response = instance
+                .new_session(workspace)
+                .await
+                .map_err(|error| anyhow::anyhow!("gemini ACP session/new failed: {error}"))?;
+            provider_session_id = Some(response.session_id);
+        }
+        let provider_session_id = provider_session_id
+            .ok_or_else(|| anyhow::anyhow!("gemini ACP session setup did not return session id"))?;
+        crate::gemini_driver::spawn_acp_pump(
+            instance.client.clone(),
+            thread_id.to_string(),
+            self.events_tx.clone(),
+        );
+        self.gemini_instances
+            .lock()
+            .await
+            .insert(thread_id.to_string(), instance);
+        Ok(provider_session_id)
     }
 
     async fn ensure_opencode_instance(
@@ -802,33 +898,12 @@ impl AgentManager {
                         handle.set_active_turn_id_if_absent(turn_id);
                     }
                     AgentName::Claude => {
-                        let cli_path = PathBuf::from(AgentName::Claude.bin_name());
-                        let resume_sid = handle.codex_session_id.as_deref();
-                        let session = crate::claude_driver::ClaudeNdjsonSession::start_turn(
-                            &cli_path,
-                            &handle.workspace,
-                            thread_id.to_string(),
-                            &text,
-                            resume_sid,
-                            self.threads.clone(),
-                            self.manager_tx.clone(),
-                            self.events_tx.clone(),
-                            &self.config.subprocess_env,
-                        )
-                        .await?;
-                        self.claude_sessions
-                            .lock()
-                            .await
-                            .insert(thread_id.to_string(), session);
+                        self.start_claude_turn(thread_id, &text, &handle).await?;
                     }
                     AgentName::Opencode => {
                         let oc_session_id = self
-                            .opencode_session_map
-                            .lock()
-                            .await
-                            .get(thread_id)
-                            .cloned()
-                            .ok_or_else(|| anyhow::anyhow!("opencode session not found"))?;
+                            .ensure_opencode_session_for_thread(thread_id, &handle)
+                            .await?;
                         let workspace = handle.workspace.clone();
                         let instance = self
                             .opencode_instances
@@ -843,14 +918,284 @@ impl AgentManager {
                             .send_prompt(&oc_session_id, &text)
                             .await?;
                     }
-                    AgentName::Gemini => {}
+                    AgentName::Gemini => {
+                        self.spawn_gemini_prompt_task(thread_id.to_string(), text, handle.clone())
+                            .await?;
+                    }
                 }
                 Ok(())
             }
-            ThreadState::Running { .. } => self.steer_turn(thread_id, text).await,
-            ThreadState::Suspended { .. } => self.implicit_resume(thread_id, text).await,
+            ThreadState::Running { .. } => match handle.agent {
+                AgentName::Codex => self.steer_turn(thread_id, text).await,
+                AgentName::Opencode => self.send_opencode_prompt(thread_id, &text, &handle).await,
+                AgentName::Claude => self.send_claude_prompt(thread_id, &text, &handle).await,
+                AgentName::Gemini => anyhow::bail!("gemini turn is already running"),
+            },
+            ThreadState::Suspended { .. } => {
+                match handle.agent {
+                    AgentName::Codex => return self.implicit_resume(thread_id, text).await,
+                    AgentName::Claude => {
+                        self.resume_claude_thread(thread_id, &text, &handle).await?
+                    }
+                    AgentName::Opencode => {
+                        self.resume_opencode_thread(thread_id, &handle).await?;
+                    }
+                    AgentName::Gemini => self.resume_gemini_thread(thread_id, &handle).await?,
+                }
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let new_state = ThreadState::Running {
+                    turn_started_at_ms: now_ms,
+                };
+                handle.transition(new_state.clone())?;
+                let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+                    thread_id: thread_id.to_string(),
+                    old: ThreadState::Idle,
+                    new: new_state,
+                    at_ms: now_ms,
+                });
+                self.synth_user_message_ingest(thread_id, &text, handle.agent);
+                match handle.agent {
+                    AgentName::Claude => self.start_claude_turn(thread_id, &text, &handle).await,
+                    AgentName::Opencode => {
+                        let oc_session_id = self
+                            .ensure_opencode_session_for_thread(thread_id, &handle)
+                            .await?;
+                        let workspace = handle.workspace.clone();
+                        let instance = self
+                            .opencode_instances
+                            .lock()
+                            .await
+                            .get(&workspace)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
+                        let result = instance
+                            .lock()
+                            .await
+                            .send_prompt(&oc_session_id, &text)
+                            .await;
+                        result
+                    }
+                    AgentName::Gemini => {
+                        self.spawn_gemini_prompt_task(thread_id.to_string(), text, handle)
+                            .await
+                    }
+                    AgentName::Codex => unreachable!("codex suspended branch returns above"),
+                }
+            }
             other => anyhow::bail!("send_user_message rejected: state={other:?}"),
         }
+    }
+
+    async fn start_claude_turn(
+        &self,
+        thread_id: &str,
+        text: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        let cli_path = PathBuf::from(AgentName::Claude.bin_name());
+        let provider_session_id = match provider_resume_session_id(thread_id, handle) {
+            Some(session_id) => session_id.to_string(),
+            None => {
+                let session_id = uuid::Uuid::new_v4().to_string();
+                self.set_thread_provider_session_id(thread_id, session_id.clone())
+                    .await;
+                session_id
+            }
+        };
+        let has_runtime_session = self.claude_sessions.lock().await.contains_key(thread_id);
+        let has_persisted_history = handle.last_seq.load(std::sync::atomic::Ordering::SeqCst) > 0;
+        let resume_sid =
+            (has_runtime_session || has_persisted_history).then_some(provider_session_id.as_str());
+        let session_id = resume_sid.is_none().then_some(provider_session_id.as_str());
+        let session = crate::claude_driver::ClaudeNdjsonSession::start_turn(
+            &cli_path,
+            &handle.workspace,
+            thread_id.to_string(),
+            text,
+            session_id,
+            resume_sid,
+            self.threads.clone(),
+            self.manager_tx.clone(),
+            self.events_tx.clone(),
+            &self.config.subprocess_env,
+        )
+        .await?;
+        self.claude_sessions
+            .lock()
+            .await
+            .insert(thread_id.to_string(), session);
+        Ok(())
+    }
+
+    async fn send_claude_prompt(
+        &self,
+        thread_id: &str,
+        text: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        self.synth_user_message_ingest(thread_id, text, handle.agent);
+        self.start_claude_turn(thread_id, text, handle).await
+    }
+
+    async fn ensure_opencode_session_for_thread(
+        &self,
+        thread_id: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<String> {
+        if let Some(existing) = self
+            .opencode_session_map
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+        {
+            return Ok(existing);
+        }
+
+        let workspace = handle.workspace.clone();
+        let instance = self.ensure_opencode_instance(&workspace).await?;
+        let session_id = match provider_resume_session_id(thread_id, handle) {
+            Some(session_id) => session_id.to_string(),
+            None => instance.lock().await.create_session().await?,
+        };
+        self.opencode_session_map
+            .lock()
+            .await
+            .insert(thread_id.to_string(), session_id.clone());
+        self.set_thread_provider_session_id(thread_id, session_id.clone())
+            .await;
+        Ok(session_id)
+    }
+
+    async fn send_opencode_prompt(
+        &self,
+        thread_id: &str,
+        text: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        let oc_session_id = self
+            .ensure_opencode_session_for_thread(thread_id, handle)
+            .await?;
+        let workspace = handle.workspace.clone();
+        let instance = self
+            .opencode_instances
+            .lock()
+            .await
+            .get(&workspace)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
+        self.synth_user_message_ingest(thread_id, text, handle.agent);
+        let result = instance
+            .lock()
+            .await
+            .send_prompt(&oc_session_id, text)
+            .await;
+        result
+    }
+
+    async fn set_thread_provider_session_id(&self, thread_id: &str, provider_session_id: String) {
+        if let Some(handle) = self.threads.lock().await.get_mut(thread_id) {
+            handle.codex_session_id = Some(provider_session_id);
+        }
+    }
+
+    fn transition_resumed_thread_to_idle(
+        &self,
+        thread_id: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        let old = handle.current_state();
+        handle.transition(ThreadState::Resuming)?;
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old,
+            new: ThreadState::Resuming,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        handle.transition(ThreadState::Idle)?;
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old: ThreadState::Resuming,
+            new: ThreadState::Idle,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        Ok(())
+    }
+
+    async fn resume_claude_thread(
+        &self,
+        thread_id: &str,
+        _text: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        self.transition_resumed_thread_to_idle(thread_id, handle)
+    }
+
+    async fn resume_opencode_thread(
+        &self,
+        thread_id: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        self.ensure_opencode_session_for_thread(thread_id, handle)
+            .await?;
+        self.transition_resumed_thread_to_idle(thread_id, handle)
+    }
+
+    async fn resume_gemini_thread(
+        &self,
+        thread_id: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        let provider_session_id = self
+            .ensure_gemini_instance_for_thread(
+                thread_id,
+                &handle.workspace,
+                provider_resume_session_id(thread_id, handle),
+            )
+            .await?;
+        self.set_thread_provider_session_id(thread_id, provider_session_id)
+            .await;
+        self.transition_resumed_thread_to_idle(thread_id, handle)
+    }
+
+    async fn spawn_gemini_prompt_task(
+        &self,
+        thread_id: String,
+        text: String,
+        handle: ThreadHandle,
+    ) -> anyhow::Result<()> {
+        let instance = self
+            .gemini_instances
+            .lock()
+            .await
+            .get(&thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("gemini ACP instance not found: {thread_id}"))?;
+        let events_tx = self.events_tx.clone();
+        let manager_tx = self.manager_tx.clone();
+        tokio::spawn(async move {
+            instance.touch().await;
+            let result = instance.prompt(&text).await;
+            let payload = match result {
+                Ok(response) => serde_json::json!({
+                    "kind": "acp_prompt_response",
+                    "stopReason": response.stop_reason,
+                }),
+                Err(error) => serde_json::json!({
+                    "kind": "acp_error",
+                    "code": "session/prompt",
+                    "message": error.to_string(),
+                }),
+            };
+            let _ = events_tx.send(RawIngest {
+                agent: AgentName::Gemini,
+                thread_id: thread_id.clone(),
+                payload,
+                ts_ms: current_unix_ms(),
+            });
+            mark_thread_idle_with_tx(&thread_id, &handle, &manager_tx);
+        });
+        Ok(())
     }
 
     pub async fn steer_turn(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
@@ -883,12 +1228,16 @@ impl AgentManager {
         Ok(())
     }
 
-    /// Build and broadcast a synthetic codex `item/started{userMessage}`
+    /// Build and broadcast a synthetic user-message ingest event.
+    ///
+    /// Codex-style agents use a synthetic codex `item/started{userMessage}`
     /// notification matching the real codex 2026-04 wire shape (see
     /// `minos-codex-protocol::ItemStartedNotification` + `ThreadItem`).
+    /// Gemini uses a Minos-owned `kind:user_message` event so its translator
+    /// stays scoped to ACP instead of accepting codex JSON-RPC shapes.
+    ///
     /// The `EventWriter` bridge persists it to the local SQLite store and
-    /// `RelayClient` forwards it to the backend, which translates via
-    /// `minos-ui-protocol::translate_codex` into a
+    /// `RelayClient` forwards it to the backend, which translates it into a
     /// `MessageStarted{role:User} + TextDelta` pair and fans out to
     /// paired mobile peers.
     ///
@@ -898,18 +1247,26 @@ impl AgentManager {
     /// reach either persistence layer, so killing the app would lose it.
     fn synth_user_message_ingest(&self, thread_id: &str, text: &str, agent: AgentName) {
         let item_id = uuid::Uuid::new_v4().to_string();
-        let payload = serde_json::json!({
-            "method": "item/started",
-            "params": {
-                "item": {
-                    "type": "userMessage",
-                    "id": item_id,
-                    "content": [{"type": "text", "text": text}],
-                },
+        let payload = match agent {
+            AgentName::Gemini => serde_json::json!({
+                "kind": "user_message",
+                "messageId": item_id,
+                "text": text,
                 "threadId": thread_id,
-                "turnId": "",
-            }
-        });
+            }),
+            _ => serde_json::json!({
+                "method": "item/started",
+                "params": {
+                    "item": {
+                        "type": "userMessage",
+                        "id": item_id,
+                        "content": [{"type": "text", "text": text}],
+                    },
+                    "threadId": thread_id,
+                    "turnId": "",
+                }
+            }),
+        };
         let ingest = RawIngest {
             agent,
             thread_id: thread_id.to_string(),
@@ -1025,7 +1382,11 @@ impl AgentManager {
                     }
                 }
             }
-            AgentName::Gemini => {}
+            AgentName::Gemini => {
+                if let Some(instance) = self.gemini_instances.lock().await.get(thread_id).cloned() {
+                    let _ = instance.cancel().await;
+                }
+            }
         }
         let from_state = handle.current_state();
         handle.set_active_turn_id(None);
@@ -1095,7 +1456,11 @@ impl AgentManager {
             AgentName::Opencode => {
                 self.opencode_session_map.lock().await.remove(thread_id);
             }
-            AgentName::Gemini => {}
+            AgentName::Gemini => {
+                if let Some(instance) = self.gemini_instances.lock().await.remove(thread_id) {
+                    let _ = instance.close_session().await;
+                }
+            }
         }
         let _ = self.manager_tx.send(ManagerEvent::ThreadClosed {
             thread_id: thread_id.to_string(),
@@ -1220,6 +1585,7 @@ impl AgentManager {
 pub struct StartAgentOutcome {
     pub thread_id: String,
     pub cwd: PathBuf,
+    pub provider_session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1232,6 +1598,7 @@ pub struct SessionPolicies {
 pub struct DispatchOutcome {
     pub session_id: String,
     pub cwd: PathBuf,
+    pub provider_session_id: Option<String>,
 }
 
 #[cfg(feature = "test-support")]
@@ -1274,6 +1641,32 @@ fn current_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+fn provider_resume_session_id<'a>(thread_id: &str, handle: &'a ThreadHandle) -> Option<&'a str> {
+    handle
+        .codex_session_id
+        .as_deref()
+        .filter(|session_id| *session_id != thread_id)
+}
+
+fn mark_thread_idle_with_tx(
+    thread_id: &str,
+    handle: &ThreadHandle,
+    manager_tx: &broadcast::Sender<ManagerEvent>,
+) {
+    let old = handle.current_state();
+    if !matches!(old, ThreadState::Running { .. }) {
+        return;
+    }
+    if handle.transition(ThreadState::Idle).is_ok() {
+        let _ = manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old,
+            new: ThreadState::Idle,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+    }
 }
 
 const VALID_APPROVAL_POLICIES: &[&str] = &["never", "unless-allow-listed", "on-failure", "always"];
@@ -1815,6 +2208,7 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn write_codex_config(dir: &std::path::Path, contents: &str) {
         std::fs::create_dir_all(dir).unwrap();
@@ -1954,6 +2348,552 @@ mod tests {
             vec![std::path::PathBuf::from("/w-test")]
         );
         fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn gemini_send_user_message_runs_acp_prompt_and_returns_idle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script_path = tmp.path().join("fake-gemini.sh");
+        std::fs::write(
+            &script_path,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"authMethods":[],"agentCapabilities":{}}}\n' "$id"
+      ;;
+    session/new)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"session-1"}}\n' "$id"
+      ;;
+    session/prompt)
+      printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"gemini says hi"}}}}\n'
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id"
+      ;;
+    session/close)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.gemini_bin = Some(script_path);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let started = mgr
+            .start_agent(AgentName::Gemini, tmp.path().to_path_buf())
+            .await
+            .unwrap();
+        let thread_id = started.thread_id.clone();
+
+        let mut rx = mgr.ingest_stream();
+        mgr.send_user_message(&thread_id, "ping".into())
+            .await
+            .unwrap();
+
+        let user = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("synthetic Gemini user message should arrive")
+            .expect("ingest stream should stay open");
+        assert_eq!(user.thread_id, thread_id);
+        assert_eq!(
+            user.payload.get("kind").and_then(Value::as_str),
+            Some("user_message")
+        );
+        assert_eq!(
+            user.payload.get("text").and_then(Value::as_str),
+            Some("ping")
+        );
+        assert!(user
+            .payload
+            .get("messageId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()));
+
+        let chunk = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest stream should stay open");
+                if ingest.thread_id == thread_id
+                    && ingest.payload.get("kind").and_then(Value::as_str)
+                        == Some("acp_notification")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("fake Gemini ACP notification should arrive");
+
+        assert_eq!(
+            chunk.payload["params"]["update"]["content"]["text"],
+            "gemini says hi"
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if matches!(mgr.thread_state(&thread_id).await, Some(ThreadState::Idle)) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Gemini prompt task should return thread to idle");
+        assert!(matches!(
+            mgr.thread_state(&thread_id).await,
+            Some(ThreadState::Idle)
+        ));
+
+        mgr.close_thread(&thread_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn gemini_suspended_thread_recreates_acp_instance_before_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script_path = tmp.path().join("fake-gemini-resume.sh");
+        std::fs::write(
+            &script_path,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"authMethods":[],"agentCapabilities":{"resume":{}}}}\n' "$id"
+      ;;
+    session/resume)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
+      ;;
+    session/new)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"new-session"}}\n' "$id"
+      ;;
+    session/prompt)
+      printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"resume-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"resumed gemini"}}}}\n'
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id"
+      ;;
+    session/close)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.gemini_bin = Some(script_path);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let thread_id = "gemini-resume-thread";
+        mgr.register_persisted_thread(
+            thread_id.into(),
+            tmp.path().to_path_buf(),
+            AgentName::Gemini,
+            Some("resume-session".into()),
+            ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart,
+            },
+            4,
+        )
+        .await
+        .unwrap();
+
+        let mut rx = mgr.ingest_stream();
+        mgr.send_user_message(thread_id, "continue".into())
+            .await
+            .unwrap();
+
+        let chunk = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest stream should stay open");
+                if ingest.thread_id == thread_id
+                    && ingest.payload.get("kind").and_then(Value::as_str)
+                        == Some("acp_notification")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("resumed Gemini ACP notification should arrive");
+
+        assert_eq!(
+            chunk.payload["params"]["update"]["content"]["text"],
+            "resumed gemini"
+        );
+        assert_eq!(
+            mgr.thread_provider_session_id(thread_id).await.as_deref(),
+            Some("resume-session")
+        );
+        mgr.close_thread(thread_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn claude_first_turn_uses_generated_session_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let script_path = bin_dir.join("claude");
+        let args_path = tmp.path().join("claude-first-args.txt");
+        std::fs::write(
+            &script_path,
+            r#"#!/bin/sh
+printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGS"
+printf '{"type":"result","is_error":false}\n'
+"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.subprocess_env = Arc::new(HashMap::from([
+            ("PATH".to_string(), bin_dir.display().to_string()),
+            (
+                "FAKE_CLAUDE_ARGS".to_string(),
+                args_path.display().to_string(),
+            ),
+        ]));
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let started = mgr
+            .start_agent(AgentName::Claude, tmp.path().to_path_buf())
+            .await
+            .unwrap();
+        let provider_session_id = started
+            .provider_session_id
+            .as_deref()
+            .expect("claude start should allocate a provider session id");
+        uuid::Uuid::parse_str(provider_session_id).expect("provider session id must be a UUID");
+
+        let mut rx = mgr.ingest_stream();
+        mgr.send_user_message(&started.thread_id, "first claude".into())
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest stream should stay open");
+                if ingest.thread_id == started.thread_id
+                    && ingest.payload.get("type").and_then(Value::as_str) == Some("result")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("fake Claude result should arrive");
+
+        let args = std::fs::read_to_string(args_path).unwrap();
+        assert!(args.contains(&format!("--session-id {provider_session_id}")));
+        assert!(!args.contains("--resume"));
+    }
+
+    #[tokio::test]
+    async fn claude_suspended_thread_starts_claude_turn_with_provider_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let script_path = bin_dir.join("claude");
+        let args_path = tmp.path().join("claude-args.txt");
+        let provider_session_id = "cbdad4f3-ca95-4ac3-9bd0-2d6ec33fdc3d";
+        std::fs::write(
+            &script_path,
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGS"
+printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}}\n'
+"#
+            ),
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.subprocess_env = Arc::new(HashMap::from([
+            ("PATH".to_string(), bin_dir.display().to_string()),
+            (
+                "FAKE_CLAUDE_ARGS".to_string(),
+                args_path.display().to_string(),
+            ),
+        ]));
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let thread_id = "claude-resume-thread";
+        mgr.register_persisted_thread(
+            thread_id.into(),
+            tmp.path().to_path_buf(),
+            AgentName::Claude,
+            Some(provider_session_id.into()),
+            ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart,
+            },
+            9,
+        )
+        .await
+        .unwrap();
+
+        let mut rx = mgr.ingest_stream();
+        mgr.send_user_message(thread_id, "continue claude".into())
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest stream should stay open");
+                if ingest.thread_id == thread_id
+                    && ingest.payload.get("type").and_then(Value::as_str) == Some("result")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("fake Claude result should arrive");
+
+        let args = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(args) = std::fs::read_to_string(&args_path) {
+                    break args;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fake Claude args should be written");
+        assert!(args.contains(&format!("--resume {provider_session_id}")));
+        assert!(matches!(
+            mgr.thread_state(thread_id).await,
+            Some(ThreadState::Idle)
+        ));
+    }
+
+    #[tokio::test]
+    async fn running_claude_message_resumes_bound_session_and_synthesizes_user_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let script_path = bin_dir.join("claude");
+        let args_path = tmp.path().join("claude-running-args.txt");
+        let provider_session_id = "d5f4d81e-c934-4551-a8d0-bf3ef6db96cc";
+        std::fs::write(
+            &script_path,
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGS"
+printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}}\n'
+"#
+            ),
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.subprocess_env = Arc::new(HashMap::from([
+            ("PATH".to_string(), bin_dir.display().to_string()),
+            (
+                "FAKE_CLAUDE_ARGS".to_string(),
+                args_path.display().to_string(),
+            ),
+        ]));
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let thread_id = "claude-running-thread";
+        mgr.register_persisted_thread(
+            thread_id.into(),
+            tmp.path().to_path_buf(),
+            AgentName::Claude,
+            Some(provider_session_id.into()),
+            ThreadState::Running {
+                turn_started_at_ms: 1,
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+        let mut rx = mgr.ingest_stream();
+        let outcome = mgr
+            .dispatch_message(
+                AgentName::Claude,
+                "/unused".into(),
+                Some(thread_id.into()),
+                "answer while running".into(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.session_id, thread_id);
+
+        let args = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(args) = std::fs::read_to_string(&args_path) {
+                    break args;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fake Claude args should be written");
+        assert!(args.contains(&format!("--resume {provider_session_id}")));
+
+        let user = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest stream should stay open");
+                if ingest.thread_id == thread_id
+                    && ingest.payload.get("method").and_then(Value::as_str) == Some("item/started")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("synthetic Claude user message should arrive");
+        assert_eq!(
+            user.payload["params"]["item"]["content"][0]["text"],
+            "answer while running"
+        );
+    }
+
+    #[tokio::test]
+    async fn running_opencode_message_uses_prompt_async_and_synthesizes_user_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = std::fs::canonicalize(tmp.path()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 1024];
+            loop {
+                let n = stream.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let headers_end = request
+                        .windows(4)
+                        .position(|window| window == b"\r\n\r\n")
+                        .unwrap()
+                        + 4;
+                    let headers = String::from_utf8_lossy(&request[..headers_end]);
+                    let content_len = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= headers_end + content_len {
+                        break;
+                    }
+                }
+            }
+            let text = String::from_utf8_lossy(&request).to_string();
+            let _ = request_tx.send(text);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let thread_id = "opencode-running-thread";
+        mgr.register_persisted_thread(
+            thread_id.into(),
+            workspace.clone(),
+            AgentName::Opencode,
+            Some("sess_running".into()),
+            ThreadState::Running {
+                turn_started_at_ms: 1,
+            },
+            0,
+        )
+        .await
+        .unwrap();
+        let instance = crate::opencode_driver::OpencodeServerInstance {
+            workspace: workspace.clone(),
+            config: crate::opencode_driver::OpencodeServerConfig {
+                opencode_bin: "opencode".into(),
+                port: addr.port(),
+                password: "pw".into(),
+                subprocess_env: Arc::new(HashMap::new()),
+            },
+            child: None,
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap(),
+            base_url: format!("http://{addr}"),
+            auth_header: "Basic test".into(),
+        };
+        mgr.opencode_instances
+            .lock()
+            .await
+            .insert(workspace, Arc::new(Mutex::new(instance)));
+
+        let mut rx = mgr.ingest_stream();
+        let outcome = mgr
+            .dispatch_message(
+                AgentName::Opencode,
+                "/unused".into(),
+                Some(thread_id.into()),
+                "running answer".into(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.session_id, thread_id);
+
+        let request = request_rx.await.unwrap();
+        assert!(request.starts_with("POST /session/sess_running/prompt_async "));
+        assert!(request.contains(r#""text":"running answer""#));
+
+        let user = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("synthetic opencode user message should arrive")
+            .expect("ingest stream should stay open");
+        assert_eq!(user.thread_id, thread_id);
+        assert_eq!(
+            user.payload.get("method").and_then(Value::as_str),
+            Some("item/started")
+        );
+        assert_eq!(
+            user.payload["params"]["item"]["content"][0]["text"],
+            "running answer"
+        );
     }
 
     #[tokio::test]

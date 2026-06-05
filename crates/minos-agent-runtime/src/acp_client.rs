@@ -75,25 +75,39 @@ impl AcpClient {
         let (inbound_tx, inbound_rx) = mpsc::channel::<Inbound>(64);
 
         let stdin = {
-            let mut guard = child.try_lock().map_err(|_| MinosError::GeminiSpawnFailed {
-                message: "could not lock child".into(),
-            })?;
-            guard.as_mut().ok_or_else(|| MinosError::GeminiSpawnFailed {
-                message: "child is None".into(),
-            })?.stdin.take().ok_or_else(|| MinosError::GeminiSpawnFailed {
-                message: "could not take child stdin".into(),
-            })?
+            let mut guard = child
+                .try_lock()
+                .map_err(|_| MinosError::GeminiSpawnFailed {
+                    message: "could not lock child".into(),
+                })?;
+            guard
+                .as_mut()
+                .ok_or_else(|| MinosError::GeminiSpawnFailed {
+                    message: "child is None".into(),
+                })?
+                .stdin
+                .take()
+                .ok_or_else(|| MinosError::GeminiSpawnFailed {
+                    message: "could not take child stdin".into(),
+                })?
         };
 
         let stdout = {
-            let mut guard = child.try_lock().map_err(|_| MinosError::GeminiSpawnFailed {
-                message: "could not lock child".into(),
-            })?;
-            guard.as_mut().ok_or_else(|| MinosError::GeminiSpawnFailed {
-                message: "child is None".into(),
-            })?.stdout.take().ok_or_else(|| MinosError::GeminiSpawnFailed {
-                message: "could not take child stdout".into(),
-            })?
+            let mut guard = child
+                .try_lock()
+                .map_err(|_| MinosError::GeminiSpawnFailed {
+                    message: "could not lock child".into(),
+                })?;
+            guard
+                .as_mut()
+                .ok_or_else(|| MinosError::GeminiSpawnFailed {
+                    message: "child is None".into(),
+                })?
+                .stdout
+                .take()
+                .ok_or_else(|| MinosError::GeminiSpawnFailed {
+                    message: "could not take child stdout".into(),
+                })?
         };
 
         let pump_task = tokio::spawn(pump_loop(stdin, stdout, outbound_rx, inbound_tx));
@@ -109,29 +123,64 @@ impl AcpClient {
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, MinosError> {
         let (reply_to, rx) = oneshot::channel();
         self.outbound_tx
-            .send(Outbound::Request { method: method.to_string(), params, reply_to })
+            .send(Outbound::Request {
+                method: method.to_string(),
+                params,
+                reply_to,
+            })
             .await
-            .map_err(|_| MinosError::AcpProtocolError { method: method.to_string(), message: "acp client pump has shut down".into() })?;
-        rx.await.map_err(|_| MinosError::AcpProtocolError { method: method.to_string(), message: "acp client dropped the call response".into() })?
+            .map_err(|_| MinosError::AcpProtocolError {
+                method: method.to_string(),
+                message: "acp client pump has shut down".into(),
+            })?;
+        rx.await.map_err(|_| MinosError::AcpProtocolError {
+            method: method.to_string(),
+            message: "acp client dropped the call response".into(),
+        })?
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), MinosError> {
         let (ack, rx) = oneshot::channel();
         self.outbound_tx
-            .send(Outbound::Notification { method: method.to_string(), params, ack })
+            .send(Outbound::Notification {
+                method: method.to_string(),
+                params,
+                ack,
+            })
             .await
-            .map_err(|_| MinosError::AcpProtocolError { method: method.to_string(), message: "acp client pump has shut down".into() })?;
-        rx.await.map_err(|_| MinosError::AcpProtocolError { method: method.to_string(), message: "acp client dropped the notification ack".into() })?
+            .map_err(|_| MinosError::AcpProtocolError {
+                method: method.to_string(),
+                message: "acp client pump has shut down".into(),
+            })?;
+        rx.await.map_err(|_| MinosError::AcpProtocolError {
+            method: method.to_string(),
+            message: "acp client dropped the notification ack".into(),
+        })?
     }
 
-    pub async fn call_typed<R: AcpClientRequest>(&self, params: R) -> Result<R::Response, MinosError> {
-        let value = serde_json::to_value(&params).map_err(|e| MinosError::AcpProtocolError { method: R::METHOD.into(), message: format!("encode params failed: {e}") })?;
+    pub async fn call_typed<R: AcpClientRequest>(
+        &self,
+        params: R,
+    ) -> Result<R::Response, MinosError> {
+        let value = serde_json::to_value(&params).map_err(|e| MinosError::AcpProtocolError {
+            method: R::METHOD.into(),
+            message: format!("encode params failed: {e}"),
+        })?;
         let raw = self.call(R::METHOD, value).await?;
-        serde_json::from_value::<R::Response>(raw).map_err(|e| MinosError::AcpProtocolError { method: R::METHOD.into(), message: format!("decode response failed: {e}") })
+        serde_json::from_value::<R::Response>(raw).map_err(|e| MinosError::AcpProtocolError {
+            method: R::METHOD.into(),
+            message: format!("decode response failed: {e}"),
+        })
     }
 
-    pub async fn notify_typed<N: AcpClientNotification>(&self, params: N) -> Result<(), MinosError> {
-        let value = serde_json::to_value(&params).map_err(|e| MinosError::AcpProtocolError { method: N::METHOD.into(), message: format!("encode notification params failed: {e}") })?;
+    pub async fn notify_typed<N: AcpClientNotification>(
+        &self,
+        params: N,
+    ) -> Result<(), MinosError> {
+        let value = serde_json::to_value(&params).map_err(|e| MinosError::AcpProtocolError {
+            method: N::METHOD.into(),
+            message: format!("encode notification params failed: {e}"),
+        })?;
         self.notify(N::METHOD, value).await
     }
 
@@ -141,8 +190,14 @@ impl AcpClient {
         self.outbound_tx
             .send(Outbound::Reply { id, result, ack })
             .await
-            .map_err(|_| MinosError::AcpProtocolError { method: "<reply>".into(), message: "acp client pump has shut down".into() })?;
-        rx.await.map_err(|_| MinosError::AcpProtocolError { method: "<reply>".into(), message: "acp client dropped the reply ack".into() })?
+            .map_err(|_| MinosError::AcpProtocolError {
+                method: "<reply>".into(),
+                message: "acp client pump has shut down".into(),
+            })?;
+        rx.await.map_err(|_| MinosError::AcpProtocolError {
+            method: "<reply>".into(),
+            message: "acp client dropped the reply ack".into(),
+        })?
     }
 
     pub async fn next_inbound(&self) -> Option<Inbound> {
@@ -211,21 +266,47 @@ async fn pump_loop(
     }
 }
 
-async fn write_frame(stdin: &mut tokio::process::ChildStdin, method: &str, frame: &Value) -> Result<(), MinosError> {
-    let mut bytes = serde_json::to_string(frame).map_err(|e| MinosError::AcpProtocolError { method: method.to_string(), message: format!("serialize frame failed: {e}") })?;
+async fn write_frame(
+    stdin: &mut tokio::process::ChildStdin,
+    method: &str,
+    frame: &Value,
+) -> Result<(), MinosError> {
+    let mut bytes = serde_json::to_string(frame).map_err(|e| MinosError::AcpProtocolError {
+        method: method.to_string(),
+        message: format!("serialize frame failed: {e}"),
+    })?;
     bytes.push('\n');
-    stdin.write_all(bytes.as_bytes()).await.map_err(|e| MinosError::AcpProtocolError { method: method.to_string(), message: format!("stdin write failed: {e}") })?;
-    stdin.flush().await.map_err(|e| MinosError::AcpProtocolError { method: method.to_string(), message: format!("stdin flush failed: {e}") })?;
+    stdin
+        .write_all(bytes.as_bytes())
+        .await
+        .map_err(|e| MinosError::AcpProtocolError {
+            method: method.to_string(),
+            message: format!("stdin write failed: {e}"),
+        })?;
+    stdin
+        .flush()
+        .await
+        .map_err(|e| MinosError::AcpProtocolError {
+            method: method.to_string(),
+            message: format!("stdin flush failed: {e}"),
+        })?;
     Ok(())
 }
 
-async fn handle_inbound_line(line: &str, pending: &mut HashMap<String, oneshot::Sender<Result<Value, MinosError>>>, inbound_tx: &mpsc::Sender<Inbound>) {
+async fn handle_inbound_line(
+    line: &str,
+    pending: &mut HashMap<String, oneshot::Sender<Result<Value, MinosError>>>,
+    inbound_tx: &mpsc::Sender<Inbound>,
+) {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
         warn!(raw = %line, "gemini ACP sent malformed JSON; ignoring");
         return;
     };
     let id = value.get("id").cloned();
-    let method = value.get("method").and_then(Value::as_str).map(str::to_string);
+    let method = value
+        .get("method")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let has_result_or_error = value.get("result").is_some() || value.get("error").is_some();
 
     match (id, method, has_result_or_error) {
@@ -233,12 +314,25 @@ async fn handle_inbound_line(line: &str, pending: &mut HashMap<String, oneshot::
             let key = match &id_val {
                 Value::String(s) => s.clone(),
                 Value::Number(n) => n.to_string(),
-                _ => { warn!(id = ?id_val, "response with non-string/non-number id"); return; }
+                _ => {
+                    warn!(id = ?id_val, "response with non-string/non-number id");
+                    return;
+                }
             };
-            let Some(tx) = pending.remove(&key) else { warn!(id = ?id_val, "response for unknown request id"); return };
+            let Some(tx) = pending.remove(&key) else {
+                warn!(id = ?id_val, "response for unknown request id");
+                return;
+            };
             if let Some(err) = value.get("error") {
-                let message = err.get("message").and_then(Value::as_str).unwrap_or("ACP error without message").to_string();
-                let _ = tx.send(Err(MinosError::AcpProtocolError { method: "<response>".into(), message }));
+                let message = err
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("ACP error without message")
+                    .to_string();
+                let _ = tx.send(Err(MinosError::AcpProtocolError {
+                    method: "<response>".into(),
+                    message,
+                }));
             } else {
                 let result = value.get("result").cloned().unwrap_or(Value::Null);
                 let _ = tx.send(Ok(result));
@@ -246,12 +340,22 @@ async fn handle_inbound_line(line: &str, pending: &mut HashMap<String, oneshot::
         }
         (Some(id_val), Some(method), false) => {
             let params = value.get("params").cloned().unwrap_or(Value::Null);
-            let _ = inbound_tx.send(Inbound::ServerRequest { id: id_val, method, params }).await;
+            let _ = inbound_tx
+                .send(Inbound::ServerRequest {
+                    id: id_val,
+                    method,
+                    params,
+                })
+                .await;
         }
         (None, Some(method), false) => {
             let params = value.get("params").cloned().unwrap_or(Value::Null);
-            let _ = inbound_tx.send(Inbound::Notification { method, params }).await;
+            let _ = inbound_tx
+                .send(Inbound::Notification { method, params })
+                .await;
         }
-        _ => { warn!(raw = %line, "gemini ACP sent ambiguous JSON-RPC frame"); }
+        _ => {
+            warn!(raw = %line, "gemini ACP sent ambiguous JSON-RPC frame");
+        }
     }
 }

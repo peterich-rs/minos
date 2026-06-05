@@ -1,18 +1,19 @@
-//! `PtyAgent` — minimal PTY/process adapter for non-codex CLIs (claude, gemini).
+//! `PtyAgent` — minimal PTY/process adapter for legacy line-oriented CLIs.
 //!
 //! Spawns the CLI as a child process, pipes stdin/stdout/stderr, and emits
 //! `RawIngest` events with `raw_kind: "stdout" | "stderr"` for each line of
 //! output. The backend's ingest pipeline will wrap these as
 //! `UiEventMessage::Raw` for fan-out to clients.
 //!
-//! Spec R3.4 — `start_agent { agent: Claude | Gemini, workspace }` spawns
-//! the CLI, pipes stdout/stderr lines as `UiEventMessage::Raw`, pipes
-//! composer text into stdin.
+//! Historical R3.4 behavior spawned a CLI, piped stdout/stderr lines as
+//! `UiEventMessage::Raw`, and piped composer text into stdin. Current Gemini
+//! support uses ACP instead of this adapter.
 //!
 //! ## Design decisions
 //!
 //! - Uses `tokio::process::Command` (not `portable-pty`) per plan §open
-//!   decision #1. Revisit only if claude/gemini refuse output without a TTY.
+//!   decision #1. Revisit only if a supported line-oriented CLI refuses output
+//!   without a TTY.
 //! - Line-buffers stdout+stderr to avoid partial-line fan-out.
 //! - SIGTERM → 3s → SIGKILL escalation on close.
 

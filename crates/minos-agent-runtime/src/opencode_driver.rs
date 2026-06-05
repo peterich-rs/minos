@@ -136,7 +136,8 @@ impl OpencodeServerInstance {
             .header("Content-Type", "application/json")
             .body("{}")
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         let body: Value = resp.json().await?;
         body.get("id")
             .and_then(Value::as_str)
@@ -157,7 +158,8 @@ impl OpencodeServerInstance {
             .header("Content-Type", "application/json")
             .body(serde_json::to_string(&payload)?)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -166,7 +168,8 @@ impl OpencodeServerInstance {
             .post(format!("{}/session/{session_id}/abort", self.base_url))
             .header("Authorization", &self.auth_header)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -186,7 +189,8 @@ impl OpencodeServerInstance {
             .header("Content-Type", "application/json")
             .body(serde_json::to_string(&payload)?)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -438,6 +442,7 @@ async fn sync_thread_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn val(s: &str) -> Value {
         serde_json::from_str(s).expect("json fixture should parse")
@@ -478,5 +483,43 @@ mod tests {
         };
 
         assert_eq!(instance.subscribe_sse_url(), "http://127.0.0.1:4311/event");
+    }
+
+    #[tokio::test]
+    async fn send_prompt_rejects_non_success_status() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = stream.read(&mut buf).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let instance = OpencodeServerInstance {
+            workspace: "/tmp".into(),
+            config: OpencodeServerConfig {
+                opencode_bin: "opencode".into(),
+                port: addr.port(),
+                password: "pw".into(),
+                subprocess_env: Arc::new(HashMap::new()),
+            },
+            child: None,
+            http_client: Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap(),
+            base_url: format!("http://{addr}"),
+            auth_header: "Basic test".into(),
+        };
+
+        let error = instance
+            .send_prompt("missing-session", "hello")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("404"));
     }
 }

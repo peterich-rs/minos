@@ -27,12 +27,12 @@
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
 
+pub mod acp_client;
 pub(crate) mod approvals;
 pub mod claude_driver;
 pub(crate) mod codex_client;
-pub mod acp_client;
-pub mod gemini_driver;
 pub mod config;
+pub mod gemini_driver;
 pub mod ingest;
 pub mod instance;
 pub mod manager;
@@ -47,7 +47,9 @@ pub mod thread_handle;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+pub use claude_driver::ClaudeNdjsonSession;
 pub use config::{AgentLaunchMode, AgentRuntimeConfig, RawIngest};
+pub use gemini_driver::GeminiAcpInstance;
 pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
 pub use manager::{
@@ -55,9 +57,7 @@ pub use manager::{
 };
 pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;
+pub use opencode_driver::OpencodeServerInstance;
 pub use pty_agent::PtyAgent;
 pub use state_machine::{CloseReason, PauseReason, ThreadState};
 pub use thread_handle::ThreadHandle;
-pub use claude_driver::ClaudeNdjsonSession;
-pub use opencode_driver::OpencodeServerInstance;
-pub use gemini_driver::GeminiAcpInstance;

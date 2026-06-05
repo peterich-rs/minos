@@ -36,6 +36,7 @@ impl ClaudeNdjsonSession {
         workspace: &Path,
         thread_id: String,
         user_text: &str,
+        session_id: Option<&str>,
         resume_session_id: Option<&str>,
         threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
         manager_tx: broadcast::Sender<ManagerEvent>,
@@ -52,6 +53,9 @@ impl ClaudeNdjsonSession {
         ];
         if let Some(sid) = resume_session_id {
             args.push("--resume".into());
+            args.push(sid.into());
+        } else if let Some(sid) = session_id {
+            args.push("--session-id".into());
             args.push(sid.into());
         }
 
@@ -134,7 +138,7 @@ impl ClaudeNdjsonSession {
         Ok(Self {
             thread_id,
             workspace: workspace.to_path_buf(),
-            claude_session_id: None,
+            claude_session_id: resume_session_id.or(session_id).map(str::to_string),
             current_turn_child: Some(child),
             stdout_task,
             stderr_task,

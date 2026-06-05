@@ -17,6 +17,7 @@ use url::Url;
 pub struct AgentRuntimeConfig {
     pub workspace_root: PathBuf,
     pub codex_bin: Option<PathBuf>,
+    pub gemini_bin: Option<PathBuf>,
     pub opencode_bin: Option<PathBuf>,
     pub opencode_port_range: std::ops::RangeInclusive<u16>,
     pub ws_port_range: std::ops::RangeInclusive<u16>,
@@ -41,6 +42,7 @@ impl AgentRuntimeConfig {
         Self {
             workspace_root,
             codex_bin: None,
+            gemini_bin: None,
             opencode_bin: None,
             opencode_port_range: 4096..=4106,
             ws_port_range: 7879..=7883,

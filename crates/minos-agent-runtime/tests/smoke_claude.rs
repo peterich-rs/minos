@@ -41,6 +41,7 @@ async fn claude_real_smoke_start_and_chat() {
         &workspace,
         "smoke_test_thread".into(),
         "Say hello in one word",
+        Some("b0c2c7f6-841b-4af6-9dc7-05d860b4a9b1"),
         None,
         threads,
         manager_tx,
