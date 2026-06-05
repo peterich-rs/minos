@@ -15,7 +15,8 @@ use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
-    AgentLaunchMode, CloseThreadRequest, GetThreadParams, HealthResponse, ReadThreadParams,
+    AgentLaunchMode, CloseThreadRequest, GetThreadParams, HealthResponse, LocalGroupChatMessage,
+    LocalGroupChatMessageKind, ReadGroupChatParams, ReadGroupChatResponse, ReadThreadParams,
     StartAgentRequest, StartAgentResponse,
 };
 use tokio::sync::mpsc;
@@ -74,6 +75,7 @@ async fn setup() -> (
     let config = LocalRpcConfig {
         addr: "127.0.0.1:0".parse().unwrap(),
         discovery_path,
+        group_chat_log_path: tmp.path().join("tui-group-chat.jsonl"),
     };
     let handle = start_local_rpc_server(config, Arc::new(NoopRunner), glue.clone())
         .await
@@ -273,6 +275,66 @@ async fn read_thread_raw_history_returns_events_after_start() {
     }
 
     fake.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn read_group_chat_returns_messages_from_local_jsonl() {
+    let (_glue, _handle, tmp, _fake) = setup().await;
+    let url = discovery_addr(&tmp);
+    let client = WsClientBuilder::default().build(&url).await.unwrap();
+    let log_path = tmp.path().join("tui-group-chat.jsonl");
+
+    let messages = [
+        LocalGroupChatMessage {
+            seq: 1,
+            message_id: "m1".into(),
+            created_at_ms: 10,
+            kind: LocalGroupChatMessageKind::User,
+            text: "@codex inspect auth".into(),
+            agent: Some(AgentName::Codex),
+            thread_id: Some("thread-1".into()),
+            thread_short_id: Some("thread-1".into()),
+            workspace: Some("/tmp/ws".into()),
+        },
+        LocalGroupChatMessage {
+            seq: 2,
+            message_id: "m2".into(),
+            created_at_ms: 20,
+            kind: LocalGroupChatMessageKind::AgentResult,
+            text: "auth summary".into(),
+            agent: Some(AgentName::Codex),
+            thread_id: Some("thread-1".into()),
+            thread_short_id: Some("thread-1".into()),
+            workspace: Some("/tmp/ws".into()),
+        },
+    ];
+    let jsonl = messages
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .join("\n")
+        + "\n";
+    std::fs::write(&log_path, jsonl).unwrap();
+
+    let response: ReadGroupChatResponse = client
+        .request(
+            "minos_local_read_group_chat",
+            [ReadGroupChatParams {
+                after_seq: Some(1),
+                limit: Some(10),
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.log_path, log_path.display().to_string());
+    assert_eq!(response.messages.len(), 1);
+    assert_eq!(response.messages[0].message_id, "m2");
+    assert_eq!(
+        response.messages[0].kind,
+        LocalGroupChatMessageKind::AgentResult
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

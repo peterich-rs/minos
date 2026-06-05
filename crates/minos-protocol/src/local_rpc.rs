@@ -2,6 +2,44 @@ use jsonrpsee::proc_macros::rpc;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadGroupChatParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadGroupChatResponse {
+    pub log_path: String,
+    pub messages: Vec<LocalGroupChatMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalGroupChatMessage {
+    pub seq: u64,
+    pub message_id: String,
+    pub created_at_ms: i64,
+    pub kind: LocalGroupChatMessageKind,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<minos_domain::AgentName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_short_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalGroupChatMessageKind {
+    User,
+    AgentResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalThreadSnapshot {
     pub thread_id: String,
     pub agent: minos_domain::AgentName,
@@ -94,6 +132,12 @@ pub trait LocalDaemonRpc {
         &self,
         req: crate::ReadThreadParams,
     ) -> jsonrpsee::core::RpcResult<ReadThreadRawHistoryResponse>;
+
+    #[method(name = "read_group_chat")]
+    async fn read_group_chat(
+        &self,
+        req: ReadGroupChatParams,
+    ) -> jsonrpsee::core::RpcResult<ReadGroupChatResponse>;
 
     #[subscription(name = "subscribe_ingest", item = LocalIngestFrame)]
     async fn subscribe_ingest(&self) -> jsonrpsee::core::SubscriptionResult;

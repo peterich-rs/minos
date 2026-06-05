@@ -336,9 +336,11 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
             .map_err(|e| std::io::Error::other(format!("invalid --local-rpc-addr: {e}")))?;
         let run_dir = paths::run_dir()?;
         let discovery_path = run_dir.join("tui-daemon-rpc.json");
+        let group_chat_log_path = paths::state_dir()?.join("tui-group-chat.jsonl");
         Some(LocalRpcConfig {
             addr,
             discovery_path: discovery_path.clone(),
+            group_chat_log_path,
         })
     } else {
         None
