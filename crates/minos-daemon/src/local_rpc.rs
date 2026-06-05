@@ -1,0 +1,331 @@
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
+
+use jsonrpsee::core::async_trait;
+use jsonrpsee::server::Server;
+use minos_agent_runtime::ManagerEvent;
+use minos_cli_detect::{detect_all, CommandRunner};
+use minos_domain::MinosError;
+use minos_protocol::{
+    CloseReason, CloseThreadRequest, HealthResponse, InterruptThreadRequest, ListClisResponse,
+    LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, ThreadState,
+};
+use serde_json::json;
+use tokio::sync::broadcast;
+use tracing;
+
+use crate::agent::AgentGlue;
+use crate::rpc_server::rpc_err;
+
+pub struct LocalRpcConfig {
+    pub addr: SocketAddr,
+    pub discovery_path: PathBuf,
+}
+
+pub struct LocalRpcImpl {
+    pub started_at: Instant,
+    pub runner: Arc<dyn CommandRunner>,
+    pub agent: Arc<AgentGlue>,
+    pub ingest_broadcaster: broadcast::Sender<LocalIngestFrame>,
+    pub manager_event_broadcaster: broadcast::Sender<LocalManagerEvent>,
+}
+
+#[async_trait]
+impl LocalDaemonRpcServer for LocalRpcImpl {
+    async fn health(&self) -> jsonrpsee::core::RpcResult<HealthResponse> {
+        Ok(HealthResponse {
+            version: env!("CARGO_PKG_VERSION").into(),
+            uptime_secs: self.started_at.elapsed().as_secs(),
+        })
+    }
+
+    async fn list_clis(&self) -> jsonrpsee::core::RpcResult<ListClisResponse> {
+        Ok(detect_all(self.runner.clone()).await)
+    }
+
+    async fn start_agent(
+        &self,
+        req: StartAgentRequest,
+    ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
+        self.agent.start_agent(req).await.map_err(rpc_err)
+    }
+
+    async fn send_user_message(
+        &self,
+        req: SendUserMessageRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.send_user_message(req).await.map_err(rpc_err)
+    }
+
+    async fn interrupt_thread(
+        &self,
+        req: InterruptThreadRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.interrupt_thread(req).await.map_err(rpc_err)
+    }
+
+    async fn close_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.close_thread(req).await.map_err(rpc_err)
+    }
+
+    async fn subscribe_ingest(
+        &self,
+        pending: jsonrpsee::PendingSubscriptionSink,
+    ) -> jsonrpsee::core::SubscriptionResult {
+        let sink = pending.accept().await?;
+        let mut rx = self.ingest_broadcaster.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(frame) => {
+                        let msg = match jsonrpsee::server::SubscriptionMessage::from_json(&frame) {
+                            Ok(m) => m,
+                            Err(_) => break,
+                        };
+                        if sink.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        Ok(())
+    }
+
+    async fn subscribe_manager_events(
+        &self,
+        pending: jsonrpsee::PendingSubscriptionSink,
+    ) -> jsonrpsee::core::SubscriptionResult {
+        let sink = pending.accept().await?;
+        let mut rx = self.manager_event_broadcaster.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        let msg =
+                            match jsonrpsee::server::SubscriptionMessage::from_json(&event) {
+                                Ok(m) => m,
+                                Err(_) => break,
+                            };
+                        if sink.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        Ok(())
+    }
+}
+
+pub async fn start_local_rpc_server(
+    config: LocalRpcConfig,
+    runner: Arc<dyn CommandRunner>,
+    agent: Arc<AgentGlue>,
+) -> Result<jsonrpsee::server::ServerHandle, MinosError> {
+    let (ingest_tx, _) = broadcast::channel(256);
+    let (mgr_evt_tx, _) = broadcast::channel(256);
+
+    let impl_ = LocalRpcImpl {
+        started_at: Instant::now(),
+        runner,
+        agent: agent.clone(),
+        ingest_broadcaster: ingest_tx.clone(),
+        manager_event_broadcaster: mgr_evt_tx.clone(),
+    };
+
+    let server = Server::builder()
+        .build(config.addr)
+        .await
+        .map_err(|e| MinosError::CodexProtocolError {
+            method: "local_rpc_server_bind".into(),
+            message: e.to_string(),
+        })?;
+
+    let local_addr = server.local_addr().map_err(|e| MinosError::CodexProtocolError {
+        method: "local_rpc_local_addr".into(),
+        message: e.to_string(),
+    })?;
+
+    let handle = server.start(impl_.into_rpc());
+
+    write_discovery_file(&config.discovery_path, local_addr);
+
+    spawn_ingest_bridge(agent.clone(), ingest_tx);
+
+    spawn_manager_event_bridge(agent.clone(), mgr_evt_tx);
+
+    tracing::info!(
+        target: "minos_daemon::local_rpc",
+        addr = %local_addr,
+        "local RPC server started",
+    );
+
+    Ok(handle)
+}
+
+fn write_discovery_file(path: &PathBuf, addr: SocketAddr) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let payload = json!({
+        "url": format!("ws://{addr}")
+    });
+    match serde_json::to_string_pretty(&payload) {
+        Ok(content) => {
+            if let Err(e) = std::fs::write(path, content) {
+                tracing::warn!(
+                    target: "minos_daemon::local_rpc",
+                    error = %e,
+                    path = %path.display(),
+                    "failed to write discovery file",
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_daemon::local_rpc",
+                error = %e,
+                "failed to serialize discovery JSON",
+            );
+        }
+    }
+}
+
+fn spawn_ingest_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<LocalIngestFrame>) {
+    let mut rx = agent.ingest_stream();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(raw) => {
+                    let frame = LocalIngestFrame {
+                        thread_id: raw.thread_id,
+                        agent: raw.agent,
+                        payload: raw.payload,
+                        ts_ms: raw.ts_ms,
+                    };
+                    let _ = tx.send(frame);
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        target: "minos_daemon::local_rpc",
+                        n,
+                        "ingest bridge lagged, dropping frames",
+                    );
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+fn spawn_manager_event_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<LocalManagerEvent>) {
+    let mut rx = agent.manager.manager_event_stream();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let local_event = match convert_manager_event(event) {
+                        Some(e) => e,
+                        None => continue,
+                    };
+                    let _ = tx.send(local_event);
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        target: "minos_daemon::local_rpc",
+                        n,
+                        "manager event bridge lagged, dropping events",
+                    );
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+fn convert_manager_event(event: ManagerEvent) -> Option<LocalManagerEvent> {
+    match event {
+        ManagerEvent::ThreadAdded {
+            thread_id,
+            workspace,
+            agent,
+        } => Some(LocalManagerEvent::ThreadAdded {
+            thread_id,
+            workspace: workspace.display().to_string(),
+            agent,
+        }),
+        ManagerEvent::ThreadStateChanged {
+            thread_id,
+            old,
+            new,
+            at_ms,
+        } => Some(LocalManagerEvent::ThreadStateChanged {
+            thread_id,
+            old: runtime_state_to_proto(&old),
+            new: runtime_state_to_proto(&new),
+            at_ms,
+        }),
+        ManagerEvent::ThreadClosed {
+            thread_id,
+            reason,
+        } => Some(LocalManagerEvent::ThreadClosed {
+            thread_id,
+            reason: runtime_close_reason_to_proto(&reason),
+        }),
+        ManagerEvent::InstanceCrashed {
+            workspace,
+            affected_threads,
+        } => Some(LocalManagerEvent::InstanceCrashed {
+            workspace: workspace.display().to_string(),
+            affected_threads,
+        }),
+    }
+}
+
+fn runtime_state_to_proto(state: &minos_agent_runtime::ThreadState) -> ThreadState {
+    use minos_agent_runtime::ThreadState as RtState;
+    match state {
+        RtState::Starting => ThreadState::Starting,
+        RtState::Idle => ThreadState::Idle,
+        RtState::Running { turn_started_at_ms } => ThreadState::Running {
+            turn_started_at_ms: *turn_started_at_ms,
+        },
+        RtState::Suspended { reason } => ThreadState::Suspended {
+            reason: runtime_pause_reason_to_proto(reason),
+        },
+        RtState::Resuming => ThreadState::Resuming,
+        RtState::Closed { reason } => ThreadState::Closed {
+            reason: runtime_close_reason_to_proto(reason),
+        },
+    }
+}
+
+fn runtime_pause_reason_to_proto(
+    reason: &minos_agent_runtime::PauseReason,
+) -> minos_protocol::PauseReason {
+    use minos_agent_runtime::PauseReason as Rt;
+    match reason {
+        Rt::UserInterrupt => minos_protocol::PauseReason::UserInterrupt,
+        Rt::CodexCrashed => minos_protocol::PauseReason::CodexCrashed,
+        Rt::DaemonRestart => minos_protocol::PauseReason::DaemonRestart,
+        Rt::InstanceReaped => minos_protocol::PauseReason::InstanceReaped,
+    }
+}
+
+fn runtime_close_reason_to_proto(
+    reason: &minos_agent_runtime::CloseReason,
+) -> CloseReason {
+    use minos_agent_runtime::CloseReason as Rt;
+    match reason {
+        Rt::UserClose => CloseReason::UserClose,
+        Rt::TerminalError => CloseReason::TerminalError,
+    }
+}

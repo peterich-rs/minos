@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::AgentGlue;
 use crate::config::RelayConfig;
+use crate::local_rpc::{LocalRpcConfig, start_local_rpc_server};
 use crate::paths;
 use crate::relay_client::{PersistenceCtx, RelayClient};
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
@@ -52,6 +53,10 @@ struct DaemonInner {
     /// tokio runtime) so sync FFI methods can spawn onto it from Swift
     /// threads that lack a current runtime.
     rt_handle: Handle,
+    /// Handle for the optional local RPC server (TUI daemon). `None` when
+    /// the daemon runs without a local control plane.
+    #[allow(dead_code)]
+    local_rpc_handle: Option<jsonrpsee::server::ServerHandle>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -76,6 +81,21 @@ impl DaemonHandle {
         peer: Option<PeerRecord>,
         secret: Option<DeviceSecret>,
         mac_name: String,
+    ) -> Result<Arc<Self>, MinosError> {
+        Self::start_with_local_rpc(config, self_device_id, peer, secret, mac_name, None).await
+    }
+
+    /// Extended entry point that optionally starts a local JSON-RPC server
+    /// for TUI-daemon communication. When `local_rpc_config` is `None`, the
+    /// behaviour is identical to [`start`].
+    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
+    pub async fn start_with_local_rpc(
+        config: RelayConfig,
+        self_device_id: DeviceId,
+        peer: Option<PeerRecord>,
+        secret: Option<DeviceSecret>,
+        mac_name: String,
+        local_rpc_config: Option<LocalRpcConfig>,
     ) -> Result<Arc<Self>, MinosError> {
         let secret = match secret {
             Some(secret) => Some(secret),
@@ -192,6 +212,16 @@ impl DaemonHandle {
             }
         });
 
+        let local_rpc_handle = if let Some(lr_config) = local_rpc_config {
+            let runner = Arc::new(minos_cli_detect::RealCommandRunner::new(
+                subprocess_env.clone(),
+            ));
+            let handle = start_local_rpc_server(lr_config, runner, agent.clone()).await?;
+            Some(handle)
+        } else {
+            None
+        };
+
         Ok(Arc::new(Self {
             inner: Arc::new(DaemonInner {
                 relay,
@@ -203,6 +233,7 @@ impl DaemonHandle {
                 last_error,
                 agent,
                 rt_handle: Handle::current(),
+                local_rpc_handle,
             }),
         }))
     }
@@ -298,6 +329,9 @@ impl DaemonHandle {
             .manager
             .shutdown_instances(std::time::Duration::from_secs(5))
             .await;
+        if let Some(handle) = &self.inner.local_rpc_handle {
+            let _ = handle.stop();
+        }
         self.inner.relay.stop().await;
         Ok(())
     }

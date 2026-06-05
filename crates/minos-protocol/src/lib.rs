@@ -9,6 +9,7 @@
 
 pub mod auth;
 pub mod envelope;
+pub mod local_rpc;
 pub mod messages;
 pub mod realtime;
 pub mod rpc;
@@ -16,6 +17,7 @@ pub mod ws_ticket;
 
 pub use auth::*;
 pub use envelope::*;
+pub use local_rpc::*;
 pub use messages::*;
 pub use realtime::*;
 pub use rpc::*;

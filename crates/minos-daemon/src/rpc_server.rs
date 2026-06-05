@@ -122,7 +122,7 @@ impl MinosRpcServer for RpcServerImpl {
     }
 }
 
-fn rpc_err(e: MinosError) -> ErrorObjectOwned {
+pub fn rpc_err(e: MinosError) -> ErrorObjectOwned {
     let code = match e {
         MinosError::PairingStateMismatch { .. } => -32001,
         MinosError::PairingTokenInvalid => -32002,
