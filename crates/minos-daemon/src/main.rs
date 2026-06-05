@@ -1,7 +1,5 @@
 use std::env;
 use std::ffi::OsString;
-use std::io::BufRead as _;
-use std::io::Write as _;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,10 +7,9 @@ use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 use minos_cli_detect::{capture_user_shell_env, detect_all, RealCommandRunner};
-use minos_daemon::{paths, AgentGlue, DaemonHandle, LocalState, RelayConfig};
 use minos_daemon::local_rpc::LocalRpcConfig;
+use minos_daemon::{paths, AgentGlue, DaemonHandle, LocalState, RelayConfig};
 use minos_domain::{AgentDescriptor, AgentName, AgentStatus, MinosError};
-use minos_ui_protocol::{translate_codex, CodexTranslatorState, MessageRole, UiEventMessage};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Instant};
@@ -52,12 +49,6 @@ enum Command {
     Threads(ThreadsArgs),
     /// Read one persisted thread summary + live state from the local store.
     Thread(ThreadArgs),
-    /// Read translated transcript history for one local thread.
-    History(HistoryArgs),
-    /// Run one local prompt against the host agent runtime and stream output.
-    Run(RunArgs),
-    /// Start a persistent local chat session against the host agent runtime.
-    Chat(ChatArgs),
     /// Start the daemon (dials the relay) and keep it running until Ctrl-C.
     Start(StartArgs),
 }
@@ -140,18 +131,6 @@ struct ThreadArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-struct HistoryArgs {
-    /// Thread id to inspect.
-    thread_id: String,
-    /// Maximum number of recent messages to print in text mode.
-    #[arg(long, default_value_t = 20)]
-    messages: usize,
-    /// Print JSON instead of formatted transcript text.
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone)]
 struct HostSkillsArgs {
     /// Workspace directory to inspect. Defaults to the daemon workspace root.
     #[arg(long)]
@@ -190,49 +169,6 @@ struct SetHostSkillArgs {
     json: bool,
 }
 
-#[derive(Args, Debug, Clone)]
-struct RunArgs {
-    /// Workspace directory to run against. Defaults to the current directory.
-    #[arg(long)]
-    workspace: Option<PathBuf>,
-    /// Resume an existing persisted thread instead of creating a new one.
-    #[arg(long)]
-    thread: Option<String>,
-    /// Agent runtime to use. Local run currently supports codex only.
-    #[arg(long, default_value = "codex")]
-    agent: String,
-    /// Print a JSON summary instead of streaming plain text.
-    #[arg(long)]
-    json: bool,
-    /// Maximum seconds to wait for the turn to complete.
-    #[arg(long, default_value_t = 60)]
-    timeout_s: u64,
-    /// User prompt to send.
-    prompt: String,
-}
-
-#[derive(Args, Debug, Clone)]
-struct ChatArgs {
-    /// Workspace directory to run against. Defaults to the current directory.
-    #[arg(long)]
-    workspace: Option<PathBuf>,
-    /// Resume an existing persisted thread instead of creating a new one.
-    #[arg(long)]
-    thread: Option<String>,
-    /// Agent runtime to use. Local chat currently supports codex only.
-    #[arg(long, default_value = "codex")]
-    agent: String,
-    /// Maximum seconds to wait for each turn to complete.
-    #[arg(long, default_value_t = 60)]
-    timeout_s: u64,
-    /// How many recent messages to replay when attaching to an existing thread.
-    #[arg(long, default_value_t = 8)]
-    history_messages: usize,
-    /// Optional first prompt to send before entering the REPL.
-    #[arg(long)]
-    prompt: Option<String>,
-}
-
 #[derive(Args, Debug)]
 struct CliPaths {
     /// Root directory used by the CLI for daemon state and logs.
@@ -265,9 +201,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::ForgetPeer(args) => forget_peer(args, &resolved_paths).await,
         Command::Threads(args) => threads(args, &resolved_paths).await,
         Command::Thread(args) => thread(args, &resolved_paths).await,
-        Command::History(args) => history(args, &resolved_paths).await,
-        Command::Run(args) => run_prompt(args, &resolved_paths).await,
-        Command::Chat(args) => chat_session(args, &resolved_paths).await,
         Command::Start(args) => {
             let home_guard = maybe_apply_minos_home_override(&resolved_paths);
             minos_daemon::logging::init()?;
@@ -379,438 +312,6 @@ async fn set_host_skill(
     }
 }
 
-async fn run_prompt(
-    args: RunArgs,
-    paths: &ResolvedPaths,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let local = start_local_agent(paths).await?;
-    let result = run_prompt_inner(&args, &local).await;
-    let shutdown = shutdown_local_agent(local).await;
-    match (result, shutdown) {
-        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
-        (Ok(()), Ok(())) => Ok(()),
-    }
-}
-
-async fn run_prompt_inner(
-    args: &RunArgs,
-    local: &LocalAgentContext,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let agent = parse_agent_name(&args.agent)?;
-    if agent != AgentName::Codex {
-        return Err(Box::new(std::io::Error::other(format!(
-            "local run currently supports codex only; got {agent:?}"
-        ))));
-    }
-    let workspace = resolve_workspace_arg(args.workspace.as_ref())?;
-    let session = match args.thread.as_deref() {
-        Some(thread_id) => resume_local_cli_session(local, thread_id).await?,
-        None => start_local_cli_session(local, agent, &workspace).await?,
-    };
-
-    if !args.json {
-        eprintln!("thread: {}", session.session_id);
-        eprintln!("workspace: {}", session.cwd);
-    }
-
-    let mut translator = if args.thread.is_some() {
-        local
-            .agent
-            .hydrate_codex_translator(&session.session_id)
-            .await?
-    } else {
-        CodexTranslatorState::new(session.session_id.clone())
-    };
-    let mut renderer = execute_local_turn(
-        local,
-        &session.session_id,
-        &args.prompt,
-        args.timeout_s,
-        args.json,
-        &mut translator,
-    )
-    .await?;
-
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&RunSummary {
-                session_id: session.session_id,
-                cwd: session.cwd,
-                assistant_text: renderer.assistant_text,
-                errors: renderer.errors,
-            })?
-        );
-    } else {
-        renderer.finish_stdout_line()?;
-    }
-
-    Ok(())
-}
-
-async fn chat_session(
-    args: ChatArgs,
-    paths: &ResolvedPaths,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let local = start_local_agent(paths).await?;
-    let result = chat_session_inner(&args, &local).await;
-    let shutdown = shutdown_local_agent(local).await;
-    match (result, shutdown) {
-        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
-        (Ok(()), Ok(())) => Ok(()),
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-async fn chat_session_inner(
-    args: &ChatArgs,
-    local: &LocalAgentContext,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let agent = parse_agent_name(&args.agent)?;
-    if agent != AgentName::Codex {
-        return Err(Box::new(std::io::Error::other(format!(
-            "local chat currently supports codex only; got {agent:?}"
-        ))));
-    }
-    let workspace = resolve_workspace_arg(args.workspace.as_ref())?;
-    let mut session = match args.thread.as_deref() {
-        Some(thread_id) => resume_local_cli_session(local, thread_id).await?,
-        None => start_local_cli_session(local, agent, &workspace).await?,
-    };
-    let mut translator = if args.thread.is_some() {
-        local
-            .agent
-            .hydrate_codex_translator(&session.session_id)
-            .await?
-    } else {
-        CodexTranslatorState::new(session.session_id.clone())
-    };
-
-    eprintln!("thread: {}", session.session_id);
-    eprintln!("workspace: {}", session.cwd);
-    eprintln!("commands: /threads  /history  /resume <id>  /status  /interrupt  /exit");
-
-    if args.thread.is_some() {
-        show_thread_history(local, &session.session_id, args.history_messages).await?;
-    }
-
-    if let Some(prompt) = args.prompt.as_deref() {
-        execute_local_turn(
-            local,
-            &session.session_id,
-            prompt,
-            args.timeout_s,
-            false,
-            &mut translator,
-        )
-        .await?;
-    }
-
-    loop {
-        let Some(line) = read_repl_line("minos> ")? else {
-            break;
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        match trimmed {
-            "/exit" | "/quit" => {
-                let _ = local
-                    .agent
-                    .close_thread(minos_protocol::CloseThreadRequest {
-                        thread_id: session.session_id.clone(),
-                    })
-                    .await;
-                break;
-            }
-            "/status" => {
-                let thread = local
-                    .agent
-                    .get_thread(minos_protocol::GetThreadParams {
-                        thread_id: session.session_id.clone(),
-                    })
-                    .await?;
-                print_thread_snapshot(&thread);
-            }
-            "/threads" => {
-                let threads = local
-                    .agent
-                    .list_threads(minos_protocol::ListThreadsParams {
-                        limit: 20,
-                        before_ts_ms: None,
-                        agent: Some(AgentName::Codex),
-                    })
-                    .await?;
-                print_threads(&threads.threads);
-            }
-            "/history" => {
-                show_thread_history(local, &session.session_id, args.history_messages).await?;
-            }
-            "/interrupt" => {
-                local
-                    .agent
-                    .interrupt_thread(minos_protocol::InterruptThreadRequest {
-                        thread_id: session.session_id.clone(),
-                    })
-                    .await?;
-                eprintln!("interrupted");
-            }
-            "/help" => {
-                eprintln!("commands: /threads  /history  /resume <id>  /status  /interrupt  /exit");
-            }
-            _ if trimmed.starts_with("/resume ") => {
-                let target = trimmed.trim_start_matches("/resume").trim();
-                if target.is_empty() {
-                    eprintln!("usage: /resume <thread-id>");
-                    continue;
-                }
-                session = resume_local_cli_session(local, target).await?;
-                translator = local
-                    .agent
-                    .hydrate_codex_translator(&session.session_id)
-                    .await?;
-                eprintln!("resumed thread: {}", session.session_id);
-                show_thread_history(local, &session.session_id, args.history_messages).await?;
-            }
-            other if other.starts_with('/') => {
-                eprintln!("unknown command: {other}");
-            }
-            _ => {
-                execute_local_turn(
-                    local,
-                    &session.session_id,
-                    trimmed,
-                    args.timeout_s,
-                    false,
-                    &mut translator,
-                )
-                .await?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn resolve_workspace_arg(
-    workspace: Option<&PathBuf>,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    match workspace {
-        Some(path) => expand_tilde(path),
-        None => Ok(env::current_dir()?),
-    }
-}
-
-async fn start_local_cli_session(
-    local: &LocalAgentContext,
-    agent: AgentName,
-    workspace: &Path,
-) -> Result<minos_protocol::StartAgentResponse, Box<dyn std::error::Error>> {
-    Ok(local
-        .agent
-        .start_agent(minos_protocol::StartAgentRequest {
-            agent,
-            workspace: workspace.display().to_string(),
-            mode: Some(minos_protocol::AgentLaunchMode::Server),
-        })
-        .await?)
-}
-
-async fn resume_local_cli_session(
-    local: &LocalAgentContext,
-    thread_id: &str,
-) -> Result<minos_protocol::StartAgentResponse, Box<dyn std::error::Error>> {
-    Ok(local.agent.resume_thread(thread_id).await?)
-}
-
-async fn execute_local_turn(
-    local: &LocalAgentContext,
-    session_id: &str,
-    prompt: &str,
-    timeout_s: u64,
-    json_mode: bool,
-    translator: &mut CodexTranslatorState,
-) -> Result<RunRenderer, Box<dyn std::error::Error>> {
-    let mut ingest_rx = local.agent.ingest_stream();
-    let mut state_rx = local
-        .agent
-        .manager
-        .thread_state_stream(session_id)
-        .await
-        .ok_or_else(|| MinosError::CodexProtocolError {
-            method: "thread_state_stream".into(),
-            message: format!("missing state stream for {session_id}"),
-        })?;
-
-    local
-        .agent
-        .send_user_message(minos_protocol::SendUserMessageRequest {
-            session_id: session_id.to_string(),
-            text: prompt.to_string(),
-        })
-        .await?;
-
-    let mut renderer = RunRenderer::default();
-    let deadline = Instant::now() + Duration::from_secs(timeout_s);
-
-    loop {
-        if Instant::now() >= deadline {
-            return Err(Box::new(MinosError::Timeout));
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let mut reached_terminal_state = false;
-
-        tokio::select! {
-            recv = ingest_rx.recv() => {
-                match recv {
-                    Ok(raw) if raw.thread_id == session_id => {
-                        renderer.handle_raw_ingest(&raw, translator, json_mode)?;
-                    }
-                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        reached_terminal_state = true;
-                    }
-                }
-            }
-            changed = state_rx.changed() => {
-                if changed.is_err() {
-                    reached_terminal_state = true;
-                } else {
-                    let state = state_rx.borrow().clone();
-                    if matches!(
-                        state,
-                        minos_daemon::ThreadState::Idle
-                            | minos_daemon::ThreadState::Suspended { .. }
-                            | minos_daemon::ThreadState::Closed { .. }
-                    ) {
-                        reached_terminal_state = true;
-                    }
-                }
-            }
-            () = tokio::time::sleep(remaining) => {
-                return Err(Box::new(MinosError::Timeout));
-            }
-        }
-
-        if reached_terminal_state {
-            break;
-        }
-    }
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    while let Ok(raw) = ingest_rx.try_recv() {
-        if raw.thread_id == session_id {
-            renderer.handle_raw_ingest(&raw, translator, json_mode)?;
-        }
-    }
-    Ok(renderer)
-}
-
-async fn show_thread_history(
-    local: &LocalAgentContext,
-    thread_id: &str,
-    history_messages: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let history = local.agent.read_thread_history(thread_id).await?;
-    print_transcript_history(&history.ui_events, history_messages);
-    Ok(())
-}
-
-fn read_repl_line(prompt: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    print!("{prompt}");
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    let read = std::io::stdin().lock().read_line(&mut line)?;
-    if read == 0 {
-        return Ok(None);
-    }
-    Ok(Some(line))
-}
-
-#[derive(Default)]
-struct TranscriptBuilder {
-    order: Vec<String>,
-    messages: std::collections::HashMap<String, TranscriptMessage>,
-}
-
-#[derive(Clone)]
-struct TranscriptMessage {
-    role: MessageRole,
-    text: String,
-    reasoning: String,
-}
-
-fn print_transcript_history(events: &[UiEventMessage], max_messages: usize) {
-    let messages = transcript_messages(events);
-    if messages.is_empty() {
-        eprintln!("no local transcript yet");
-        return;
-    }
-    let start = messages.len().saturating_sub(max_messages);
-    eprintln!("history:");
-    for message in &messages[start..] {
-        let label = match message.role {
-            MessageRole::User => "user",
-            MessageRole::Assistant => "assistant",
-            MessageRole::System => "system",
-        };
-        let text = if message.text.trim().is_empty() {
-            "<empty>"
-        } else {
-            message.text.trim()
-        };
-        eprintln!("{label}> {text}");
-        if !message.reasoning.trim().is_empty() {
-            eprintln!("  reasoning> {}", message.reasoning.trim());
-        }
-    }
-}
-
-fn transcript_messages(events: &[UiEventMessage]) -> Vec<TranscriptMessage> {
-    let mut builder = TranscriptBuilder::default();
-    for event in events {
-        match event {
-            UiEventMessage::MessageStarted {
-                message_id, role, ..
-            } => {
-                builder.order.push(message_id.clone());
-                builder.messages.insert(
-                    message_id.clone(),
-                    TranscriptMessage {
-                        role: *role,
-                        text: String::new(),
-                        reasoning: String::new(),
-                    },
-                );
-            }
-            UiEventMessage::TextDelta { message_id, text } => {
-                if let Some(message) = builder.messages.get_mut(message_id) {
-                    message.text.push_str(text);
-                }
-            }
-            UiEventMessage::ReasoningDelta { message_id, text } => {
-                if let Some(message) = builder.messages.get_mut(message_id) {
-                    message.reasoning.push_str(text);
-                }
-            }
-            UiEventMessage::MessageCompleted { .. }
-            | UiEventMessage::ToolCallPlaced { .. }
-            | UiEventMessage::ToolCallCompleted { .. }
-            | UiEventMessage::Error { .. }
-            | UiEventMessage::ThreadOpened { .. }
-            | UiEventMessage::ThreadTitleUpdated { .. }
-            | UiEventMessage::ThreadClosed { .. }
-            | UiEventMessage::Raw { .. } => {}
-        }
-    }
-    builder
-        .order
-        .into_iter()
-        .filter_map(|message_id| builder.messages.remove(&message_id))
-        .collect()
-}
-
 async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std::error::Error>> {
     let config = relay_config_from_env()?;
     let mac_name = args.mac_name.unwrap_or_else(default_mac_name);
@@ -832,9 +333,7 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
             .as_deref()
             .unwrap_or("127.0.0.1:0")
             .parse()
-            .map_err(|e| {
-                std::io::Error::other(format!("invalid --local-rpc-addr: {e}"))
-            })?;
+            .map_err(|e| std::io::Error::other(format!("invalid --local-rpc-addr: {e}")))?;
         let run_dir = paths::run_dir()?;
         let discovery_path = run_dir.join("tui-daemon-rpc.json");
         Some(LocalRpcConfig {
@@ -1026,28 +525,6 @@ async fn thread(args: ThreadArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn s
     action
 }
 
-async fn history(
-    args: HistoryArgs,
-    paths: &ResolvedPaths,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let local = start_local_agent(paths).await?;
-    let result = async {
-        let history = local.agent.read_thread_history(&args.thread_id).await?;
-        if args.json {
-            println!("{}", serde_json::to_string_pretty(&history)?);
-        } else {
-            print_transcript_history(&history.ui_events, args.messages);
-        }
-        Ok::<(), Box<dyn std::error::Error>>(())
-    }
-    .await;
-    let shutdown = shutdown_local_agent(local).await;
-    match (result, shutdown) {
-        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
-        (Ok(()), Ok(())) => Ok(()),
-    }
-}
-
 /// Block until the process receives SIGINT (Ctrl-C) or SIGTERM. C20 shutdown
 /// sequence is driven by `DaemonHandle::stop`; this helper just unblocks the
 /// `start` future so the runtime can drive the shutdown.
@@ -1173,127 +650,9 @@ struct SetHostSkillResult {
     effective_enabled: bool,
 }
 
-#[derive(Debug, Serialize)]
-struct RunSummary {
-    session_id: String,
-    cwd: String,
-    assistant_text: String,
-    errors: Vec<String>,
-}
-
 struct LocalAgentContext {
     agent: Arc<AgentGlue>,
     _home_guard: MinosHomeEnvGuard,
-}
-
-#[derive(Default)]
-struct RunRenderer {
-    assistant_text: String,
-    errors: Vec<String>,
-    stdout_open: bool,
-    message_roles: std::collections::HashMap<String, minos_ui_protocol::MessageRole>,
-}
-
-impl RunRenderer {
-    fn handle_raw_ingest(
-        &mut self,
-        raw: &minos_agent_runtime::RawIngest,
-        translator: &mut CodexTranslatorState,
-        json_mode: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let events = translate_codex(translator, &raw.payload).map_err(|error| {
-            std::io::Error::other(format!("translate ingest {}: {error}", raw.thread_id))
-        })?;
-        for event in events {
-            self.handle_event(&event, json_mode)?;
-        }
-        Ok(())
-    }
-
-    fn handle_event(
-        &mut self,
-        event: &UiEventMessage,
-        json_mode: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        match event {
-            UiEventMessage::MessageStarted {
-                message_id, role, ..
-            } => {
-                self.message_roles.insert(message_id.clone(), *role);
-            }
-            UiEventMessage::TextDelta { text, .. } => {
-                if self.is_assistant_message(event) {
-                    self.assistant_text.push_str(text);
-                    if !json_mode {
-                        print!("{text}");
-                        std::io::stdout().flush()?;
-                        self.stdout_open = true;
-                    }
-                }
-            }
-            UiEventMessage::MessageCompleted { message_id, .. } => {
-                self.message_roles.remove(message_id);
-                self.finish_stdout_line()?;
-            }
-            UiEventMessage::ToolCallPlaced { name, .. } if !json_mode => {
-                self.finish_stdout_line()?;
-                eprintln!("[tool] started {name}");
-            }
-            UiEventMessage::ToolCallCompleted {
-                tool_call_id,
-                is_error,
-                ..
-            } if !json_mode => {
-                self.finish_stdout_line()?;
-                eprintln!(
-                    "[tool] completed {} ({})",
-                    tool_call_id,
-                    if *is_error { "error" } else { "ok" }
-                );
-            }
-            UiEventMessage::Error { code, message, .. } => {
-                self.errors.push(format!("{code}: {message}"));
-                if !json_mode {
-                    self.finish_stdout_line()?;
-                    eprintln!("[error] {code}: {message}");
-                }
-            }
-            UiEventMessage::ThreadClosed { reason, .. } if !json_mode => {
-                self.finish_stdout_line()?;
-                eprintln!("[thread] closed: {}", serde_json::to_string(reason)?);
-            }
-            UiEventMessage::ReasoningDelta { .. }
-            | UiEventMessage::ToolCallPlaced { .. }
-            | UiEventMessage::ToolCallCompleted { .. }
-            | UiEventMessage::ThreadClosed { .. }
-            | UiEventMessage::ThreadOpened { .. }
-            | UiEventMessage::ThreadTitleUpdated { .. }
-            | UiEventMessage::Raw { .. } => {}
-        }
-        Ok(())
-    }
-
-    fn finish_stdout_line(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.stdout_open {
-            println!();
-            std::io::stdout().flush()?;
-            self.stdout_open = false;
-        }
-        Ok(())
-    }
-
-    fn is_assistant_message(&self, event: &UiEventMessage) -> bool {
-        let message_id = match event {
-            UiEventMessage::TextDelta { message_id, .. }
-            | UiEventMessage::ReasoningDelta { message_id, .. }
-            | UiEventMessage::ToolCallPlaced { message_id, .. } => Some(message_id),
-            UiEventMessage::Error { message_id, .. } => message_id.as_ref(),
-            _ => None,
-        };
-        message_id
-            .and_then(|id| self.message_roles.get(id))
-            .is_some_and(|role| *role == minos_ui_protocol::MessageRole::Assistant)
-    }
 }
 
 async fn start_ephemeral(
@@ -1644,11 +1003,7 @@ struct ResolvedPaths {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minos_agent_runtime::config::AgentRuntimeConfig;
-    use minos_agent_runtime::test_support::{FakeCodexServer, Step};
-    use minos_agent_runtime::{AgentManager, InstanceCaps};
     use tempfile::TempDir;
-    use tokio::sync::mpsc;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1742,74 +1097,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_run_command() {
-        let cli = Cli::parse_from([
-            "minos-daemon",
-            "run",
-            "--workspace",
-            "/tmp/ws",
-            "--timeout-s",
-            "90",
-            "hello from cli",
-        ]);
-        match cli.command {
-            Command::Run(args) => {
-                assert_eq!(args.workspace, Some(PathBuf::from("/tmp/ws")));
-                assert_eq!(args.timeout_s, 90);
-                assert_eq!(args.prompt, "hello from cli");
-                assert_eq!(args.agent, "codex");
-                assert!(args.thread.is_none());
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_chat_command() {
-        let cli = Cli::parse_from([
-            "minos-daemon",
-            "chat",
-            "--workspace",
-            "/tmp/ws",
-            "--prompt",
-            "boot",
-        ]);
-        match cli.command {
-            Command::Chat(args) => {
-                assert_eq!(args.workspace, Some(PathBuf::from("/tmp/ws")));
-                assert_eq!(args.prompt.as_deref(), Some("boot"));
-                assert_eq!(args.agent, "codex");
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_history_command() {
-        let cli = Cli::parse_from(["minos-daemon", "history", "--messages", "5", "thr-123"]);
-        match cli.command {
-            Command::History(args) => {
-                assert_eq!(args.thread_id, "thr-123");
-                assert_eq!(args.messages, 5);
-                assert!(!args.json);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_run_thread_command() {
-        let cli = Cli::parse_from(["minos-daemon", "run", "--thread", "thr-123", "continue"]);
-        match cli.command {
-            Command::Run(args) => {
-                assert_eq!(args.thread.as_deref(), Some("thr-123"));
-                assert_eq!(args.prompt, "continue");
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
     fn minos_home_override_sets_and_restores_env() {
         let _guard = ENV_LOCK.lock().unwrap();
         env::remove_var("MINOS_HOME");
@@ -1825,125 +1112,5 @@ mod tests {
         }
 
         assert!(env::var_os("MINOS_HOME").is_none());
-    }
-
-    fn fake_thread_response(thread_id: &str) -> serde_json::Value {
-        serde_json::json!({
-            "approvalPolicy": "never",
-            "approvalsReviewer": "user",
-            "cwd": "/tmp",
-            "instructionSources": [],
-            "model": "fake",
-            "modelProvider": "fake",
-            "sandbox": { "type": "dangerFullAccess" },
-            "thread": {
-                "id": thread_id,
-                "cliVersion": "0.0.0-fake",
-                "createdAt": 0,
-                "cwd": "/tmp",
-                "ephemeral": true,
-                "modelProvider": "fake",
-                "preview": "",
-                "source": "appServer",
-                "status": { "type": "idle" },
-                "turns": [],
-                "updatedAt": 0
-            }
-        })
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn execute_local_turn_streams_assistant_text() {
-        let tmp = tempfile::tempdir().unwrap();
-        let thread_id = "thr-main-run";
-        let script = vec![
-            Step::ExpectRequest {
-                method: "thread/start".into(),
-                reply: fake_thread_response(thread_id),
-            },
-            Step::ExpectRequest {
-                method: "turn/start".into(),
-                reply: serde_json::json!({
-                    "turn": {
-                        "id": "turn-1",
-                        "items": [],
-                        "status": "inProgress"
-                    }
-                }),
-            },
-            Step::EmitNotification {
-                method: "item/started".into(),
-                params: serde_json::json!({
-                    "threadId": thread_id,
-                    "item": { "type": "agentMessage", "id": "a1", "text": "" }
-                }),
-            },
-            Step::EmitNotification {
-                method: "item/agentMessage/delta".into(),
-                params: serde_json::json!({
-                    "threadId": thread_id,
-                    "itemId": "a1",
-                    "delta": "hello from codex"
-                }),
-            },
-            Step::EmitNotification {
-                method: "turn/completed".into(),
-                params: serde_json::json!({
-                    "threadId": thread_id,
-                    "finishedAtMs": 1
-                }),
-            },
-            Step::Sleep { ms: 50 },
-        ];
-        let (server, port) = FakeCodexServer::bind(script).await;
-
-        let mut cfg = AgentRuntimeConfig::new(tmp.path().join("workspaces"));
-        cfg.test_ws_url = Some(
-            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
-        );
-        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
-        let store = Arc::new(
-            minos_daemon::store::LocalStore::open(&tmp.path().join("daemon.sqlite"))
-                .await
-                .unwrap(),
-        );
-        let (out_tx, _out_rx) = mpsc::channel(8);
-        let writer = Arc::new(minos_daemon::store::event_writer::EventWriter::spawn(
-            store.clone(),
-            out_tx,
-        ));
-        let agent = Arc::new(AgentGlue::wire_with(
-            manager,
-            writer,
-            store,
-            tmp.path().join("workspaces"),
-        ));
-        let local = LocalAgentContext {
-            agent,
-            _home_guard: MinosHomeEnvGuard {
-                previous: None,
-                active: false,
-            },
-        };
-
-        let session = start_local_cli_session(&local, AgentName::Codex, Path::new("/tmp"))
-            .await
-            .unwrap();
-        let mut translator = CodexTranslatorState::new(session.session_id.clone());
-        let renderer = execute_local_turn(
-            &local,
-            &session.session_id,
-            "hello",
-            2,
-            true,
-            &mut translator,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(renderer.assistant_text, "hello from codex");
-        assert!(renderer.errors.is_empty());
-
-        server.stop().await;
     }
 }

@@ -74,10 +74,11 @@ pub trait LocalDaemonRpc {
     ) -> jsonrpsee::core::RpcResult<()>;
 
     #[method(name = "close_thread")]
-    async fn close_thread(
-        &self,
-        req: crate::CloseThreadRequest,
-    ) -> jsonrpsee::core::RpcResult<()>;
+    async fn close_thread(&self, req: crate::CloseThreadRequest) -> jsonrpsee::core::RpcResult<()>;
+
+    #[method(name = "delete_thread")]
+    async fn delete_thread(&self, req: crate::CloseThreadRequest)
+        -> jsonrpsee::core::RpcResult<()>;
 
     #[method(name = "resume_thread")]
     async fn resume_thread(

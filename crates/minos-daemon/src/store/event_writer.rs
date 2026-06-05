@@ -10,7 +10,9 @@
 use crate::store::LocalStore;
 use anyhow::Result;
 use minos_agent_runtime::RawIngest;
+use minos_domain::AgentName;
 use minos_protocol::realtime::ClientFrame;
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -145,14 +147,26 @@ async fn process_batch(
             results.push(Err(e.into()));
             continue;
         }
-        if let Err(e) =
+        let provider_session_id = provider_session_id_from_ingest(&job.ingest);
+        let update_result = if let Some(provider_session_id) = provider_session_id.as_deref() {
+            sqlx::query(
+                "UPDATE threads SET last_seq = ?, last_activity_at = ?, codex_session_id = ? WHERE thread_id = ?",
+            )
+            .bind(seq as i64)
+            .bind(job.ingest.ts_ms)
+            .bind(provider_session_id)
+            .bind(&job.ingest.thread_id)
+            .execute(&mut *tx)
+            .await
+        } else {
             sqlx::query("UPDATE threads SET last_seq = ?, last_activity_at = ? WHERE thread_id = ?")
                 .bind(seq as i64)
                 .bind(job.ingest.ts_ms)
                 .bind(&job.ingest.thread_id)
                 .execute(&mut *tx)
                 .await
-        {
+        };
+        if let Err(e) = update_result {
             results.push(Err(e.into()));
             continue;
         }
@@ -185,6 +199,65 @@ async fn process_batch(
     }
 }
 
+pub(crate) fn provider_session_id_from_ingest(ingest: &RawIngest) -> Option<String> {
+    match ingest.agent {
+        AgentName::Claude => ingest
+            .payload
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        AgentName::Opencode => opencode_session_id(&ingest.payload).map(str::to_string),
+        AgentName::Gemini => gemini_session_id(&ingest.payload).map(str::to_string),
+        AgentName::Codex => None,
+    }
+}
+
+fn gemini_session_id(payload: &Value) -> Option<&str> {
+    payload
+        .get("params")
+        .and_then(|params| params.get("sessionId"))
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("sessionId").and_then(Value::as_str))
+}
+
+fn opencode_session_id(payload: &Value) -> Option<&str> {
+    let properties = payload.get("properties").unwrap_or(payload);
+    properties
+        .get("sessionID")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            properties
+                .get("info")
+                .and_then(|info| info.get("sessionID").or_else(|| info.get("id")))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            properties
+                .get("part")
+                .and_then(|part| part.get("sessionID"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            payload
+                .get("session")
+                .and_then(|session| session.get("id"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            payload
+                .get("message")
+                .and_then(|message| message.get("sessionID"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            payload
+                .get("part")
+                .and_then(|part| part.get("sessionID"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| payload.get("sessionID").and_then(Value::as_str))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +276,48 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn provider_session_id_from_ingest_supports_non_codex_agents() {
+        let claude = RawIngest {
+            agent: AgentName::Claude,
+            thread_id: "thr-claude".into(),
+            payload: serde_json::json!({"type":"result","session_id":"claude-session"}),
+            ts_ms: 1,
+        };
+        assert_eq!(
+            provider_session_id_from_ingest(&claude).as_deref(),
+            Some("claude-session")
+        );
+
+        let gemini = RawIngest {
+            agent: AgentName::Gemini,
+            thread_id: "thr-gemini".into(),
+            payload: serde_json::json!({
+                "kind":"acp_notification",
+                "params":{"sessionId":"gemini-session"}
+            }),
+            ts_ms: 1,
+        };
+        assert_eq!(
+            provider_session_id_from_ingest(&gemini).as_deref(),
+            Some("gemini-session")
+        );
+
+        let opencode = RawIngest {
+            agent: AgentName::Opencode,
+            thread_id: "thr-opencode".into(),
+            payload: serde_json::json!({
+                "type":"message.part.updated",
+                "properties":{"part":{"sessionID":"opencode-session"}}
+            }),
+            ts_ms: 1,
+        };
+        assert_eq!(
+            provider_session_id_from_ingest(&opencode).as_deref(),
+            Some("opencode-session")
+        );
     }
 
     #[tokio::test]

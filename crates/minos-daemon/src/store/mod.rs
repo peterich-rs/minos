@@ -172,6 +172,19 @@ impl LocalStore {
         Ok(())
     }
 
+    pub async fn update_thread_provider_session_id(
+        &self,
+        thread_id: &str,
+        provider_session_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE threads SET codex_session_id = ? WHERE thread_id = ?")
+            .bind(provider_session_id)
+            .bind(thread_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Stamp a thread closed: `status='closed'`, `ended_at=ts_ms`,
     /// `last_close_reason=reason`. No-op (zero rows updated) if the row is
     /// missing — callers treat that as success because there's nothing left
@@ -194,6 +207,20 @@ impl LocalStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn delete_thread(&self, thread_id: &str) -> anyhow::Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM events WHERE thread_id = ?")
+            .bind(thread_id)
+            .execute(&mut *tx)
+            .await?;
+        let result = sqlx::query("DELETE FROM threads WHERE thread_id = ?")
+            .bind(thread_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected())
     }
 
     // ── Project CRUD ──────────────────────────────────────────────────
@@ -464,6 +491,42 @@ mod tests {
         assert_eq!(threads.len(), 3);
         let one = store.get_thread("thr-1").await.unwrap();
         assert_eq!(one.unwrap().agent, "codex");
+    }
+
+    #[tokio::test]
+    async fn delete_thread_removes_thread_and_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-delete', '/w', 'codex', 'idle', 1, 0, 0)")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES ('thr-delete', 1, ?, 0, 'live')",
+        )
+        .bind(br#"{"method":"item/started"}"#.as_slice())
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        let deleted = store.delete_thread("thr-delete").await.unwrap();
+
+        assert_eq!(deleted, 1);
+        assert!(store.get_thread("thr-delete").await.unwrap().is_none());
+        let events: (i64,) = sqlx::query_as("SELECT count(*) FROM events WHERE thread_id = ?")
+            .bind("thr-delete")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(events.0, 0);
     }
 
     #[tokio::test]

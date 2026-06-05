@@ -11,9 +11,9 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use minos_domain::AgentName;
 use minos_ui_protocol::{
-    translate_claude, translate_codex, translate_gemini, translate_opencode,
-    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState,
-    TranslationError, UiEventMessage,
+    translate_claude, translate_codex, translate_gemini, translate_opencode, ClaudeTranslatorState,
+    CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState, TranslationError,
+    UiEventMessage,
 };
 use serde_json::Value;
 

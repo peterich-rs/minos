@@ -15,8 +15,8 @@ use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
-    AgentLaunchMode, GetThreadParams, HealthResponse, ReadThreadParams, StartAgentRequest,
-    StartAgentResponse,
+    AgentLaunchMode, CloseThreadRequest, GetThreadParams, HealthResponse, ReadThreadParams,
+    StartAgentRequest, StartAgentResponse,
 };
 use tokio::sync::mpsc;
 
@@ -145,6 +145,56 @@ async fn start_agent_then_list_local_threads_returns_one() {
 
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].thread_id, start_resp.session_id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_thread_removes_local_thread_and_history() {
+    let (glue, _handle, tmp, _fake) = setup().await;
+    let url = discovery_addr(&tmp);
+    let client = WsClientBuilder::default().build(&url).await.unwrap();
+
+    let start_resp: StartAgentResponse = client
+        .request(
+            "minos_local_start_agent",
+            [StartAgentRequest {
+                agent: AgentName::Codex,
+                workspace: String::new(),
+                mode: Some(AgentLaunchMode::Server),
+            }],
+        )
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    client
+        .request::<(), _>(
+            "minos_local_delete_thread",
+            [CloseThreadRequest {
+                thread_id: start_resp.session_id.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let threads: Vec<minos_protocol::LocalThreadSnapshot> = client
+        .request("minos_local_list_local_threads", ArrayParams::new())
+        .await
+        .unwrap();
+    assert!(threads.is_empty());
+
+    let event_count: (i64,) = sqlx::query_as("SELECT count(*) FROM events WHERE thread_id = ?")
+        .bind(&start_resp.session_id)
+        .fetch_one(glue.store().pool())
+        .await
+        .unwrap();
+    assert_eq!(event_count.0, 0);
+    assert!(glue
+        .store()
+        .get_thread(&start_resp.session_id)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]

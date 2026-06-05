@@ -186,7 +186,10 @@ mod tests {
                 ("codex", ScriptStep::Which(None)),
                 ("claude", ScriptStep::Which(None)),
                 ("gemini", ScriptStep::Which(None)),
-                ("opencode", ScriptStep::Which(Some("/usr/local/bin/opencode"))),
+                (
+                    "opencode",
+                    ScriptStep::Which(Some("/usr/local/bin/opencode")),
+                ),
                 ("opencode", outcome_ok("opencode 1.0.0\n")),
             ]),
         });

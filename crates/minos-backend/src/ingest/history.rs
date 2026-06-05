@@ -98,14 +98,11 @@ pub async fn read_thread(
     };
 
     // Fresh translator state per call so history stays deterministic.
-    let mut codex_state =
-        minos_ui_protocol::CodexTranslatorState::new(params.thread_id.clone());
-    let mut claude_state =
-        minos_ui_protocol::ClaudeTranslatorState::new(params.thread_id.clone());
+    let mut codex_state = minos_ui_protocol::CodexTranslatorState::new(params.thread_id.clone());
+    let mut claude_state = minos_ui_protocol::ClaudeTranslatorState::new(params.thread_id.clone());
     let mut opencode_state =
         minos_ui_protocol::OpencodeTranslatorState::new(params.thread_id.clone());
-    let mut gemini_state =
-        minos_ui_protocol::GeminiTranslatorState::new(params.thread_id.clone());
+    let mut gemini_state = minos_ui_protocol::GeminiTranslatorState::new(params.thread_id.clone());
     let mut ui_events: Vec<minos_ui_protocol::UiEventMessage> = Vec::new();
     let mut last_seq_read = from_seq;
     for row in &rows {

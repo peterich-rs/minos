@@ -72,6 +72,10 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         self.agent.close_thread(req).await.map_err(rpc_err)
     }
 
+    async fn delete_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.delete_thread(req).await.map_err(rpc_err)
+    }
+
     async fn resume_thread(
         &self,
         req: GetThreadParams,

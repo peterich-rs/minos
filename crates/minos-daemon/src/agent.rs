@@ -12,19 +12,15 @@ use minos_protocol::{
     ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams,
     GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
     ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
-    PauseReason as ProtoPauseReason, ReadThreadResponse, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    PauseReason as ProtoPauseReason, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    ThreadState as ProtoThreadState, ThreadSummary, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
-use minos_ui_protocol::{
-    translate_claude, translate_codex, translate_gemini, translate_opencode, ClaudeTranslatorState,
-    CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState, ThreadEndReason,
-    UiEventMessage,
-};
+use minos_ui_protocol::ThreadEndReason;
 use tokio::sync::{broadcast, mpsc, watch};
 
-use crate::store::event_writer::EventWriter;
-use crate::store::LocalStore;
+use crate::store::event_writer::{provider_session_id_from_ingest, EventWriter};
+use crate::store::{EventRow, LocalStore, ThreadRow};
 use crate::subscription::{AgentStateObserver, Subscription};
 
 /// `AgentGlue` is the daemon-side wrapper that:
@@ -54,42 +50,6 @@ pub struct AgentGlue {
     /// legacy surface (no workspace param). Resolved once at construction
     /// time.
     default_workspace: PathBuf,
-}
-
-pub enum TranslatorState {
-    Codex(CodexTranslatorState),
-    Claude(ClaudeTranslatorState),
-    Opencode(OpencodeTranslatorState),
-    Gemini(GeminiTranslatorState),
-}
-
-impl TranslatorState {
-    fn new(thread_id: String, agent: minos_domain::AgentName) -> Self {
-        match agent {
-            minos_domain::AgentName::Codex => Self::Codex(CodexTranslatorState::new(thread_id)),
-            minos_domain::AgentName::Claude => Self::Claude(ClaudeTranslatorState::new(thread_id)),
-            minos_domain::AgentName::Opencode => {
-                Self::Opencode(OpencodeTranslatorState::new(thread_id))
-            }
-            minos_domain::AgentName::Gemini => Self::Gemini(GeminiTranslatorState::new(thread_id)),
-        }
-    }
-
-    fn translate(&mut self, raw: &serde_json::Value) -> Vec<UiEventMessage> {
-        match self {
-            Self::Codex(s) => translate_codex(s, raw),
-            Self::Claude(s) => translate_claude(s, raw),
-            Self::Opencode(s) => translate_opencode(s, raw),
-            Self::Gemini(s) => translate_gemini(s, raw),
-        }
-        .unwrap_or_else(|error| {
-            vec![UiEventMessage::Error {
-                code: "translation_failed".into(),
-                message: error.to_string(),
-                message_id: None,
-            }]
-        })
-    }
 }
 
 impl AgentGlue {
@@ -236,8 +196,13 @@ impl AgentGlue {
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
-        self.persist_thread_parent_rows(&outcome.thread_id, &cwd, req.agent)
-            .await;
+        self.persist_thread_parent_rows(
+            &outcome.thread_id,
+            &cwd,
+            req.agent,
+            outcome.provider_session_id.as_deref(),
+        )
+        .await;
 
         // Legacy single-state mirror: emit Idle (not Running) because the
         // multi-thread manager keeps per-thread state internally; the
@@ -254,7 +219,10 @@ impl AgentGlue {
         self.manager
             .send_user_message(&req.session_id, req.text)
             .await
-            .map_err(map_anyhow)
+            .map_err(map_anyhow)?;
+        self.persist_current_provider_session_id(&req.session_id)
+            .await;
+        Ok(())
     }
 
     pub async fn resolve_approval(&self, req: ApprovalDecisionRequest) -> Result<(), MinosError> {
@@ -304,8 +272,13 @@ impl AgentGlue {
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
-        self.persist_thread_parent_rows(&outcome.session_id, &cwd, agent)
-            .await;
+        self.persist_thread_parent_rows(
+            &outcome.session_id,
+            &cwd,
+            agent,
+            outcome.provider_session_id.as_deref(),
+        )
+        .await;
 
         Ok(AgentDispatchResponse {
             session_id: outcome.session_id,
@@ -317,6 +290,7 @@ impl AgentGlue {
         thread_id: &str,
         cwd: &str,
         agent: minos_domain::AgentName,
+        provider_session_id: Option<&str>,
     ) {
         let now_ms = current_unix_ms();
         if let Err(e) = self.store.upsert_workspace(cwd, now_ms).await {
@@ -333,7 +307,7 @@ impl AgentGlue {
                 thread_id,
                 cwd,
                 agent_label(agent),
-                Some(thread_id),
+                provider_session_id,
                 "idle",
                 now_ms,
             )
@@ -348,6 +322,67 @@ impl AgentGlue {
         }
     }
 
+    async fn persist_current_provider_session_id(&self, thread_id: &str) {
+        let provider_session_id = self.manager.thread_provider_session_id(thread_id).await;
+        if provider_session_id.is_none() {
+            return;
+        }
+        if let Err(e) = self
+            .store
+            .update_thread_provider_session_id(thread_id, provider_session_id.as_deref())
+            .await
+        {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                thread_id,
+                "store.update_thread_provider_session_id failed",
+            );
+        }
+    }
+
+    async fn resolve_provider_session_id(
+        &self,
+        row: &ThreadRow,
+        agent: minos_domain::AgentName,
+    ) -> Result<Option<String>, MinosError> {
+        if agent == minos_domain::AgentName::Codex {
+            return Ok(row.codex_session_id.clone());
+        }
+
+        if let Some(session_id) = row
+            .codex_session_id
+            .as_deref()
+            .filter(|session_id| *session_id != row.thread_id)
+        {
+            return Ok(Some(session_id.to_string()));
+        }
+
+        self.latest_provider_session_id_from_events(row, agent)
+            .await
+    }
+
+    async fn latest_provider_session_id_from_events(
+        &self,
+        row: &ThreadRow,
+        agent: minos_domain::AgentName,
+    ) -> Result<Option<String>, MinosError> {
+        let max_seq = u64::try_from(row.last_seq.max(0)).unwrap_or(0);
+        if max_seq == 0 {
+            return Ok(None);
+        }
+
+        let rows = self
+            .store
+            .read_events(&row.thread_id, 1, max_seq)
+            .await
+            .map_err(|e| map_store_error("latest_provider_session_id_from_events", e))?;
+        Ok(rows
+            .iter()
+            .rev()
+            .find_map(|event| provider_session_id_from_event(&row.thread_id, agent, event)))
+    }
+
     pub async fn ensure_thread_registered(&self, thread_id: &str) -> Result<(), MinosError> {
         if self.manager.has_thread(thread_id).await {
             return Ok(());
@@ -359,12 +394,14 @@ impl AgentGlue {
             .map_err(|e| map_store_error("ensure_thread_registered", e))?
             .ok_or(MinosError::AgentSessionIdMismatch)?;
         let state = row_state_to_runtime(&row)?;
+        let agent = parse_agent_label(&row.agent)?;
+        let provider_session_id = self.resolve_provider_session_id(&row, agent).await?;
         self.manager
             .register_persisted_thread(
                 row.thread_id.clone(),
                 PathBuf::from(&row.workspace_root),
-                parse_agent_label(&row.agent)?,
-                row.codex_session_id.clone(),
+                agent,
+                provider_session_id,
                 state,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
             )
@@ -385,12 +422,14 @@ impl AgentGlue {
         ) {
             return Err(MinosError::AgentSessionIdMismatch);
         }
+        let agent = parse_agent_label(&row.agent)?;
+        let provider_session_id = self.resolve_provider_session_id(&row, agent).await?;
         self.manager
             .register_persisted_thread(
                 row.thread_id.clone(),
                 PathBuf::from(&row.workspace_root),
-                parse_agent_label(&row.agent)?,
-                row.codex_session_id.clone(),
+                agent,
+                provider_session_id,
                 row_state_to_runtime(&row)?,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
             )
@@ -400,77 +439,6 @@ impl AgentGlue {
             session_id: row.thread_id,
             cwd: row.workspace_root,
         })
-    }
-
-    pub async fn read_thread_history(
-        &self,
-        thread_id: &str,
-    ) -> Result<ReadThreadResponse, MinosError> {
-        let (row, ui_events, _) = self.load_thread_history(thread_id).await?;
-        Ok(ReadThreadResponse {
-            ui_events,
-            next_seq: None,
-            thread_end_reason: row_end_reason(&row),
-        })
-    }
-
-    pub async fn hydrate_codex_translator(
-        &self,
-        thread_id: &str,
-    ) -> Result<CodexTranslatorState, MinosError> {
-        let translator = self.hydrate_translator(thread_id).await?;
-        match translator {
-            TranslatorState::Codex(s) => Ok(s),
-            _ => Err(MinosError::CodexProtocolError {
-                method: "hydrate_codex_translator".into(),
-                message: "thread is not a codex thread".into(),
-            }),
-        }
-    }
-
-    pub async fn hydrate_translator(&self, thread_id: &str) -> Result<TranslatorState, MinosError> {
-        let (_, _, translator) = self.load_thread_history(thread_id).await?;
-        Ok(translator)
-    }
-
-    async fn load_thread_history(
-        &self,
-        thread_id: &str,
-    ) -> Result<
-        (
-            crate::store::ThreadRow,
-            Vec<UiEventMessage>,
-            TranslatorState,
-        ),
-        MinosError,
-    > {
-        let row = self
-            .store
-            .get_thread(thread_id)
-            .await
-            .map_err(|e| map_store_error("read_thread_history", e))?
-            .ok_or(MinosError::AgentSessionIdMismatch)?;
-        let max_seq = u64::try_from(row.last_seq.max(0)).unwrap_or(0);
-        let rows = self
-            .store
-            .read_events(thread_id, 1, max_seq.max(1))
-            .await
-            .map_err(|e| map_store_error("read_thread_history", e))?;
-        let agent = parse_agent_label(&row.agent)?;
-        let mut ui_events = Vec::new();
-        let mut translator = TranslatorState::new(thread_id.to_string(), agent);
-        for event in rows {
-            let payload: serde_json::Value =
-                serde_json::from_slice(&event.payload).map_err(|e| {
-                    MinosError::CodexProtocolError {
-                        method: "local_store.history_payload".into(),
-                        message: e.to_string(),
-                    }
-                })?;
-            let translated = translator.translate(&payload);
-            ui_events.extend(translated);
-        }
-        Ok((row, ui_events, translator))
     }
 
     pub async fn list_host_skills(
@@ -530,6 +498,31 @@ impl AgentGlue {
                 thread_id = %req.thread_id,
                 "store.close_thread_row failed; row will look orphan on next restart",
             );
+        }
+
+        let _ = self.state_tx.send(ThreadState::Idle);
+        Ok(())
+    }
+
+    pub async fn delete_thread(&self, req: CloseThreadRequest) -> Result<(), MinosError> {
+        if let Err(e) = self.manager.close_thread(&req.thread_id).await {
+            tracing::debug!(
+                target: "minos_daemon::agent",
+                error = %e,
+                thread_id = %req.thread_id,
+                "manager.close_thread skipped during local delete",
+            );
+        }
+
+        let deleted = self
+            .store
+            .delete_thread(&req.thread_id)
+            .await
+            .map_err(|e| map_store_error("delete_thread", e))?;
+        if deleted == 0 {
+            return Err(MinosError::ThreadNotFound {
+                thread_id: req.thread_id,
+            });
         }
 
         let _ = self.state_tx.send(ThreadState::Idle);
@@ -1025,6 +1018,20 @@ fn current_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+fn provider_session_id_from_event(
+    thread_id: &str,
+    agent: minos_domain::AgentName,
+    event: &EventRow,
+) -> Option<String> {
+    let payload = serde_json::from_slice(&event.payload).ok()?;
+    provider_session_id_from_ingest(&RawIngest {
+        agent,
+        thread_id: thread_id.to_string(),
+        payload,
+        ts_ms: event.ts_ms,
+    })
+}
+
 fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState {
     use minos_agent_runtime::ThreadState as RtState;
     match state {
@@ -1211,190 +1218,40 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::cast_possible_wrap)]
-    async fn read_thread_history_translates_local_events() {
+    async fn resume_thread_recovers_non_codex_provider_session_id_from_events() {
         let test = test_glue().await;
-        seed_thread(&test.glue, "thr-h", "codex", 10, 20).await;
-        let payloads = [
-            serde_json::json!({
-                "method":"item/started",
-                "params":{
-                    "threadId":"thr-h",
-                    "item":{
-                        "type":"userMessage",
-                        "id":"u1",
-                        "content":[{"type":"text","text":"hello"}]
-                    }
-                }
-            }),
-            serde_json::json!({
-                "method":"item/started",
-                "params":{
-                    "threadId":"thr-h",
-                    "item":{"type":"agentMessage","id":"a1","text":""}
-                }
-            }),
-            serde_json::json!({
-                "method":"item/agentMessage/delta",
-                "params":{"threadId":"thr-h","itemId":"a1","delta":"world"}
-            }),
-            serde_json::json!({
-                "method":"turn/completed",
-                "params":{"threadId":"thr-h","finishedAtMs":30}
-            }),
-        ];
-        for (idx, payload) in payloads.into_iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
-            )
-            .bind("thr-h")
-            .bind((idx + 1) as i64)
-            .bind(serde_json::to_vec(&payload).unwrap())
-            .bind((idx + 1) as i64)
-            .execute(test.glue.store.pool())
-            .await
-            .unwrap();
-        }
-        sqlx::query("UPDATE threads SET last_seq = 4 WHERE thread_id = 'thr-h'")
-            .execute(test.glue.store.pool())
-            .await
-            .unwrap();
-
-        let history = test.glue.read_thread_history("thr-h").await.unwrap();
-        assert!(history.ui_events.iter().any(|event| matches!(
-            event,
-            UiEventMessage::TextDelta { message_id, text }
-                if message_id == "u1" && text == "hello"
-        )));
-        assert!(history.ui_events.iter().any(|event| matches!(
-            event,
-            UiEventMessage::TextDelta { message_id, text }
-                if message_id == "a1" && text == "world"
-        )));
-    }
-
-    #[tokio::test]
-    #[allow(clippy::cast_possible_wrap)]
-    async fn hydrate_codex_translator_restores_open_message_state() {
-        let test = test_glue().await;
-        seed_thread(&test.glue, "thr-open", "codex", 10, 20).await;
-        let payloads = [
-            serde_json::json!({
-                "method":"item/started",
-                "params":{
-                    "threadId":"thr-open",
-                    "item":{"type":"agentMessage","id":"a1","text":""}
-                }
-            }),
-            serde_json::json!({
-                "method":"item/agentMessage/delta",
-                "params":{"threadId":"thr-open","itemId":"a1","delta":"hello "}
-            }),
-        ];
-        for (idx, payload) in payloads.into_iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
-            )
-            .bind("thr-open")
-            .bind((idx + 1) as i64)
-            .bind(serde_json::to_vec(&payload).unwrap())
-            .bind((idx + 1) as i64)
-            .execute(test.glue.store.pool())
-            .await
-            .unwrap();
-        }
-        sqlx::query("UPDATE threads SET last_seq = 2 WHERE thread_id = 'thr-open'")
-            .execute(test.glue.store.pool())
-            .await
-            .unwrap();
-
-        let mut translator = test
-            .glue
-            .hydrate_codex_translator("thr-open")
-            .await
-            .unwrap();
-        let continued = translate_codex(
-            &mut translator,
-            &serde_json::json!({
-                "method":"item/agentMessage/delta",
-                "params":{"threadId":"thr-open","itemId":"a1","delta":"world"}
-            }),
+        seed_thread(&test.glue, "thr-g", "gemini", 10, 20).await;
+        sqlx::query(
+            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', codex_session_id = 'thr-g', last_seq = 1 WHERE thread_id = 'thr-g'",
         )
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, 1, ?, 25, 'live')",
+        )
+        .bind("thr-g")
+        .bind(
+            serde_json::to_vec(&serde_json::json!({
+                "kind":"acp_notification",
+                "params":{"sessionId":"gemini-provider-session"}
+            }))
+            .unwrap(),
+        )
+        .execute(test.glue.store.pool())
+        .await
         .unwrap();
 
-        assert!(continued.iter().any(|event| matches!(
-            event,
-            UiEventMessage::TextDelta { message_id, text }
-                if message_id == "a1" && text == "world"
-        )));
-    }
+        let response = test.glue.resume_thread("thr-g").await.unwrap();
 
-    #[tokio::test]
-    #[allow(clippy::cast_possible_wrap)]
-    async fn hydrate_translator_returns_claude_variant_for_claude_thread() {
-        let test = test_glue().await;
-        seed_thread(&test.glue, "thr-cl", "claude", 10, 20).await;
-        let payloads = [
-            serde_json::json!({
-                "type":"system",
-                "subtype":"init",
-                "session_id":"sess_1",
-                "tools":[]
-            }),
-            serde_json::json!({
-                "type":"assistant",
-                "message":{"id":"msg_1","content":[]},
-                "delta":{"type":"text_delta","text":"hi"}
-            }),
-        ];
-        for (idx, payload) in payloads.into_iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
-            )
-            .bind("thr-cl")
-            .bind((idx + 1) as i64)
-            .bind(serde_json::to_vec(&payload).unwrap())
-            .bind((idx + 1) as i64)
-            .execute(test.glue.store.pool())
-            .await
-            .unwrap();
-        }
-        sqlx::query("UPDATE threads SET last_seq = 2 WHERE thread_id = 'thr-cl'")
-            .execute(test.glue.store.pool())
-            .await
-            .unwrap();
-
-        let translator = test.glue.hydrate_translator("thr-cl").await.unwrap();
-        assert!(matches!(translator, super::TranslatorState::Claude(_)));
-    }
-
-    #[tokio::test]
-    #[allow(clippy::cast_possible_wrap)]
-    async fn hydrate_translator_returns_opencode_variant_for_opencode_thread() {
-        let test = test_glue().await;
-        seed_thread(&test.glue, "thr-oc", "opencode", 10, 20).await;
-        let payloads = [serde_json::json!({
-            "type":"session.created",
-            "session":{"id":"sess_1","title":"Test"}
-        })];
-        for (idx, payload) in payloads.into_iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
-            )
-            .bind("thr-oc")
-            .bind((idx + 1) as i64)
-            .bind(serde_json::to_vec(&payload).unwrap())
-            .bind((idx + 1) as i64)
-            .execute(test.glue.store.pool())
-            .await
-            .unwrap();
-        }
-        sqlx::query("UPDATE threads SET last_seq = 1 WHERE thread_id = 'thr-oc'")
-            .execute(test.glue.store.pool())
-            .await
-            .unwrap();
-
-        let translator = test.glue.hydrate_translator("thr-oc").await.unwrap();
-        assert!(matches!(translator, super::TranslatorState::Opencode(_)));
+        assert_eq!(response.session_id, "thr-g");
+        assert_eq!(
+            test.glue
+                .manager
+                .thread_provider_session_id("thr-g")
+                .await
+                .as_deref(),
+            Some("gemini-provider-session")
+        );
     }
 }

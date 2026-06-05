@@ -10,7 +10,7 @@ use minos_agent_runtime::config::AgentRuntimeConfig;
 use minos_agent_runtime::test_support::FakeCodexBackend;
 use minos_agent_runtime::{AgentManager, InstanceCaps};
 use minos_daemon::agent::AgentGlue;
-use minos_daemon::local_rpc::{LocalRpcConfig, start_local_rpc_server};
+use minos_daemon::local_rpc::{start_local_rpc_server, LocalRpcConfig};
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
@@ -19,9 +19,9 @@ use minos_protocol::{
 };
 use tokio::sync::mpsc;
 
+use async_trait::async_trait;
 use minos_cli_detect::CommandOutcome;
 use minos_domain::MinosError;
-use async_trait::async_trait;
 
 struct NoopRunner;
 
@@ -44,7 +44,12 @@ impl minos_cli_detect::CommandRunner for NoopRunner {
     }
 }
 
-async fn setup() -> (Arc<AgentGlue>, jsonrpsee::server::ServerHandle, tempfile::TempDir, FakeCodexBackend) {
+async fn setup() -> (
+    Arc<AgentGlue>,
+    jsonrpsee::server::ServerHandle,
+    tempfile::TempDir,
+    FakeCodexBackend,
+) {
     let tmp = tempfile::tempdir().unwrap();
     let workspace = tmp.path().join("ws");
     std::fs::create_dir_all(&workspace).unwrap();

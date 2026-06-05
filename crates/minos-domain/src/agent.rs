@@ -20,7 +20,12 @@ impl AgentName {
     /// All known agents, in the order shown to users.
     #[must_use]
     pub const fn all() -> &'static [AgentName] {
-        &[AgentName::Codex, AgentName::Claude, AgentName::Gemini, AgentName::Opencode]
+        &[
+            AgentName::Codex,
+            AgentName::Claude,
+            AgentName::Gemini,
+            AgentName::Opencode,
+        ]
     }
 
     /// The CLI binary name to look for on PATH.
