@@ -68,6 +68,10 @@ impl AgentBackend for EmbeddedBackend {
             .map_err(Into::into)
     }
 
+    async fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        self.close_thread(thread_id).await
+    }
+
     async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>> {
         Ok(self
             .manager

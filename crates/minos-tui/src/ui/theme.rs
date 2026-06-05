@@ -4,7 +4,6 @@ pub const USER_LABEL: Style = Style::new().fg(Color::Cyan).add_modifier(Modifier
 pub const ASSISTANT_LABEL: Style = Style::new().fg(Color::Green).add_modifier(Modifier::BOLD);
 pub const SYSTEM_LABEL: Style = Style::new().fg(Color::Yellow);
 pub const ERROR_STYLE: Style = Style::new().fg(Color::Red).add_modifier(Modifier::BOLD);
-pub const RAW_STYLE: Style = Style::new().fg(Color::Yellow);
 pub const REASONING_STYLE: Style = Style::new().fg(Color::DarkGray);
 pub const TOOL_NAME_STYLE: Style = Style::new().fg(Color::Magenta);
 pub const TOOL_SUCCESS: Style = Style::new().fg(Color::Green);

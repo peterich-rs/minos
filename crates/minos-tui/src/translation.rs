@@ -3,7 +3,7 @@ use minos_ui_protocol::{
     ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, MessageRole,
     OpencodeTranslatorState, UiEventMessage,
 };
-use tracing::warn;
+use tracing::{debug, warn};
 
 pub enum AgentTranslationState {
     Codex(CodexTranslatorState),
@@ -67,6 +67,7 @@ pub struct ChatState {
     pub scroll_offset: u16,
     pub auto_scroll: bool,
     pub max_scroll: u16,
+    pub selection: Option<ChatSelection>,
 }
 
 impl ChatState {
@@ -79,6 +80,7 @@ impl ChatState {
             scroll_offset: 0,
             auto_scroll: true,
             max_scroll: 0,
+            selection: None,
         }
     }
 
@@ -127,6 +129,23 @@ impl ChatState {
     pub fn scroll_to_bottom(&mut self) {
         self.auto_scroll = true;
         self.scroll_offset = 0;
+    }
+
+    pub fn begin_selection(&mut self, point: ChatSelectionPoint) {
+        self.selection = Some(ChatSelection {
+            anchor: point,
+            focus: point,
+        });
+    }
+
+    pub fn update_selection(&mut self, point: ChatSelectionPoint) {
+        if let Some(selection) = self.selection.as_mut() {
+            selection.focus = point;
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
     }
 
     pub fn apply_ui_events(&mut self, events: Vec<UiEventMessage>) {
@@ -187,10 +206,14 @@ impl ChatState {
                     .rev()
                     .find(|m| m.message_id == message_id)
                 {
+                    let args_summary = summarize_tool_args(&name, &args_json);
+                    let args_detail = compact_tool_args(&args_json)
+                        .filter(|detail| !detail.is_empty() && detail != &args_summary);
                     msg.tool_calls.push(ToolCallBlock {
                         tool_call_id,
                         name,
-                        args_summary: truncate_str(&args_json, 120),
+                        args_summary,
+                        args_detail,
                         output_summary: None,
                         is_error: false,
                         is_expanded: false,
@@ -246,15 +269,11 @@ impl ChatState {
                 }
             }
             UiEventMessage::Raw { kind, payload_json } => {
-                self.messages.push(RenderedMessage {
-                    message_id: String::new(),
-                    role: MessageRole::System,
-                    text_parts: vec![TextPart::Plain(format!("[raw:{kind}] {payload_json}"))],
-                    tool_calls: Vec::new(),
-                    reasoning: None,
-                    is_streaming: false,
-                    error: None,
-                });
+                debug!(
+                    raw_kind = %kind,
+                    payload_bytes = payload_json.len(),
+                    "raw ui event suppressed from chat"
+                );
             }
             UiEventMessage::ThreadOpened { .. } | UiEventMessage::ThreadTitleUpdated { .. } => {}
             UiEventMessage::ThreadClosed { reason, .. } => {
@@ -292,6 +311,216 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
+fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
+    let Some(value) = parse_tool_args(args_json) else {
+        return truncate_str(&one_line(args_json), 180);
+    };
+
+    if value.is_null() {
+        return String::new();
+    }
+
+    let lower_name = tool_name.to_ascii_lowercase();
+    let mut pieces = Vec::new();
+
+    if let Some(value) = find_stringish(
+        &value,
+        &[
+            "file_path",
+            "filePath",
+            "filepath",
+            "path",
+            "absolute_path",
+            "absolutePath",
+            "relative_path",
+            "relativePath",
+            "target_file",
+            "targetFile",
+            "file",
+            "uri",
+        ],
+    ) {
+        pieces.push(summary_piece("file", &value, 90));
+    }
+
+    if let Some(value) = find_stringish(&value, &["cmd", "command", "script", "shell"]) {
+        pieces.push(summary_piece("cmd", &value, 90));
+    }
+
+    if lower_name.contains("task")
+        || lower_name == "todo"
+        || lower_name == "todowrite"
+        || lower_name == "todo_write"
+    {
+        if let Some(value) = find_stringish(
+            &value,
+            &[
+                "task",
+                "description",
+                "prompt",
+                "instructions",
+                "question",
+                "subagent_type",
+                "subagentType",
+            ],
+        ) {
+            pieces.push(summary_piece("task", &value, 110));
+        }
+    } else if let Some(value) = find_stringish(&value, &["task", "description"]) {
+        pieces.push(summary_piece("task", &value, 110));
+    }
+
+    if lower_name.contains("skill") {
+        if let Some(value) = find_stringish(
+            &value,
+            &[
+                "skill",
+                "skill_name",
+                "skillName",
+                "name",
+                "skill_path",
+                "skillPath",
+            ],
+        ) {
+            pieces.push(summary_piece("skill", &value, 90));
+        }
+    } else if let Some(value) = find_stringish(&value, &["skill", "skill_name", "skillName"]) {
+        pieces.push(summary_piece("skill", &value, 90));
+    }
+
+    if let Some(count) = array_len_for_keys(&value, &["todos", "todo", "items"]) {
+        pieces.push(format!("items={count}"));
+    }
+
+    if pieces.is_empty() {
+        compact_tool_args(args_json).unwrap_or_default()
+    } else {
+        truncate_str(&pieces.join(" "), 180)
+    }
+}
+
+fn compact_tool_args(args_json: &str) -> Option<String> {
+    let value = parse_tool_args(args_json)?;
+    if value.is_null() {
+        return Some(String::new());
+    }
+    serde_json::to_string(&value)
+        .ok()
+        .map(|text| truncate_str(&one_line(&text), 500))
+}
+
+fn parse_tool_args(args_json: &str) -> Option<serde_json::Value> {
+    let trimmed = args_json.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    serde_json::from_str(trimmed).ok()
+}
+
+fn summary_piece(label: &str, value: &str, max_len: usize) -> String {
+    format!("{label}={}", truncate_str(&one_line(value), max_len))
+}
+
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn find_stringish(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    find_stringish_inner(value, keys, 0)
+}
+
+fn find_stringish_inner(value: &serde_json::Value, keys: &[&str], depth: usize) -> Option<String> {
+    if depth > 4 {
+        return None;
+    }
+
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(found) = map.get(*key).and_then(value_to_summary_text) {
+                    return Some(found);
+                }
+            }
+            for child_key in [
+                "input",
+                "args",
+                "arguments",
+                "params",
+                "tool_input",
+                "toolInput",
+                "metadata",
+                "state",
+            ] {
+                if let Some(found) = map
+                    .get(child_key)
+                    .and_then(|child| find_stringish_inner(child, keys, depth + 1))
+                {
+                    return Some(found);
+                }
+            }
+            map.values()
+                .find_map(|child| find_stringish_inner(child, keys, depth + 1))
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|child| find_stringish_inner(child, keys, depth + 1)),
+        _ => None,
+    }
+}
+
+fn value_to_summary_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => (!text.trim().is_empty()).then(|| text.to_owned()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        serde_json::Value::Bool(boolean) => Some(boolean.to_string()),
+        serde_json::Value::Array(items) => {
+            let values = items
+                .iter()
+                .filter_map(value_to_summary_text)
+                .collect::<Vec<_>>();
+            (!values.is_empty()).then(|| values.join(","))
+        }
+        serde_json::Value::Object(map) => {
+            for key in [
+                "name",
+                "path",
+                "file_path",
+                "filePath",
+                "description",
+                "task",
+                "prompt",
+            ] {
+                if let Some(text) = map.get(key).and_then(value_to_summary_text) {
+                    return Some(text);
+                }
+            }
+            None
+        }
+        serde_json::Value::Null => None,
+    }
+}
+
+fn array_len_for_keys(value: &serde_json::Value, keys: &[&str]) -> Option<usize> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(len) = map
+                    .get(*key)
+                    .and_then(|value| value.as_array().map(Vec::len))
+                {
+                    return Some(len);
+                }
+            }
+            map.values()
+                .find_map(|child| array_len_for_keys(child, keys))
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|child| array_len_for_keys(child, keys)),
+        _ => None,
+    }
+}
+
 pub struct RenderedMessage {
     pub message_id: String,
     pub role: MessageRole,
@@ -300,6 +529,32 @@ pub struct RenderedMessage {
     pub reasoning: Option<String>,
     pub is_streaming: bool,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChatSelectionPoint {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatSelection {
+    pub anchor: ChatSelectionPoint,
+    pub focus: ChatSelectionPoint,
+}
+
+impl ChatSelection {
+    pub fn normalized(&self) -> (ChatSelectionPoint, ChatSelectionPoint) {
+        if (self.anchor.row, self.anchor.col) <= (self.focus.row, self.focus.col) {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.focus
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -312,6 +567,7 @@ pub struct ToolCallBlock {
     pub tool_call_id: String,
     pub name: String,
     pub args_summary: String,
+    pub args_detail: Option<String>,
     pub output_summary: Option<String>,
     pub is_error: bool,
     pub is_expanded: bool,
@@ -369,6 +625,7 @@ mod tests {
         }]);
         assert_eq!(cs.messages[0].tool_calls.len(), 1);
         assert_eq!(cs.messages[0].tool_calls[0].name, "write_file");
+        assert_eq!(cs.messages[0].tool_calls[0].args_summary, "file=foo.rs");
 
         cs.apply_ui_events(vec![UiEventMessage::ToolCallCompleted {
             tool_call_id: "tc1".into(),
@@ -380,6 +637,33 @@ mod tests {
             Some("ok")
         );
         assert!(!cs.messages[0].tool_calls[0].is_error);
+    }
+
+    #[test]
+    fn tool_arg_summary_highlights_task_and_skill_details() {
+        assert_eq!(
+            summarize_tool_args(
+                "Task",
+                r#"{"description":"inspect parser","prompt":"find the failing branch"}"#
+            ),
+            "task=inspect parser"
+        );
+        assert_eq!(
+            summarize_tool_args("skill", r#"{"skillName":"openai-docs"}"#),
+            "skill=openai-docs"
+        );
+    }
+
+    #[test]
+    fn raw_events_do_not_render_large_payloads_into_chat() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+
+        cs.apply_ui_events(vec![UiEventMessage::Raw {
+            kind: "tool/output".into(),
+            payload_json: r#"{"content":"fn main() { println!(\"large source\"); }"}"#.into(),
+        }]);
+
+        assert!(cs.messages.is_empty());
     }
 
     #[test]

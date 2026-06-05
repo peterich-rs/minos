@@ -11,8 +11,9 @@ use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    widgets::ListState,
+    layout::{Constraint, Direction, Flex, Layout, Rect},
+    text::{Line, Span},
+    widgets::{Block, Clear, ListState, Paragraph, Wrap},
     Frame,
 };
 
@@ -45,10 +46,18 @@ pub struct UiState {
     pub focus: Focus,
     pub error_flash: Option<(String, Instant)>,
     pub panel_areas: PanelAreas,
+    pub delete_confirm: Option<DeleteConfirmState>,
 }
 
 pub struct AgentPickerState {
     pub selected: usize,
+}
+
+pub struct DeleteConfirmState {
+    pub thread_id: String,
+    pub agent: AgentName,
+    pub workspace: PathBuf,
+    pub selected_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -71,6 +80,7 @@ impl UiState {
             focus: Focus::ThreadList,
             error_flash: None,
             panel_areas: PanelAreas::default(),
+            delete_confirm: None,
         }
     }
 
@@ -146,4 +156,59 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
     if let Some(picker) = state.agent_picker.as_ref() {
         agent_picker::render_agent_picker(f, state.status.agents.as_slice(), picker);
     }
+
+    if let Some(confirm) = state.delete_confirm.as_ref() {
+        render_delete_confirm(f, confirm);
+    }
+}
+
+fn render_delete_confirm(f: &mut Frame, state: &DeleteConfirmState) {
+    let area = centered_rect(f.area(), 64, 8);
+    f.render_widget(Clear, area);
+
+    let tid_short = &state.thread_id[..8.min(state.thread_id.len())];
+    let workspace = state
+        .workspace
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let lines = vec![
+        Line::from("Delete this local thread?"),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Thread "),
+            Span::styled(tid_short.to_owned(), theme::HIGHLIGHTED),
+            Span::raw(format!(
+                "  Agent {}  Workspace {}",
+                state.agent.bin_name(),
+                workspace
+            )),
+        ]),
+        Line::from(""),
+        Line::from("Enter/Y confirm    Esc/N cancel"),
+    ];
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::bordered()
+                .title("Confirm Delete")
+                .border_style(theme::FOCUSED_BORDER),
+        )
+        .wrap(Wrap { trim: true });
+    f.render_widget(paragraph, area);
+}
+
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let [vertical] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(height.min(area.height))])
+        .flex(Flex::Center)
+        .areas(area);
+
+    let [horizontal] = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(width.min(area.width))])
+        .flex(Flex::Center)
+        .areas(vertical);
+
+    horizontal
 }

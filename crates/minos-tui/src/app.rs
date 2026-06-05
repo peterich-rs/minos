@@ -12,8 +12,8 @@ use tracing::debug;
 
 use crate::backend::AgentBackend;
 use crate::event::AppEvent;
-use crate::translation::ChatState;
-use crate::ui::{AgentPickerState, Focus, ThreadEntry, UiState};
+use crate::translation::{ChatSelectionPoint, ChatState};
+use crate::ui::{AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState};
 
 pub struct App {
     backend: Arc<dyn AgentBackend>,
@@ -286,6 +286,10 @@ impl App {
             return false;
         }
 
+        if self.ui.delete_confirm.is_some() {
+            return self.handle_delete_confirm_key(key).await;
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('q') => {
@@ -393,6 +397,7 @@ impl App {
                 self.ui.focus = Focus::Chat;
                 true
             }
+            KeyCode::Delete => self.request_delete_current_thread(),
             KeyCode::Tab => {
                 self.cycle_focus();
                 true
@@ -475,6 +480,19 @@ impl App {
         }
     }
 
+    async fn handle_delete_confirm_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.confirm_delete_thread().await
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                self.ui.delete_confirm = None;
+                true
+            }
+            _ => true,
+        }
+    }
+
     async fn handle_ctrl_c(&mut self) -> bool {
         if self.current_thread_is_interruptible() {
             if let Some(thread_id) = self.ui.current_thread_id().map(String::from) {
@@ -491,6 +509,15 @@ impl App {
     }
 
     async fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if self.current_chat_selection_active() {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+                    return self.handle_chat_selection_mouse(mouse);
+                }
+                _ => {}
+            }
+        }
+
         if rect_contains(self.ui.panel_areas.thread_list, mouse.column, mouse.row) {
             return match mouse.kind {
                 MouseEventKind::ScrollUp => {
@@ -534,7 +561,13 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.ui.focus = Focus::Chat;
                     self.sync_input_agent_picker();
+                    if self.begin_chat_selection(mouse.column, mouse.row) {
+                        return true;
+                    }
                     true
+                }
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+                    self.handle_chat_selection_mouse(mouse)
                 }
                 MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => false,
                 _ => false,
@@ -568,6 +601,60 @@ impl App {
         }
     }
 
+    fn current_chat_selection_active(&self) -> bool {
+        self.ui
+            .selected_thread
+            .and_then(|index| self.ui.threads.get(index))
+            .and_then(|thread| self.ui.chat_states.get(&thread.thread_id))
+            .is_some_and(|chat| chat.selection.is_some())
+    }
+
+    fn begin_chat_selection(&mut self, column: u16, row: u16) -> bool {
+        let content_area = chat_content_area(self.ui.panel_areas.chat);
+        if !rect_contains(content_area, column, row) {
+            if let Some(chat) = self.ui.current_chat_mut() {
+                chat.clear_selection();
+            }
+            return false;
+        }
+
+        let Some(chat) = self.ui.current_chat_mut() else {
+            return false;
+        };
+        let point = chat_selection_point(content_area, chat.active_scroll(), column, row);
+        chat.begin_selection(point);
+        true
+    }
+
+    fn handle_chat_selection_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let content_area = chat_content_area(self.ui.panel_areas.chat);
+        let selected_text = {
+            let Some(chat) = self.ui.current_chat_mut() else {
+                return false;
+            };
+            let point =
+                chat_selection_point(content_area, chat.active_scroll(), mouse.column, mouse.row);
+            chat.update_selection(point);
+            if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+                let text = crate::ui::chat::selected_text(chat, content_area.width);
+                if text.is_none() {
+                    chat.clear_selection();
+                }
+                text
+            } else {
+                None
+            }
+        };
+
+        if let Some(text) = selected_text {
+            if let Err(error) = copy_to_clipboard(&text) {
+                self.ui
+                    .set_error(format!("Failed to copy selection: {error}"));
+            }
+        }
+        true
+    }
+
     async fn close_current_thread(&mut self) -> bool {
         if let Some(thread_id) = self.ui.current_thread_id().map(String::from) {
             if let Err(error) = self.backend.close_thread(&thread_id).await {
@@ -577,6 +664,68 @@ impl App {
             return true;
         }
         false
+    }
+
+    fn request_delete_current_thread(&mut self) -> bool {
+        let Some(selected) = self.ui.selected_thread else {
+            return false;
+        };
+        let Some(thread) = self.ui.threads.get(selected) else {
+            return false;
+        };
+
+        self.ui.delete_confirm = Some(DeleteConfirmState {
+            thread_id: thread.thread_id.clone(),
+            agent: thread.agent,
+            workspace: thread.workspace.clone(),
+            selected_index: selected,
+        });
+        true
+    }
+
+    async fn confirm_delete_thread(&mut self) -> bool {
+        let Some(pending) = self.ui.delete_confirm.take() else {
+            return false;
+        };
+
+        if let Err(error) = self.backend.delete_thread(&pending.thread_id).await {
+            self.ui
+                .set_error(format!("Failed to delete thread: {error}"));
+            return true;
+        }
+
+        self.remove_thread_from_ui(pending.selected_index, &pending.thread_id);
+        true
+    }
+
+    fn remove_thread_from_ui(&mut self, selected: usize, thread_id: &str) {
+        let index = self
+            .ui
+            .threads
+            .get(selected)
+            .filter(|entry| entry.thread_id == thread_id)
+            .map(|_| selected)
+            .or_else(|| {
+                self.ui
+                    .threads
+                    .iter()
+                    .position(|entry| entry.thread_id == thread_id)
+            });
+        let Some(index) = index else {
+            return;
+        };
+
+        self.ui.threads.remove(index);
+        self.ui.chat_states.remove(thread_id);
+        self.hydrated_threads.remove(thread_id);
+
+        if self.ui.threads.is_empty() {
+            self.ui.selected_thread = None;
+            self.ui.thread_list_state.select(None);
+        } else {
+            self.select_thread(index.min(self.ui.threads.len().saturating_sub(1)));
+        }
+        self.sync_input_agent_picker();
     }
 
     fn open_agent_picker(&mut self) -> bool {
@@ -899,6 +1048,108 @@ fn rect_contains(area: ratatui::layout::Rect, column: u16, row: u16) -> bool {
         && row < area.y.saturating_add(area.height)
 }
 
+fn chat_content_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    if area.width <= 2 || area.height <= 2 {
+        return ratatui::layout::Rect::new(area.x, area.y, 0, 0);
+    }
+    ratatui::layout::Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    )
+}
+
+fn chat_selection_point(
+    area: ratatui::layout::Rect,
+    scroll: u16,
+    column: u16,
+    row: u16,
+) -> ChatSelectionPoint {
+    let col = if area.width == 0 || column <= area.x {
+        0
+    } else if column >= area.x.saturating_add(area.width) {
+        area.width.saturating_sub(1)
+    } else {
+        column.saturating_sub(area.x)
+    };
+    let row_offset = if area.height == 0 || row <= area.y {
+        0
+    } else if row >= area.y.saturating_add(area.height) {
+        area.height.saturating_sub(1)
+    } else {
+        row.saturating_sub(area.y)
+    };
+    ChatSelectionPoint {
+        row: usize::from(scroll).saturating_add(usize::from(row_offset)),
+        col: usize::from(col),
+    }
+}
+
+#[cfg(test)]
+static TEST_CLIPBOARD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
+    TEST_CLIPBOARD
+        .lock()
+        .expect("test clipboard lock")
+        .push(text.to_owned());
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    const COMMANDS: &[(&str, &[&str])] = &[("pbcopy", &[])];
+    #[cfg(target_os = "linux")]
+    const COMMANDS: &[(&str, &[&str])] = &[
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+    ];
+    #[cfg(target_os = "windows")]
+    const COMMANDS: &[(&str, &[&str])] =
+        &[("powershell", &["-NoProfile", "-Command", "Set-Clipboard"])];
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    const COMMANDS: &[(&str, &[&str])] = &[];
+
+    let mut last_error = None;
+    for (program, args) in COMMANDS {
+        match run_clipboard_command(program, args, text) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {
+                last_error = Some(anyhow::anyhow!("{program} exited with a non-zero status"));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => last_error = Some(error.into()),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no clipboard command available")))
+}
+
+#[cfg(not(test))]
+fn run_clipboard_command(program: &str, args: &[&str], text: &str) -> std::io::Result<bool> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    Ok(child.wait()?.success())
+}
+
 fn clicked_thread_index(
     area: ratatui::layout::Rect,
     list_state: &ratatui::widgets::ListState,
@@ -929,6 +1180,7 @@ mod tests {
     use minos_agent_runtime::{RawIngest, StartAgentOutcome};
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
     use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
+    use minos_ui_protocol::{MessageRole, UiEventMessage};
     use ratatui::layout::Rect;
     use tokio::sync::broadcast;
 
@@ -941,6 +1193,7 @@ mod tests {
         next_thread: Mutex<usize>,
         interrupted: Mutex<Vec<String>>,
         closed: Mutex<Vec<String>>,
+        deleted: Mutex<Vec<String>>,
         listed_threads: Mutex<Vec<BackendThreadSnapshot>>,
         history_pages: Mutex<HashMap<String, VecDeque<ReadThreadRawHistoryResponse>>>,
         history_calls: Mutex<Vec<(String, Option<u64>, u32)>>,
@@ -964,6 +1217,7 @@ mod tests {
                 next_thread: Mutex::new(0),
                 interrupted: Mutex::new(Vec::new()),
                 closed: Mutex::new(Vec::new()),
+                deleted: Mutex::new(Vec::new()),
                 listed_threads: Mutex::new(Vec::new()),
                 history_pages: Mutex::new(HashMap::new()),
                 history_calls: Mutex::new(Vec::new()),
@@ -1013,6 +1267,7 @@ mod tests {
             Ok(StartAgentOutcome {
                 thread_id: format!("thread-{}", *next_thread),
                 cwd: workspace,
+                provider_session_id: None,
             })
         }
 
@@ -1040,6 +1295,14 @@ mod tests {
             Ok(())
         }
 
+        async fn delete_thread(&self, thread_id: &str) -> Result<()> {
+            self.deleted
+                .lock()
+                .expect("delete list lock")
+                .push(thread_id.to_owned());
+            Ok(())
+        }
+
         async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>> {
             Ok(self
                 .listed_threads
@@ -1052,6 +1315,7 @@ mod tests {
             Ok(StartAgentOutcome {
                 thread_id: String::new(),
                 cwd: PathBuf::new(),
+                provider_session_id: None,
             })
         }
 
@@ -1417,6 +1681,152 @@ mod tests {
 
         assert!(redraw);
         assert_eq!(app.ui.focus, Focus::ThreadList);
+    }
+
+    #[tokio::test]
+    async fn mouse_selection_copies_chat_text_on_release() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-1".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+        let mut chat = ChatState::new("thread-1".into(), AgentName::Codex);
+        chat.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::User,
+                started_at_ms: 0,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "m1".into(),
+                text: "hello\nworld".into(),
+            },
+            UiEventMessage::MessageCompleted {
+                message_id: "m1".into(),
+                finished_at_ms: 1,
+            },
+        ]);
+        app.ui.chat_states.insert("thread-1".into(), chat);
+        app.select_thread(0);
+        app.ui.panel_areas.chat = Rect::new(0, 0, 40, 10);
+        super::TEST_CLIPBOARD
+            .lock()
+            .expect("test clipboard lock")
+            .clear();
+
+        let down = app
+            .handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 2,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            })
+            .await;
+        assert!(down);
+        assert!(super::TEST_CLIPBOARD
+            .lock()
+            .expect("test clipboard lock")
+            .is_empty());
+
+        let up = app
+            .handle_mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: 3,
+                row: 3,
+                modifiers: KeyModifiers::NONE,
+            })
+            .await;
+
+        assert!(up);
+        assert_eq!(
+            super::TEST_CLIPBOARD
+                .lock()
+                .expect("test clipboard lock")
+                .as_slice(),
+            &["ello\nwor".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_key_in_thread_list_opens_confirmation() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-1".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-2".into(),
+            agent: AgentName::Claude,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+        app.ui.chat_states.insert(
+            "thread-1".into(),
+            ChatState::new("thread-1".into(), AgentName::Codex),
+        );
+        app.hydrated_threads.insert("thread-1".into());
+        app.select_thread(0);
+        app.ui.focus = Focus::ThreadList;
+
+        let redraw = app.handle_key(press(KeyCode::Delete)).await;
+
+        assert!(redraw);
+        assert!(app.ui.delete_confirm.is_some());
+        assert!(backend.deleted.lock().expect("delete list lock").is_empty());
+        assert_eq!(app.ui.threads.len(), 2);
+        assert!(app.ui.chat_states.contains_key("thread-1"));
+
+        let redraw = app.handle_key(press(KeyCode::Esc)).await;
+
+        assert!(redraw);
+        assert!(app.ui.delete_confirm.is_none());
+        assert_eq!(app.ui.threads.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn enter_confirms_thread_delete_and_removes_local_state() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-1".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-2".into(),
+            agent: AgentName::Claude,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+        app.ui.chat_states.insert(
+            "thread-1".into(),
+            ChatState::new("thread-1".into(), AgentName::Codex),
+        );
+        app.hydrated_threads.insert("thread-1".into());
+        app.select_thread(0);
+        app.ui.focus = Focus::ThreadList;
+
+        assert!(app.handle_key(press(KeyCode::Delete)).await);
+        let redraw = app.handle_key(press(KeyCode::Enter)).await;
+
+        assert!(redraw);
+        assert!(app.ui.delete_confirm.is_none());
+        assert_eq!(
+            backend.deleted.lock().expect("delete list lock").as_slice(),
+            &["thread-1".to_owned()]
+        );
+        assert_eq!(app.ui.threads.len(), 1);
+        assert_eq!(app.ui.threads[0].thread_id, "thread-2");
+        assert_eq!(app.ui.selected_thread, Some(0));
+        assert!(!app.ui.chat_states.contains_key("thread-1"));
+        assert!(!app.hydrated_threads.contains("thread-1"));
     }
 
     #[tokio::test]

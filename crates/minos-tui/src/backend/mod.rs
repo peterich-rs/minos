@@ -45,6 +45,8 @@ pub trait AgentBackend: Send + Sync {
 
     async fn close_thread(&self, thread_id: &str) -> Result<()>;
 
+    async fn delete_thread(&self, thread_id: &str) -> Result<()>;
+
     async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>>;
 
     async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentOutcome>;

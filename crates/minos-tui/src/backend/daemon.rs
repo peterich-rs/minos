@@ -196,6 +196,7 @@ impl AgentBackend for DaemonBackend {
         Ok(StartAgentOutcome {
             thread_id: response.session_id,
             cwd: PathBuf::from(response.cwd),
+            provider_session_id: None,
         })
     }
 
@@ -233,6 +234,17 @@ impl AgentBackend for DaemonBackend {
         Ok(())
     }
 
+    async fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        let request = CloseThreadRequest {
+            thread_id: thread_id.to_owned(),
+        };
+        self.client
+            .request::<(), _>("minos_local_delete_thread", [request])
+            .await
+            .context("RPC minos_local_delete_thread failed")?;
+        Ok(())
+    }
+
     async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>> {
         let snapshots: Vec<LocalThreadSnapshot> = self
             .client
@@ -262,6 +274,7 @@ impl AgentBackend for DaemonBackend {
         Ok(StartAgentOutcome {
             thread_id: response.session_id,
             cwd: PathBuf::from(response.cwd),
+            provider_session_id: None,
         })
     }
 
