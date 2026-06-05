@@ -39,7 +39,11 @@ pub struct JsonRpcNotification<P> {
 
 const JSONRPC_VERSION: &str = "2.0";
 
-pub fn make_request(id: serde_json::Value, method: &str, params: serde_json::Value) -> serde_json::Value {
+pub fn make_request(
+    id: serde_json::Value,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": JSONRPC_VERSION,
         "id": id,
@@ -87,7 +91,10 @@ mod tests {
 
     #[test]
     fn make_response_includes_jsonrpc_field() {
-        let frame = make_response(serde_json::json!("req-1"), serde_json::json!({"outcome": "allow"}));
+        let frame = make_response(
+            serde_json::json!("req-1"),
+            serde_json::json!({"outcome": "allow"}),
+        );
         assert_eq!(frame["jsonrpc"], "2.0");
         assert_eq!(frame["id"], "req-1");
         assert_eq!(frame["result"]["outcome"], "allow");

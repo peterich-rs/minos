@@ -13,16 +13,35 @@ pub enum StopReason {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ContentBlock {
-    Text { text: String },
-    Image { data: String, mime_type: String },
-    Audio { data: String, mime_type: String },
-    Resource { resource: ResourceContent },
-    ResourceLink { uri: String, #[serde(skip_serializing_if = "Option::is_none", default)] name: Option<String> },
+    Text {
+        text: String,
+    },
+    Image {
+        data: String,
+        mime_type: String,
+    },
+    Audio {
+        data: String,
+        mime_type: String,
+    },
+    Resource {
+        resource: ResourceContent,
+    },
+    ResourceLink {
+        uri: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceContent {
     pub uri: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -50,6 +69,7 @@ pub enum ToolCallStatus {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolCallUpdate {
     pub tool_call_id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -61,7 +81,11 @@ pub struct ToolCallUpdate {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ToolCallContent {
     Content { content: ContentBlock },
     Terminal { terminal_id: String },
@@ -76,6 +100,7 @@ pub enum RequestPermissionOutcome {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct PermissionOption {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -85,6 +110,7 @@ pub struct PermissionOption {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Implementation {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -94,6 +120,7 @@ pub struct Implementation {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
     #[serde(default)]
     pub fs: FsCapabilities,
@@ -102,6 +129,7 @@ pub struct ClientCapabilities {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct FsCapabilities {
     #[serde(default)]
     pub read_text_file: bool,
@@ -110,6 +138,7 @@ pub struct FsCapabilities {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentCapabilities {
     #[serde(default)]
     pub load_session: bool,
@@ -124,6 +153,7 @@ pub struct AgentCapabilities {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct PromptCapabilities {
     #[serde(default)]
     pub image: bool,
@@ -134,6 +164,7 @@ pub struct PromptCapabilities {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct McpCapabilities {
     #[serde(default)]
     pub http: bool,
@@ -142,6 +173,7 @@ pub struct McpCapabilities {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentAuthCapabilities {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub logout: Option<LogoutCapabilities>,
@@ -151,6 +183,7 @@ pub struct AgentAuthCapabilities {
 pub struct LogoutCapabilities {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionCapabilities {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub close: Option<CloseCapability>,
@@ -172,15 +205,18 @@ pub struct ResumeCapability {}
 pub struct AdditionalDirectoriesCapability {}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AuthMethod {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(alias = "name")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct McpServer {
     pub name: String,
     #[serde(flatten)]
@@ -188,22 +224,39 @@ pub struct McpServer {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "transport_type", rename_all = "snake_case")]
+#[serde(
+    tag = "transportType",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum McpTransport {
-    Stdio { command: String, #[serde(default)] args: Vec<String>, #[serde(default)] env: std::collections::HashMap<String, String> },
-    Http { url: String },
-    Sse { url: String },
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: std::collections::HashMap<String, String>,
+    },
+    Http {
+        url: String,
+    },
+    Sse {
+        url: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionModeState {
     pub current_mode_id: SessionModeId,
     pub available_modes: Vec<SessionMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionMode {
     pub id: SessionModeId,
+    #[serde(alias = "name")]
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
@@ -212,8 +265,10 @@ pub struct SessionMode {
 pub type SessionModeId = String;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionConfigOption {
     pub id: SessionConfigId,
+    #[serde(alias = "name")]
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
@@ -225,14 +280,17 @@ pub type SessionConfigId = String;
 pub type SessionConfigValueId = String;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionConfigValue {
     pub id: SessionConfigValueId,
+    #[serde(alias = "name")]
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -259,7 +317,9 @@ mod tests {
 
     #[test]
     fn content_block_text_round_trips() {
-        let block = ContentBlock::Text { text: "hello".into() };
+        let block = ContentBlock::Text {
+            text: "hello".into(),
+        };
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains(r#""type":"text""#));
         let back: ContentBlock = serde_json::from_str(&json).unwrap();

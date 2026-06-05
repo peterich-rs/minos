@@ -17,6 +17,7 @@ pub trait AcpClientNotification: Serialize {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
     pub protocol_version: u32,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -31,6 +32,7 @@ impl AcpClientRequest for InitializeParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub protocol_version: u32,
     #[serde(default)]
@@ -42,7 +44,10 @@ pub struct InitializeResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct AuthenticateParams { pub method_id: String }
+#[serde(rename_all = "camelCase")]
+pub struct AuthenticateParams {
+    pub method_id: String,
+}
 impl AcpClientRequest for AuthenticateParams {
     const METHOD: &'static str = "authenticate";
     type Response = AuthenticateResponse;
@@ -51,6 +56,7 @@ impl AcpClientRequest for AuthenticateParams {
 pub struct AuthenticateResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct NewSessionParams {
     pub cwd: String,
     #[serde(default)]
@@ -63,6 +69,7 @@ impl AcpClientRequest for NewSessionParams {
     type Response = NewSessionResponse;
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct NewSessionResponse {
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -72,6 +79,7 @@ pub struct NewSessionResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct LoadSessionParams {
     pub session_id: SessionId,
     pub cwd: String,
@@ -85,6 +93,7 @@ impl AcpClientRequest for LoadSessionParams {
     type Response = LoadSessionResponse;
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct LoadSessionResponse {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub modes: Option<SessionModeState>,
@@ -93,6 +102,7 @@ pub struct LoadSessionResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ResumeSessionParams {
     pub session_id: SessionId,
     pub cwd: String,
@@ -106,6 +116,7 @@ impl AcpClientRequest for ResumeSessionParams {
     type Response = ResumeSessionResponse;
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ResumeSessionResponse {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub modes: Option<SessionModeState>,
@@ -114,6 +125,7 @@ pub struct ResumeSessionResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct PromptParams {
     pub session_id: SessionId,
     pub prompt: Vec<ContentBlock>,
@@ -123,10 +135,16 @@ impl AcpClientRequest for PromptParams {
     type Response = PromptResponse;
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PromptResponse { pub stop_reason: StopReason }
+#[serde(rename_all = "camelCase")]
+pub struct PromptResponse {
+    pub stop_reason: StopReason,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CloseSessionParams { pub session_id: SessionId }
+#[serde(rename_all = "camelCase")]
+pub struct CloseSessionParams {
+    pub session_id: SessionId,
+}
 impl AcpClientRequest for CloseSessionParams {
     const METHOD: &'static str = "session/close";
     type Response = CloseSessionResponse;
@@ -135,7 +153,11 @@ impl AcpClientRequest for CloseSessionParams {
 pub struct CloseSessionResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SetSessionModeParams { pub session_id: SessionId, pub mode_id: SessionModeId }
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionModeParams {
+    pub session_id: SessionId,
+    pub mode_id: SessionModeId,
+}
 impl AcpClientRequest for SetSessionModeParams {
     const METHOD: &'static str = "session/set_mode";
     type Response = SetSessionModeResponse;
@@ -144,15 +166,24 @@ impl AcpClientRequest for SetSessionModeParams {
 pub struct SetSessionModeResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SetConfigOptionParams { pub session_id: SessionId, pub config_id: SessionConfigId, pub value: SessionConfigValueId }
+#[serde(rename_all = "camelCase")]
+pub struct SetConfigOptionParams {
+    pub session_id: SessionId,
+    pub config_id: SessionConfigId,
+    pub value: SessionConfigValueId,
+}
 impl AcpClientRequest for SetConfigOptionParams {
     const METHOD: &'static str = "session/set_config_option";
     type Response = SetConfigOptionResponse;
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SetConfigOptionResponse { pub config_options: Vec<SessionConfigOption> }
+#[serde(rename_all = "camelCase")]
+pub struct SetConfigOptionResponse {
+    pub config_options: Vec<SessionConfigOption>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ListSessionsParams {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cwd: Option<String>,
@@ -164,6 +195,7 @@ impl AcpClientRequest for ListSessionsParams {
     type Response = ListSessionsResponse;
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ListSessionsResponse {
     pub sessions: Vec<SessionInfo>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
