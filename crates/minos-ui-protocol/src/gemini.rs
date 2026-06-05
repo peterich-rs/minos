@@ -34,39 +34,158 @@ impl GeminiTranslatorState {
     }
 }
 
+fn ensure_assistant_message(state: &mut GeminiTranslatorState) -> (String, Vec<UiEventMessage>) {
+    let message_id = state.open_assistant_message_id.clone().unwrap_or_else(|| {
+        let id = format!("msg_{}", Uuid::new_v4());
+        state.open_assistant_message_id = Some(id.clone());
+        id
+    });
+
+    let mut events = Vec::new();
+    if state.emitted_message_ids.insert(message_id.clone()) {
+        events.push(UiEventMessage::MessageStarted {
+            message_id: message_id.clone(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        });
+    }
+
+    (message_id, events)
+}
+
+fn complete_open_assistant_message(
+    state: &mut GeminiTranslatorState,
+    finished_at_ms: i64,
+) -> Vec<UiEventMessage> {
+    state
+        .open_assistant_message_id
+        .take()
+        .map(|message_id| {
+            vec![UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms,
+            }]
+        })
+        .unwrap_or_default()
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn translate(
     state: &mut GeminiTranslatorState,
     raw: &Value,
 ) -> Result<Vec<UiEventMessage>, TranslationError> {
-    let kind = raw
-        .get("kind")
-        .and_then(Value::as_str)
-        .ok_or_else(|| TranslationError::Malformed {
-            reason: "missing kind field".into(),
-        })?;
+    let kind =
+        raw.get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| TranslationError::Malformed {
+                reason: "missing kind field".into(),
+            })?;
 
     match kind {
+        "user_message" => translate_user_message(state, raw),
         "acp_notification" => translate_acp_notification(state, raw),
         "acp_server_request" => translate_acp_server_request(state, raw),
+        "acp_prompt_response" => translate_acp_prompt_response(state, raw),
+        "acp_error" => Ok(vec![UiEventMessage::Error {
+            code: raw
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("gemini_acp_error")
+                .to_string(),
+            message: raw
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Gemini ACP reported an error")
+                .to_string(),
+            message_id: state
+                .open_assistant_message_id
+                .clone()
+                .or_else(|| state.open_user_message_id.clone()),
+        }]),
         "acp_closed" => {
-            let mut events = Vec::new();
-            if let Some(mid) = state.open_assistant_message_id.take() {
-                events.push(UiEventMessage::MessageCompleted {
-                    message_id: mid,
-                    finished_at_ms: chrono::Utc::now().timestamp_millis(),
-                });
-            }
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let mut events = complete_open_assistant_message(state, now_ms);
+            state.tool_calls.clear();
             events.push(UiEventMessage::ThreadClosed {
                 thread_id: state.thread_id.clone(),
                 reason: ThreadEndReason::AgentDone,
-                closed_at_ms: chrono::Utc::now().timestamp_millis(),
+                closed_at_ms: now_ms,
             });
             Ok(events)
         }
         other => Ok(vec![UiEventMessage::Raw {
             kind: format!("gemini/{other}"),
             payload_json: serde_json::to_string(raw).unwrap_or_default(),
+        }]),
+    }
+}
+
+fn translate_user_message(
+    state: &mut GeminiTranslatorState,
+    raw: &Value,
+) -> Result<Vec<UiEventMessage>, TranslationError> {
+    let message_id = raw
+        .get("messageId")
+        .and_then(Value::as_str)
+        .map_or_else(|| Uuid::new_v4().to_string(), str::to_string);
+    if !state.emitted_message_ids.insert(message_id.clone()) {
+        return Ok(vec![]);
+    }
+    let mut events = complete_open_assistant_message(
+        state,
+        raw.get("createdAtMs")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
+    );
+    state.open_user_message_id = Some(message_id.clone());
+    let text = raw
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    events.push(UiEventMessage::MessageStarted {
+        message_id: message_id.clone(),
+        role: MessageRole::User,
+        started_at_ms: raw.get("createdAtMs").and_then(Value::as_i64).unwrap_or(0),
+    });
+    if !text.is_empty() {
+        events.push(UiEventMessage::TextDelta { message_id, text });
+    }
+    Ok(events)
+}
+
+fn translate_acp_prompt_response(
+    state: &mut GeminiTranslatorState,
+    raw: &Value,
+) -> Result<Vec<UiEventMessage>, TranslationError> {
+    let stop_reason = raw
+        .get("stopReason")
+        .and_then(Value::as_str)
+        .unwrap_or("end_turn");
+    match stop_reason {
+        "end_turn" => {
+            state.tool_calls.clear();
+            Ok(complete_open_assistant_message(
+                state,
+                chrono::Utc::now().timestamp_millis(),
+            ))
+        }
+        "cancelled" => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let mut events = complete_open_assistant_message(state, now_ms);
+            state.tool_calls.clear();
+            events.push(UiEventMessage::ThreadClosed {
+                thread_id: state.thread_id.clone(),
+                reason: ThreadEndReason::UserStopped,
+                closed_at_ms: now_ms,
+            });
+            Ok(events)
+        }
+        other => Ok(vec![UiEventMessage::Error {
+            code: format!("gemini_stop_reason_{other}"),
+            message: format!("Gemini stopped with reason: {other}"),
+            message_id: state.open_assistant_message_id.clone(),
         }]),
     }
 }
@@ -85,31 +204,17 @@ fn translate_acp_notification(
         .unwrap_or("");
 
     match session_update {
-        "agent_message_chunk" => {
+        "agent_message_chunk" | "agent_thought_chunk" => {
             let content = update.get("content").cloned().unwrap_or(Value::Null);
-            let content_type = content.get("type").and_then(Value::as_str).unwrap_or("text");
+            let content_type = content
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("text");
 
-            let mid = state
-                .open_assistant_message_id
-                .clone()
-                .unwrap_or_else(|| {
-                    let id = format!("msg_{}", Uuid::new_v4());
-                    state.open_assistant_message_id = Some(id.clone());
-                    id
-                });
-
-            let mut events = Vec::new();
-
-            if state.emitted_message_ids.insert(mid.clone()) {
-                events.push(UiEventMessage::MessageStarted {
-                    message_id: mid.clone(),
-                    role: MessageRole::Assistant,
-                    started_at_ms: 0,
-                });
-            }
+            let (mid, mut events) = ensure_assistant_message(state);
 
             match content_type {
-                "text" => {
+                "text" if session_update == "agent_message_chunk" => {
                     let text = content
                         .get("text")
                         .and_then(Value::as_str)
@@ -122,7 +227,7 @@ fn translate_acp_notification(
                         });
                     }
                 }
-                "thought" => {
+                "text" | "thought" => {
                     let text = content
                         .get("text")
                         .and_then(Value::as_str)
@@ -137,7 +242,7 @@ fn translate_acp_notification(
                 }
                 _ => {
                     events.push(UiEventMessage::Raw {
-                        kind: format!("gemini/agent_message_chunk/{content_type}"),
+                        kind: format!("gemini/{session_update}/{content_type}"),
                         payload_json: serde_json::to_string(&update).unwrap_or_default(),
                     });
                 }
@@ -147,7 +252,7 @@ fn translate_acp_notification(
         }
         "tool_call" => {
             let tool_call_id = update
-                .get("tool_call_id")
+                .get("toolCallId")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
@@ -162,14 +267,10 @@ fn translate_acp_notification(
                 .unwrap_or("other")
                 .to_string();
 
-            let mid = state
-                .open_assistant_message_id
-                .clone()
-                .unwrap_or_default();
-
             if tool_call_id.is_empty() {
                 Ok(vec![])
             } else {
+                let (mid, mut events) = ensure_assistant_message(state);
                 state.tool_calls.insert(
                     tool_call_id.clone(),
                     OpenGeminiToolCall {
@@ -177,17 +278,18 @@ fn translate_acp_notification(
                         name: title.clone(),
                     },
                 );
-                Ok(vec![UiEventMessage::ToolCallPlaced {
+                events.push(UiEventMessage::ToolCallPlaced {
                     message_id: mid,
                     tool_call_id,
                     name: format!("{kind}: {title}"),
-                    args_json: String::new(),
-                }])
+                    args_json: serde_json::to_string(&update).unwrap_or_default(),
+                });
+                Ok(events)
             }
         }
         "tool_call_update" => {
             let tool_call_id = update
-                .get("tool_call_id")
+                .get("toolCallId")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
@@ -238,17 +340,15 @@ fn translate_acp_notification(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let mid = state
-                .open_assistant_message_id
-                .clone()
-                .unwrap_or_default();
             if text.is_empty() {
                 Ok(vec![])
             } else {
-                Ok(vec![UiEventMessage::ReasoningDelta {
+                let (mid, mut events) = ensure_assistant_message(state);
+                events.push(UiEventMessage::ReasoningDelta {
                     message_id: mid,
                     text,
-                }])
+                });
+                Ok(events)
             }
         }
         "current_mode_update" => Ok(vec![UiEventMessage::Raw {
@@ -276,17 +376,14 @@ fn translate_acp_server_request(
     state: &mut GeminiTranslatorState,
     raw: &Value,
 ) -> Result<Vec<UiEventMessage>, TranslationError> {
-    let method = raw
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let method = raw.get("method").and_then(Value::as_str).unwrap_or("");
 
     match method {
         "session/request_permission" => {
             let params = raw.get("params").cloned().unwrap_or(Value::Null);
-            let tool_call = params.get("tool_call").cloned().unwrap_or(Value::Null);
+            let tool_call = params.get("toolCall").cloned().unwrap_or(Value::Null);
             let tool_call_id = tool_call
-                .get("tool_call_id")
+                .get("toolCallId")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
@@ -301,17 +398,13 @@ fn translate_acp_server_request(
                 .unwrap_or("other")
                 .to_string();
 
-            let mid = state
-                .open_assistant_message_id
-                .clone()
-                .unwrap_or_default();
-
             if tool_call_id.is_empty() {
                 Ok(vec![UiEventMessage::Raw {
                     kind: "gemini/permission_request".into(),
                     payload_json: serde_json::to_string(raw).unwrap_or_default(),
                 }])
             } else {
+                let (mid, mut events) = ensure_assistant_message(state);
                 state.tool_calls.insert(
                     tool_call_id.clone(),
                     OpenGeminiToolCall {
@@ -319,12 +412,13 @@ fn translate_acp_server_request(
                         name: title.clone(),
                     },
                 );
-                Ok(vec![UiEventMessage::ToolCallPlaced {
+                events.push(UiEventMessage::ToolCallPlaced {
                     message_id: mid,
                     tool_call_id,
                     name: format!("{kind}: {title}"),
-                    args_json: String::new(),
-                }])
+                    args_json: serde_json::to_string(&tool_call).unwrap_or_default(),
+                });
+                Ok(events)
             }
         }
         "fs/read_text_file" | "fs/write_text_file" => Ok(vec![UiEventMessage::Raw {
@@ -350,16 +444,81 @@ mod tests {
     #[test]
     fn acp_notification_agent_message_chunk_text() {
         let mut s = GeminiTranslatorState::new("thr_x".into());
-        let raw = val(r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}}"#);
+        let raw = val(
+            r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}}"#,
+        );
         let out = translate(&mut s, &raw).unwrap();
-        assert!(
-            out.iter()
-                .any(|e| matches!(e, UiEventMessage::MessageStarted { role: MessageRole::Assistant, .. }))
-        );
-        assert!(
-            out.iter()
-                .any(|e| matches!(e, UiEventMessage::TextDelta { text, .. } if text == "Hello"))
-        );
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::MessageStarted {
+                role: MessageRole::Assistant,
+                ..
+            }
+        )));
+        assert!(out
+            .iter()
+            .any(|e| matches!(e, UiEventMessage::TextDelta { text, .. } if text == "Hello")));
+    }
+
+    #[test]
+    fn internal_user_message_text() {
+        let mut s = GeminiTranslatorState::new("thr_x".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{"kind":"user_message","messageId":"u1","text":"你好","threadId":"thr_x"}"#),
+        )
+        .unwrap();
+
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::MessageStarted {
+                message_id,
+                role: MessageRole::User,
+                ..
+            } if message_id == "u1"
+        )));
+        assert!(out
+            .iter()
+            .any(|e| matches!(e, UiEventMessage::TextDelta { message_id, text } if message_id == "u1" && text == "你好")));
+    }
+
+    #[test]
+    fn codex_json_rpc_event_is_not_accepted_for_gemini() {
+        let mut s = GeminiTranslatorState::new("thr_x".into());
+        let err = translate(
+            &mut s,
+            &val(
+                r#"{"method":"item/agentMessage/delta","params":{"itemId":"a1","delta":"Hello"}}"#,
+            ),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            TranslationError::Malformed { reason } if reason == "missing kind field"
+        ));
+    }
+
+    #[test]
+    fn acp_prompt_response_completes_open_assistant_message() {
+        let mut s = GeminiTranslatorState::new("thr_x".into());
+        let _ = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}}"#,
+            ),
+        )
+        .unwrap();
+
+        let out = translate(
+            &mut s,
+            &val(r#"{"kind":"acp_prompt_response","stopReason":"end_turn"}"#),
+        )
+        .unwrap();
+
+        assert!(out
+            .iter()
+            .any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })));
     }
 
     #[test]
@@ -379,10 +538,36 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(
-            out.iter()
-                .any(|e| matches!(e, UiEventMessage::ReasoningDelta { text, .. } if text == "thinking..."))
-        );
+        assert!(out.iter().any(
+            |e| matches!(e, UiEventMessage::ReasoningDelta { text, .. } if text == "thinking...")
+        ));
+    }
+
+    #[test]
+    fn acp_notification_agent_thought_chunk_emits_reasoning_delta() {
+        let mut s = GeminiTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking from gemini"}}}}"#,
+            ),
+        )
+        .unwrap();
+
+        let assistant_id = out
+            .iter()
+            .find_map(|event| match event {
+                UiEventMessage::MessageStarted {
+                    message_id,
+                    role: MessageRole::Assistant,
+                    ..
+                } => Some(message_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(out.iter().any(
+            |event| matches!(event, UiEventMessage::ReasoningDelta { message_id, text } if message_id == &assistant_id && text == "thinking from gemini")
+        ));
     }
 
     #[test]
@@ -398,7 +583,7 @@ mod tests {
         let out = translate(
             &mut s,
             &val(
-                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call","tool_call_id":"tc_1","title":"Edit file","kind":"edit","status":"pending"}}}"#,
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tc_1","title":"Edit file","kind":"edit","status":"pending"}}}"#,
             ),
         )
         .unwrap();
@@ -406,6 +591,94 @@ mod tests {
             out.iter()
                 .any(|e| matches!(e, UiEventMessage::ToolCallPlaced { tool_call_id, name, .. } if tool_call_id == "tc_1" && name.contains("Edit file")))
         );
+    }
+
+    #[test]
+    fn acp_notification_tool_call_without_open_message_starts_assistant_message() {
+        let mut s = GeminiTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tc_1","title":"Read file","kind":"read","status":"pending"}}}"#,
+            ),
+        )
+        .unwrap();
+
+        let assistant_id = out
+            .iter()
+            .find_map(|event| match event {
+                UiEventMessage::MessageStarted {
+                    message_id,
+                    role: MessageRole::Assistant,
+                    ..
+                } => Some(message_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(out.iter().any(
+            |event| matches!(event, UiEventMessage::ToolCallPlaced { message_id, tool_call_id, .. } if message_id == &assistant_id && tool_call_id == "tc_1")
+        ));
+    }
+
+    #[test]
+    fn cancelled_prompt_then_continue_tool_call_uses_new_assistant_message() {
+        let mut s = GeminiTranslatorState::new("thr".into());
+        let first = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"partial"}}}}"#,
+            ),
+        )
+        .unwrap();
+        let first_assistant_id = first
+            .iter()
+            .find_map(|event| match event {
+                UiEventMessage::MessageStarted {
+                    message_id,
+                    role: MessageRole::Assistant,
+                    ..
+                } => Some(message_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+
+        let cancelled = translate(
+            &mut s,
+            &val(r#"{"kind":"acp_prompt_response","stopReason":"cancelled"}"#),
+        )
+        .unwrap();
+        assert!(cancelled.iter().any(
+            |event| matches!(event, UiEventMessage::MessageCompleted { message_id, .. } if message_id == &first_assistant_id)
+        ));
+
+        let _ = translate(
+            &mut s,
+            &val(r#"{"kind":"user_message","messageId":"u_continue","text":"continue"}"#),
+        )
+        .unwrap();
+        let after_continue_tool = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tc_after_continue","title":"Read file","kind":"read","status":"pending"}}}"#,
+            ),
+        )
+        .unwrap();
+        let new_assistant_id = after_continue_tool
+            .iter()
+            .find_map(|event| match event {
+                UiEventMessage::MessageStarted {
+                    message_id,
+                    role: MessageRole::Assistant,
+                    ..
+                } => Some(message_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_ne!(new_assistant_id, first_assistant_id);
+        assert!(after_continue_tool.iter().any(
+            |event| matches!(event, UiEventMessage::ToolCallPlaced { message_id, tool_call_id, .. } if message_id == &new_assistant_id && tool_call_id == "tc_after_continue")
+        ));
     }
 
     #[test]
@@ -421,14 +694,14 @@ mod tests {
         let _ = translate(
             &mut s,
             &val(
-                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call","tool_call_id":"tc_1","title":"Edit","kind":"edit","status":"pending"}}}"#,
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tc_1","title":"Edit","kind":"edit","status":"pending"}}}"#,
             ),
         )
         .unwrap();
         let out = translate(
             &mut s,
             &val(
-                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call_update","tool_call_id":"tc_1","status":"completed","content":null}}}"#,
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_1","status":"completed","content":null}}}"#,
             ),
         )
         .unwrap();
@@ -449,11 +722,16 @@ mod tests {
         )
         .unwrap();
         let out = translate(&mut s, &val(r#"{"kind":"acp_closed"}"#)).unwrap();
-        assert!(out.iter().any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })));
-        assert!(
-            out.iter()
-                .any(|e| matches!(e, UiEventMessage::ThreadClosed { reason: ThreadEndReason::AgentDone, .. }))
-        );
+        assert!(out
+            .iter()
+            .any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })));
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::ThreadClosed {
+                reason: ThreadEndReason::AgentDone,
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -466,10 +744,9 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(
-            out.iter()
-                .any(|e| matches!(e, UiEventMessage::Raw { kind, .. } if kind == "gemini/plan"))
-        );
+        assert!(out
+            .iter()
+            .any(|e| matches!(e, UiEventMessage::Raw { kind, .. } if kind == "gemini/plan")));
     }
 
     #[test]
@@ -485,7 +762,7 @@ mod tests {
         let out = translate(
             &mut s,
             &val(
-                r#"{"kind":"acp_server_request","method":"session/request_permission","params":{"tool_call":{"tool_call_id":"tc_perm","title":"Run shell","kind":"terminal","status":"pending"},"options":[]}}"#,
+                r#"{"kind":"acp_server_request","method":"session/request_permission","params":{"toolCall":{"toolCallId":"tc_perm","title":"Run shell","kind":"terminal","status":"pending"},"options":[]}}"#,
             ),
         )
         .unwrap();
@@ -505,9 +782,8 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(
-            out.iter()
-                .any(|e| matches!(e, UiEventMessage::Raw { kind, .. } if kind == "gemini/acp/custom_event"))
-        );
+        assert!(out.iter().any(
+            |e| matches!(e, UiEventMessage::Raw { kind, .. } if kind == "gemini/acp/custom_event")
+        ));
     }
 }

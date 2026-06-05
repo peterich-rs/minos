@@ -580,7 +580,7 @@ fn translate_tool_part(
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string(),
-                    args_json: tool_args_json(&tool_state),
+                    args_json: tool_args_json(part, &tool_state),
                 }]
             }
         }
@@ -612,12 +612,16 @@ fn translate_tool_part(
     }
 }
 
-fn tool_args_json(tool_state: &Value) -> String {
+fn tool_args_json(part: &Value, tool_state: &Value) -> String {
     tool_state
         .get("raw")
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| serde_json::to_string(tool_state.get("input").unwrap_or(&Value::Null)).ok())
+        .filter(|value| value != "null")
+        .or_else(|| serde_json::to_string(part.get("args").unwrap_or(&Value::Null)).ok())
+        .filter(|value| value != "null")
+        .or_else(|| serde_json::to_string(tool_state).ok())
         .unwrap_or_default()
 }
 
