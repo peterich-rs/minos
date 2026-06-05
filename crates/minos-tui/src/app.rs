@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ pub struct App {
     ui: UiState,
     should_quit: bool,
     workspace: PathBuf,
+    hydrated_threads: HashSet<String>,
 }
 
 impl App {
@@ -28,6 +30,7 @@ impl App {
             ui: UiState::new(readonly),
             should_quit: false,
             workspace,
+            hydrated_threads: HashSet::new(),
         }
     }
 
@@ -75,7 +78,9 @@ impl App {
                         return true;
                     }
                 }
-                self.ui.status.update_backend_state(self.backend.connection_state());
+                self.ui
+                    .status
+                    .update_backend_state(self.backend.connection_state());
                 false
             }
             AppEvent::Resize(_, _) => true,
@@ -87,6 +92,12 @@ impl App {
     }
 
     pub async fn shutdown(&self) {
+        if !matches!(
+            self.backend.connection_state(),
+            crate::backend::BackendConnectionState::Embedded
+        ) {
+            return;
+        }
         let thread_ids: Vec<String> = self
             .ui
             .threads
@@ -106,25 +117,26 @@ impl App {
         match self.backend.list_threads().await {
             Ok(threads) => {
                 for snap in threads {
-                    if self
+                    let agent = snap.agent.unwrap_or(AgentName::Codex);
+                    if let Some(entry) = self
                         .ui
                         .threads
-                        .iter()
-                        .any(|t| t.thread_id == snap.thread_id)
+                        .iter_mut()
+                        .find(|thread| thread.thread_id == snap.thread_id)
                     {
-                        continue;
+                        entry.agent = agent;
+                        entry.workspace = snap.workspace.clone();
+                        entry.state = snap.state.clone();
+                    } else {
+                        self.ui.threads.push(ThreadEntry {
+                            thread_id: snap.thread_id.clone(),
+                            agent,
+                            workspace: snap.workspace.clone(),
+                            state: snap.state.clone(),
+                        });
                     }
-                    let entry = ThreadEntry {
-                        thread_id: snap.thread_id.clone(),
-                        agent: minos_domain::AgentName::Codex,
-                        workspace: snap.workspace.clone(),
-                        state: snap.state,
-                    };
-                    self.ui.threads.push(entry);
-                    self.ui.chat_states.insert(
-                        snap.thread_id.clone(),
-                        ChatState::new(snap.thread_id.clone(), minos_domain::AgentName::Codex),
-                    );
+                    self.ensure_chat_state_agent(&snap.thread_id, agent);
+                    self.hydrate_thread_if_needed(&snap.thread_id).await;
                 }
                 if !self.ui.threads.is_empty() && self.ui.selected_thread.is_none() {
                     self.select_thread(0);
@@ -141,33 +153,57 @@ impl App {
     }
 
     async fn replay_thread_history(&mut self, thread_id: &str) {
-        let agent = self
-            .ui
-            .threads
-            .iter()
-            .find(|t| t.thread_id == thread_id)
-            .map(|t| t.agent);
-        let Some(agent) = agent else { return };
-        match self
-            .backend
-            .read_thread_raw_history(thread_id, None, 1000)
-            .await
-        {
-            Ok(frames) => {
-                if let Some(chat) = self.ui.chat_states.get_mut(thread_id) {
-                    for frame in frames {
-                        let events = chat.translation_state.translate(&frame.payload);
-                        chat.apply_ui_events(events);
-                    }
+        let mut from_seq = None;
+        loop {
+            let response = match self
+                .backend
+                .read_thread_raw_history(thread_id, from_seq, 1000)
+                .await
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_tui::app",
+                        error = %e,
+                        thread_id = %thread_id,
+                        "replay_thread_history failed"
+                    );
+                    return;
+                }
+            };
+
+            if let Some(chat) = self.ui.chat_states.get_mut(thread_id) {
+                for frame in response.events {
+                    let events = chat.translation_state.translate(&frame.payload);
+                    chat.apply_ui_events(events);
                 }
             }
-            Err(e) => {
-                tracing::warn!(
-                    target: "minos_tui::app",
-                    error = %e,
-                    thread_id = %thread_id,
-                    "replay_thread_history failed"
-                );
+
+            let Some(next_seq) = response.next_seq else {
+                self.hydrated_threads.insert(thread_id.to_owned());
+                return;
+            };
+            from_seq = Some(next_seq.saturating_sub(1));
+        }
+    }
+
+    async fn hydrate_thread_if_needed(&mut self, thread_id: &str) {
+        if self.hydrated_threads.contains(thread_id) {
+            return;
+        }
+        self.replay_thread_history(thread_id).await;
+    }
+
+    fn ensure_chat_state_agent(&mut self, thread_id: &str, agent: AgentName) {
+        match self.ui.chat_states.entry(thread_id.to_owned()) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if entry.get().agent != agent {
+                    entry.insert(ChatState::new(thread_id.to_owned(), agent));
+                    self.hydrated_threads.remove(thread_id);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(ChatState::new(thread_id.to_owned(), agent));
             }
         }
     }
@@ -189,10 +225,7 @@ impl App {
                         entry.agent = agent;
                         entry.workspace = workspace;
                     }
-                    self.ui
-                        .chat_states
-                        .entry(thread_id.clone())
-                        .or_insert_with(|| ChatState::new(thread_id, agent));
+                    self.ensure_chat_state_agent(&thread_id, agent);
                     return true;
                 }
 
@@ -222,19 +255,14 @@ impl App {
                 }
                 true
             }
-            ManagerEvent::ThreadClosed {
-                thread_id,
-                reason: _,
-            } => {
+            ManagerEvent::ThreadClosed { thread_id, reason } => {
                 if let Some(entry) = self
                     .ui
                     .threads
                     .iter_mut()
                     .find(|t| t.thread_id == thread_id)
                 {
-                    entry.state = ThreadState::Closed {
-                        reason: minos_agent_runtime::CloseReason::UserClose,
-                    };
+                    entry.state = ThreadState::Closed { reason };
                 }
                 true
             }
@@ -747,6 +775,7 @@ impl App {
         if let Some(chat) = self.ui.current_chat_mut() {
             chat.scroll_to_bottom();
         }
+        self.hydrate_thread_if_needed(&thread_id).await;
         if let Err(e) = self.backend.resume_thread(&thread_id).await {
             tracing::debug!(
                 target: "minos_tui::app",
@@ -805,10 +834,7 @@ impl App {
                 entry.agent = agent;
                 entry.workspace = workspace;
             }
-            self.ui
-                .chat_states
-                .entry(thread_id.clone())
-                .or_insert_with(|| ChatState::new(thread_id.clone(), agent));
+            self.ensure_chat_state_agent(&thread_id, agent);
             self.select_thread(index);
             self.ui.focus = Focus::Input;
             self.sync_input_agent_picker();
@@ -821,10 +847,7 @@ impl App {
             workspace,
             state: ThreadState::Starting,
         });
-        self.ui
-            .chat_states
-            .entry(thread_id)
-            .or_insert_with_key(|thread_id| ChatState::new(thread_id.clone(), agent));
+        self.ensure_chat_state_agent(&thread_id, agent);
         self.select_thread(self.ui.threads.len().saturating_sub(1));
         self.ui.focus = Focus::Input;
         self.sync_input_agent_picker();
@@ -896,15 +919,16 @@ fn clicked_thread_index(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, VecDeque};
     use std::sync::Mutex;
 
+    use crate::backend::{BackendConnectionState, BackendThreadSnapshot};
     use anyhow::Result;
     use async_trait::async_trait;
-    use crate::backend::BackendConnectionState;
     use crossterm::event::{KeyEventState, MouseEvent, MouseEventKind};
     use minos_agent_runtime::{RawIngest, StartAgentOutcome};
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
-    use minos_protocol::local_rpc::LocalIngestFrame;
+    use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
     use ratatui::layout::Rect;
     use tokio::sync::broadcast;
 
@@ -917,6 +941,10 @@ mod tests {
         next_thread: Mutex<usize>,
         interrupted: Mutex<Vec<String>>,
         closed: Mutex<Vec<String>>,
+        listed_threads: Mutex<Vec<BackendThreadSnapshot>>,
+        history_pages: Mutex<HashMap<String, VecDeque<ReadThreadRawHistoryResponse>>>,
+        history_calls: Mutex<Vec<(String, Option<u64>, u32)>>,
+        connection_state: BackendConnectionState,
         ingest_tx: broadcast::Sender<RawIngest>,
         manager_tx: broadcast::Sender<ManagerEvent>,
     }
@@ -936,9 +964,35 @@ mod tests {
                 next_thread: Mutex::new(0),
                 interrupted: Mutex::new(Vec::new()),
                 closed: Mutex::new(Vec::new()),
+                listed_threads: Mutex::new(Vec::new()),
+                history_pages: Mutex::new(HashMap::new()),
+                history_calls: Mutex::new(Vec::new()),
+                connection_state: BackendConnectionState::Embedded,
                 ingest_tx,
                 manager_tx,
             }
+        }
+
+        fn with_connection_state(mut self, connection_state: BackendConnectionState) -> Self {
+            self.connection_state = connection_state;
+            self
+        }
+
+        fn with_listed_threads(self, listed_threads: Vec<BackendThreadSnapshot>) -> Self {
+            *self.listed_threads.lock().expect("listed threads lock") = listed_threads;
+            self
+        }
+
+        fn with_history_pages(
+            self,
+            thread_id: &str,
+            pages: Vec<ReadThreadRawHistoryResponse>,
+        ) -> Self {
+            self.history_pages
+                .lock()
+                .expect("history pages lock")
+                .insert(thread_id.to_owned(), VecDeque::from(pages));
+            self
         }
     }
 
@@ -986,10 +1040,12 @@ mod tests {
             Ok(())
         }
 
-        async fn list_threads(
-            &self,
-        ) -> Result<Vec<minos_agent_runtime::store_facing::ThreadSnapshot>> {
-            Ok(Vec::new())
+        async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>> {
+            Ok(self
+                .listed_threads
+                .lock()
+                .expect("listed threads lock")
+                .clone())
         }
 
         async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {
@@ -1001,11 +1057,22 @@ mod tests {
 
         async fn read_thread_raw_history(
             &self,
-            _thread_id: &str,
-            _from_seq: Option<u64>,
-            _limit: u32,
-        ) -> Result<Vec<LocalIngestFrame>> {
-            Ok(Vec::new())
+            thread_id: &str,
+            from_seq: Option<u64>,
+            limit: u32,
+        ) -> Result<ReadThreadRawHistoryResponse> {
+            self.history_calls
+                .lock()
+                .expect("history calls lock")
+                .push((thread_id.to_owned(), from_seq, limit));
+            let mut pages = self.history_pages.lock().expect("history pages lock");
+            Ok(pages
+                .get_mut(thread_id)
+                .and_then(VecDeque::pop_front)
+                .unwrap_or(ReadThreadRawHistoryResponse {
+                    events: Vec::new(),
+                    next_seq: None,
+                }))
         }
 
         async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {
@@ -1017,7 +1084,7 @@ mod tests {
         }
 
         fn connection_state(&self) -> BackendConnectionState {
-            BackendConnectionState::Embedded
+            self.connection_state.clone()
         }
     }
 
@@ -1350,5 +1417,82 @@ mod tests {
 
         assert!(redraw);
         assert_eq!(app.ui.focus, Focus::ThreadList);
+    }
+
+    #[tokio::test]
+    async fn init_hydrates_connected_daemon_threads_with_agent_and_paginated_history() {
+        let backend = Arc::new(
+            TestBackend::with_agents(vec![ok_agent(AgentName::Claude)])
+                .with_connection_state(BackendConnectionState::Connected {
+                    endpoint: "ws://127.0.0.1:43123".into(),
+                })
+                .with_listed_threads(vec![BackendThreadSnapshot {
+                    thread_id: "thread-1".into(),
+                    agent: Some(AgentName::Claude),
+                    workspace: PathBuf::from("/tmp/ws"),
+                    state: ThreadState::Suspended {
+                        reason: minos_agent_runtime::PauseReason::DaemonRestart,
+                    },
+                }])
+                .with_history_pages(
+                    "thread-1",
+                    vec![
+                        ReadThreadRawHistoryResponse {
+                            events: Vec::new(),
+                            next_seq: Some(2),
+                        },
+                        ReadThreadRawHistoryResponse {
+                            events: Vec::new(),
+                            next_seq: None,
+                        },
+                    ],
+                ),
+        );
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+
+        app.init().await.unwrap();
+
+        assert_eq!(app.ui.threads.len(), 1);
+        assert_eq!(app.ui.threads[0].agent, AgentName::Claude);
+        assert_eq!(app.ui.selected_thread, Some(0));
+        assert_eq!(
+            app.ui
+                .chat_states
+                .get("thread-1")
+                .expect("chat state")
+                .agent,
+            AgentName::Claude
+        );
+        assert_eq!(
+            backend
+                .history_calls
+                .lock()
+                .expect("history calls lock")
+                .as_slice(),
+            &[
+                ("thread-1".to_owned(), None, 1000),
+                ("thread-1".to_owned(), Some(1), 1000),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_does_not_close_threads_for_daemon_backend() {
+        let backend = Arc::new(TestBackend::new().with_connection_state(
+            BackendConnectionState::Connected {
+                endpoint: "ws://127.0.0.1:43123".into(),
+            },
+        ));
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-1".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+
+        app.shutdown().await;
+
+        assert!(backend.closed.lock().expect("close list lock").is_empty());
     }
 }

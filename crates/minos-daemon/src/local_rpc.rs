@@ -18,8 +18,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use tracing;
 
-use crate::agent::AgentGlue;
-use crate::agent::parse_agent_label;
+use crate::agent::{map_store_error, parse_agent_label, row_state_to_proto, AgentGlue};
 use crate::rpc_server::rpc_err;
 
 pub struct LocalRpcConfig {
@@ -77,27 +76,29 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         &self,
         req: GetThreadParams,
     ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
-        self.agent.resume_thread(&req.thread_id).await.map_err(rpc_err)
+        self.agent
+            .resume_thread(&req.thread_id)
+            .await
+            .map_err(rpc_err)
     }
 
     async fn list_local_threads(&self) -> jsonrpsee::core::RpcResult<Vec<LocalThreadSnapshot>> {
-        let live = self.agent.manager.list_threads().await;
-        let mut result = Vec::with_capacity(live.len());
-        for snap in live {
-            let agent = self
-                .agent
-                .store()
-                .get_thread(&snap.thread_id)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|row| parse_agent_label(&row.agent).ok())
-                .unwrap_or(minos_domain::AgentName::Codex);
+        let rows = self
+            .agent
+            .store()
+            .list_threads(None, Some(500), None)
+            .await
+            .map_err(|e| rpc_err(map_store_error("list_local_threads", e)))?;
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            let thread_id = row.thread_id.clone();
+            let workspace = row.workspace_root.clone();
+            let state = row_state_to_proto(&row).map_err(rpc_err)?;
             result.push(LocalThreadSnapshot {
-                thread_id: snap.thread_id,
-                agent,
-                workspace: snap.workspace.display().to_string(),
-                state: runtime_state_to_proto(&snap.state),
+                thread_id,
+                agent: parse_agent_label(&row.agent).map_err(rpc_err)?,
+                workspace,
+                state,
             });
         }
         Ok(result)
@@ -151,11 +152,10 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        let msg =
-                            match jsonrpsee::server::SubscriptionMessage::from_json(&event) {
-                                Ok(m) => m,
-                                Err(_) => break,
-                            };
+                        let msg = match jsonrpsee::server::SubscriptionMessage::from_json(&event) {
+                            Ok(m) => m,
+                            Err(_) => break,
+                        };
                         if sink.send(msg).await.is_err() {
                             break;
                         }
@@ -185,18 +185,21 @@ pub async fn start_local_rpc_server(
         manager_event_broadcaster: mgr_evt_tx.clone(),
     };
 
-    let server = Server::builder()
-        .build(config.addr)
-        .await
+    let server =
+        Server::builder()
+            .build(config.addr)
+            .await
+            .map_err(|e| MinosError::CodexProtocolError {
+                method: "local_rpc_server_bind".into(),
+                message: e.to_string(),
+            })?;
+
+    let local_addr = server
+        .local_addr()
         .map_err(|e| MinosError::CodexProtocolError {
-            method: "local_rpc_server_bind".into(),
+            method: "local_rpc_local_addr".into(),
             message: e.to_string(),
         })?;
-
-    let local_addr = server.local_addr().map_err(|e| MinosError::CodexProtocolError {
-        method: "local_rpc_local_addr".into(),
-        message: e.to_string(),
-    })?;
 
     let handle = server.start(impl_.into_rpc());
 
@@ -317,10 +320,7 @@ fn convert_manager_event(event: ManagerEvent) -> Option<LocalManagerEvent> {
             new: runtime_state_to_proto(&new),
             at_ms,
         }),
-        ManagerEvent::ThreadClosed {
-            thread_id,
-            reason,
-        } => Some(LocalManagerEvent::ThreadClosed {
+        ManagerEvent::ThreadClosed { thread_id, reason } => Some(LocalManagerEvent::ThreadClosed {
             thread_id,
             reason: runtime_close_reason_to_proto(&reason),
         }),
@@ -364,9 +364,7 @@ fn runtime_pause_reason_to_proto(
     }
 }
 
-fn runtime_close_reason_to_proto(
-    reason: &minos_agent_runtime::CloseReason,
-) -> CloseReason {
+fn runtime_close_reason_to_proto(reason: &minos_agent_runtime::CloseReason) -> CloseReason {
     use minos_agent_runtime::CloseReason as Rt;
     match reason {
         Rt::UserClose => CloseReason::UserClose,

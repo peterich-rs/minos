@@ -10,7 +10,7 @@ use minos_agent_runtime::config::AgentRuntimeConfig;
 use minos_agent_runtime::test_support::FakeCodexBackend;
 use minos_agent_runtime::{AgentManager, InstanceCaps};
 use minos_daemon::agent::AgentGlue;
-use minos_daemon::local_rpc::{LocalRpcConfig, start_local_rpc_server};
+use minos_daemon::local_rpc::{start_local_rpc_server, LocalRpcConfig};
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
@@ -20,9 +20,9 @@ use minos_protocol::{
 };
 use tokio::sync::mpsc;
 
+use async_trait::async_trait;
 use minos_cli_detect::CommandOutcome;
 use minos_domain::MinosError;
-use async_trait::async_trait;
 
 struct NoopRunner;
 
@@ -45,7 +45,12 @@ impl minos_cli_detect::CommandRunner for NoopRunner {
     }
 }
 
-async fn setup() -> (Arc<AgentGlue>, jsonrpsee::server::ServerHandle, tempfile::TempDir, FakeCodexBackend) {
+async fn setup() -> (
+    Arc<AgentGlue>,
+    jsonrpsee::server::ServerHandle,
+    tempfile::TempDir,
+    FakeCodexBackend,
+) {
     let tmp = tempfile::tempdir().unwrap();
     let workspace = tmp.path().join("ws");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -267,4 +272,52 @@ async fn resume_thread_returns_thread_info() {
     assert_eq!(resume_resp.session_id, thread_id);
 
     fake.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn list_local_threads_includes_persisted_suspended_threads() {
+    let (glue, _handle, tmp, _fake) = setup().await;
+    let url = discovery_addr(&tmp);
+    let client = WsClientBuilder::default().build(&url).await.unwrap();
+
+    glue.store()
+        .upsert_workspace("/tmp/persisted", 10)
+        .await
+        .unwrap();
+    glue.store()
+        .insert_thread(
+            "thr-persisted",
+            "/tmp/persisted",
+            "claude",
+            None,
+            "idle",
+            10,
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart' WHERE thread_id = ?",
+    )
+    .bind("thr-persisted")
+    .execute(glue.store().pool())
+    .await
+    .unwrap();
+
+    let threads: Vec<minos_protocol::LocalThreadSnapshot> = client
+        .request("minos_local_list_local_threads", ArrayParams::new())
+        .await
+        .unwrap();
+
+    let persisted = threads
+        .iter()
+        .find(|thread| thread.thread_id == "thr-persisted")
+        .expect("persisted thread missing");
+    assert_eq!(persisted.agent, AgentName::Claude);
+    assert_eq!(persisted.workspace, "/tmp/persisted");
+    assert_eq!(
+        persisted.state,
+        minos_protocol::ThreadState::Suspended {
+            reason: minos_protocol::PauseReason::DaemonRestart,
+        }
+    );
 }

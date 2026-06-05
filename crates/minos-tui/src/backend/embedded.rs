@@ -1,13 +1,10 @@
-use super::{AgentBackend, BackendConnectionState};
+use super::{AgentBackend, BackendConnectionState, BackendThreadSnapshot};
 use anyhow::Result;
 use async_trait::async_trait;
-use minos_agent_runtime::{
-    store_facing::ThreadSnapshot, AgentManager, InstanceCaps, ManagerEvent, RawIngest,
-    StartAgentOutcome,
-};
+use minos_agent_runtime::{AgentManager, InstanceCaps, ManagerEvent, RawIngest, StartAgentOutcome};
 use minos_cli_detect::{capture_user_shell_env, detect_all, RealCommandRunner};
 use minos_domain::AgentName;
-use minos_protocol::local_rpc::LocalIngestFrame;
+use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::broadcast;
 
@@ -71,12 +68,25 @@ impl AgentBackend for EmbeddedBackend {
             .map_err(Into::into)
     }
 
-    async fn list_threads(&self) -> Result<Vec<ThreadSnapshot>> {
-        Ok(self.manager.list_threads().await)
+    async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>> {
+        Ok(self
+            .manager
+            .list_threads()
+            .await
+            .into_iter()
+            .map(|thread| BackendThreadSnapshot {
+                thread_id: thread.thread_id,
+                agent: None,
+                workspace: thread.workspace,
+                state: thread.state,
+            })
+            .collect())
     }
 
     async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {
-        Err(anyhow::anyhow!("embedded mode does not support thread resumption"))
+        Err(anyhow::anyhow!(
+            "embedded mode does not support thread resumption"
+        ))
     }
 
     async fn read_thread_raw_history(
@@ -84,8 +94,11 @@ impl AgentBackend for EmbeddedBackend {
         _thread_id: &str,
         _from_seq: Option<u64>,
         _limit: u32,
-    ) -> Result<Vec<LocalIngestFrame>> {
-        Ok(Vec::new())
+    ) -> Result<ReadThreadRawHistoryResponse> {
+        Ok(ReadThreadRawHistoryResponse {
+            events: Vec::new(),
+            next_seq: None,
+        })
     }
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {

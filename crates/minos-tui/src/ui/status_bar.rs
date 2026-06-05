@@ -35,7 +35,9 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState) {
     let mut spans: Vec<Span> = Vec::new();
 
     match &state.backend_state {
-        BackendConnectionState::Embedded => {}
+        BackendConnectionState::Embedded => {
+            spans.push(Span::styled(" backend:embedded ", DAEMON_CONNECTED));
+        }
         BackendConnectionState::Connected { .. } => {
             spans.push(Span::styled(" daemon:connected ", DAEMON_CONNECTED));
         }

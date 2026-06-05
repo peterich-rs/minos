@@ -3,15 +3,19 @@ use async_trait::async_trait;
 use minos_agent_runtime::{ManagerEvent, RawIngest, StartAgentOutcome};
 use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;
-use minos_protocol::local_rpc::LocalIngestFrame;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendConnectionState {
     Embedded,
-    Connected { endpoint: String },
-    Disconnected { endpoint: String, last_error: Option<String> },
+    Connected {
+        endpoint: String,
+    },
+    Disconnected {
+        endpoint: String,
+        last_error: Option<String>,
+    },
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -19,6 +23,14 @@ pub enum BackendKind {
     #[default]
     Embedded,
     Daemon,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendThreadSnapshot {
+    pub thread_id: String,
+    pub agent: Option<AgentName>,
+    pub workspace: PathBuf,
+    pub state: minos_agent_runtime::ThreadState,
 }
 
 #[async_trait]
@@ -33,7 +45,7 @@ pub trait AgentBackend: Send + Sync {
 
     async fn close_thread(&self, thread_id: &str) -> Result<()>;
 
-    async fn list_threads(&self) -> Result<Vec<minos_agent_runtime::store_facing::ThreadSnapshot>>;
+    async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>>;
 
     async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentOutcome>;
 
@@ -42,7 +54,7 @@ pub trait AgentBackend: Send + Sync {
         thread_id: &str,
         from_seq: Option<u64>,
         limit: u32,
-    ) -> Result<Vec<LocalIngestFrame>>;
+    ) -> Result<minos_protocol::local_rpc::ReadThreadRawHistoryResponse>;
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest>;
 

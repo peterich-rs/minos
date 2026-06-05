@@ -1,21 +1,19 @@
-use super::{AgentBackend, BackendConnectionState};
+use super::{AgentBackend, BackendConnectionState, BackendThreadSnapshot};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use jsonrpsee::core::client::{ClientT, SubscriptionClientT};
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use minos_agent_runtime::{
-    CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
-    RawIngest, StartAgentOutcome, ThreadState as RuntimeThreadState,
-    store_facing::ThreadSnapshot,
+    CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason, RawIngest,
+    StartAgentOutcome, ThreadState as RuntimeThreadState,
 };
 use minos_domain::{AgentDescriptor, AgentName};
 use minos_protocol::{
-    CloseReason as ProtoCloseReason, GetThreadParams, ListClisResponse, LocalIngestFrame,
-    LocalManagerEvent, LocalThreadSnapshot, PauseReason as ProtoPauseReason,
-    ReadThreadParams, ReadThreadRawHistoryResponse, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse, ThreadState as ProtoThreadState, InterruptThreadRequest,
-    CloseThreadRequest,
+    CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams, InterruptThreadRequest,
+    ListClisResponse, LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot,
+    PauseReason as ProtoPauseReason, ReadThreadParams, ReadThreadRawHistoryResponse,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -47,8 +45,18 @@ impl DaemonBackend {
 
         let client = Arc::new(client);
 
-        Self::start_ingest_pump(client.clone(), ingest_tx.clone(), state.clone(), endpoint.clone());
-        Self::start_manager_event_pump(client.clone(), manager_tx.clone(), state.clone(), endpoint.clone());
+        Self::start_ingest_pump(
+            client.clone(),
+            ingest_tx.clone(),
+            state.clone(),
+            endpoint.clone(),
+        );
+        Self::start_manager_event_pump(
+            client.clone(),
+            manager_tx.clone(),
+            state.clone(),
+            endpoint.clone(),
+        );
 
         Ok(Self {
             client,
@@ -57,6 +65,19 @@ impl DaemonBackend {
             manager_tx,
             state,
         })
+    }
+
+    fn mark_disconnected(
+        state: &Arc<StdMutex<BackendConnectionState>>,
+        endpoint: &str,
+        last_error: Option<String>,
+    ) {
+        if let Ok(mut snapshot) = state.lock() {
+            *snapshot = BackendConnectionState::Disconnected {
+                endpoint: endpoint.to_owned(),
+                last_error,
+            };
+        }
     }
 
     fn start_ingest_pump(
@@ -77,12 +98,7 @@ impl DaemonBackend {
                 Ok(s) => s,
                 Err(e) => {
                     warn!("ingest subscription failed: {e}");
-                    if let Ok(mut s) = state.lock() {
-                        *s = BackendConnectionState::Disconnected {
-                            endpoint,
-                            last_error: Some(e.to_string()),
-                        };
-                    }
+                    Self::mark_disconnected(&state, &endpoint, Some(e.to_string()));
                     return;
                 }
             };
@@ -96,9 +112,13 @@ impl DaemonBackend {
                     }
                     Err(e) => {
                         warn!("ingest subscription error: {e}");
+                        Self::mark_disconnected(&state, &endpoint, Some(e.to_string()));
+                        return;
                     }
                 }
             }
+            warn!("ingest subscription ended");
+            Self::mark_disconnected(&state, &endpoint, Some("ingest subscription ended".into()));
         });
     }
 
@@ -120,12 +140,7 @@ impl DaemonBackend {
                 Ok(s) => s,
                 Err(e) => {
                     warn!("manager event subscription failed: {e}");
-                    if let Ok(mut s) = state.lock() {
-                        *s = BackendConnectionState::Disconnected {
-                            endpoint,
-                            last_error: Some(e.to_string()),
-                        };
-                    }
+                    Self::mark_disconnected(&state, &endpoint, Some(e.to_string()));
                     return;
                 }
             };
@@ -139,9 +154,17 @@ impl DaemonBackend {
                     }
                     Err(e) => {
                         warn!("manager event subscription error: {e}");
+                        Self::mark_disconnected(&state, &endpoint, Some(e.to_string()));
+                        return;
                     }
                 }
             }
+            warn!("manager event subscription ended");
+            Self::mark_disconnected(
+                &state,
+                &endpoint,
+                Some("manager event subscription ended".into()),
+            );
         });
     }
 }
@@ -210,7 +233,7 @@ impl AgentBackend for DaemonBackend {
         Ok(())
     }
 
-    async fn list_threads(&self) -> Result<Vec<ThreadSnapshot>> {
+    async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>> {
         let snapshots: Vec<LocalThreadSnapshot> = self
             .client
             .request("minos_local_list_local_threads", ArrayParams::new())
@@ -218,8 +241,9 @@ impl AgentBackend for DaemonBackend {
             .context("RPC minos_local_list_local_threads failed")?;
         Ok(snapshots
             .into_iter()
-            .map(|s| ThreadSnapshot {
+            .map(|s| BackendThreadSnapshot {
                 thread_id: s.thread_id,
+                agent: Some(s.agent),
                 workspace: PathBuf::from(s.workspace),
                 state: proto_state_to_runtime(&s.state),
             })
@@ -246,18 +270,16 @@ impl AgentBackend for DaemonBackend {
         thread_id: &str,
         from_seq: Option<u64>,
         limit: u32,
-    ) -> Result<Vec<LocalIngestFrame>> {
+    ) -> Result<ReadThreadRawHistoryResponse> {
         let request = ReadThreadParams {
             thread_id: thread_id.to_owned(),
             from_seq,
             limit,
         };
-        let response: ReadThreadRawHistoryResponse = self
-            .client
+        self.client
             .request("minos_local_read_thread_raw_history", [request])
             .await
-            .context("RPC minos_local_read_thread_raw_history failed")?;
-        Ok(response.events)
+            .context("RPC minos_local_read_thread_raw_history failed")
     }
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {

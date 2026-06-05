@@ -184,7 +184,10 @@ impl AgentGlue {
         let max_seq = u64::try_from(row.last_seq.max(0)).unwrap_or(0);
         let start = from_seq.unwrap_or(0).saturating_add(1);
         let effective_limit = limit.min(1000);
-        let end = start.saturating_add(u64::from(effective_limit)).saturating_sub(1).min(max_seq);
+        let end = start
+            .saturating_add(u64::from(effective_limit))
+            .saturating_sub(1)
+            .min(max_seq);
         let rows = self
             .store
             .read_events(thread_id, start, end)
@@ -193,12 +196,13 @@ impl AgentGlue {
         let agent = parse_agent_label(&row.agent)?;
         let mut events = Vec::with_capacity(rows.len());
         for event in rows {
-            let payload: serde_json::Value = serde_json::from_slice(&event.payload).map_err(|e| {
-                MinosError::CodexProtocolError {
-                    method: "read_thread_raw_history".into(),
-                    message: e.to_string(),
-                }
-            })?;
+            let payload: serde_json::Value =
+                serde_json::from_slice(&event.payload).map_err(|e| {
+                    MinosError::CodexProtocolError {
+                        method: "read_thread_raw_history".into(),
+                        message: e.to_string(),
+                    }
+                })?;
             events.push(minos_protocol::LocalIngestFrame {
                 thread_id: thread_id.to_owned(),
                 agent,
@@ -841,7 +845,9 @@ fn row_end_reason(row: &crate::store::ThreadRow) -> Option<ThreadEndReason> {
     }
 }
 
-fn row_state_to_proto(row: &crate::store::ThreadRow) -> Result<ProtoThreadState, MinosError> {
+pub(crate) fn row_state_to_proto(
+    row: &crate::store::ThreadRow,
+) -> Result<ProtoThreadState, MinosError> {
     match row.status.as_str() {
         "starting" => Ok(ProtoThreadState::Starting),
         "idle" => Ok(ProtoThreadState::Idle),
@@ -1005,7 +1011,7 @@ fn map_anyhow(e: anyhow::Error) -> MinosError {
     }
 }
 
-fn map_store_error(operation: &str, e: anyhow::Error) -> MinosError {
+pub(crate) fn map_store_error(operation: &str, e: anyhow::Error) -> MinosError {
     MinosError::StoreIo {
         path: "local_store".into(),
         message: format!("{operation}: {e}"),

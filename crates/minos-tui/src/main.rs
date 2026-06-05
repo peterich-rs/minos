@@ -52,6 +52,65 @@ fn parse_agent_name(s: &str) -> Result<AgentName> {
     }
 }
 
+fn validate_backend_args(cli: &Cli) -> Result<()> {
+    if matches!(cli.backend, BackendKind::Daemon) && cli.max_instances.is_some() {
+        anyhow::bail!("--max-instances only applies to --backend embedded");
+    }
+    if matches!(cli.backend, BackendKind::Embedded) && cli.daemon_url.is_some() {
+        anyhow::bail!("--daemon-url only applies to --backend daemon");
+    }
+    Ok(())
+}
+
+fn resolve_minos_home() -> Result<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("MINOS_HOME") {
+        return Ok(path.into());
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return Ok(std::path::PathBuf::from(home).join(".minos"));
+    }
+    if let Some(user_profile) = std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()) {
+        return Ok(std::path::PathBuf::from(user_profile).join(".minos"));
+    }
+    let home_drive = std::env::var_os("HOMEDRIVE").filter(|value| !value.is_empty());
+    let home_path = std::env::var_os("HOMEPATH").filter(|value| !value.is_empty());
+    if let (Some(drive), Some(path)) = (home_drive, home_path) {
+        return Ok(std::path::PathBuf::from(drive).join(path).join(".minos"));
+    }
+    anyhow::bail!("unable to resolve MINOS_HOME from environment")
+}
+
+fn resolve_daemon_discovery_path() -> Result<std::path::PathBuf> {
+    Ok(resolve_minos_home()?
+        .join("run")
+        .join("tui-daemon-rpc.json"))
+}
+
+fn resolve_daemon_url(override_url: Option<String>) -> Result<String> {
+    if let Some(url) = override_url {
+        return Ok(url);
+    }
+    let discovery_path = resolve_daemon_discovery_path()?;
+    let content = std::fs::read_to_string(&discovery_path).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to read daemon discovery file at {}: {error}. start `minos-daemon start --local-rpc` or pass --daemon-url",
+            discovery_path.display()
+        )
+    })?;
+    let payload: serde_json::Value = serde_json::from_str(&content).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to parse daemon discovery file at {}: {error}",
+            discovery_path.display()
+        )
+    })?;
+    payload["url"].as_str().map(str::to_owned).ok_or_else(|| {
+        anyhow::anyhow!(
+            "daemon discovery file at {} does not contain a `url` field",
+            discovery_path.display()
+        )
+    })
+}
+
 fn setup_terminal() -> Result<DefaultTerminal> {
     let mut terminal = ratatui::try_init()?;
     execute!(std::io::stdout(), EnableMouseCapture)?;
@@ -69,40 +128,23 @@ fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    validate_backend_args(&cli)?;
     let log_path = logging::resolve_log_path(&cli.workspace, cli.log_file.clone());
     logging::init(&log_path)?;
 
     let max_instances = cli.max_instances.unwrap_or(3);
     let backend: Arc<dyn crate::backend::AgentBackend> = match cli.backend {
-        BackendKind::Embedded => {
-            Arc::new(
-                crate::backend::EmbeddedBackend::new(
-                    cli.workspace.clone(),
-                    max_instances,
-                    std::time::Duration::from_secs(300),
-                )
-                .await?,
+        BackendKind::Embedded => Arc::new(
+            crate::backend::EmbeddedBackend::new(
+                cli.workspace.clone(),
+                max_instances,
+                std::time::Duration::from_secs(300),
             )
-        }
-        BackendKind::Daemon => {
-            let url = cli.daemon_url.unwrap_or_else(|| {
-                match std::fs::read_to_string(
-                    dirs::data_dir()
-                        .unwrap_or_default()
-                        .join(".minos/run/tui-daemon-rpc.json"),
-                ) {
-                    Ok(content) => {
-                        let doc: serde_json::Value =
-                            serde_json::from_str(&content).unwrap_or_default();
-                        doc["url"].as_str().unwrap_or("ws://127.0.0.1:9123").to_owned()
-                    }
-                    Err(_) => "ws://127.0.0.1:9123".to_owned(),
-                }
-            });
-            Arc::new(
-                crate::backend::DaemonBackend::connect(&url).await?,
-            )
-        }
+            .await?,
+        ),
+        BackendKind::Daemon => Arc::new(
+            crate::backend::DaemonBackend::connect(&resolve_daemon_url(cli.daemon_url)?).await?,
+        ),
     };
 
     let mut app = app::App::new(backend.clone(), cli.readonly, cli.workspace.clone());
@@ -151,4 +193,57 @@ async fn main() -> Result<()> {
     restore_terminal(&mut terminal)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn test_cli(backend: BackendKind) -> Cli {
+        Cli {
+            agent: None,
+            workspace: ".".into(),
+            readonly: false,
+            max_instances: None,
+            log_file: None,
+            backend,
+            daemon_url: None,
+        }
+    }
+
+    #[test]
+    fn validate_backend_args_rejects_incompatible_flags() {
+        let mut daemon_cli = test_cli(BackendKind::Daemon);
+        daemon_cli.max_instances = Some(3);
+        assert!(validate_backend_args(&daemon_cli).is_err());
+
+        let mut embedded_cli = test_cli(BackendKind::Embedded);
+        embedded_cli.daemon_url = Some("ws://127.0.0.1:43123".into());
+        assert!(validate_backend_args(&embedded_cli).is_err());
+    }
+
+    #[test]
+    fn resolve_daemon_url_reads_discovery_file_from_minos_home() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("unix epoch")
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!("minos-tui-main-{unique}"));
+        let discovery_dir = temp_root.join("run");
+        std::fs::create_dir_all(&discovery_dir).expect("create discovery dir");
+        let discovery_path = discovery_dir.join("tui-daemon-rpc.json");
+        std::fs::write(&discovery_path, r#"{"url":"ws://127.0.0.1:43123"}"#)
+            .expect("write discovery file");
+        std::env::set_var("MINOS_HOME", &temp_root);
+
+        let url = resolve_daemon_url(None).expect("resolve daemon url");
+
+        assert_eq!(url, "ws://127.0.0.1:43123");
+
+        std::env::remove_var("MINOS_HOME");
+        std::fs::remove_dir_all(&temp_root).expect("remove temp root");
+    }
 }

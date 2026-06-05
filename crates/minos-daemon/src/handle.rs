@@ -7,6 +7,7 @@
 //! threads can still enter the Tokio reactor — same trick the old
 //! WS-server façade used.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use chrono::{TimeZone, Utc};
@@ -20,7 +21,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::AgentGlue;
 use crate::config::RelayConfig;
-use crate::local_rpc::{LocalRpcConfig, start_local_rpc_server};
+use crate::local_rpc::{start_local_rpc_server, LocalRpcConfig};
 use crate::paths;
 use crate::relay_client::{PersistenceCtx, RelayClient};
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
@@ -57,6 +58,7 @@ struct DaemonInner {
     /// the daemon runs without a local control plane.
     #[allow(dead_code)]
     local_rpc_handle: Option<jsonrpsee::server::ServerHandle>,
+    local_rpc_discovery_path: Option<PathBuf>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -212,6 +214,10 @@ impl DaemonHandle {
             }
         });
 
+        let local_rpc_discovery_path = local_rpc_config
+            .as_ref()
+            .map(|config| config.discovery_path.clone());
+
         let local_rpc_handle = if let Some(lr_config) = local_rpc_config {
             let runner = Arc::new(minos_cli_detect::RealCommandRunner::new(
                 subprocess_env.clone(),
@@ -234,6 +240,7 @@ impl DaemonHandle {
                 agent,
                 rt_handle: Handle::current(),
                 local_rpc_handle,
+                local_rpc_discovery_path,
             }),
         }))
     }
@@ -331,6 +338,18 @@ impl DaemonHandle {
             .await;
         if let Some(handle) = &self.inner.local_rpc_handle {
             let _ = handle.stop();
+        }
+        if let Some(path) = &self.inner.local_rpc_discovery_path {
+            if let Err(error) = std::fs::remove_file(path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        target: "minos_daemon::handle",
+                        error = %error,
+                        path = %path.display(),
+                        "failed to remove local RPC discovery file",
+                    );
+                }
+            }
         }
         self.inner.relay.stop().await;
         Ok(())
