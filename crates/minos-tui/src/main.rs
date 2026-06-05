@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::backend::AgentBackend;
+use crate::backend::BackendKind;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
@@ -34,6 +34,12 @@ struct Cli {
 
     #[arg(long)]
     log_file: Option<std::path::PathBuf>,
+
+    #[arg(long, value_enum, default_value = "embedded")]
+    backend: BackendKind,
+
+    #[arg(long)]
+    daemon_url: Option<String>,
 }
 
 fn parse_agent_name(s: &str) -> Result<AgentName> {
@@ -67,14 +73,37 @@ async fn main() -> Result<()> {
     logging::init(&log_path)?;
 
     let max_instances = cli.max_instances.unwrap_or(3);
-    let backend = Arc::new(
-        backend::EmbeddedBackend::new(
-            cli.workspace.clone(),
-            max_instances,
-            std::time::Duration::from_secs(300),
-        )
-        .await?,
-    );
+    let backend: Arc<dyn crate::backend::AgentBackend> = match cli.backend {
+        BackendKind::Embedded => {
+            Arc::new(
+                crate::backend::EmbeddedBackend::new(
+                    cli.workspace.clone(),
+                    max_instances,
+                    std::time::Duration::from_secs(300),
+                )
+                .await?,
+            )
+        }
+        BackendKind::Daemon => {
+            let url = cli.daemon_url.unwrap_or_else(|| {
+                match std::fs::read_to_string(
+                    dirs::data_dir()
+                        .unwrap_or_default()
+                        .join(".minos/run/tui-daemon-rpc.json"),
+                ) {
+                    Ok(content) => {
+                        let doc: serde_json::Value =
+                            serde_json::from_str(&content).unwrap_or_default();
+                        doc["url"].as_str().unwrap_or("ws://127.0.0.1:9123").to_owned()
+                    }
+                    Err(_) => "ws://127.0.0.1:9123".to_owned(),
+                }
+            });
+            Arc::new(
+                crate::backend::DaemonBackend::connect(&url).await?,
+            )
+        }
+    };
 
     let mut app = app::App::new(backend.clone(), cli.readonly, cli.workspace.clone());
     app.init().await?;

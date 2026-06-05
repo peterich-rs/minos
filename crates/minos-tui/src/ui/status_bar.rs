@@ -1,3 +1,4 @@
+use crate::backend::BackendConnectionState;
 use minos_domain::{AgentDescriptor, AgentStatus};
 use ratatui::{
     layout::Rect,
@@ -6,24 +7,47 @@ use ratatui::{
     Frame,
 };
 
-use super::theme::{CLI_MISSING, CLI_OK};
+use super::theme::{CLI_MISSING, CLI_OK, DAEMON_CONNECTED, DAEMON_DISCONNECTED};
 
 pub struct StatusBarState {
     pub agents: Vec<AgentDescriptor>,
+    pub backend_state: BackendConnectionState,
 }
 
 impl StatusBarState {
     pub fn new() -> Self {
-        Self { agents: Vec::new() }
+        Self {
+            agents: Vec::new(),
+            backend_state: BackendConnectionState::Embedded,
+        }
     }
 
     pub fn update_agents(&mut self, agents: Vec<AgentDescriptor>) {
         self.agents = agents;
     }
+
+    pub fn update_backend_state(&mut self, state: BackendConnectionState) {
+        self.backend_state = state;
+    }
 }
 
 pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState) {
     let mut spans: Vec<Span> = Vec::new();
+
+    match &state.backend_state {
+        BackendConnectionState::Embedded => {}
+        BackendConnectionState::Connected { .. } => {
+            spans.push(Span::styled(" daemon:connected ", DAEMON_CONNECTED));
+        }
+        BackendConnectionState::Disconnected { last_error, .. } => {
+            let label = match last_error {
+                Some(e) => format!(" daemon:disconnected ({}) ", e),
+                None => " daemon:disconnected ".to_owned(),
+            };
+            spans.push(Span::styled(label, DAEMON_DISCONNECTED));
+        }
+    }
+
     for desc in &state.agents {
         let (icon, style) = match desc.status {
             AgentStatus::Ok => ("✓", CLI_OK),

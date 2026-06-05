@@ -6,6 +6,20 @@ use minos_domain::AgentName;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackendConnectionState {
+    Embedded,
+    Connected { endpoint: String },
+    Disconnected { endpoint: String, last_error: Option<String> },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BackendKind {
+    #[default]
+    Embedded,
+    Daemon,
+}
+
 #[async_trait]
 pub trait AgentBackend: Send + Sync {
     async fn detect_clis(&self) -> Result<Vec<AgentDescriptor>>;
@@ -23,7 +37,11 @@ pub trait AgentBackend: Send + Sync {
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest>;
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent>;
+
+    fn connection_state(&self) -> BackendConnectionState;
 }
 
+pub mod daemon;
 pub mod embedded;
+pub use daemon::DaemonBackend;
 pub use embedded::EmbeddedBackend;

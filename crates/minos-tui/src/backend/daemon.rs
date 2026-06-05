@@ -1,0 +1,311 @@
+use super::{AgentBackend, BackendConnectionState};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use futures::{StreamExt, TryStreamExt};
+use jsonrpsee::core::client::{ClientT, SubscriptionClientT};
+use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
+use minos_agent_runtime::{
+    CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
+    RawIngest, StartAgentOutcome, ThreadState as RuntimeThreadState,
+    store_facing::ThreadSnapshot,
+};
+use minos_domain::{AgentDescriptor, AgentName};
+use minos_protocol::{
+    CloseReason as ProtoCloseReason, ListClisResponse, LocalIngestFrame, LocalManagerEvent,
+    PauseReason as ProtoPauseReason, SendUserMessageRequest, StartAgentRequest,
+    StartAgentResponse, ThreadState as ProtoThreadState, InterruptThreadRequest,
+    CloseThreadRequest,
+};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::broadcast;
+use tracing::warn;
+
+pub struct DaemonBackend {
+    client: Arc<WsClient>,
+    endpoint: String,
+    ingest_tx: broadcast::Sender<RawIngest>,
+    manager_tx: broadcast::Sender<ManagerEvent>,
+    state: Arc<StdMutex<BackendConnectionState>>,
+}
+
+impl DaemonBackend {
+    pub async fn connect(url: &str) -> Result<Self> {
+        let client = WsClientBuilder::default()
+            .build(url)
+            .await
+            .context(format!("failed to connect to daemon at {url}"))?;
+
+        let (ingest_tx, _) = broadcast::channel(256);
+        let (manager_tx, _) = broadcast::channel(64);
+
+        let endpoint = url.to_owned();
+        let state = Arc::new(StdMutex::new(BackendConnectionState::Connected {
+            endpoint: endpoint.clone(),
+        }));
+
+        let client = Arc::new(client);
+
+        Self::start_ingest_pump(client.clone(), ingest_tx.clone(), state.clone(), endpoint.clone());
+        Self::start_manager_event_pump(client.clone(), manager_tx.clone(), state.clone(), endpoint.clone());
+
+        Ok(Self {
+            client,
+            endpoint,
+            ingest_tx,
+            manager_tx,
+            state,
+        })
+    }
+
+    fn start_ingest_pump(
+        client: Arc<WsClient>,
+        tx: broadcast::Sender<RawIngest>,
+        state: Arc<StdMutex<BackendConnectionState>>,
+        endpoint: String,
+    ) {
+        tokio::spawn(async move {
+            let sub = match client
+                .subscribe::<LocalIngestFrame, ArrayParams>(
+                    "minos_local_subscribe_ingest",
+                    ArrayParams::new(),
+                    "minos_local_unsubscribe_ingest",
+                )
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("ingest subscription failed: {e}");
+                    if let Ok(mut s) = state.lock() {
+                        *s = BackendConnectionState::Disconnected {
+                            endpoint,
+                            last_error: Some(e.to_string()),
+                        };
+                    }
+                    return;
+                }
+            };
+
+            let mut stream = sub.into_stream();
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(frame) => {
+                        let raw = local_ingest_to_raw(frame);
+                        let _ = tx.send(raw);
+                    }
+                    Err(e) => {
+                        warn!("ingest subscription error: {e}");
+                    }
+                }
+            }
+        });
+    }
+
+    fn start_manager_event_pump(
+        client: Arc<WsClient>,
+        tx: broadcast::Sender<ManagerEvent>,
+        state: Arc<StdMutex<BackendConnectionState>>,
+        endpoint: String,
+    ) {
+        tokio::spawn(async move {
+            let sub = match client
+                .subscribe::<LocalManagerEvent, ArrayParams>(
+                    "minos_local_subscribe_manager_events",
+                    ArrayParams::new(),
+                    "minos_local_unsubscribe_manager_events",
+                )
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("manager event subscription failed: {e}");
+                    if let Ok(mut s) = state.lock() {
+                        *s = BackendConnectionState::Disconnected {
+                            endpoint,
+                            last_error: Some(e.to_string()),
+                        };
+                    }
+                    return;
+                }
+            };
+
+            let mut stream = sub.into_stream();
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(event) => {
+                        let rt_event = local_manager_to_runtime(event);
+                        let _ = tx.send(rt_event);
+                    }
+                    Err(e) => {
+                        warn!("manager event subscription error: {e}");
+                    }
+                }
+            }
+        });
+    }
+}
+
+use jsonrpsee::core::params::ArrayParams;
+
+#[async_trait]
+impl AgentBackend for DaemonBackend {
+    async fn detect_clis(&self) -> Result<Vec<AgentDescriptor>> {
+        let response: ListClisResponse = self
+            .client
+            .request("minos_local_list_clis", ArrayParams::new())
+            .await
+            .context("RPC minos_local_list_clis failed")?;
+        Ok(response)
+    }
+
+    async fn start_agent(&self, agent: AgentName, workspace: PathBuf) -> Result<StartAgentOutcome> {
+        let request = StartAgentRequest {
+            agent,
+            workspace: workspace.to_string_lossy().into_owned(),
+            mode: None,
+        };
+        let response: StartAgentResponse = self
+            .client
+            .request("minos_local_start_agent", [request])
+            .await
+            .context("RPC minos_local_start_agent failed")?;
+        Ok(StartAgentOutcome {
+            thread_id: response.session_id,
+            cwd: PathBuf::from(response.cwd),
+        })
+    }
+
+    async fn send_message(&self, thread_id: &str, text: &str) -> Result<()> {
+        let request = SendUserMessageRequest {
+            session_id: thread_id.to_owned(),
+            text: text.to_owned(),
+        };
+        self.client
+            .request::<(), _>("minos_local_send_user_message", [request])
+            .await
+            .context("RPC minos_local_send_user_message failed")?;
+        Ok(())
+    }
+
+    async fn interrupt_thread(&self, thread_id: &str) -> Result<()> {
+        let request = InterruptThreadRequest {
+            thread_id: thread_id.to_owned(),
+        };
+        self.client
+            .request::<(), _>("minos_local_interrupt_thread", [request])
+            .await
+            .context("RPC minos_local_interrupt_thread failed")?;
+        Ok(())
+    }
+
+    async fn close_thread(&self, thread_id: &str) -> Result<()> {
+        let request = CloseThreadRequest {
+            thread_id: thread_id.to_owned(),
+        };
+        self.client
+            .request::<(), _>("minos_local_close_thread", [request])
+            .await
+            .context("RPC minos_local_close_thread failed")?;
+        Ok(())
+    }
+
+    async fn list_threads(&self) -> Result<Vec<ThreadSnapshot>> {
+        Ok(Vec::new())
+    }
+
+    async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {
+        self.ingest_tx.subscribe()
+    }
+
+    async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent> {
+        self.manager_tx.subscribe()
+    }
+
+    fn connection_state(&self) -> BackendConnectionState {
+        self.state
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or(BackendConnectionState::Disconnected {
+                endpoint: self.endpoint.clone(),
+                last_error: Some("state lock poisoned".into()),
+            })
+    }
+}
+
+fn local_ingest_to_raw(frame: LocalIngestFrame) -> RawIngest {
+    RawIngest {
+        thread_id: frame.thread_id,
+        agent: frame.agent,
+        payload: frame.payload,
+        ts_ms: frame.ts_ms,
+    }
+}
+
+fn local_manager_to_runtime(event: LocalManagerEvent) -> ManagerEvent {
+    match event {
+        LocalManagerEvent::ThreadAdded {
+            thread_id,
+            workspace,
+            agent,
+        } => ManagerEvent::ThreadAdded {
+            thread_id,
+            workspace: PathBuf::from(workspace),
+            agent,
+        },
+        LocalManagerEvent::ThreadStateChanged {
+            thread_id,
+            old,
+            new,
+            at_ms,
+        } => ManagerEvent::ThreadStateChanged {
+            thread_id,
+            old: proto_state_to_runtime(&old),
+            new: proto_state_to_runtime(&new),
+            at_ms,
+        },
+        LocalManagerEvent::ThreadClosed { thread_id, reason } => ManagerEvent::ThreadClosed {
+            thread_id,
+            reason: proto_close_reason_to_runtime(&reason),
+        },
+        LocalManagerEvent::InstanceCrashed {
+            workspace,
+            affected_threads,
+        } => ManagerEvent::InstanceCrashed {
+            workspace: PathBuf::from(workspace),
+            affected_threads,
+        },
+    }
+}
+
+fn proto_state_to_runtime(state: &ProtoThreadState) -> RuntimeThreadState {
+    match state {
+        ProtoThreadState::Starting => RuntimeThreadState::Starting,
+        ProtoThreadState::Idle => RuntimeThreadState::Idle,
+        ProtoThreadState::Running { turn_started_at_ms } => RuntimeThreadState::Running {
+            turn_started_at_ms: *turn_started_at_ms,
+        },
+        ProtoThreadState::Suspended { reason } => RuntimeThreadState::Suspended {
+            reason: proto_pause_reason_to_runtime(reason),
+        },
+        ProtoThreadState::Resuming => RuntimeThreadState::Resuming,
+        ProtoThreadState::Closed { reason } => RuntimeThreadState::Closed {
+            reason: proto_close_reason_to_runtime(reason),
+        },
+    }
+}
+
+fn proto_pause_reason_to_runtime(reason: &ProtoPauseReason) -> RuntimePauseReason {
+    match reason {
+        ProtoPauseReason::UserInterrupt => RuntimePauseReason::UserInterrupt,
+        ProtoPauseReason::CodexCrashed => RuntimePauseReason::CodexCrashed,
+        ProtoPauseReason::DaemonRestart => RuntimePauseReason::DaemonRestart,
+        ProtoPauseReason::InstanceReaped => RuntimePauseReason::InstanceReaped,
+    }
+}
+
+fn proto_close_reason_to_runtime(reason: &ProtoCloseReason) -> RuntimeCloseReason {
+    match reason {
+        ProtoCloseReason::UserClose => RuntimeCloseReason::UserClose,
+        ProtoCloseReason::TerminalError => RuntimeCloseReason::TerminalError,
+    }
+}

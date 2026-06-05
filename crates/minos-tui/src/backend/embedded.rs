@@ -1,4 +1,4 @@
-use super::AgentBackend;
+use super::{AgentBackend, BackendConnectionState};
 use anyhow::Result;
 use async_trait::async_trait;
 use minos_agent_runtime::{
@@ -80,5 +80,9 @@ impl AgentBackend for EmbeddedBackend {
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent> {
         self.manager.manager_event_stream()
+    }
+
+    fn connection_state(&self) -> BackendConnectionState {
+        BackendConnectionState::Embedded
     }
 }

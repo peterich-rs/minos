@@ -17,6 +17,7 @@ minos-agent-runtime = { path = "../minos-agent-runtime" }
 minos-ui-protocol = { path = "../minos-ui-protocol" }
 minos-domain = { path = "../minos-domain" }
 minos-cli-detect = { path = "../minos-cli-detect" }
+minos-protocol = { path = "../minos-protocol" }
 ratatui = "0.29"
 crossterm = "0.28"
 tokio = { workspace = true }
@@ -24,6 +25,9 @@ clap = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+jsonrpsee = { workspace = true }
+futures = { workspace = true }
+dirs = "6"
 chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

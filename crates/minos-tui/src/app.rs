@@ -14,15 +14,15 @@ use crate::event::AppEvent;
 use crate::translation::ChatState;
 use crate::ui::{AgentPickerState, Focus, ThreadEntry, UiState};
 
-pub struct App<B: AgentBackend> {
-    backend: Arc<B>,
+pub struct App {
+    backend: Arc<dyn AgentBackend>,
     ui: UiState,
     should_quit: bool,
     workspace: PathBuf,
 }
 
-impl<B: AgentBackend> App<B> {
-    pub fn new(backend: Arc<B>, readonly: bool, workspace: PathBuf) -> Self {
+impl App {
+    pub fn new(backend: Arc<dyn AgentBackend>, readonly: bool, workspace: PathBuf) -> Self {
         Self {
             backend,
             ui: UiState::new(readonly),
@@ -69,6 +69,7 @@ impl<B: AgentBackend> App<B> {
                         return true;
                     }
                 }
+                self.ui.status.update_backend_state(self.backend.connection_state());
                 false
             }
             AppEvent::Resize(_, _) => true,
@@ -815,6 +816,7 @@ mod tests {
 
     use anyhow::Result;
     use async_trait::async_trait;
+    use crate::backend::BackendConnectionState;
     use crossterm::event::{KeyEventState, MouseEvent, MouseEventKind};
     use minos_agent_runtime::{RawIngest, StartAgentOutcome};
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
@@ -911,6 +913,10 @@ mod tests {
 
         async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent> {
             self.manager_tx.subscribe()
+        }
+
+        fn connection_state(&self) -> BackendConnectionState {
+            BackendConnectionState::Embedded
         }
     }
 
