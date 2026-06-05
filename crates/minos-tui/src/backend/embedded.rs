@@ -1,14 +1,14 @@
 use super::AgentBackend;
+use anyhow::Result;
 use async_trait::async_trait;
 use minos_agent_runtime::{
-    AgentManager, InstanceCaps, ManagerEvent, RawIngest, StartAgentOutcome,
-    store_facing::ThreadSnapshot,
+    store_facing::ThreadSnapshot, AgentManager, InstanceCaps, ManagerEvent, RawIngest,
+    StartAgentOutcome,
 };
-use minos_cli_detect::{detect_all, RealCommandRunner, capture_user_shell_env};
+use minos_cli_detect::{capture_user_shell_env, detect_all, RealCommandRunner};
 use minos_domain::AgentName;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::broadcast;
-use anyhow::Result;
 
 pub struct EmbeddedBackend {
     manager: Arc<AgentManager>,
@@ -20,7 +20,9 @@ impl EmbeddedBackend {
         max_instances: usize,
         idle_timeout: std::time::Duration,
     ) -> Result<Self> {
-        let config = minos_agent_runtime::AgentRuntimeConfig::new(workspace_root);
+        let shell_env = capture_user_shell_env().await;
+        let mut config = minos_agent_runtime::AgentRuntimeConfig::new(workspace_root);
+        config.subprocess_env = Arc::new(shell_env);
         let caps = InstanceCaps {
             max_instances,
             idle_timeout,

@@ -1,8 +1,9 @@
 use minos_domain::AgentName;
 use minos_ui_protocol::{
-    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState,
-    UiEventMessage, MessageRole,
+    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, MessageRole,
+    OpencodeTranslatorState, UiEventMessage,
 };
+use tracing::warn;
 
 pub enum AgentTranslationState {
     Codex(CodexTranslatorState),
@@ -21,19 +22,39 @@ impl AgentTranslationState {
         }
     }
 
-    pub fn translate(
-        &mut self,
-        payload: &serde_json::Value,
-    ) -> Vec<UiEventMessage> {
+    pub fn translate(&mut self, payload: &serde_json::Value) -> Vec<UiEventMessage> {
         match self {
-            Self::Codex(s) => minos_ui_protocol::translate_codex(s, payload)
-                .unwrap_or_default(),
-            Self::Claude(s) => minos_ui_protocol::translate_claude(s, payload)
-                .unwrap_or_default(),
-            Self::Gemini(s) => minos_ui_protocol::translate_gemini(s, payload)
-                .unwrap_or_default(),
-            Self::Opencode(s) => minos_ui_protocol::translate_opencode(s, payload)
-                .unwrap_or_default(),
+            Self::Codex(s) => translate_with_log("codex", payload, || {
+                minos_ui_protocol::translate_codex(s, payload)
+            }),
+            Self::Claude(s) => translate_with_log("claude", payload, || {
+                minos_ui_protocol::translate_claude(s, payload)
+            }),
+            Self::Gemini(s) => translate_with_log("gemini", payload, || {
+                minos_ui_protocol::translate_gemini(s, payload)
+            }),
+            Self::Opencode(s) => translate_with_log("opencode", payload, || {
+                minos_ui_protocol::translate_opencode(s, payload)
+            }),
+        }
+    }
+}
+
+fn translate_with_log<F>(agent: &str, payload: &serde_json::Value, f: F) -> Vec<UiEventMessage>
+where
+    F: FnOnce() -> Result<Vec<UiEventMessage>, minos_ui_protocol::TranslationError>,
+{
+    match f() {
+        Ok(events) => events,
+        Err(error) => {
+            warn!(
+                target: "minos_tui::translation",
+                agent,
+                error = %error,
+                payload = %payload,
+                "ui translation failed"
+            );
+            Vec::new()
         }
     }
 }
@@ -45,6 +66,7 @@ pub struct ChatState {
     pub messages: Vec<RenderedMessage>,
     pub scroll_offset: u16,
     pub auto_scroll: bool,
+    pub max_scroll: u16,
 }
 
 impl ChatState {
@@ -56,7 +78,55 @@ impl ChatState {
             messages: Vec::new(),
             scroll_offset: 0,
             auto_scroll: true,
+            max_scroll: 0,
         }
+    }
+
+    pub fn update_max_scroll(&mut self, max_scroll: u16) {
+        self.max_scroll = max_scroll;
+        if !self.auto_scroll {
+            self.scroll_offset = self.scroll_offset.min(self.max_scroll);
+        }
+    }
+
+    pub fn active_scroll(&self) -> u16 {
+        if self.auto_scroll {
+            self.max_scroll
+        } else {
+            self.scroll_offset.min(self.max_scroll)
+        }
+    }
+
+    pub fn scroll_up(&mut self, lines: u16) {
+        if self.auto_scroll {
+            self.scroll_offset = self.max_scroll;
+            self.auto_scroll = false;
+        }
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+    }
+
+    pub fn scroll_down(&mut self, lines: u16) {
+        if self.auto_scroll {
+            return;
+        }
+
+        self.scroll_offset = self
+            .scroll_offset
+            .saturating_add(lines)
+            .min(self.max_scroll);
+        if self.scroll_offset >= self.max_scroll {
+            self.scroll_to_bottom();
+        }
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.auto_scroll = false;
+        self.scroll_offset = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.auto_scroll = true;
+        self.scroll_offset = 0;
     }
 
     pub fn apply_ui_events(&mut self, events: Vec<UiEventMessage>) {
@@ -159,9 +229,9 @@ impl ChatState {
                 message_id,
                 ..
             } => {
-                if let Some(msg) = message_id.and_then(|mid| {
-                    self.messages.iter_mut().rev().find(|m| m.message_id == mid)
-                }) {
+                if let Some(msg) = message_id
+                    .and_then(|mid| self.messages.iter_mut().rev().find(|m| m.message_id == mid))
+                {
                     msg.error = Some(message);
                 } else {
                     self.messages.push(RenderedMessage {
@@ -175,10 +245,7 @@ impl ChatState {
                     });
                 }
             }
-            UiEventMessage::Raw {
-                kind,
-                payload_json,
-            } => {
+            UiEventMessage::Raw { kind, payload_json } => {
                 self.messages.push(RenderedMessage {
                     message_id: String::new(),
                     role: MessageRole::System,
@@ -313,5 +380,24 @@ mod tests {
             Some("ok")
         );
         assert!(!cs.messages[0].tool_calls[0].is_error);
+    }
+
+    #[test]
+    fn scroll_state_tracks_manual_navigation_and_bottom_following() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Gemini);
+        cs.update_max_scroll(40);
+
+        assert_eq!(cs.active_scroll(), 40);
+
+        cs.scroll_up(5);
+        assert!(!cs.auto_scroll);
+        assert_eq!(cs.active_scroll(), 35);
+
+        cs.scroll_down(3);
+        assert_eq!(cs.active_scroll(), 38);
+
+        cs.scroll_down(10);
+        assert!(cs.auto_scroll);
+        assert_eq!(cs.active_scroll(), 40);
     }
 }

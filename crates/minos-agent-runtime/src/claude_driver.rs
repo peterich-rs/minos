@@ -10,11 +10,14 @@ use minos_domain::AgentName;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::config::RawIngest;
+use crate::manager_event::ManagerEvent;
+use crate::state_machine::ThreadState;
+use crate::thread_handle::ThreadHandle;
 
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
 
@@ -34,6 +37,8 @@ impl ClaudeNdjsonSession {
         thread_id: String,
         user_text: &str,
         resume_session_id: Option<&str>,
+        threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
+        manager_tx: broadcast::Sender<ManagerEvent>,
         events_tx: broadcast::Sender<RawIngest>,
         subprocess_env: &Arc<HashMap<String, String>>,
     ) -> anyhow::Result<Self> {
@@ -79,6 +84,8 @@ impl ClaudeNdjsonSession {
         let stdout_task = stdout.map(|out| {
             let tx = events_tx.clone();
             let tid = thread_id.clone();
+            let threads = threads.clone();
+            let manager_tx = manager_tx.clone();
             tokio::spawn(async move {
                 let reader = BufReader::new(out);
                 let mut lines = reader.lines();
@@ -91,6 +98,7 @@ impl ClaudeNdjsonSession {
                             "payload_json": serde_json::to_string(&line).unwrap_or_default()
                         }),
                     };
+                    sync_thread_from_payload(&payload, &tid, &threads, &manager_tx).await;
                     let _ = tx.send(RawIngest {
                         agent: AgentName::Claude,
                         thread_id: tid.clone(),
@@ -193,5 +201,129 @@ impl ClaudeNdjsonSession {
             thread_id = %self.thread_id,
             "claude ndjson session closed"
         );
+    }
+}
+
+async fn sync_thread_from_payload(
+    payload: &Value,
+    thread_id: &str,
+    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    manager_tx: &broadcast::Sender<ManagerEvent>,
+) {
+    let session_id = payload.get("session_id").and_then(Value::as_str);
+    let should_idle = matches!(
+        payload.get("type").and_then(Value::as_str),
+        Some("result") | Some("error")
+    );
+
+    let maybe_transition = {
+        let mut guard = threads.lock().await;
+        let Some(handle) = guard.get_mut(thread_id) else {
+            return;
+        };
+
+        if let Some(session_id) = session_id {
+            handle.codex_session_id = Some(session_id.to_string());
+        }
+
+        if should_idle {
+            handle.set_active_turn_id(None);
+            let old = handle.current_state();
+            if matches!(old, ThreadState::Running { .. } | ThreadState::Resuming) {
+                if handle.transition(ThreadState::Idle).is_ok() {
+                    Some((old, ThreadState::Idle))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some((old, new)) = maybe_transition {
+        let _ = manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old,
+            new,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manager_event::ManagerEvent;
+    use crate::state_machine::ThreadState;
+    use crate::thread_handle::ThreadHandle;
+
+    fn val(s: &str) -> Value {
+        serde_json::from_str(s).expect("json fixture should parse")
+    }
+
+    #[test]
+    fn claude_payload_exposes_session_id() {
+        let payload = val(
+            r#"{"type":"stream_event","session_id":"sess_1","event":{"type":"message_start"}}"#,
+        );
+        assert_eq!(
+            payload.get("session_id").and_then(Value::as_str),
+            Some("sess_1")
+        );
+    }
+
+    #[test]
+    fn result_payload_is_terminal() {
+        let payload = val(r#"{"type":"result","is_error":false}"#);
+        assert!(matches!(
+            payload.get("type").and_then(Value::as_str),
+            Some("result")
+        ));
+    }
+
+    #[tokio::test]
+    async fn sync_thread_from_result_updates_state_and_session_id() {
+        let thread_id = "thr_claude".to_string();
+        let threads = Arc::new(Mutex::new(HashMap::new()));
+        threads.lock().await.insert(
+            thread_id.clone(),
+            ThreadHandle::new(
+                thread_id.clone(),
+                "/tmp".into(),
+                AgentName::Claude,
+                ThreadState::Running {
+                    turn_started_at_ms: 1,
+                },
+                0,
+            ),
+        );
+        let (manager_tx, mut manager_rx) = broadcast::channel::<ManagerEvent>(8);
+
+        sync_thread_from_payload(
+            &val(r#"{"type":"result","session_id":"sess_resume","is_error":false}"#),
+            &thread_id,
+            &threads,
+            &manager_tx,
+        )
+        .await;
+
+        let guard = threads.lock().await;
+        let handle = guard.get(&thread_id).expect("thread should exist");
+        assert!(matches!(handle.current_state(), ThreadState::Idle));
+        assert_eq!(handle.codex_session_id.as_deref(), Some("sess_resume"));
+        drop(guard);
+
+        let event = manager_rx
+            .recv()
+            .await
+            .expect("manager event should be emitted");
+        assert!(matches!(
+            event,
+            ManagerEvent::ThreadStateChanged { thread_id, new: ThreadState::Idle, .. }
+                if thread_id == "thr_claude"
+        ));
     }
 }

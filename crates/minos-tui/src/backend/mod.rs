@@ -1,10 +1,10 @@
+use anyhow::Result;
 use async_trait::async_trait;
 use minos_agent_runtime::{ManagerEvent, RawIngest, StartAgentOutcome};
 use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
-use anyhow::Result;
 
 #[async_trait]
 pub trait AgentBackend: Send + Sync {

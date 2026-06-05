@@ -1,4 +1,4 @@
-use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
+use minos_domain::{AgentDescriptor, AgentStatus};
 use ratatui::{
     layout::Rect,
     text::{Line, Span},
@@ -14,21 +14,11 @@ pub struct StatusBarState {
 
 impl StatusBarState {
     pub fn new() -> Self {
-        Self {
-            agents: Vec::new(),
-        }
+        Self { agents: Vec::new() }
     }
 
     pub fn update_agents(&mut self, agents: Vec<AgentDescriptor>) {
         self.agents = agents;
-    }
-
-    pub fn installed_agents(&self) -> Vec<AgentName> {
-        self.agents
-            .iter()
-            .filter(|a| matches!(a.status, AgentStatus::Ok))
-            .map(|a| a.name)
-            .collect()
     }
 }
 
@@ -43,6 +33,9 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState) {
         let label = format!(" {} {} ", desc.name.bin_name(), icon);
         spans.push(Span::styled(label, style));
     }
+    spans.push(Span::raw(
+        "  n new-thread  @agent route  Tab focus  wheel/PgUp/PgDn scroll  Esc cancel/focus  Ctrl+C interrupt/quit  Ctrl+Q quit",
+    ));
     let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: true });
     f.render_widget(paragraph, area);
 }

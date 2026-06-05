@@ -1,10 +1,11 @@
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyEvent, MouseEvent};
 use minos_agent_runtime::{ManagerEvent, RawIngest};
 
 pub enum AppEvent {
     Ingest(RawIngest),
     ManagerEvent(ManagerEvent),
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Resize(u16, u16),
     Tick,
 }
@@ -48,25 +49,38 @@ pub fn spawn_manager_event_pump(
 }
 
 pub fn spawn_terminal_pump(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
-    tokio::spawn(async move {
-        loop {
-            if let Ok(event) = crossterm::event::read() {
-                match event {
-                    crossterm::event::Event::Key(key) => {
-                        if tx.send(AppEvent::Key(key)).is_err() {
-                            break;
+    std::thread::Builder::new()
+        .name("minos-tui-terminal".into())
+        .spawn(move || {
+            let poll_timeout = std::time::Duration::from_millis(250);
+
+            loop {
+                match crossterm::event::poll(poll_timeout) {
+                    Ok(true) => match crossterm::event::read() {
+                        Ok(crossterm::event::Event::Key(key)) => {
+                            if tx.send(AppEvent::Key(key)).is_err() {
+                                break;
+                            }
                         }
-                    }
-                    crossterm::event::Event::Resize(w, h) => {
-                        if tx.send(AppEvent::Resize(w, h)).is_err() {
-                            break;
+                        Ok(crossterm::event::Event::Mouse(mouse)) => {
+                            if tx.send(AppEvent::Mouse(mouse)).is_err() {
+                                break;
+                            }
                         }
-                    }
-                    _ => {}
+                        Ok(crossterm::event::Event::Resize(w, h)) => {
+                            if tx.send(AppEvent::Resize(w, h)).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(_) => break,
+                    },
+                    Ok(false) => continue,
+                    Err(_) => break,
                 }
             }
-        }
-    });
+        })
+        .expect("terminal event pump thread should spawn");
 }
 
 pub fn spawn_tick_pump(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>, interval_ms: u64) {

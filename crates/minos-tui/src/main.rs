@@ -1,19 +1,19 @@
 use std::sync::Arc;
 
+use crate::backend::AgentBackend;
 use anyhow::Result;
 use clap::Parser;
-use crate::backend::AgentBackend;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use minos_domain::AgentName;
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::DefaultTerminal;
 
 mod app;
 mod backend;
 mod event;
+mod logging;
 mod translation;
 mod ui;
 
@@ -31,6 +31,9 @@ struct Cli {
 
     #[arg(long)]
     max_instances: Option<usize>,
+
+    #[arg(long)]
+    log_file: Option<std::path::PathBuf>,
 }
 
 fn parse_agent_name(s: &str) -> Result<AgentName> {
@@ -43,28 +46,25 @@ fn parse_agent_name(s: &str) -> Result<AgentName> {
     }
 }
 
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    Ok(Terminal::new(backend)?)
+fn setup_terminal() -> Result<DefaultTerminal> {
+    let mut terminal = ratatui::try_init()?;
+    execute!(std::io::stdout(), EnableMouseCapture)?;
+    terminal.clear()?;
+    Ok(terminal)
 }
 
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
+    execute!(std::io::stdout(), DisableMouseCapture)?;
     terminal.show_cursor()?;
+    ratatui::try_restore()?;
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let log_path = logging::resolve_log_path(&cli.workspace, cli.log_file.clone());
+    logging::init(&log_path)?;
 
     let max_instances = cli.max_instances.unwrap_or(3);
     let backend = Arc::new(
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
         .await?,
     );
 
-    let mut app = app::App::new(backend.clone(), cli.readonly);
+    let mut app = app::App::new(backend.clone(), cli.readonly, cli.workspace.clone());
     app.init().await?;
 
     let mut terminal = setup_terminal()?;
@@ -98,13 +98,19 @@ async fn main() -> Result<()> {
         backend.start_agent(agent, workspace).await?;
     }
 
-    loop {
-        terminal.draw(|f| {
-            ui::render_ui(f, app.ui());
-        })?;
+    terminal.draw(|f| {
+        ui::render_ui(f, app.ui());
+    })?;
 
+    loop {
         if let Some(event) = rx.recv().await {
-            app.handle_event(event).await;
+            if app.handle_event(event).await {
+                terminal.draw(|f| {
+                    ui::render_ui(f, app.ui());
+                })?;
+            }
+        } else {
+            break;
         }
 
         if app.should_quit() {

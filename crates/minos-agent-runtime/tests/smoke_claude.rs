@@ -2,6 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use minos_agent_runtime::{
+    manager_event::ManagerEvent, state_machine::ThreadState, thread_handle::ThreadHandle,
+};
+
 fn should_run() -> bool {
     std::env::var("MINOS_XTASK_WITH_CLAUDE")
         .map(|v| v == "1")
@@ -16,6 +20,20 @@ async fn claude_real_smoke_start_and_chat() {
     }
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(256);
+    let (manager_tx, _) = tokio::sync::broadcast::channel::<ManagerEvent>(32);
+    let threads = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    threads.lock().await.insert(
+        "smoke_test_thread".into(),
+        ThreadHandle::new(
+            "smoke_test_thread".into(),
+            workspace.clone(),
+            minos_domain::AgentName::Claude,
+            ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+            0,
+        ),
+    );
     let cli_path = PathBuf::from("claude");
 
     let session = minos_agent_runtime::ClaudeNdjsonSession::start_turn(
@@ -24,6 +42,8 @@ async fn claude_real_smoke_start_and_chat() {
         "smoke_test_thread".into(),
         "Say hello in one word",
         None,
+        threads,
+        manager_tx,
         events_tx,
         &Arc::new(std::collections::HashMap::new()),
     )

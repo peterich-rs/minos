@@ -7,7 +7,10 @@ use ratatui::{
     Frame,
 };
 
-use super::theme::{HIGHLIGHTED, THREAD_ACTIVE, THREAD_CLOSED, THREAD_IDLE, THREAD_RUNNING};
+use super::theme::{
+    BORDER_FG, FOCUSED_BORDER, HIGHLIGHTED, THREAD_ACTIVE, THREAD_CLOSED, THREAD_IDLE,
+    THREAD_RUNNING,
+};
 
 fn agent_label(agent: AgentName) -> &'static str {
     match agent {
@@ -24,6 +27,7 @@ pub fn render_thread_list(
     threads: &[ThreadEntry],
     selected: Option<usize>,
     list_state: &mut ListState,
+    focused: bool,
 ) {
     let items: Vec<ListItem> = threads
         .iter()
@@ -37,17 +41,25 @@ pub fn render_thread_list(
             let agent_name = agent_label(entry.agent);
             let line = ratatui::text::Line::from(vec![
                 ratatui::text::Span::styled(prefix.to_owned(), state_style),
+                ratatui::text::Span::styled(format!("{:<7}", agent_name), state_style),
                 ratatui::text::Span::styled(
-                    format!("{:<7}", agent_name),
-                    state_style,
-                ),
-                ratatui::text::Span::styled(
-                    format!("{:>8} ", entry.workspace.file_name().unwrap_or_default().to_string_lossy()),
+                    format!(
+                        "{:>8} ",
+                        entry
+                            .workspace
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    ),
                     state_style,
                 ),
                 ratatui::text::Span::styled(
                     format!("{} {}", tid_short, state_label),
-                    if is_selected { HIGHLIGHTED } else { state_style },
+                    if is_selected {
+                        HIGHLIGHTED
+                    } else {
+                        state_style
+                    },
                 ),
             ]);
             ListItem::new(line)
@@ -57,7 +69,11 @@ pub fn render_thread_list(
     let list = List::new(items).block(
         ratatui::widgets::Block::bordered()
             .title("Threads")
-            .border_style(ratatui::style::Style::new().fg(ratatui::style::Color::DarkGray)),
+            .border_style(if focused {
+                FOCUSED_BORDER
+            } else {
+                ratatui::style::Style::new().fg(BORDER_FG)
+            }),
     );
     f.render_stateful_widget(list, area, list_state);
 }
