@@ -2956,6 +2956,7 @@ dependencies = [
  "minos-ui-protocol",
  "ratatui",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

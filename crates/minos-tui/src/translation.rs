@@ -154,6 +154,23 @@ impl ChatState {
         }
     }
 
+    pub fn last_completed_assistant_text(&self) -> Option<(String, String)> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| matches!(message.role, MessageRole::Assistant) && !message.is_streaming)
+            .and_then(|message| {
+                rendered_message_text(message).map(|text| {
+                    let key = if message.message_id.is_empty() {
+                        format!("text:{text}")
+                    } else {
+                        message.message_id.clone()
+                    };
+                    (key, text)
+                })
+            })
+    }
+
     fn apply_ui_event(&mut self, event: UiEventMessage) {
         match event {
             UiEventMessage::MessageStarted {
@@ -288,6 +305,35 @@ impl ChatState {
                 });
             }
         }
+    }
+}
+
+fn rendered_message_text(message: &RenderedMessage) -> Option<String> {
+    let mut parts = Vec::new();
+    for part in &message.text_parts {
+        match part {
+            TextPart::Plain(text) => {
+                if !text.trim().is_empty() {
+                    parts.push(text.trim().to_owned());
+                }
+            }
+            TextPart::Code { code, .. } => {
+                if !code.trim().is_empty() {
+                    parts.push(code.trim().to_owned());
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        message
+            .error
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    } else {
+        Some(parts.join("\n"))
     }
 }
 

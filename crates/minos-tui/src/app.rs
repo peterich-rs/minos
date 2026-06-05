@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,10 +8,12 @@ use crossterm::event::{
 };
 use minos_agent_runtime::{ManagerEvent, ThreadState};
 use minos_domain::{AgentName, AgentStatus};
+use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};
 use tracing::debug;
 
 use crate::backend::AgentBackend;
 use crate::event::AppEvent;
+use crate::group_chat::GroupChatStore;
 use crate::translation::{ChatSelectionPoint, ChatState};
 use crate::ui::{AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState};
 
@@ -21,20 +23,35 @@ pub struct App {
     should_quit: bool,
     workspace: PathBuf,
     hydrated_threads: HashSet<String>,
+    group_chat_store: GroupChatStore,
+    recorded_agent_results: HashMap<String, String>,
 }
 
 impl App {
     pub fn new(backend: Arc<dyn AgentBackend>, readonly: bool, workspace: PathBuf) -> Self {
+        let group_chat_store = default_group_chat_store();
+        Self::with_group_chat_store(backend, readonly, workspace, group_chat_store)
+    }
+
+    fn with_group_chat_store(
+        backend: Arc<dyn AgentBackend>,
+        readonly: bool,
+        workspace: PathBuf,
+        group_chat_store: GroupChatStore,
+    ) -> Self {
         Self {
             backend,
             ui: UiState::new(readonly),
             should_quit: false,
             workspace,
             hydrated_threads: HashSet::new(),
+            group_chat_store,
+            recorded_agent_results: HashMap::new(),
         }
     }
 
     pub async fn init(&mut self) -> anyhow::Result<()> {
+        self.load_group_chat_history();
         let agents = self.backend.detect_clis().await?;
         self.ui.status.update_agents(agents);
         self.sync_input_agent_picker();
@@ -59,6 +76,8 @@ impl App {
                         "translated ingest payload"
                     );
                     chat.apply_ui_events(events);
+                    let thread_id = ingest.thread_id.clone();
+                    self.record_agent_group_result_if_done(&thread_id);
                     return true;
                 }
                 debug!(
@@ -253,6 +272,7 @@ impl App {
                 {
                     entry.state = new;
                 }
+                self.record_agent_group_result_if_done(&thread_id);
                 true
             }
             ManagerEvent::ThreadClosed { thread_id, reason } => {
@@ -264,6 +284,7 @@ impl App {
                 {
                     entry.state = ThreadState::Closed { reason };
                 }
+                self.record_agent_group_result_if_done(&thread_id);
                 true
             }
             ManagerEvent::InstanceCrashed {
@@ -540,6 +561,24 @@ impl App {
                     ) {
                         self.select_thread(index);
                     }
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        if rect_contains(self.ui.panel_areas.group_chat, mouse.column, mouse.row) {
+            return match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.ui.group_chat.scroll_up(3);
+                    true
+                }
+                MouseEventKind::ScrollDown => {
+                    self.ui.group_chat.scroll_down(3);
+                    true
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.ui.focus = Focus::ThreadList;
                     true
                 }
                 _ => false,
@@ -886,7 +925,9 @@ impl App {
                 return true;
             }
             self.ui.input.take_input();
-            return self.dispatch_prompt_to_agent(agent, body).await;
+            return self
+                .dispatch_prompt_to_agent(agent, body, text.trim().to_owned())
+                .await;
         }
 
         let Some(thread_id) = self.ui.current_thread_id().map(str::to_owned) else {
@@ -894,17 +935,28 @@ impl App {
                 .set_error("No thread selected. Press `n` or start with @agent.".into());
             return true;
         };
+        let group_text = self.group_user_text_for_thread(&thread_id, text.as_str());
         self.ui.input.take_input();
-        self.send_text_to_thread(thread_id, text).await
+        self.send_text_to_thread(thread_id, text, group_text).await
     }
 
-    async fn dispatch_prompt_to_agent(&mut self, agent: AgentName, text: String) -> bool {
+    async fn dispatch_prompt_to_agent(
+        &mut self,
+        agent: AgentName,
+        text: String,
+        group_text: String,
+    ) -> bool {
         if let Some(thread_id) = self.selected_thread_for_agent(agent) {
-            return self.send_text_to_thread(thread_id, text).await;
+            return self
+                .send_text_to_thread(thread_id, text, Some(group_text))
+                .await;
         }
 
         match self.start_new_thread(agent).await {
-            Ok(thread_id) => self.send_text_to_thread(thread_id, text).await,
+            Ok(thread_id) => {
+                self.send_text_to_thread(thread_id, text, Some(group_text))
+                    .await
+            }
             Err(error) => {
                 self.ui.set_error(error);
                 true
@@ -912,7 +964,12 @@ impl App {
         }
     }
 
-    async fn send_text_to_thread(&mut self, thread_id: String, text: String) -> bool {
+    async fn send_text_to_thread(
+        &mut self,
+        thread_id: String,
+        text: String,
+        group_text: Option<String>,
+    ) -> bool {
         if let Some(index) = self
             .ui
             .threads
@@ -936,6 +993,8 @@ impl App {
         if let Err(error) = self.backend.send_message(&thread_id, &text).await {
             self.ui
                 .set_error(format!("Failed to send message: {error}"));
+        } else if let Some(group_text) = group_text {
+            self.record_user_group_message(&thread_id, group_text);
         }
         true
     }
@@ -1016,6 +1075,144 @@ impl App {
             .input
             .sync_agent_picker(agents.as_slice(), matches!(self.ui.focus, Focus::Input));
     }
+
+    fn load_group_chat_history(&mut self) {
+        match self.group_chat_store.load_recent(500) {
+            Ok(messages) => self.ui.group_chat.replace_messages(messages),
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %error,
+                    "failed to load group chat history"
+                );
+                self.ui
+                    .set_error(format!("Failed to load group chat history: {error}"));
+            }
+        }
+    }
+
+    fn group_user_text_for_thread(&self, thread_id: &str, text: &str) -> Option<String> {
+        let thread = self
+            .ui
+            .threads
+            .iter()
+            .find(|thread| thread.thread_id == thread_id)?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(format!("@{} {trimmed}", thread.agent.bin_name()))
+    }
+
+    fn record_user_group_message(&mut self, thread_id: &str, text: String) {
+        let Some(message) = self.group_message(thread_id, LocalGroupChatMessageKind::User, text)
+        else {
+            return;
+        };
+        self.append_group_chat_message(message);
+    }
+
+    fn record_agent_group_result_if_done(&mut self, thread_id: &str) {
+        let Some(thread) = self
+            .ui
+            .threads
+            .iter()
+            .find(|thread| thread.thread_id == thread_id)
+        else {
+            return;
+        };
+        if !thread_is_done(&thread.state) {
+            return;
+        }
+        let Some(chat) = self.ui.chat_states.get(thread_id) else {
+            return;
+        };
+        let Some((message_key, text)) = chat.last_completed_assistant_text() else {
+            return;
+        };
+        if self
+            .recorded_agent_results
+            .get(thread_id)
+            .is_some_and(|recorded| recorded == &message_key)
+        {
+            return;
+        }
+        let Some(message) =
+            self.group_message(thread_id, LocalGroupChatMessageKind::AgentResult, text)
+        else {
+            return;
+        };
+        self.append_group_chat_message(message);
+        self.recorded_agent_results
+            .insert(thread_id.to_owned(), message_key);
+    }
+
+    fn group_message(
+        &self,
+        thread_id: &str,
+        kind: LocalGroupChatMessageKind,
+        text: String,
+    ) -> Option<LocalGroupChatMessage> {
+        let thread = self
+            .ui
+            .threads
+            .iter()
+            .find(|thread| thread.thread_id == thread_id)?;
+        Some(LocalGroupChatMessage {
+            seq: 0,
+            message_id: String::new(),
+            created_at_ms: chrono::Utc::now().timestamp_millis(),
+            kind,
+            text,
+            agent: Some(thread.agent),
+            thread_id: Some(thread.thread_id.clone()),
+            thread_short_id: Some(short_thread_id(&thread.thread_id)),
+            workspace: Some(thread.workspace.display().to_string()),
+        })
+    }
+
+    fn append_group_chat_message(&mut self, message: LocalGroupChatMessage) {
+        match self.group_chat_store.append(message) {
+            Ok(message) => self.ui.group_chat.push_message(message),
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %error,
+                    "failed to append group chat message"
+                );
+                self.ui
+                    .set_error(format!("Failed to record group chat message: {error}"));
+            }
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn default_group_chat_store() -> GroupChatStore {
+    match GroupChatStore::default_for_runtime() {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_tui::app",
+                error = %error,
+                "group chat persistence disabled"
+            );
+            GroupChatStore::disabled()
+        }
+    }
+}
+
+#[cfg(test)]
+fn default_group_chat_store() -> GroupChatStore {
+    GroupChatStore::disabled()
+}
+
+fn thread_is_done(state: &ThreadState) -> bool {
+    matches!(state, ThreadState::Idle | ThreadState::Closed { .. })
+}
+
+fn short_thread_id(thread_id: &str) -> String {
+    thread_id[..8.min(thread_id.len())].to_owned()
 }
 
 fn parse_agent_routing(text: &str) -> Option<(AgentName, String)> {
@@ -1180,6 +1377,7 @@ mod tests {
     use minos_agent_runtime::{RawIngest, StartAgentOutcome};
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
     use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
+    use minos_protocol::LocalGroupChatMessageKind;
     use minos_ui_protocol::{MessageRole, UiEventMessage};
     use ratatui::layout::Rect;
     use tokio::sync::broadcast;
@@ -1538,6 +1736,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn routed_prompt_records_user_message_in_group_chat() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Gemini)]));
+        let mut app =
+            App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Gemini)]);
+        app.ui.focus = Focus::Input;
+        app.ui.input.content = "@gemini write tests".into();
+        app.ui.input.cursor_pos = app.ui.input.content.len();
+        app.sync_input_agent_picker();
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert_eq!(
+            backend
+                .sent_messages
+                .lock()
+                .expect("sent messages lock")
+                .as_slice(),
+            &[("thread-1".to_owned(), "write tests".to_owned())]
+        );
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        let message = &app.ui.group_chat.messages[0];
+        assert_eq!(message.seq, 1);
+        assert_eq!(message.kind, LocalGroupChatMessageKind::User);
+        assert_eq!(message.text, "@gemini write tests");
+        assert_eq!(message.agent, Some(AgentName::Gemini));
+
+        let persisted = std::fs::read_to_string(temp.path().join("group.jsonl"))
+            .expect("group chat log should be written");
+        assert!(persisted.contains(r#""kind":"user""#));
+        assert!(persisted.contains(r#""text":"@gemini write tests""#));
+    }
+
+    #[tokio::test]
     async fn routed_prompt_reuses_selected_thread_for_same_agent() {
         let backend = Arc::new(TestBackend::with_agents(vec![
             ok_agent(AgentName::Codex),
@@ -1579,6 +1815,62 @@ mod tests {
                 .as_slice(),
             &[("thread-codex".to_owned(), "explain the diff".to_owned())]
         );
+    }
+
+    #[tokio::test]
+    async fn idle_thread_records_last_assistant_message_in_group_chat_once() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(TestBackend::new());
+        let mut app =
+            App::with_group_chat_store(backend, false, PathBuf::from("/tmp"), group_store);
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-gemini-1234".into(),
+            agent: AgentName::Gemini,
+            workspace: PathBuf::from("/tmp/ws"),
+            state: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+        });
+        let mut chat = ChatState::new("thread-gemini-1234".into(), AgentName::Gemini);
+        chat.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "assistant-1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 1,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "assistant-1".into(),
+                text: "The module handles auth.".into(),
+            },
+            UiEventMessage::MessageCompleted {
+                message_id: "assistant-1".into(),
+                finished_at_ms: 2,
+            },
+        ]);
+        app.ui.chat_states.insert("thread-gemini-1234".into(), chat);
+        app.select_thread(0);
+
+        let event = ManagerEvent::ThreadStateChanged {
+            thread_id: "thread-gemini-1234".into(),
+            old: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+            new: ThreadState::Idle,
+            at_ms: 3,
+        };
+        assert!(
+            app.handle_event(AppEvent::ManagerEvent(event.clone()))
+                .await
+        );
+        assert!(app.handle_event(AppEvent::ManagerEvent(event)).await);
+
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        let message = &app.ui.group_chat.messages[0];
+        assert_eq!(message.kind, LocalGroupChatMessageKind::AgentResult);
+        assert_eq!(message.text, "The module handles auth.");
+        assert_eq!(message.agent, Some(AgentName::Gemini));
+        assert_eq!(message.thread_short_id.as_deref(), Some("thread-g"));
     }
 
     #[tokio::test]

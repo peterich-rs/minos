@@ -1,5 +1,6 @@
 pub mod agent_picker;
 pub mod chat;
+pub mod group_chat;
 pub mod input_bar;
 pub mod status_bar;
 pub mod theme;
@@ -10,6 +11,7 @@ use crate::ui::input_bar::InputState;
 use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
+use minos_protocol::LocalGroupChatMessage;
 use ratatui::{
     layout::{Constraint, Direction, Flex, Layout, Rect},
     text::{Line, Span},
@@ -40,6 +42,7 @@ pub struct UiState {
     pub threads: Vec<ThreadEntry>,
     pub selected_thread: Option<usize>,
     pub thread_list_state: ListState,
+    pub group_chat: GroupChatState,
     pub agent_picker: Option<AgentPickerState>,
     pub chat_states: HashMap<String, ChatState>,
     pub input: InputState,
@@ -60,9 +63,17 @@ pub struct DeleteConfirmState {
     pub selected_index: usize,
 }
 
+pub struct GroupChatState {
+    pub messages: Vec<LocalGroupChatMessage>,
+    pub scroll_offset: u16,
+    pub auto_scroll: bool,
+    pub max_scroll: u16,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PanelAreas {
     pub thread_list: Rect,
+    pub group_chat: Rect,
     pub chat: Rect,
     pub input: Rect,
 }
@@ -74,6 +85,7 @@ impl UiState {
             threads: Vec::new(),
             selected_thread: None,
             thread_list_state: ListState::default(),
+            group_chat: GroupChatState::new(),
             agent_picker: None,
             chat_states: HashMap::new(),
             input: InputState::new(readonly),
@@ -100,6 +112,69 @@ impl UiState {
     }
 }
 
+impl GroupChatState {
+    fn new() -> Self {
+        Self {
+            messages: Vec::new(),
+            scroll_offset: 0,
+            auto_scroll: true,
+            max_scroll: 0,
+        }
+    }
+
+    pub fn replace_messages(&mut self, messages: Vec<LocalGroupChatMessage>) {
+        self.messages = messages;
+        self.scroll_to_bottom();
+    }
+
+    pub fn push_message(&mut self, message: LocalGroupChatMessage) {
+        self.messages.push(message);
+        self.scroll_to_bottom();
+    }
+
+    pub fn update_max_scroll(&mut self, max_scroll: u16) {
+        self.max_scroll = max_scroll;
+        if !self.auto_scroll {
+            self.scroll_offset = self.scroll_offset.min(self.max_scroll);
+        }
+    }
+
+    pub fn active_scroll(&self) -> u16 {
+        if self.auto_scroll {
+            self.max_scroll
+        } else {
+            self.scroll_offset.min(self.max_scroll)
+        }
+    }
+
+    pub fn scroll_up(&mut self, lines: u16) {
+        if self.auto_scroll {
+            self.scroll_offset = self.max_scroll;
+            self.auto_scroll = false;
+        }
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+    }
+
+    pub fn scroll_down(&mut self, lines: u16) {
+        if self.auto_scroll {
+            return;
+        }
+
+        self.scroll_offset = self
+            .scroll_offset
+            .saturating_add(lines)
+            .min(self.max_scroll);
+        if self.scroll_offset >= self.max_scroll {
+            self.scroll_to_bottom();
+        }
+    }
+
+    fn scroll_to_bottom(&mut self) {
+        self.auto_scroll = true;
+        self.scroll_offset = 0;
+    }
+}
+
 pub fn render_ui(f: &mut Frame, state: &mut UiState) {
     state.input.focused = matches!(state.focus, Focus::Input);
     let chat_focused = matches!(state.focus, Focus::Chat);
@@ -122,20 +197,26 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(outer[1]);
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(middle[0]);
     state.panel_areas = PanelAreas {
-        thread_list: middle[0],
+        thread_list: left[0],
+        group_chat: left[1],
         chat: middle[1],
         input: outer[2],
     };
 
     thread_list::render_thread_list(
         f,
-        middle[0],
+        left[0],
         &state.threads,
         state.selected_thread,
         &mut state.thread_list_state,
         thread_list_focused,
     );
+    group_chat::render_group_chat(f, left[1], &mut state.group_chat);
 
     if let Some(chat) = state.current_chat_mut() {
         chat::render_chat(f, middle[1], chat, chat_focused);

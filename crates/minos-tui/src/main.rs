@@ -13,6 +13,7 @@ use ratatui::DefaultTerminal;
 mod app;
 mod backend;
 mod event;
+mod group_chat;
 mod logging;
 mod translation;
 mod ui;
