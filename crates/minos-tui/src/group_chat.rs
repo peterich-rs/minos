@@ -1,80 +1,123 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use minos_chat_store::{ChatAgentSession, ChatStore, NewChatMessage};
 use minos_protocol::LocalGroupChatMessage;
 
 #[derive(Clone)]
 pub struct GroupChatStore {
-    path: Option<PathBuf>,
+    db_path: Option<PathBuf>,
+    legacy_jsonl_path: Option<PathBuf>,
+    room_id: String,
+    room_title: String,
+    workspace_root: String,
 }
 
 impl GroupChatStore {
     #[cfg(not(test))]
-    pub fn default_for_runtime() -> anyhow::Result<Self> {
+    pub fn default_for_runtime(workspace: &Path) -> anyhow::Result<Self> {
+        let room_id = minos_chat_store::room_id_for_workspace(workspace);
+        let room_title = minos_chat_store::room_title_for_workspace(workspace);
         Ok(Self {
-            path: Some(default_group_chat_log_path()?),
+            db_path: Some(minos_chat_store::default_db_path()?),
+            legacy_jsonl_path: minos_chat_store::legacy_jsonl_path().ok(),
+            room_id,
+            room_title,
+            workspace_root: workspace.display().to_string(),
         })
     }
 
     #[cfg(test)]
     pub fn at_path(path: PathBuf) -> Self {
-        Self { path: Some(path) }
+        Self {
+            db_path: Some(path),
+            legacy_jsonl_path: None,
+            room_id: "room-test".into(),
+            room_title: "test".into(),
+            workspace_root: "/tmp/test".into(),
+        }
     }
 
     pub fn disabled() -> Self {
-        Self { path: None }
+        Self {
+            db_path: None,
+            legacy_jsonl_path: None,
+            room_id: "room-disabled".into(),
+            room_title: "disabled".into(),
+            workspace_root: String::new(),
+        }
     }
 
-    pub fn load_recent(&self, limit: usize) -> anyhow::Result<Vec<LocalGroupChatMessage>> {
-        let Some(path) = &self.path else {
+    pub async fn load_recent(&self, limit: usize) -> anyhow::Result<Vec<LocalGroupChatMessage>> {
+        let Some(store) = self.open().await? else {
             return Ok(Vec::new());
         };
-
-        let mut messages = read_messages(path)?;
-        if messages.len() > limit {
-            messages = messages.split_off(messages.len() - limit);
-        }
+        self.migrate_legacy_jsonl_if_needed(&store).await?;
+        let limit = u32::try_from(limit).unwrap_or(u32::MAX);
+        let messages = store
+            .list_recent_messages_asc(&self.room_id, Some(limit))
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect();
         Ok(messages)
     }
 
-    pub fn append(
+    pub async fn list_agent_sessions(&self) -> anyhow::Result<Vec<ChatAgentSession>> {
+        let Some(store) = self.open().await? else {
+            return Ok(Vec::new());
+        };
+        self.migrate_legacy_jsonl_if_needed(&store).await?;
+        store.list_agent_sessions(&self.room_id).await
+    }
+
+    pub async fn append(
         &self,
-        mut message: LocalGroupChatMessage,
+        message: LocalGroupChatMessage,
     ) -> anyhow::Result<LocalGroupChatMessage> {
-        let Some(path) = &self.path else {
+        let Some(store) = self.open().await? else {
+            let mut message = message;
             if message.message_id.is_empty() {
                 message.message_id = "volatile-group-message".into();
             }
             return Ok(message);
         };
+        self.migrate_legacy_jsonl_if_needed(&store).await?;
+        let message = store
+            .append_message(&self.room_id, NewChatMessage::from(message))
+            .await?;
+        Ok(message.into())
+    }
 
-        let next_seq = read_messages(path)?
-            .iter()
-            .map(|message| message.seq)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1);
-        message.seq = next_seq;
-        if message.message_id.is_empty() {
-            message.message_id = format!("tui-group-{next_seq}");
-        }
-        if message.created_at_ms == 0 {
-            message.created_at_ms = chrono::Utc::now().timestamp_millis();
-        }
+    async fn open(&self) -> anyhow::Result<Option<ChatStore>> {
+        let Some(path) = &self.db_path else {
+            return Ok(None);
+        };
+        let store = ChatStore::open(path).await?;
+        store
+            .ensure_room(&self.room_id, &self.room_title, &self.workspace_root)
+            .await?;
+        Ok(Some(store))
+    }
 
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+    async fn migrate_legacy_jsonl_if_needed(&self, store: &ChatStore) -> anyhow::Result<()> {
+        let Some(path) = &self.legacy_jsonl_path else {
+            return Ok(());
+        };
+        if store.count_messages(&self.room_id).await? > 0 {
+            return Ok(());
         }
-        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        serde_json::to_writer(&mut file, &message)?;
-        file.write_all(b"\n")?;
-        Ok(message)
+        let messages = read_legacy_jsonl(path)?;
+        for message in messages {
+            store
+                .append_message(&self.room_id, NewChatMessage::from(message))
+                .await?;
+        }
+        Ok(())
     }
 }
 
-fn read_messages(path: &PathBuf) -> anyhow::Result<Vec<LocalGroupChatMessage>> {
-    let content = match fs::read_to_string(path) {
+fn read_legacy_jsonl(path: &Path) -> anyhow::Result<Vec<LocalGroupChatMessage>> {
+    let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),
@@ -89,38 +132,12 @@ fn read_messages(path: &PathBuf) -> anyhow::Result<Vec<LocalGroupChatMessage>> {
                     target: "minos_tui::group_chat",
                     path = %path.display(),
                     error = %error,
-                    "skipping malformed group chat log line"
+                    "skipping malformed legacy group chat log line"
                 );
             }
         }
     }
     Ok(messages)
-}
-
-#[cfg(not(test))]
-fn default_group_chat_log_path() -> anyhow::Result<PathBuf> {
-    Ok(resolve_minos_home()?
-        .join("state")
-        .join("tui-group-chat.jsonl"))
-}
-
-#[cfg(not(test))]
-fn resolve_minos_home() -> anyhow::Result<PathBuf> {
-    if let Ok(path) = std::env::var("MINOS_HOME") {
-        return Ok(path.into());
-    }
-    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home).join(".minos"));
-    }
-    if let Some(user_profile) = std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(user_profile).join(".minos"));
-    }
-    let home_drive = std::env::var_os("HOMEDRIVE").filter(|value| !value.is_empty());
-    let home_path = std::env::var_os("HOMEPATH").filter(|value| !value.is_empty());
-    if let (Some(drive), Some(path)) = (home_drive, home_path) {
-        return Ok(PathBuf::from(drive).join(path).join(".minos"));
-    }
-    anyhow::bail!("unable to resolve MINOS_HOME from environment")
 }
 
 #[cfg(test)]
@@ -129,24 +146,24 @@ mod tests {
     use minos_domain::AgentName;
     use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};
 
-    #[test]
-    fn append_and_load_recent_round_trips_jsonl_messages() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
-
+    #[tokio::test]
+    async fn append_assigns_sequence_and_load_recent_returns_ascending() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = GroupChatStore::at_path(temp.path().join("group.sqlite"));
         store
             .append(LocalGroupChatMessage {
                 seq: 0,
                 message_id: String::new(),
                 created_at_ms: 10,
                 kind: LocalGroupChatMessageKind::User,
-                text: "@codex inspect src".into(),
+                text: "@codex hello".into(),
                 agent: Some(AgentName::Codex),
                 thread_id: Some("thread-1".into()),
                 thread_short_id: Some("thread-1".into()),
                 workspace: Some("/tmp/ws".into()),
             })
-            .expect("append first");
+            .await
+            .unwrap();
         store
             .append(LocalGroupChatMessage {
                 seq: 0,
@@ -159,14 +176,16 @@ mod tests {
                 thread_short_id: Some("thread-1".into()),
                 workspace: Some("/tmp/ws".into()),
             })
-            .expect("append second");
+            .await
+            .unwrap();
 
-        let messages = store.load_recent(10).expect("load");
-
+        let messages = store.load_recent(10).await.unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].seq, 1);
-        assert_eq!(messages[0].message_id, "tui-group-1");
-        assert_eq!(messages[1].seq, 2);
         assert_eq!(messages[1].kind, LocalGroupChatMessageKind::AgentResult);
+
+        let sessions = store.list_agent_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].agent, AgentName::Codex);
     }
 }

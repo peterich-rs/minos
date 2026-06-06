@@ -10,10 +10,10 @@ use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
     CloseReason, CloseThreadRequest, GetThreadParams, HealthResponse, InterruptThreadRequest,
-    ListClisResponse, LocalDaemonRpcServer, LocalGroupChatMessage, LocalIngestFrame,
-    LocalManagerEvent, LocalThreadSnapshot, ReadGroupChatParams, ReadGroupChatResponse,
-    ReadThreadParams, ReadThreadRawHistoryResponse, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse, ThreadState,
+    ListClisResponse, LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent,
+    LocalThreadSnapshot, ReadGroupChatParams, ReadGroupChatResponse, ReadThreadParams,
+    ReadThreadRawHistoryResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    ThreadState,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -25,7 +25,7 @@ use crate::rpc_server::rpc_err;
 pub struct LocalRpcConfig {
     pub addr: SocketAddr,
     pub discovery_path: PathBuf,
-    pub group_chat_log_path: PathBuf,
+    pub group_chat_db_path: PathBuf,
 }
 
 pub struct LocalRpcImpl {
@@ -34,7 +34,7 @@ pub struct LocalRpcImpl {
     pub agent: Arc<AgentGlue>,
     pub ingest_broadcaster: broadcast::Sender<LocalIngestFrame>,
     pub manager_event_broadcaster: broadcast::Sender<LocalManagerEvent>,
-    pub group_chat_log_path: PathBuf,
+    pub group_chat_db_path: PathBuf,
 }
 
 #[async_trait]
@@ -127,12 +127,14 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         &self,
         req: ReadGroupChatParams,
     ) -> jsonrpsee::core::RpcResult<ReadGroupChatResponse> {
-        let messages =
-            read_group_chat_messages(&self.group_chat_log_path, req.after_seq, req.limit)
-                .map_err(rpc_err)?;
+        let page = read_group_chat_messages(&self.group_chat_db_path, &req)
+            .await
+            .map_err(rpc_err)?;
         Ok(ReadGroupChatResponse {
-            log_path: self.group_chat_log_path.display().to_string(),
-            messages,
+            log_path: self.group_chat_db_path.display().to_string(),
+            messages: page.messages.into_iter().map(Into::into).collect(),
+            next_before_seq: page.next_before_seq,
+            has_more: page.has_more,
         })
     }
 
@@ -203,7 +205,7 @@ pub async fn start_local_rpc_server(
         agent: agent.clone(),
         ingest_broadcaster: ingest_tx.clone(),
         manager_event_broadcaster: mgr_evt_tx.clone(),
-        group_chat_log_path: config.group_chat_log_path.clone(),
+        group_chat_db_path: config.group_chat_db_path.clone(),
     };
 
     let server =
@@ -239,48 +241,43 @@ pub async fn start_local_rpc_server(
     Ok(handle)
 }
 
-fn read_group_chat_messages(
-    path: &PathBuf,
-    after_seq: Option<u64>,
-    limit: Option<u32>,
-) -> Result<Vec<LocalGroupChatMessage>, MinosError> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(MinosError::StoreIo {
-                path: path.display().to_string(),
+async fn read_group_chat_messages(
+    db_path: &std::path::Path,
+    req: &ReadGroupChatParams,
+) -> Result<minos_chat_store::ChatMessagePage, MinosError> {
+    let store = minos_chat_store::ChatStore::open(db_path)
+        .await
+        .map_err(|error| MinosError::StoreIo {
+            path: db_path.display().to_string(),
+            message: error.to_string(),
+        })?;
+    let room_id = req
+        .room_id
+        .clone()
+        .unwrap_or_else(|| "room-main".to_owned());
+    if let Some(after_seq) = req.after_seq {
+        let messages = store
+            .list_messages_after_asc(&room_id, after_seq, req.limit)
+            .await
+            .map_err(|error| MinosError::StoreIo {
+                path: db_path.display().to_string(),
                 message: error.to_string(),
-            });
-        }
-    };
-
-    let mut messages = Vec::new();
-    for line in content.lines().filter(|line| !line.trim().is_empty()) {
-        let message: LocalGroupChatMessage = match serde_json::from_str(line) {
-            Ok(message) => message,
-            Err(error) => {
-                tracing::warn!(
-                    target: "minos_daemon::local_rpc",
-                    path = %path.display(),
-                    error = %error,
-                    "skipping malformed group chat log line"
-                );
-                continue;
-            }
-        };
-        if after_seq.is_none_or(|seq| message.seq > seq) {
-            messages.push(message);
-        }
+            })?;
+        return Ok(minos_chat_store::ChatMessagePage {
+            room_id,
+            messages,
+            next_before_seq: None,
+            has_more: false,
+        });
     }
 
-    if let Some(limit) = limit.and_then(|limit| usize::try_from(limit).ok()) {
-        if messages.len() > limit {
-            messages = messages.split_off(messages.len() - limit);
-        }
-    }
-
-    Ok(messages)
+    store
+        .list_messages_desc(&room_id, req.before_seq, req.limit)
+        .await
+        .map_err(|error| MinosError::StoreIo {
+            path: db_path.display().to_string(),
+            message: error.to_string(),
+        })
 }
 
 fn write_discovery_file(path: &PathBuf, addr: SocketAddr) {
@@ -392,9 +389,11 @@ fn convert_manager_event(event: ManagerEvent) -> Option<LocalManagerEvent> {
         ManagerEvent::InstanceCrashed {
             workspace,
             affected_threads,
+            reason,
         } => Some(LocalManagerEvent::InstanceCrashed {
             workspace: workspace.display().to_string(),
             affected_threads,
+            reason: runtime_pause_reason_to_proto(&reason),
         }),
     }
 }

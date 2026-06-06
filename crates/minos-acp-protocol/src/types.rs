@@ -92,19 +92,33 @@ pub enum ToolCallContent {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(
+    tag = "outcome",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum RequestPermissionOutcome {
-    Allow,
-    Deny,
+    Selected { option_id: String },
     Cancelled,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionOptionKind {
+    AllowOnce,
+    AllowAlways,
+    RejectOnce,
+    RejectAlways,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionOption {
-    pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub title: Option<String>,
+    #[serde(alias = "id")]
+    pub option_id: String,
+    #[serde(alias = "title")]
+    pub name: String,
+    pub kind: PermissionOptionKind,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
 }
@@ -224,25 +238,55 @@ pub struct McpServer {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(
-    tag = "transportType",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
+#[serde(untagged, rename_all_fields = "camelCase")]
 pub enum McpTransport {
     Stdio {
         command: String,
         #[serde(default)]
         args: Vec<String>,
         #[serde(default)]
-        env: std::collections::HashMap<String, String>,
+        env: Vec<McpEnvVariable>,
     },
     Http {
+        #[serde(rename = "type")]
+        r#type: McpHttpTransportType,
         url: String,
+        #[serde(default)]
+        headers: Vec<McpHttpHeader>,
     },
     Sse {
+        #[serde(rename = "type")]
+        r#type: McpSseTransportType,
         url: String,
+        #[serde(default)]
+        headers: Vec<McpHttpHeader>,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpEnvVariable {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpHttpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpHttpTransportType {
+    Http,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpSseTransportType {
+    Sse,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -344,11 +388,46 @@ mod tests {
     }
 
     #[test]
+    fn stdio_mcp_server_serializes_to_gemini_acp_shape() {
+        let server = McpServer {
+            name: "minos_chat".into(),
+            transport: McpTransport::Stdio {
+                command: "/tmp/minos-tui".into(),
+                args: vec!["chat-mcp".into()],
+                env: vec![McpEnvVariable {
+                    name: "A".into(),
+                    value: "B".into(),
+                }],
+            },
+        };
+
+        let json = serde_json::to_value(&server).unwrap();
+
+        assert!(json.get("transportType").is_none());
+        assert!(json.get("type").is_none());
+        assert_eq!(json["name"], "minos_chat");
+        assert_eq!(json["command"], "/tmp/minos-tui");
+        assert_eq!(json["args"], serde_json::json!(["chat-mcp"]));
+        assert_eq!(
+            json["env"],
+            serde_json::json!([{"name": "A", "value": "B"}])
+        );
+    }
+
+    #[test]
     fn permission_outcome_round_trips() {
-        let outcome = RequestPermissionOutcome::Allow;
+        let outcome = RequestPermissionOutcome::Selected {
+            option_id: "proceed_once".into(),
+        };
         let json = serde_json::to_string(&outcome).unwrap();
-        assert_eq!(json, r#""allow""#);
+        assert_eq!(json, r#"{"outcome":"selected","optionId":"proceed_once"}"#);
         let back: RequestPermissionOutcome = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, RequestPermissionOutcome::Allow);
+        assert_eq!(back, outcome);
+
+        let cancelled = RequestPermissionOutcome::Cancelled;
+        let json = serde_json::to_string(&cancelled).unwrap();
+        assert_eq!(json, r#"{"outcome":"cancelled"}"#);
+        let back: RequestPermissionOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cancelled);
     }
 }

@@ -47,6 +47,7 @@ async fn claude_real_smoke_start_and_chat() {
         manager_tx,
         events_tx,
         &Arc::new(std::collections::HashMap::new()),
+        None,
     )
     .await
     .expect("claude spawn failed");

@@ -13,10 +13,14 @@ use minos_codex_protocol::{
     ApplyPatchApprovalResponse, CommandExecutionApprovalDecision,
     CommandExecutionRequestApprovalResponse, ExecCommandApprovalResponse,
     FileChangeApprovalDecision, FileChangeRequestApprovalResponse, GrantedPermissionProfile,
-    PermissionGrantScope, PermissionsRequestApprovalResponse, ReviewDecision, ServerRequest,
+    McpElicitationPrimitiveSchema, McpServerElicitationAction, McpServerElicitationRequestParams,
+    McpServerElicitationRequestResponse, PermissionGrantScope, PermissionsRequestApprovalResponse,
+    ReviewDecision, ServerRequest, ToolRequestUserInputResponse,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde_json::{Map, Value};
+use std::collections::HashMap;
 
 pub(crate) fn is_approval_request(req: &ServerRequest) -> bool {
     matches!(
@@ -33,9 +37,7 @@ pub(crate) fn is_approval_request(req: &ServerRequest) -> bool {
 ///
 /// Returns `Some(value)` for the five approval-shaped variants; the caller
 /// passes that value to `CodexClient::reply`. Returns `None` for non-approval
-/// variants (`item/tool/requestUserInput`, `mcpServer/elicitation/request`,
-/// `account/chatgptAuthTokens/refresh`, `item/tool/call` / DynamicToolCall) —
-/// the runtime warns and does not reply, since those are not approval prompts.
+/// variants, since those are not approval prompts.
 ///
 /// Reject choice per variant:
 /// - `decline` for `CommandExecution` / `FileChange` (agent continues turn).
@@ -75,6 +77,134 @@ pub(crate) fn auto_reject(req: &ServerRequest) -> Option<serde_json::Value> {
         | ServerRequest::DynamicToolCall(_) => return None,
     };
     Some(value.expect("typed approval response serialisation is infallible"))
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NonApprovalContext {
+    pub chat_room_id: Option<String>,
+}
+
+/// Build a conservative fallback reply for non-approval `ServerRequest`s that
+/// still require a client response to unblock the Codex turn.
+///
+/// Most replies are deliberately negative/no-input. The one positive case is
+/// the built-in, read-only Minos chat MCP server: Codex may ask the client to
+/// satisfy a form elicitation before reading chat history, and cancelling that
+/// form makes the model believe the chat read was aborted.
+pub(crate) fn auto_resolve_non_approval(
+    req: &ServerRequest,
+    context: NonApprovalContext,
+) -> Option<serde_json::Value> {
+    let value = match req {
+        ServerRequest::McpServerElicitationRequest(params) => {
+            serde_json::to_value(resolve_mcp_server_elicitation(params, &context))
+        }
+        ServerRequest::ToolRequestUserInput(_) => {
+            serde_json::to_value(ToolRequestUserInputResponse {
+                answers: HashMap::new(),
+            })
+        }
+        ServerRequest::ApplyPatchApproval(_)
+        | ServerRequest::ExecCommandApproval(_)
+        | ServerRequest::CommandExecutionRequestApproval(_)
+        | ServerRequest::FileChangeRequestApproval(_)
+        | ServerRequest::PermissionsRequestApproval(_)
+        | ServerRequest::ChatgptAuthTokensRefresh(_)
+        | ServerRequest::DynamicToolCall(_) => return None,
+    };
+    Some(value.expect("typed non-approval fallback response serialisation is infallible"))
+}
+
+fn resolve_mcp_server_elicitation(
+    params: &McpServerElicitationRequestParams,
+    context: &NonApprovalContext,
+) -> McpServerElicitationRequestResponse {
+    if let Some(content) = minos_chat_form_elicitation_content(params, context) {
+        return McpServerElicitationRequestResponse {
+            action: McpServerElicitationAction::Accept,
+            content: Some(content),
+            meta: None,
+        };
+    }
+
+    McpServerElicitationRequestResponse {
+        action: McpServerElicitationAction::Cancel,
+        content: None,
+        meta: None,
+    }
+}
+
+fn minos_chat_form_elicitation_content(
+    params: &McpServerElicitationRequestParams,
+    context: &NonApprovalContext,
+) -> Option<Value> {
+    let (server_name, requested_schema) = match params {
+        McpServerElicitationRequestParams::Variant0 {
+            server_name,
+            requested_schema,
+            ..
+        } => (server_name, requested_schema),
+        McpServerElicitationRequestParams::Variant1 { .. } => return None,
+    };
+    if server_name != "minos_chat" {
+        return None;
+    }
+
+    let required = requested_schema.required.as_deref().unwrap_or_default();
+    let mut content = Map::new();
+    for (name, schema) in &requested_schema.properties {
+        if let Some(value) = default_value_for_minos_chat_field(name, schema, context) {
+            content.insert(name.clone(), value);
+        }
+    }
+
+    if required.iter().any(|name| !content.contains_key(name)) {
+        return None;
+    }
+    Some(Value::Object(content))
+}
+
+fn default_value_for_minos_chat_field(
+    name: &str,
+    schema: &McpElicitationPrimitiveSchema,
+    context: &NonApprovalContext,
+) -> Option<Value> {
+    let normalized = normalized_field_name(name);
+    if matches!(
+        normalized.as_str(),
+        "roomid" | "chatroomid" | "defaultroomid"
+    ) {
+        return context.chat_room_id.as_ref().cloned().map(Value::String);
+    }
+
+    let schema_value = serde_json::to_value(schema).ok()?;
+    if let Some(default) = schema_value
+        .get("default")
+        .filter(|value| !value.is_null())
+        .cloned()
+    {
+        return Some(default);
+    }
+
+    match schema_value.get("type").and_then(Value::as_str) {
+        Some("number") if normalized == "limit" => Some(Value::from(100)),
+        Some("boolean")
+            if matches!(
+                normalized.as_str(),
+                "allow" | "approve" | "approved" | "confirm" | "continue" | "read"
+            ) =>
+        {
+            Some(Value::Bool(true))
+        }
+        _ => None,
+    }
+}
+
+fn normalized_field_name(name: &str) -> String {
+    name.chars()
+        .filter(|ch| *ch != '_' && *ch != '-')
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 pub(crate) fn validate_decision(
@@ -244,6 +374,83 @@ mod tests {
             auto_reject(&req).is_none(),
             "non-approval requests must not auto-reject",
         );
+    }
+
+    #[test]
+    fn auto_resolve_mcp_elicitation_returns_cancel() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "mcpServer/elicitation/request",
+            "params": {
+                "elicitationId": "elic-1",
+                "message": "Open this URL",
+                "mode": "url",
+                "serverName": "minos_chat",
+                "threadId": "thr-1",
+                "turnId": "turn-1",
+                "url": "https://example.com"
+            }
+        }))
+        .expect("mcp elicitation params decode");
+        let reply = auto_resolve_non_approval(&req, NonApprovalContext::default())
+            .expect("elicitation should auto-cancel");
+        assert_eq!(reply, json!({ "action": "cancel" }));
+    }
+
+    #[test]
+    fn auto_resolve_minos_chat_form_elicitation_accepts_default_room() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "mcpServer/elicitation/request",
+            "params": {
+                "message": "Select the Minos chat room to read",
+                "mode": "form",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "room_id": { "type": "string" }
+                    },
+                    "required": ["room_id"]
+                },
+                "serverName": "minos_chat",
+                "threadId": "thr-1",
+                "turnId": "turn-1"
+            }
+        }))
+        .expect("mcp elicitation params decode");
+        let reply = auto_resolve_non_approval(
+            &req,
+            NonApprovalContext {
+                chat_room_id: Some("room-minos".into()),
+            },
+        )
+        .expect("minos chat elicitation should auto-accept");
+        assert_eq!(
+            reply,
+            json!({
+                "action": "accept",
+                "content": { "room_id": "room-minos" }
+            })
+        );
+    }
+
+    #[test]
+    fn auto_resolve_tool_request_user_input_returns_empty_answers() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "item/tool/requestUserInput",
+            "params": {
+                "itemId": "item-1",
+                "questions": [{
+                    "header": "Need input",
+                    "id": "q1",
+                    "question": "Pick one"
+                }],
+                "threadId": "thr-1",
+                "turnId": "turn-1"
+            }
+        }))
+        .expect("tool/requestUserInput params decode");
+        let reply = auto_resolve_non_approval(&req, NonApprovalContext::default())
+            .expect("user input should auto-answer empty");
+        assert_eq!(reply, json!({ "answers": {} }));
     }
 
     #[test]

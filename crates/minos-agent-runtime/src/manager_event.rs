@@ -1,4 +1,4 @@
-use crate::state_machine::{CloseReason, ThreadState};
+use crate::state_machine::{CloseReason, PauseReason, ThreadState};
 use crate::AgentKind;
 use std::path::PathBuf;
 
@@ -22,5 +22,6 @@ pub enum ManagerEvent {
     InstanceCrashed {
         workspace: PathBuf,
         affected_threads: Vec<String>,
+        reason: PauseReason,
     },
 }

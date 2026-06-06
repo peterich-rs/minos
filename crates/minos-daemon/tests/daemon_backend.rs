@@ -73,7 +73,7 @@ async fn setup() -> (
     let config = LocalRpcConfig {
         addr: "127.0.0.1:0".parse().unwrap(),
         discovery_path,
-        group_chat_log_path: tmp.path().join("tui-group-chat.jsonl"),
+        group_chat_db_path: tmp.path().join("chat.sqlite"),
     };
     let handle = start_local_rpc_server(config, Arc::new(NoopRunner), glue.clone())
         .await

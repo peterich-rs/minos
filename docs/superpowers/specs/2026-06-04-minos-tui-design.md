@@ -89,67 +89,90 @@ Future `DaemonRpcBackend` will implement the same trait by connecting to the dae
 
 ## 5. UI Layout
 
+The interaction model is **not** “one agent thread = one user conversation”. The primary object is a **chat room thread** that aggregates multiple agents. Individual agent transcripts are secondary detail views.
+
+### 5.1 Overview Mode
+
 ```
-┌─ Status ── [● codex ✓] [● claude ✓] [○ gemini ✗] [○ opencode ✗] ── Connected ─┐
-├─ Threads ────────────┬─ Chat: codex #abc123 ───────────────────────────────────┤
-│ > codex  Running ●   │                                                        │
-│   claude Idle   ○    │  [You]                                                  │
-│                      │  帮我写一个 Rust 的 hello world                          │
-│                      │                                                        │
-│                      │  [Codex]                                                │
-│                      │  好的，我来帮你创建一个...                               │
-│                      │    🔧 write_file                                        │
-│                      │    ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄                              │
-│                      │    ✅ completed                                         │
-│                      │  文件已创建在 hello.rs                                   │
-│                      │                                                        │
-│                      │  ▓▓ (streaming)                                         │
-├──────────────────────┴────────────────────────────────────────────────────────┤
-│ > _                                                                            │
-└────────────────────────────────────────────────────────────────────────────────┘
+┌─ Status ───────────────────────────────────────────────────────────────────────┐
+├─ Threads ────────────┬─ Chat Room: thread #abc123 ──────────────┬─ Agents ────┤
+│ > launch-planning    │ [You]                                     │ > codex     │
+│   release-cut        │ @codex summarize the current blockers     │   claude    │
+│   ci-triage          │                                           │   gemini    │
+│                      │ [Codex]                                   │             │
+│                      │ The current blockers are...               │             │
+│                      │                                           │             │
+│                      │ [Claude]                                  │             │
+│                      │ I found one extra risk in...              │             │
+├──────────────────────┴───────────────────────────────────────────┴─────────────┤
+│ Chat room input: @agent route or send a room message                            │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Panel Breakdown
+### 5.2 Agent Detail Mode
 
-| Panel | Position | Width | Content |
-|-------|----------|-------|---------|
-| Status Bar | Top | 100% | Detected CLI status (green ✓ / red ✗), connection state label |
-| Thread List | Left | 25% | Active threads with agent name + status indicator + thread_id prefix |
-| Chat Panel | Right | 75% | UiEventMessage rendering for selected thread |
-| Input Bar | Bottom | 100% | Single-line input (multi-line via Shift+Enter) |
+When the user selects an agent from the right column, the TUI switches from room overview to agent inspection. The thread list is hidden temporarily because the user is already “inside” one chat room thread.
 
-### Key Bindings
+```
+┌─ Status ───────────────────────────────────────────────────────────────────────┐
+├─ Chat Room: thread #abc123 ──────────────┬─ Agents ─────┬─ Agent Detail ──────┤
+│ [You]                                    │ > codex      │ [You]                │
+│ @codex summarize the current blockers    │   claude     │ Please rewrite as... │
+│                                          │   gemini     │                      │
+│ [Codex]                                  │              │ [Agent]              │
+│ The current blockers are...              │              │ I inspected the repo │
+│                                          │              │ and updated...       │
+├──────────────────────────────────────────┴──────────────┴──────────────────────┤
+│ Chat room input                          │ Agent detail input                   │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Pressing `Esc` while the agent-detail pane is focused closes that pane and returns to overview mode.
+
+### 5.3 Panel Breakdown
+
+| Panel | Mode | Role |
+|-------|------|------|
+| Status Bar | Both | CLI detection status, backend state, high-level key hints |
+| Thread List | Overview only | Lists chat room threads, not agent execution sessions |
+| Chat Room Transcript | Both | Shows user messages plus agent result messages relevant to the room |
+| Agent List | Both | Lists agents participating in the selected chat room |
+| Agent Detail Transcript | Agent detail only | Full execution transcript for the selected agent |
+| Chat Room Input | Both | Send a room message or route with `@agent` |
+| Agent Detail Input | Agent detail only | Talk directly to the selected agent |
+
+### 5.4 Key Bindings
 
 | Key | Action |
 |-----|--------|
-| `↑/↓` | Navigate thread list |
-| `Enter` | Select thread / confirm dialog |
-| `n` | New thread (agent picker) |
-| `Enter` (in input) | Send message |
+| `↑/↓` | Navigate the focused list or move inside multiline input |
+| `←/→` | Move cursor inside input, or navigate within the focused pane where applicable |
+| `Enter` | Select thread / select agent / send input / confirm dialog |
 | `Shift+Enter` | New line in input |
-| `Ctrl+C` | Interrupt current turn |
-| `Ctrl+D` | Close current thread |
-| `Ctrl+Q` / `Esc` | Quit |
-| `PgUp/PgDn` | Scroll chat history |
-| `Tab` | Toggle focus between thread list and chat |
-| `e` | Expand/collapse tool call details |
+| `Tab` | Cycle focus between visible panes |
+| `Esc` | Cancel picker, step focus back, or close agent detail pane |
+| `PgUp/PgDn` | Scroll transcript history |
+| `Home/End` | Jump to line start/end in input or transcript edge in scrollable panes |
+| `Ctrl+A` / `Ctrl+E` | Move input cursor to line start/end |
+| `Ctrl+W` / `Alt+D` | Delete previous / next word in input |
+| `Alt+B` / `Alt+F` | Move input cursor by word |
+| `Ctrl+C` | Interrupt the selected running agent thread |
+| `Ctrl+D` | Close current agent thread |
 
 ## 6. Message Rendering Rules
 
 | UiEventMessage Variant | Rendering |
 |------------------------|-----------|
-| `ThreadOpened` | System notice in chat (thin line separator) |
-| `MessageStarted` (User) | Blue left-aligned label `[You]` |
-| `MessageStarted` (Assistant) | Green left-aligned label `[Agent]` |
-| `TextDelta` | Append to current message text; show blinking cursor ▓ when streaming |
-| `ReasoningDelta` | Gray italic block, collapsible |
-| `ToolCallPlaced` | 🔧 + tool name + folded args |
-| `ToolCallCompleted` | ✅ or ❌ + output summary (3 lines max, expandable) |
-| `MessageCompleted` | Remove streaming cursor |
-| `Error` | Red banner across chat width |
-| `Raw` | Yellow monospace block |
-| `ThreadClosed` | System notice with reason |
-| `ThreadTitleUpdated` | Update tab/thread title |
+| Chat room user message | Blue left-aligned label `[You]` in the room transcript |
+| Chat room agent result | Green left-aligned label `[Agent]` in the room transcript, only showing the result-level content relevant to the room |
+| Agent detail `MessageStarted` / `TextDelta` | Full assistant/user transcript in the agent-detail pane |
+| `ReasoningDelta` | Shown only in the agent-detail pane |
+| `ToolCallPlaced` / `ToolCallCompleted` | Shown only in the agent-detail pane |
+| `MessageCompleted` | Removes the streaming cursor / pending state from the agent-detail pane |
+| `Error` | Room-level summary in the chat room transcript, with full details in agent detail |
+| `Raw` | Suppressed from the room transcript; may be exposed in agent detail for debugging |
+| `ThreadClosed` | System notice with reason in the relevant pane |
+| `ThreadTitleUpdated` | Update the chat room thread label |
 
 ### Code Block Detection
 
@@ -260,14 +283,18 @@ pub struct ToolCallBlock {
 }
 ```
 
-## 10. New Thread Flow
+## 10. Thread Flow
 
-1. User presses `n` → agent picker popup shows only installed agents (from `detect_clis()`)
-2. User selects an agent → workspace input (defaults to current directory)
-3. Call `backend.start_agent(agent, workspace)`
-4. Thread appears in thread list with `Running` or `Starting` state
-5. Auto-switch to new thread
-6. Input bar gains focus
+For the next iteration, thread creation is not the main design problem. The TUI may start with a default initial chat room thread and defer explicit “new thread” affordances until the room/agent-detail split is solid.
+
+The important flow is:
+
+1. User focuses a chat room thread from the left list.
+2. User sends a room message or `@agent` routed message through the chat room input.
+3. The room transcript shows only result-level messages from participating agents.
+4. The right column lists available agents for that room.
+5. Selecting an agent opens agent-detail mode and reveals that agent’s full transcript plus a dedicated direct-input box.
+6. `Esc` from agent detail closes that pane and restores the thread list.
 
 ## 11. CLI Interface
 

@@ -171,6 +171,14 @@ impl ChatState {
             })
     }
 
+    pub fn finish_streaming_assistant_messages(&mut self) {
+        for message in &mut self.messages {
+            if matches!(message.role, MessageRole::Assistant) {
+                message.is_streaming = false;
+            }
+        }
+    }
+
     fn apply_ui_event(&mut self, event: UiEventMessage) {
         match event {
             UiEventMessage::MessageStarted {
@@ -178,6 +186,9 @@ impl ChatState {
                 role,
                 started_at_ms: _,
             } => {
+                if matches!(role, MessageRole::Assistant) {
+                    self.finish_streaming_assistant_messages();
+                }
                 self.messages.push(RenderedMessage {
                     message_id,
                     role,
@@ -273,7 +284,9 @@ impl ChatState {
                     .and_then(|mid| self.messages.iter_mut().rev().find(|m| m.message_id == mid))
                 {
                     msg.error = Some(message);
+                    msg.is_streaming = false;
                 } else {
+                    self.finish_streaming_assistant_messages();
                     self.messages.push(RenderedMessage {
                         message_id: String::new(),
                         role: MessageRole::System,
@@ -294,6 +307,7 @@ impl ChatState {
             }
             UiEventMessage::ThreadOpened { .. } | UiEventMessage::ThreadTitleUpdated { .. } => {}
             UiEventMessage::ThreadClosed { reason, .. } => {
+                self.finish_streaming_assistant_messages();
                 self.messages.push(RenderedMessage {
                     message_id: String::new(),
                     role: MessageRole::System,
@@ -710,6 +724,52 @@ mod tests {
         }]);
 
         assert!(cs.messages.is_empty());
+    }
+
+    #[test]
+    fn new_assistant_message_finishes_previous_streaming_assistant() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "m1".into(),
+                text: "first".into(),
+            },
+            UiEventMessage::MessageStarted {
+                message_id: "m2".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 1,
+            },
+        ]);
+
+        assert!(!cs.messages[0].is_streaming);
+        assert!(cs.messages[1].is_streaming);
+    }
+
+    #[test]
+    fn error_finishes_targeted_streaming_assistant() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::Error {
+                code: "failed".into(),
+                message: "tool failed".into(),
+                message_id: Some("m1".into()),
+            },
+        ]);
+
+        assert!(!cs.messages[0].is_streaming);
+        assert_eq!(cs.messages[0].error.as_deref(), Some("tool failed"));
     }
 
     #[test]

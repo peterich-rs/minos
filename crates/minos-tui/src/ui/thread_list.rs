@@ -24,6 +24,7 @@ fn agent_label(agent: AgentName) -> &'static str {
 pub fn render_thread_list(
     f: &mut Frame,
     area: Rect,
+    title: &str,
     threads: &[ThreadEntry],
     selected: Option<usize>,
     list_state: &mut ListState,
@@ -68,7 +69,7 @@ pub fn render_thread_list(
 
     let list = List::new(items).block(
         ratatui::widgets::Block::bordered()
-            .title("Threads")
+            .title(title)
             .border_style(if focused {
                 FOCUSED_BORDER
             } else {

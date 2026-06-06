@@ -15,7 +15,9 @@ use crate::backend::AgentBackend;
 use crate::event::AppEvent;
 use crate::group_chat::GroupChatStore;
 use crate::translation::{ChatSelectionPoint, ChatState};
-use crate::ui::{AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState};
+use crate::ui::{
+    room_list::RoomEntry, AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState,
+};
 
 pub struct App {
     backend: Arc<dyn AgentBackend>,
@@ -25,11 +27,12 @@ pub struct App {
     hydrated_threads: HashSet<String>,
     group_chat_store: GroupChatStore,
     recorded_agent_results: HashMap<String, String>,
+    event_tx: Option<tokio::sync::mpsc::UnboundedSender<AppEvent>>,
 }
 
 impl App {
     pub fn new(backend: Arc<dyn AgentBackend>, readonly: bool, workspace: PathBuf) -> Self {
-        let group_chat_store = default_group_chat_store();
+        let group_chat_store = default_group_chat_store(&workspace);
         Self::with_group_chat_store(backend, readonly, workspace, group_chat_store)
     }
 
@@ -39,19 +42,27 @@ impl App {
         workspace: PathBuf,
         group_chat_store: GroupChatStore,
     ) -> Self {
+        let mut ui = UiState::new(readonly);
+        ui.rooms.push(RoomEntry {
+            room_id: default_room_id(workspace.as_path()),
+            title: default_room_title(workspace.as_path()),
+        });
+        ui.selected_room = Some(0);
+        ui.room_list_state.select(Some(0));
         Self {
             backend,
-            ui: UiState::new(readonly),
+            ui,
             should_quit: false,
             workspace,
             hydrated_threads: HashSet::new(),
             group_chat_store,
             recorded_agent_results: HashMap::new(),
+            event_tx: None,
         }
     }
 
     pub async fn init(&mut self) -> anyhow::Result<()> {
-        self.load_group_chat_history();
+        self.load_group_chat_history().await;
         let agents = self.backend.detect_clis().await?;
         self.ui.status.update_agents(agents);
         self.sync_input_agent_picker();
@@ -77,7 +88,7 @@ impl App {
                     );
                     chat.apply_ui_events(events);
                     let thread_id = ingest.thread_id.clone();
-                    self.record_agent_group_result_if_done(&thread_id);
+                    self.record_agent_group_result_if_done(&thread_id).await;
                     return true;
                 }
                 debug!(
@@ -88,6 +99,22 @@ impl App {
                 false
             }
             AppEvent::ManagerEvent(event) => self.handle_manager_event(event).await,
+            AppEvent::AgentStartedForPrompt {
+                agent,
+                thread_id,
+                cwd,
+                text,
+            } => {
+                self.ensure_thread_visible(thread_id.clone(), agent, cwd);
+                self.send_text_to_thread(thread_id, text, None).await
+            }
+            AppEvent::SendMessageFailed { thread_id, error } => {
+                self.ui.set_error(format!(
+                    "Failed to send message to {}: {error}",
+                    short_thread_id(&thread_id)
+                ));
+                true
+            }
             AppEvent::Key(key) => self.handle_key(key).await,
             AppEvent::Mouse(mouse) => self.handle_mouse(mouse).await,
             AppEvent::Tick => {
@@ -130,6 +157,10 @@ impl App {
 
     pub fn ui(&mut self) -> &mut UiState {
         &mut self.ui
+    }
+
+    pub fn set_event_sender(&mut self, tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
+        self.event_tx = Some(tx);
     }
 
     async fn hydrate_daemon_threads(&mut self) {
@@ -259,11 +290,15 @@ impl App {
                     .chat_states
                     .insert(thread_id.clone(), ChatState::new(thread_id, agent));
                 self.select_thread(self.ui.threads.len().saturating_sub(1));
-                self.ui.focus = Focus::Input;
+                self.ui.focus = Focus::RoomInput;
                 self.sync_input_agent_picker();
                 true
             }
             ManagerEvent::ThreadStateChanged { thread_id, new, .. } => {
+                let is_terminal_for_stream = !matches!(
+                    new,
+                    ThreadState::Starting | ThreadState::Running { .. } | ThreadState::Resuming
+                );
                 if let Some(entry) = self
                     .ui
                     .threads
@@ -272,7 +307,12 @@ impl App {
                 {
                     entry.state = new;
                 }
-                self.record_agent_group_result_if_done(&thread_id);
+                if is_terminal_for_stream {
+                    if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
+                        chat.finish_streaming_assistant_messages();
+                    }
+                }
+                self.record_agent_group_result_if_done(&thread_id).await;
                 true
             }
             ManagerEvent::ThreadClosed { thread_id, reason } => {
@@ -284,17 +324,25 @@ impl App {
                 {
                     entry.state = ThreadState::Closed { reason };
                 }
-                self.record_agent_group_result_if_done(&thread_id);
+                if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
+                    chat.finish_streaming_assistant_messages();
+                }
+                self.record_agent_group_result_if_done(&thread_id).await;
                 true
             }
             ManagerEvent::InstanceCrashed {
-                affected_threads, ..
+                reason,
+                affected_threads,
+                ..
             } => {
                 for tid in affected_threads {
                     if let Some(entry) = self.ui.threads.iter_mut().find(|t| t.thread_id == tid) {
                         entry.state = ThreadState::Suspended {
-                            reason: minos_agent_runtime::PauseReason::InstanceReaped,
+                            reason: reason.clone(),
                         };
+                    }
+                    if let Some(chat) = self.ui.chat_states.get_mut(&tid) {
+                        chat.finish_streaming_assistant_messages();
                     }
                 }
                 true
@@ -332,55 +380,165 @@ impl App {
         }
 
         match key.code {
-            KeyCode::PageUp => return self.scroll_current_chat_up(5),
-            KeyCode::PageDown => return self.scroll_current_chat_down(5),
-            KeyCode::Home => return self.scroll_current_chat_to_top(),
-            KeyCode::End => return self.scroll_current_chat_to_bottom(),
-            KeyCode::Char('n') if !matches!(self.ui.focus, Focus::Input) => {
+            KeyCode::PageUp => return self.page_up_active_pane(),
+            KeyCode::PageDown => return self.page_down_active_pane(),
+            KeyCode::Home if !is_input_focus(self.ui.focus) => return self.home_active_pane(),
+            KeyCode::End if !is_input_focus(self.ui.focus) => return self.end_active_pane(),
+            KeyCode::Char('n')
+                if !matches!(self.ui.focus, Focus::RoomInput | Focus::AgentInput) =>
+            {
                 return self.open_agent_picker();
             }
             _ => {}
         }
 
         match self.ui.focus {
-            Focus::Input => self.handle_input_key(key).await,
-            Focus::ThreadList => self.handle_thread_list_key(key).await,
-            Focus::Chat => self.handle_chat_key(key).await,
+            Focus::RoomInput => self.handle_room_input_key(key).await,
+            Focus::AgentInput => self.handle_agent_input_key(key).await,
+            Focus::RoomList => self.handle_room_list_key(key).await,
+            Focus::RoomChat => self.handle_room_chat_key(key).await,
+            Focus::AgentList => self.handle_agent_list_key(key).await,
+            Focus::AgentChat => self.handle_agent_chat_key(key).await,
         }
     }
 
-    async fn handle_input_key(&mut self, key: KeyEvent) -> bool {
+    async fn handle_room_input_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Enter => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.ui.input.insert_char('\n');
+                    self.ui.room_input.insert_char('\n');
                     self.sync_input_agent_picker();
                     true
-                } else if self.ui.input.has_agent_picker() {
-                    let agents = self.ui.status.agents.clone();
-                    self.ui.input.accept_agent_completion(agents.as_slice());
+                } else if self.ui.room_input.has_agent_picker() {
+                    let candidates = self.ui.room_agent_mention_candidates();
+                    self.ui
+                        .room_input
+                        .accept_agent_completion(candidates.as_slice());
                     self.sync_input_agent_picker();
                     true
                 } else {
-                    self.submit_input().await
+                    self.submit_room_input().await
                 }
             }
-            KeyCode::Char(c) => {
-                self.ui.input.insert_char(c);
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let changed = self.ui.room_input.move_word_left();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let changed = self.ui.room_input.move_word_right();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Left => {
+                let changed = self.ui.room_input.move_left();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Right => {
+                let changed = self.ui.room_input.move_right();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let changed = self.ui.room_input.move_to_start();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Home => {
+                let changed = self.ui.room_input.move_line_start();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let changed = self.ui.room_input.move_to_end();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::End => {
+                let changed = self.ui.room_input.move_line_end();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Char(c)
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                let changed = match c.to_ascii_lowercase() {
+                    'a' => self.ui.room_input.move_line_start(),
+                    'b' => self.ui.room_input.move_left(),
+                    'e' => self.ui.room_input.move_line_end(),
+                    'f' => self.ui.room_input.move_right(),
+                    'k' => self.ui.room_input.delete_to_line_end(),
+                    'u' => self.ui.room_input.delete_to_line_start(),
+                    'w' => self.ui.room_input.delete_prev_word(),
+                    _ => false,
+                };
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Char(c)
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                let changed = match c.to_ascii_lowercase() {
+                    'b' => self.ui.room_input.move_word_left(),
+                    'd' => self.ui.room_input.delete_next_word(),
+                    'f' => self.ui.room_input.move_word_right(),
+                    _ => false,
+                };
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Char(c) if is_text_input_key(key) => {
+                self.ui.room_input.insert_char(c);
                 self.sync_input_agent_picker();
                 true
+            }
+            KeyCode::Backspace
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
+            {
+                let changed = self.ui.room_input.delete_prev_word();
+                self.sync_input_agent_picker();
+                changed
             }
             KeyCode::Backspace => {
-                self.ui.input.backspace();
+                self.ui.room_input.backspace();
                 self.sync_input_agent_picker();
                 true
             }
-            KeyCode::Up if self.ui.input.has_agent_picker() => {
-                self.ui.input.select_previous_agent();
+            KeyCode::Up if self.ui.room_input.has_agent_picker() => {
+                self.ui.room_input.select_previous_agent();
                 true
             }
-            KeyCode::Down if self.ui.input.has_agent_picker() => {
-                self.ui.input.select_next_agent();
+            KeyCode::Down if self.ui.room_input.has_agent_picker() => {
+                self.ui.room_input.select_next_agent();
+                true
+            }
+            KeyCode::Up => {
+                let changed = self.ui.room_input.move_up();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Down => {
+                let changed = self.ui.room_input.move_down();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Delete
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
+            {
+                let changed = self.ui.room_input.delete_next_word();
+                self.sync_input_agent_picker();
+                changed
+            }
+            KeyCode::Delete => {
+                self.ui.room_input.delete_forward();
+                self.sync_input_agent_picker();
                 true
             }
             KeyCode::Tab => {
@@ -388,8 +546,8 @@ impl App {
                 true
             }
             KeyCode::Esc => {
-                if self.ui.input.has_agent_picker() {
-                    self.ui.input.clear_agent_picker();
+                if self.ui.room_input.has_agent_picker() {
+                    self.ui.room_input.clear_agent_picker();
                     true
                 } else {
                     self.handle_escape()
@@ -399,24 +557,161 @@ impl App {
         }
     }
 
-    async fn handle_thread_list_key(&mut self, key: KeyEvent) -> bool {
+    async fn handle_agent_input_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Enter => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.ui.agent_input.insert_char('\n');
+                    true
+                } else {
+                    self.submit_agent_input().await
+                }
+            }
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.ui.agent_input.move_word_left()
+            }
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.ui.agent_input.move_word_right()
+            }
+            KeyCode::Left => self.ui.agent_input.move_left(),
+            KeyCode::Right => self.ui.agent_input.move_right(),
+            KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.ui.agent_input.move_to_start()
+            }
+            KeyCode::Home => self.ui.agent_input.move_line_start(),
+            KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.ui.agent_input.move_to_end()
+            }
+            KeyCode::End => self.ui.agent_input.move_line_end(),
+            KeyCode::Char(c)
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                match c.to_ascii_lowercase() {
+                    'a' => self.ui.agent_input.move_line_start(),
+                    'b' => self.ui.agent_input.move_left(),
+                    'e' => self.ui.agent_input.move_line_end(),
+                    'f' => self.ui.agent_input.move_right(),
+                    'k' => self.ui.agent_input.delete_to_line_end(),
+                    'u' => self.ui.agent_input.delete_to_line_start(),
+                    'w' => self.ui.agent_input.delete_prev_word(),
+                    _ => false,
+                }
+            }
+            KeyCode::Char(c)
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                match c.to_ascii_lowercase() {
+                    'b' => self.ui.agent_input.move_word_left(),
+                    'd' => self.ui.agent_input.delete_next_word(),
+                    'f' => self.ui.agent_input.move_word_right(),
+                    _ => false,
+                }
+            }
+            KeyCode::Char(c) if is_text_input_key(key) => {
+                self.ui.agent_input.insert_char(c);
+                true
+            }
+            KeyCode::Backspace
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
+            {
+                self.ui.agent_input.delete_prev_word()
+            }
+            KeyCode::Backspace => {
+                self.ui.agent_input.backspace();
+                true
+            }
+            KeyCode::Up => self.ui.agent_input.move_up(),
+            KeyCode::Down => self.ui.agent_input.move_down(),
+            KeyCode::Delete
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
+            {
+                self.ui.agent_input.delete_next_word()
+            }
+            KeyCode::Delete => {
+                self.ui.agent_input.delete_forward();
+                true
+            }
+            KeyCode::Tab => {
+                self.cycle_focus();
+                true
+            }
+            KeyCode::Esc => self.handle_escape(),
+            _ => false,
+        }
+    }
+
+    async fn handle_room_list_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Up => {
-                if let Some(selected) = self.ui.selected_thread {
-                    self.select_thread(selected.saturating_sub(1));
+                if let Some(selected) = self.ui.selected_room {
+                    self.select_room(selected.saturating_sub(1));
                 }
                 true
             }
             KeyCode::Down => {
-                if let Some(selected) = self.ui.selected_thread {
-                    let last = self.ui.threads.len().saturating_sub(1);
-                    self.select_thread((selected + 1).min(last));
+                if let Some(selected) = self.ui.selected_room {
+                    let last = self.ui.rooms.len().saturating_sub(1);
+                    self.select_room((selected + 1).min(last));
                 }
                 true
             }
             KeyCode::Enter => {
-                self.ui.focus = Focus::Chat;
+                self.ui.focus = Focus::RoomChat;
                 true
+            }
+            KeyCode::Tab => {
+                self.cycle_focus();
+                true
+            }
+            KeyCode::Esc => self.handle_escape(),
+            _ => false,
+        }
+    }
+
+    async fn handle_room_chat_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Up => self.scroll_group_chat_up(1),
+            KeyCode::Down => self.scroll_group_chat_down(1),
+            KeyCode::PageUp => self.scroll_group_chat_up(5),
+            KeyCode::PageDown => self.scroll_group_chat_down(5),
+            KeyCode::Home => self.scroll_group_chat_to_top(),
+            KeyCode::End => self.scroll_group_chat_to_bottom(),
+            KeyCode::Enter => {
+                self.ui.focus = Focus::RoomInput;
+                true
+            }
+            KeyCode::Tab => {
+                self.cycle_focus();
+                true
+            }
+            KeyCode::Esc => self.handle_escape(),
+            _ => false,
+        }
+    }
+
+    async fn handle_agent_list_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Up => {
+                self.select_previous_thread();
+                true
+            }
+            KeyCode::Down => {
+                self.select_next_thread();
+                true
+            }
+            KeyCode::Enter => {
+                if self.ui.selected_thread.is_some() {
+                    self.ui.agent_detail_visible = true;
+                    self.ui.focus = Focus::AgentChat;
+                    return true;
+                }
+                false
             }
             KeyCode::Delete => self.request_delete_current_thread(),
             KeyCode::Tab => {
@@ -428,7 +723,7 @@ impl App {
         }
     }
 
-    async fn handle_chat_key(&mut self, key: KeyEvent) -> bool {
+    async fn handle_agent_chat_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Up => self.scroll_current_chat_up(1),
             KeyCode::Down => self.scroll_current_chat_down(1),
@@ -437,7 +732,7 @@ impl App {
             KeyCode::Home => self.scroll_current_chat_to_top(),
             KeyCode::End => self.scroll_current_chat_to_bottom(),
             KeyCode::Enter => {
-                self.ui.focus = Focus::Input;
+                self.ui.focus = Focus::AgentInput;
                 true
             }
             KeyCode::Char('e') => self.toggle_tool_expansion(),
@@ -539,27 +834,27 @@ impl App {
             }
         }
 
-        if rect_contains(self.ui.panel_areas.thread_list, mouse.column, mouse.row) {
+        if rect_contains(self.ui.panel_areas.room_list, mouse.column, mouse.row) {
             return match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    self.ui.focus = Focus::ThreadList;
-                    self.select_previous_thread();
+                    self.ui.focus = Focus::RoomList;
+                    self.select_previous_room();
                     true
                 }
                 MouseEventKind::ScrollDown => {
-                    self.ui.focus = Focus::ThreadList;
-                    self.select_next_thread();
+                    self.ui.focus = Focus::RoomList;
+                    self.select_next_room();
                     true
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    self.ui.focus = Focus::ThreadList;
+                    self.ui.focus = Focus::RoomList;
                     if let Some(index) = clicked_thread_index(
-                        self.ui.panel_areas.thread_list,
-                        &self.ui.thread_list_state,
+                        self.ui.panel_areas.room_list,
+                        &self.ui.room_list_state,
                         mouse.row,
-                        self.ui.threads.len(),
+                        self.ui.rooms.len(),
                     ) {
-                        self.select_thread(index);
+                        self.select_room(index);
                     }
                     true
                 }
@@ -567,38 +862,67 @@ impl App {
             };
         }
 
-        if rect_contains(self.ui.panel_areas.group_chat, mouse.column, mouse.row) {
+        if rect_contains(self.ui.panel_areas.room_chat, mouse.column, mouse.row) {
             return match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    self.ui.group_chat.scroll_up(3);
-                    true
+                    self.ui.focus = Focus::RoomChat;
+                    self.scroll_group_chat_up(3)
                 }
                 MouseEventKind::ScrollDown => {
-                    self.ui.group_chat.scroll_down(3);
-                    true
+                    self.ui.focus = Focus::RoomChat;
+                    self.scroll_group_chat_down(3)
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    self.ui.focus = Focus::ThreadList;
+                    self.ui.focus = Focus::RoomChat;
                     true
                 }
                 _ => false,
             };
         }
 
-        if rect_contains(self.ui.panel_areas.chat, mouse.column, mouse.row) {
+        if rect_contains(self.ui.panel_areas.agent_list, mouse.column, mouse.row) {
             return match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    self.ui.focus = Focus::Chat;
+                    self.ui.focus = Focus::AgentList;
+                    self.select_previous_thread();
+                    true
+                }
+                MouseEventKind::ScrollDown => {
+                    self.ui.focus = Focus::AgentList;
+                    self.select_next_thread();
+                    true
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.ui.focus = Focus::AgentList;
+                    if let Some(index) = clicked_thread_index(
+                        self.ui.panel_areas.agent_list,
+                        &self.ui.agent_list_state,
+                        mouse.row,
+                        self.ui.threads.len(),
+                    ) {
+                        self.select_thread(index);
+                        self.ui.agent_detail_visible = true;
+                    }
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        if rect_contains(self.ui.panel_areas.agent_chat, mouse.column, mouse.row) {
+            return match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.ui.focus = Focus::AgentChat;
                     self.sync_input_agent_picker();
                     self.scroll_current_chat_up(3)
                 }
                 MouseEventKind::ScrollDown => {
-                    self.ui.focus = Focus::Chat;
+                    self.ui.focus = Focus::AgentChat;
                     self.sync_input_agent_picker();
                     self.scroll_current_chat_down(3)
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    self.ui.focus = Focus::Chat;
+                    self.ui.focus = Focus::AgentChat;
                     self.sync_input_agent_picker();
                     if self.begin_chat_selection(mouse.column, mouse.row) {
                         return true;
@@ -613,11 +937,21 @@ impl App {
             };
         }
 
-        if rect_contains(self.ui.panel_areas.input, mouse.column, mouse.row) {
+        if rect_contains(self.ui.panel_areas.room_input, mouse.column, mouse.row) {
             return match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    self.ui.focus = Focus::Input;
+                    self.ui.focus = Focus::RoomInput;
                     self.sync_input_agent_picker();
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        if rect_contains(self.ui.panel_areas.agent_input, mouse.column, mouse.row) {
+            return match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.ui.focus = Focus::AgentInput;
                     true
                 }
                 _ => false,
@@ -626,14 +960,12 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.ui.focus = Focus::Chat;
-                self.sync_input_agent_picker();
-                self.scroll_current_chat_up(3)
+                self.ui.focus = Focus::RoomChat;
+                self.scroll_group_chat_up(3)
             }
             MouseEventKind::ScrollDown => {
-                self.ui.focus = Focus::Chat;
-                self.sync_input_agent_picker();
-                self.scroll_current_chat_down(3)
+                self.ui.focus = Focus::RoomChat;
+                self.scroll_group_chat_down(3)
             }
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => false,
             _ => false,
@@ -649,7 +981,7 @@ impl App {
     }
 
     fn begin_chat_selection(&mut self, column: u16, row: u16) -> bool {
-        let content_area = chat_content_area(self.ui.panel_areas.chat);
+        let content_area = chat_content_area(self.ui.panel_areas.agent_chat);
         if !rect_contains(content_area, column, row) {
             if let Some(chat) = self.ui.current_chat_mut() {
                 chat.clear_selection();
@@ -666,7 +998,7 @@ impl App {
     }
 
     fn handle_chat_selection_mouse(&mut self, mouse: MouseEvent) -> bool {
-        let content_area = chat_content_area(self.ui.panel_areas.chat);
+        let content_area = chat_content_area(self.ui.panel_areas.agent_chat);
         let selected_text = {
             let Some(chat) = self.ui.current_chat_mut() else {
                 return false;
@@ -760,7 +1092,8 @@ impl App {
 
         if self.ui.threads.is_empty() {
             self.ui.selected_thread = None;
-            self.ui.thread_list_state.select(None);
+            self.ui.agent_list_state.select(None);
+            self.ui.agent_detail_visible = false;
         } else {
             self.select_thread(index.min(self.ui.threads.len().saturating_sub(1)));
         }
@@ -810,7 +1143,25 @@ impl App {
 
     fn select_thread(&mut self, index: usize) {
         self.ui.selected_thread = Some(index);
-        self.ui.thread_list_state.select(Some(index));
+        self.ui.agent_list_state.select(Some(index));
+    }
+
+    fn select_room(&mut self, index: usize) {
+        self.ui.selected_room = Some(index);
+        self.ui.room_list_state.select(Some(index));
+    }
+
+    fn select_previous_room(&mut self) {
+        if let Some(selected) = self.ui.selected_room {
+            self.select_room(selected.saturating_sub(1));
+        }
+    }
+
+    fn select_next_room(&mut self) {
+        if let Some(selected) = self.ui.selected_room {
+            let last = self.ui.rooms.len().saturating_sub(1);
+            self.select_room((selected + 1).min(last));
+        }
     }
 
     fn select_previous_thread(&mut self) {
@@ -827,11 +1178,29 @@ impl App {
     }
 
     fn cycle_focus(&mut self) {
-        self.ui.focus = match self.ui.focus {
-            Focus::ThreadList => Focus::Chat,
-            Focus::Chat => Focus::Input,
-            Focus::Input => Focus::ThreadList,
+        let order = if self.ui.agent_detail_visible {
+            [
+                Focus::RoomChat,
+                Focus::AgentList,
+                Focus::AgentChat,
+                Focus::RoomInput,
+                Focus::AgentInput,
+            ]
+            .as_slice()
+        } else {
+            [
+                Focus::RoomList,
+                Focus::RoomChat,
+                Focus::AgentList,
+                Focus::RoomInput,
+            ]
+            .as_slice()
         };
+        let current = order
+            .iter()
+            .position(|focus| *focus == self.ui.focus)
+            .unwrap_or(0);
+        self.ui.focus = order[(current + 1) % order.len()];
         self.sync_input_agent_picker();
     }
 
@@ -841,18 +1210,55 @@ impl App {
             return true;
         }
 
-        if self.ui.input.has_agent_picker() {
-            self.ui.input.clear_agent_picker();
+        if self.ui.room_input.has_agent_picker() {
+            self.ui.room_input.clear_agent_picker();
             return true;
         }
 
-        if !matches!(self.ui.focus, Focus::ThreadList) {
-            self.ui.focus = Focus::ThreadList;
+        if self.ui.agent_detail_visible
+            && matches!(self.ui.focus, Focus::AgentChat | Focus::AgentInput)
+        {
+            self.ui.agent_detail_visible = false;
+            self.ui.focus = Focus::AgentList;
+            self.sync_input_agent_picker();
+            return true;
+        }
+
+        let fallback_focus = if self.ui.agent_detail_visible {
+            Focus::RoomChat
+        } else {
+            Focus::RoomList
+        };
+
+        if self.ui.focus != fallback_focus {
+            self.ui.focus = fallback_focus;
             self.sync_input_agent_picker();
             return true;
         }
 
         false
+    }
+
+    fn scroll_group_chat_up(&mut self, lines: u16) -> bool {
+        self.ui.group_chat.scroll_up(lines);
+        true
+    }
+
+    fn scroll_group_chat_down(&mut self, lines: u16) -> bool {
+        self.ui.group_chat.scroll_down(lines);
+        true
+    }
+
+    fn scroll_group_chat_to_top(&mut self) -> bool {
+        self.ui.group_chat.auto_scroll = false;
+        self.ui.group_chat.scroll_offset = 0;
+        true
+    }
+
+    fn scroll_group_chat_to_bottom(&mut self) -> bool {
+        self.ui.group_chat.auto_scroll = true;
+        self.ui.group_chat.scroll_offset = 0;
+        true
     }
 
     fn scroll_current_chat_up(&mut self, lines: u16) -> bool {
@@ -911,33 +1317,154 @@ impl App {
             })
     }
 
-    async fn submit_input(&mut self) -> bool {
-        let text = self.ui.input.content.clone();
+    fn page_up_active_pane(&mut self) -> bool {
+        match self.ui.focus {
+            Focus::RoomChat => self.scroll_group_chat_up(5),
+            Focus::AgentChat => self.scroll_current_chat_up(5),
+            _ => false,
+        }
+    }
+
+    fn page_down_active_pane(&mut self) -> bool {
+        match self.ui.focus {
+            Focus::RoomChat => self.scroll_group_chat_down(5),
+            Focus::AgentChat => self.scroll_current_chat_down(5),
+            _ => false,
+        }
+    }
+
+    fn home_active_pane(&mut self) -> bool {
+        match self.ui.focus {
+            Focus::RoomChat => self.scroll_group_chat_to_top(),
+            Focus::AgentChat => self.scroll_current_chat_to_top(),
+            _ => false,
+        }
+    }
+
+    fn end_active_pane(&mut self) -> bool {
+        match self.ui.focus {
+            Focus::RoomChat => self.scroll_group_chat_to_bottom(),
+            Focus::AgentChat => self.scroll_current_chat_to_bottom(),
+            _ => false,
+        }
+    }
+
+    fn active_room_target_thread_id(&self) -> Option<String> {
+        self.ui
+            .selected_thread
+            .and_then(|index| self.ui.threads.get(index))
+            .map(|thread| thread.thread_id.clone())
+            .or_else(|| (self.ui.threads.len() == 1).then(|| self.ui.threads[0].thread_id.clone()))
+    }
+
+    async fn submit_room_input(&mut self) -> bool {
+        let text = self.ui.room_input.content.clone();
         if text.trim().is_empty() {
-            self.ui.input.take_input();
+            self.ui.room_input.take_input();
             return true;
         }
 
-        if let Some((agent, body)) = parse_agent_routing(text.as_str()) {
-            if body.trim().is_empty() {
-                self.ui
-                    .set_error(format!("Type a prompt after @{}", agent.bin_name()));
-                return true;
+        if let Some((target, body)) = parse_agent_routing(text.as_str()) {
+            self.ui.room_input.take_input();
+            if let Some(thread_short_id) = target.thread_short_id {
+                return self
+                    .dispatch_prompt_to_existing_agent(
+                        target.agent,
+                        thread_short_id,
+                        body,
+                        text.trim().to_owned(),
+                    )
+                    .await;
             }
-            self.ui.input.take_input();
+            if body.trim().is_empty() {
+                return self
+                    .invite_agent_to_room(target.agent, text.trim().to_owned())
+                    .await;
+            }
             return self
-                .dispatch_prompt_to_agent(agent, body, text.trim().to_owned())
+                .dispatch_prompt_to_agent(target.agent, body, text.trim().to_owned())
                 .await;
+        }
+
+        let Some(thread_id) = self.active_room_target_thread_id() else {
+            self.ui
+                .set_error("No agent selected. Use @agent or pick one from Agents.".into());
+            return true;
+        };
+        let group_text = self.group_user_text_for_thread(&thread_id, text.as_str());
+        self.ui.room_input.take_input();
+        self.send_text_to_thread(thread_id, text, group_text).await
+    }
+
+    async fn submit_agent_input(&mut self) -> bool {
+        let text = self.ui.agent_input.content.clone();
+        if text.trim().is_empty() {
+            self.ui.agent_input.take_input();
+            return true;
         }
 
         let Some(thread_id) = self.ui.current_thread_id().map(str::to_owned) else {
             self.ui
-                .set_error("No thread selected. Press `n` or start with @agent.".into());
+                .set_error("No agent selected for direct chat.".into());
             return true;
         };
         let group_text = self.group_user_text_for_thread(&thread_id, text.as_str());
-        self.ui.input.take_input();
+        self.ui.agent_input.take_input();
         self.send_text_to_thread(thread_id, text, group_text).await
+    }
+
+    async fn invite_agent_to_room(&mut self, agent: AgentName, group_text: String) -> bool {
+        let thread_id = match self.start_new_thread(agent).await {
+            Ok(thread_id) => thread_id,
+            Err(error) => {
+                self.ui.set_error(error);
+                return true;
+            }
+        };
+
+        if let Some(index) = self
+            .ui
+            .threads
+            .iter()
+            .position(|thread| thread.thread_id == thread_id)
+        {
+            self.select_thread(index);
+        }
+        self.record_user_group_message(&thread_id, group_text).await;
+        true
+    }
+
+    async fn dispatch_prompt_to_existing_agent(
+        &mut self,
+        agent: AgentName,
+        thread_short_id: String,
+        text: String,
+        group_text: String,
+    ) -> bool {
+        let Some(thread_id) = self.thread_id_for_agent_short_id(agent, &thread_short_id) else {
+            self.ui.set_error(format!(
+                "No existing {} session matches #{}",
+                agent.bin_name(),
+                thread_short_id
+            ));
+            return true;
+        };
+
+        if text.trim().is_empty() {
+            if let Some(index) = self
+                .ui
+                .threads
+                .iter()
+                .position(|thread| thread.thread_id == thread_id)
+            {
+                self.select_thread(index);
+            }
+            self.record_user_group_message(&thread_id, group_text).await;
+            return true;
+        }
+
+        self.send_text_to_thread(thread_id, text, Some(group_text))
+            .await
     }
 
     async fn dispatch_prompt_to_agent(
@@ -946,10 +1473,41 @@ impl App {
         text: String,
         group_text: String,
     ) -> bool {
-        if let Some(thread_id) = self.selected_thread_for_agent(agent) {
-            return self
-                .send_text_to_thread(thread_id, text, Some(group_text))
+        if let Some(tx) = self.event_tx.clone() {
+            if let Some(error) = self.agent_unavailability_error(agent) {
+                self.ui.set_error(error);
+                return true;
+            }
+            self.record_user_group_message_for_agent(agent, group_text)
                 .await;
+            let backend = Arc::clone(&self.backend);
+            let workspace = self.workspace.clone();
+            tokio::spawn(async move {
+                match backend.start_agent(agent, workspace).await {
+                    Ok(outcome) => {
+                        let _ = tx.send(AppEvent::AgentStartedForPrompt {
+                            agent,
+                            thread_id: outcome.thread_id,
+                            cwd: outcome.cwd,
+                            text,
+                        });
+                    }
+                    Err(error) => {
+                        let error = format!("Failed to start {}: {error}", agent.bin_name());
+                        tracing::warn!(
+                            target: "minos_tui::app",
+                            error = %error,
+                            agent = %agent.bin_name(),
+                            "background start_agent failed"
+                        );
+                        let _ = tx.send(AppEvent::SendMessageFailed {
+                            thread_id: agent.bin_name().to_owned(),
+                            error,
+                        });
+                    }
+                }
+            });
+            return true;
         }
 
         match self.start_new_thread(agent).await {
@@ -981,6 +1539,36 @@ impl App {
         if let Some(chat) = self.ui.current_chat_mut() {
             chat.scroll_to_bottom();
         }
+
+        if let Some(group_text) = group_text {
+            self.record_user_group_message(&thread_id, group_text).await;
+        }
+
+        if let Some(tx) = self.event_tx.clone() {
+            let backend = Arc::clone(&self.backend);
+            tokio::spawn(async move {
+                if let Err(e) = backend.resume_thread(&thread_id).await {
+                    tracing::debug!(
+                        target: "minos_tui::app",
+                        error = %e,
+                        thread_id = %thread_id,
+                        "resume_thread failed or not needed"
+                    );
+                }
+                if let Err(error) = backend.send_message(&thread_id, &text).await {
+                    let error = error.to_string();
+                    tracing::warn!(
+                        target: "minos_tui::app",
+                        error = %error,
+                        thread_id = %thread_id,
+                        "background send_message failed"
+                    );
+                    let _ = tx.send(AppEvent::SendMessageFailed { thread_id, error });
+                }
+            });
+            return true;
+        }
+
         self.hydrate_thread_if_needed(&thread_id).await;
         if let Err(e) = self.backend.resume_thread(&thread_id).await {
             tracing::debug!(
@@ -993,13 +1581,14 @@ impl App {
         if let Err(error) = self.backend.send_message(&thread_id, &text).await {
             self.ui
                 .set_error(format!("Failed to send message: {error}"));
-        } else if let Some(group_text) = group_text {
-            self.record_user_group_message(&thread_id, group_text);
         }
         true
     }
 
     async fn start_new_thread(&mut self, agent: AgentName) -> Result<String, String> {
+        if let Some(error) = self.agent_unavailability_error(agent) {
+            return Err(error);
+        }
         let Some(descriptor) = self
             .ui
             .status
@@ -1031,6 +1620,19 @@ impl App {
         }
     }
 
+    fn agent_unavailability_error(&self, agent: AgentName) -> Option<String> {
+        let Some(descriptor) = self.ui.status.agents.iter().find(|desc| desc.name == agent) else {
+            return Some(format!("Unknown agent: {}", agent.bin_name()));
+        };
+        match &descriptor.status {
+            AgentStatus::Ok => None,
+            AgentStatus::Missing => Some(format!("{} is not installed on PATH", agent.bin_name())),
+            AgentStatus::Error { reason } => {
+                Some(format!("{} is unavailable: {reason}", agent.bin_name()))
+            }
+        }
+    }
+
     fn ensure_thread_visible(&mut self, thread_id: String, agent: AgentName, workspace: PathBuf) {
         if let Some(index) = self
             .ui
@@ -1044,7 +1646,7 @@ impl App {
             }
             self.ensure_chat_state_agent(&thread_id, agent);
             self.select_thread(index);
-            self.ui.focus = Focus::Input;
+            self.ui.focus = Focus::RoomInput;
             self.sync_input_agent_picker();
             return;
         }
@@ -1057,28 +1659,49 @@ impl App {
         });
         self.ensure_chat_state_agent(&thread_id, agent);
         self.select_thread(self.ui.threads.len().saturating_sub(1));
-        self.ui.focus = Focus::Input;
+        self.ui.focus = Focus::RoomInput;
         self.sync_input_agent_picker();
     }
 
-    fn selected_thread_for_agent(&self, agent: AgentName) -> Option<String> {
+    fn thread_id_for_agent_short_id(&self, agent: AgentName, short_id: &str) -> Option<String> {
+        let short_id = short_id.to_ascii_lowercase();
         self.ui
-            .selected_thread
-            .and_then(|index| self.ui.threads.get(index))
-            .filter(|thread| thread.agent == agent)
+            .threads
+            .iter()
+            .find(|thread| {
+                thread.agent == agent
+                    && (short_thread_id(&thread.thread_id).to_ascii_lowercase() == short_id
+                        || thread.thread_id.to_ascii_lowercase().starts_with(&short_id))
+            })
             .map(|thread| thread.thread_id.clone())
     }
 
     fn sync_input_agent_picker(&mut self) {
-        let agents = self.ui.status.agents.clone();
-        self.ui
-            .input
-            .sync_agent_picker(agents.as_slice(), matches!(self.ui.focus, Focus::Input));
+        let candidates = self.ui.room_agent_mention_candidates();
+        self.ui.room_input.sync_agent_picker(
+            candidates.as_slice(),
+            matches!(self.ui.focus, Focus::RoomInput),
+        );
     }
 
-    fn load_group_chat_history(&mut self) {
-        match self.group_chat_store.load_recent(500) {
-            Ok(messages) => self.ui.group_chat.replace_messages(messages),
+    async fn load_group_chat_history(&mut self) {
+        let sessions = match self.group_chat_store.list_agent_sessions().await {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %error,
+                    "failed to load group chat agent sessions"
+                );
+                Vec::new()
+            }
+        };
+        match self.group_chat_store.load_recent(500).await {
+            Ok(messages) => {
+                self.restore_agent_entries_from_group_sessions(sessions.as_slice());
+                self.restore_agent_entries_from_group_messages(messages.as_slice());
+                self.ui.group_chat.replace_messages(messages);
+            }
             Err(error) => {
                 tracing::warn!(
                     target: "minos_tui::app",
@@ -1089,6 +1712,70 @@ impl App {
                     .set_error(format!("Failed to load group chat history: {error}"));
             }
         }
+    }
+
+    fn restore_agent_entries_from_group_sessions(
+        &mut self,
+        sessions: &[minos_chat_store::ChatAgentSession],
+    ) {
+        for session in sessions {
+            self.restore_agent_entry(
+                session.agent,
+                &session.thread_id,
+                PathBuf::from(&session.workspace_root),
+            );
+        }
+        if self.ui.selected_thread.is_none() && !self.ui.threads.is_empty() {
+            self.select_thread(0);
+        }
+    }
+
+    fn restore_agent_entries_from_group_messages(&mut self, messages: &[LocalGroupChatMessage]) {
+        for message in messages {
+            let (Some(agent), Some(thread_id)) = (message.agent, message.thread_id.as_deref())
+            else {
+                continue;
+            };
+            if thread_id.is_empty() {
+                continue;
+            }
+
+            let workspace = message
+                .workspace
+                .as_deref()
+                .filter(|workspace| !workspace.trim().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| self.workspace.clone());
+            self.restore_agent_entry(agent, thread_id, workspace);
+        }
+
+        if self.ui.selected_thread.is_none() && !self.ui.threads.is_empty() {
+            self.select_thread(0);
+        }
+    }
+
+    fn restore_agent_entry(&mut self, agent: AgentName, thread_id: &str, workspace: PathBuf) {
+        if let Some(entry) = self
+            .ui
+            .threads
+            .iter_mut()
+            .find(|entry| entry.thread_id == thread_id)
+        {
+            entry.agent = agent;
+            entry.workspace = workspace;
+            self.ensure_chat_state_agent(thread_id, agent);
+            return;
+        }
+
+        self.ui.threads.push(ThreadEntry {
+            thread_id: thread_id.to_owned(),
+            agent,
+            workspace,
+            state: ThreadState::Suspended {
+                reason: minos_agent_runtime::PauseReason::DaemonRestart,
+            },
+        });
+        self.ensure_chat_state_agent(thread_id, agent);
     }
 
     fn group_user_text_for_thread(&self, thread_id: &str, text: &str) -> Option<String> {
@@ -1104,15 +1791,30 @@ impl App {
         Some(format!("@{} {trimmed}", thread.agent.bin_name()))
     }
 
-    fn record_user_group_message(&mut self, thread_id: &str, text: String) {
+    async fn record_user_group_message(&mut self, thread_id: &str, text: String) {
         let Some(message) = self.group_message(thread_id, LocalGroupChatMessageKind::User, text)
         else {
             return;
         };
-        self.append_group_chat_message(message);
+        self.append_group_chat_message(message).await;
     }
 
-    fn record_agent_group_result_if_done(&mut self, thread_id: &str) {
+    async fn record_user_group_message_for_agent(&mut self, agent: AgentName, text: String) {
+        self.append_group_chat_message(LocalGroupChatMessage {
+            seq: 0,
+            message_id: String::new(),
+            created_at_ms: chrono::Utc::now().timestamp_millis(),
+            kind: LocalGroupChatMessageKind::User,
+            text,
+            agent: Some(agent),
+            thread_id: None,
+            thread_short_id: None,
+            workspace: Some(self.workspace.display().to_string()),
+        })
+        .await;
+    }
+
+    async fn record_agent_group_result_if_done(&mut self, thread_id: &str) {
         let Some(thread) = self
             .ui
             .threads
@@ -1142,7 +1844,7 @@ impl App {
         else {
             return;
         };
-        self.append_group_chat_message(message);
+        self.append_group_chat_message(message).await;
         self.recorded_agent_results
             .insert(thread_id.to_owned(), message_key);
     }
@@ -1171,8 +1873,8 @@ impl App {
         })
     }
 
-    fn append_group_chat_message(&mut self, message: LocalGroupChatMessage) {
-        match self.group_chat_store.append(message) {
+    async fn append_group_chat_message(&mut self, message: LocalGroupChatMessage) {
+        match self.group_chat_store.append(message).await {
             Ok(message) => self.ui.group_chat.push_message(message),
             Err(error) => {
                 tracing::warn!(
@@ -1187,9 +1889,27 @@ impl App {
     }
 }
 
+fn is_text_input_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_))
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+}
+
+fn is_input_focus(focus: Focus) -> bool {
+    matches!(focus, Focus::RoomInput | Focus::AgentInput)
+}
+
+fn default_room_id(workspace: &std::path::Path) -> String {
+    minos_chat_store::room_id_for_workspace(workspace)
+}
+
+fn default_room_title(workspace: &std::path::Path) -> String {
+    minos_chat_store::room_title_for_workspace(workspace)
+}
+
 #[cfg(not(test))]
-fn default_group_chat_store() -> GroupChatStore {
-    match GroupChatStore::default_for_runtime() {
+fn default_group_chat_store(workspace: &std::path::Path) -> GroupChatStore {
+    match GroupChatStore::default_for_runtime(workspace) {
         Ok(store) => store,
         Err(error) => {
             tracing::warn!(
@@ -1203,7 +1923,7 @@ fn default_group_chat_store() -> GroupChatStore {
 }
 
 #[cfg(test)]
-fn default_group_chat_store() -> GroupChatStore {
+fn default_group_chat_store(_workspace: &std::path::Path) -> GroupChatStore {
     GroupChatStore::disabled()
 }
 
@@ -1215,7 +1935,13 @@ fn short_thread_id(thread_id: &str) -> String {
     thread_id[..8.min(thread_id.len())].to_owned()
 }
 
-fn parse_agent_routing(text: &str) -> Option<(AgentName, String)> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentRouteTarget {
+    agent: AgentName,
+    thread_short_id: Option<String>,
+}
+
+fn parse_agent_routing(text: &str) -> Option<(AgentRouteTarget, String)> {
     let trimmed = text.trim_start();
     let rest = trimmed.strip_prefix('@')?;
     let split_at = rest
@@ -1223,9 +1949,23 @@ fn parse_agent_routing(text: &str) -> Option<(AgentName, String)> {
         .find(|(_, ch)| ch.is_whitespace())
         .map(|(index, _)| index)
         .unwrap_or(rest.len());
-    let agent = parse_agent_name(&rest[..split_at])?;
+    let target = parse_agent_route_target(&rest[..split_at])?;
     let body = rest[split_at..].trim_start().to_owned();
-    Some((agent, body))
+    Some((target, body))
+}
+
+fn parse_agent_route_target(value: &str) -> Option<AgentRouteTarget> {
+    let (agent_name, thread_short_id) = match value.split_once('#') {
+        Some((agent_name, thread_short_id)) if !thread_short_id.is_empty() => {
+            (agent_name, Some(thread_short_id.to_owned()))
+        }
+        Some(_) => return None,
+        None => (value, None),
+    };
+    Some(AgentRouteTarget {
+        agent: parse_agent_name(agent_name)?,
+        thread_short_id,
+    })
 }
 
 fn parse_agent_name(value: &str) -> Option<AgentName> {
@@ -1377,7 +2117,7 @@ mod tests {
     use minos_agent_runtime::{RawIngest, StartAgentOutcome};
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
     use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
-    use minos_protocol::LocalGroupChatMessageKind;
+    use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};
     use minos_ui_protocol::{MessageRole, UiEventMessage};
     use ratatui::layout::Rect;
     use tokio::sync::broadcast;
@@ -1396,6 +2136,8 @@ mod tests {
         history_pages: Mutex<HashMap<String, VecDeque<ReadThreadRawHistoryResponse>>>,
         history_calls: Mutex<Vec<(String, Option<u64>, u32)>>,
         connection_state: BackendConnectionState,
+        block_starts: bool,
+        block_sends: bool,
         ingest_tx: broadcast::Sender<RawIngest>,
         manager_tx: broadcast::Sender<ManagerEvent>,
     }
@@ -1420,6 +2162,8 @@ mod tests {
                 history_pages: Mutex::new(HashMap::new()),
                 history_calls: Mutex::new(Vec::new()),
                 connection_state: BackendConnectionState::Embedded,
+                block_starts: false,
+                block_sends: false,
                 ingest_tx,
                 manager_tx,
             }
@@ -1427,6 +2171,16 @@ mod tests {
 
         fn with_connection_state(mut self, connection_state: BackendConnectionState) -> Self {
             self.connection_state = connection_state;
+            self
+        }
+
+        fn with_blocked_starts(mut self) -> Self {
+            self.block_starts = true;
+            self
+        }
+
+        fn with_blocked_sends(mut self) -> Self {
+            self.block_sends = true;
             self
         }
 
@@ -1459,6 +2213,9 @@ mod tests {
             agent: AgentName,
             workspace: PathBuf,
         ) -> Result<StartAgentOutcome> {
+            if self.block_starts {
+                std::future::pending::<()>().await;
+            }
             self.started.lock().expect("started list lock").push(agent);
             let mut next_thread = self.next_thread.lock().expect("next_thread lock");
             *next_thread += 1;
@@ -1470,6 +2227,9 @@ mod tests {
         }
 
         async fn send_message(&self, thread_id: &str, text: &str) -> Result<()> {
+            if self.block_sends {
+                std::future::pending::<()>().await;
+            }
             self.sent_messages
                 .lock()
                 .expect("sent messages lock")
@@ -1560,9 +2320,13 @@ mod tests {
     }
 
     fn press(code: KeyCode) -> KeyEvent {
+        press_with_modifiers(code, KeyModifiers::NONE)
+    }
+
+    fn press_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent {
             code,
-            modifiers: KeyModifiers::NONE,
+            modifiers,
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         }
@@ -1681,7 +2445,7 @@ mod tests {
             ok_agent(AgentName::Claude),
             ok_agent(AgentName::Gemini),
         ]);
-        app.ui.focus = Focus::Input;
+        app.ui.focus = Focus::RoomInput;
         app.sync_input_agent_picker();
 
         assert!(app.handle_key(press(KeyCode::Char('@'))).await);
@@ -1689,9 +2453,50 @@ mod tests {
         assert!(app.handle_key(press(KeyCode::Down)).await);
         assert!(app.handle_key(press(KeyCode::Enter)).await);
 
-        assert_eq!(app.ui.input.content, "@claude ");
-        assert_eq!(app.ui.input.cursor_pos, "@claude ".len());
-        assert!(!app.ui.input.has_agent_picker());
+        assert_eq!(app.ui.room_input.content, "@claude ");
+        assert_eq!(app.ui.room_input.cursor_pos, "@claude ".len());
+        assert!(!app.ui.room_input.has_agent_picker());
+    }
+
+    #[tokio::test]
+    async fn input_shortcuts_edit_without_inserting_control_text() {
+        let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Codex)]));
+        let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Codex)]);
+        app.ui.focus = Focus::RoomInput;
+        app.ui.room_input.content = "hello brave world".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+
+        assert!(
+            app.handle_key(press_with_modifiers(
+                KeyCode::Char('w'),
+                KeyModifiers::CONTROL
+            ))
+            .await
+        );
+        assert_eq!(app.ui.room_input.content, "hello brave ");
+        assert_eq!(app.ui.room_input.cursor_pos, "hello brave ".len());
+
+        assert!(
+            app.handle_key(press_with_modifiers(KeyCode::Char('b'), KeyModifiers::ALT))
+                .await
+        );
+        assert_eq!(app.ui.room_input.cursor_pos, "hello ".len());
+
+        assert!(app.handle_key(press(KeyCode::Right)).await);
+        assert_eq!(app.ui.room_input.cursor_pos, "hello b".len());
+
+        assert!(
+            app.handle_key(press_with_modifiers(
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL
+            ))
+            .await
+        );
+        assert_eq!(app.ui.room_input.cursor_pos, 0);
+        assert_eq!(app.ui.room_input.content, "hello brave ");
     }
 
     #[tokio::test]
@@ -1707,9 +2512,9 @@ mod tests {
             ok_agent(AgentName::Claude),
             ok_agent(AgentName::Gemini),
         ]);
-        app.ui.focus = Focus::Input;
-        app.ui.input.content = "@gemini write tests".into();
-        app.ui.input.cursor_pos = app.ui.input.content.len();
+        app.ui.focus = Focus::RoomInput;
+        app.ui.room_input.content = "@gemini write tests".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
         app.sync_input_agent_picker();
 
         assert!(app.handle_key(press(KeyCode::Enter)).await);
@@ -1730,7 +2535,7 @@ mod tests {
                 .as_slice(),
             &[("thread-1".to_owned(), "write tests".to_owned())]
         );
-        assert_eq!(app.ui.input.content, "");
+        assert_eq!(app.ui.room_input.content, "");
         assert_eq!(app.ui.selected_thread, Some(0));
         assert_eq!(app.ui.threads[0].agent, AgentName::Gemini);
     }
@@ -1745,9 +2550,9 @@ mod tests {
         app.ui
             .status
             .update_agents(vec![ok_agent(AgentName::Gemini)]);
-        app.ui.focus = Focus::Input;
-        app.ui.input.content = "@gemini write tests".into();
-        app.ui.input.cursor_pos = app.ui.input.content.len();
+        app.ui.focus = Focus::RoomInput;
+        app.ui.room_input.content = "@gemini write tests".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
         app.sync_input_agent_picker();
 
         assert!(app.handle_key(press(KeyCode::Enter)).await);
@@ -1767,24 +2572,273 @@ mod tests {
         assert_eq!(message.text, "@gemini write tests");
         assert_eq!(message.agent, Some(AgentName::Gemini));
 
-        let persisted = std::fs::read_to_string(temp.path().join("group.jsonl"))
-            .expect("group chat log should be written");
-        assert!(persisted.contains(r#""kind":"user""#));
-        assert!(persisted.contains(r#""text":"@gemini write tests""#));
+        let persisted = app
+            .group_chat_store
+            .load_recent(10)
+            .await
+            .expect("group chat DB should be readable");
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].kind, LocalGroupChatMessageKind::User);
+        assert_eq!(persisted[0].text, "@gemini write tests");
     }
 
     #[tokio::test]
-    async fn routed_prompt_reuses_selected_thread_for_same_agent() {
+    async fn routed_prompt_echoes_in_group_chat_before_backend_send_finishes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(
+            TestBackend::with_agents(vec![ok_agent(AgentName::Gemini)]).with_blocked_sends(),
+        );
+        let mut app =
+            App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.set_event_sender(tx);
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Gemini)]);
+        app.ui.focus = Focus::RoomInput;
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-gemini-1234".into(),
+            agent: AgentName::Gemini,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+        app.ui.chat_states.insert(
+            "thread-gemini-1234".into(),
+            ChatState::new("thread-gemini-1234".into(), AgentName::Gemini),
+        );
+        app.select_thread(0);
+        app.ui.room_input.content = "@gemini#thread-g write tests".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+        app.sync_input_agent_picker();
+
+        let handled = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            app.handle_key(press(KeyCode::Enter)),
+        )
+        .await
+        .expect("room submit should not wait for backend send");
+
+        assert!(handled);
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        assert_eq!(
+            app.ui.group_chat.messages[0].kind,
+            LocalGroupChatMessageKind::User
+        );
+        assert_eq!(
+            app.ui.group_chat.messages[0].text,
+            "@gemini#thread-g write tests"
+        );
+        assert_eq!(
+            app.ui.group_chat.messages[0].thread_id.as_deref(),
+            Some("thread-gemini-1234")
+        );
+        assert_eq!(app.ui.room_input.content, "");
+    }
+
+    #[tokio::test]
+    async fn routed_prompt_echoes_in_group_chat_before_agent_start_finishes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(
+            TestBackend::with_agents(vec![ok_agent(AgentName::Gemini)]).with_blocked_starts(),
+        );
+        let mut app =
+            App::with_group_chat_store(backend, false, PathBuf::from("/tmp"), group_store);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.set_event_sender(tx);
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Gemini)]);
+        app.ui.focus = Focus::RoomInput;
+        app.ui.room_input.content = "@gemini write tests".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+        app.sync_input_agent_picker();
+
+        let handled = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            app.handle_key(press(KeyCode::Enter)),
+        )
+        .await
+        .expect("room submit should not wait for agent startup");
+
+        assert!(handled);
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        assert_eq!(
+            app.ui.group_chat.messages[0].kind,
+            LocalGroupChatMessageKind::User
+        );
+        assert_eq!(app.ui.group_chat.messages[0].text, "@gemini write tests");
+        assert_eq!(app.ui.group_chat.messages[0].agent, Some(AgentName::Gemini));
+        assert_eq!(app.ui.group_chat.messages[0].thread_id, None);
+        assert_eq!(app.ui.room_input.content, "");
+    }
+
+    #[tokio::test]
+    async fn agent_started_prompt_event_creates_chat_state_before_sending() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+
+        assert!(
+            app.handle_event(AppEvent::AgentStartedForPrompt {
+                agent: AgentName::Gemini,
+                thread_id: "thread-gemini-1234".into(),
+                cwd: PathBuf::from("/tmp"),
+                text: "write tests".into(),
+            })
+            .await
+        );
+
+        assert_eq!(app.ui.threads.len(), 1);
+        assert!(app.ui.chat_states.contains_key("thread-gemini-1234"));
+        assert_eq!(
+            backend
+                .sent_messages
+                .lock()
+                .expect("sent messages lock")
+                .as_slice(),
+            &[("thread-gemini-1234".to_owned(), "write tests".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn loading_group_history_restores_agent_list_entries() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        group_store
+            .append(LocalGroupChatMessage {
+                seq: 0,
+                message_id: String::new(),
+                created_at_ms: 10,
+                kind: LocalGroupChatMessageKind::User,
+                text: "@codex inspect the repo".into(),
+                agent: Some(AgentName::Codex),
+                thread_id: Some("thread-codex-1234".into()),
+                thread_short_id: Some("thread-c".into()),
+                workspace: Some("/tmp/minos-a".into()),
+            })
+            .await
+            .expect("append codex message");
+        group_store
+            .append(LocalGroupChatMessage {
+                seq: 0,
+                message_id: String::new(),
+                created_at_ms: 20,
+                kind: LocalGroupChatMessageKind::AgentResult,
+                text: "done".into(),
+                agent: Some(AgentName::Gemini),
+                thread_id: Some("thread-gemini-5678".into()),
+                thread_short_id: Some("thread-g".into()),
+                workspace: Some("/tmp/minos-b".into()),
+            })
+            .await
+            .expect("append gemini message");
+        let backend = Arc::new(TestBackend::new());
+        let mut app =
+            App::with_group_chat_store(backend, false, PathBuf::from("/tmp/default"), group_store);
+
+        app.load_group_chat_history().await;
+
+        assert_eq!(app.ui.group_chat.messages.len(), 2);
+        assert_eq!(app.ui.threads.len(), 2);
+        assert_eq!(app.ui.selected_thread, Some(0));
+        assert_eq!(app.ui.threads[0].thread_id, "thread-codex-1234");
+        assert_eq!(app.ui.threads[0].agent, AgentName::Codex);
+        assert_eq!(app.ui.threads[0].workspace, PathBuf::from("/tmp/minos-a"));
+        assert!(matches!(
+            app.ui.threads[0].state,
+            ThreadState::Suspended {
+                reason: minos_agent_runtime::PauseReason::DaemonRestart
+            }
+        ));
+        assert_eq!(app.ui.threads[1].thread_id, "thread-gemini-5678");
+        assert_eq!(app.ui.threads[1].agent, AgentName::Gemini);
+        assert!(app.ui.chat_states.contains_key("thread-codex-1234"));
+        assert!(app.ui.chat_states.contains_key("thread-gemini-5678"));
+    }
+
+    #[tokio::test]
+    async fn room_can_invite_second_agent_after_first_routed_prompt() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(TestBackend::with_agents(vec![
+            ok_agent(AgentName::Codex),
+            ok_agent(AgentName::Gemini),
+        ]));
+        let mut app =
+            App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+        app.ui.status.update_agents(vec![
+            ok_agent(AgentName::Codex),
+            ok_agent(AgentName::Gemini),
+        ]);
+        app.ui.focus = Focus::RoomInput;
+
+        app.ui.room_input.content = "@codex inspect the repo".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+        app.sync_input_agent_picker();
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        app.ui.room_input.content = "@gemini".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+        app.sync_input_agent_picker();
+        assert!(app.ui.room_input.has_agent_picker());
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+        assert_eq!(app.ui.room_input.content, "@gemini ");
+        assert_eq!(
+            backend
+                .started
+                .lock()
+                .expect("started list lock")
+                .as_slice(),
+            &[AgentName::Codex]
+        );
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert_eq!(
+            backend
+                .started
+                .lock()
+                .expect("started list lock")
+                .as_slice(),
+            &[AgentName::Codex, AgentName::Gemini]
+        );
+        assert_eq!(
+            backend
+                .sent_messages
+                .lock()
+                .expect("sent messages lock")
+                .as_slice(),
+            &[("thread-1".to_owned(), "inspect the repo".to_owned())]
+        );
+        assert_eq!(app.ui.group_chat.messages.len(), 2);
+        assert_eq!(
+            app.ui.group_chat.messages[0].text,
+            "@codex inspect the repo"
+        );
+        assert_eq!(app.ui.group_chat.messages[0].agent, Some(AgentName::Codex));
+        assert_eq!(app.ui.group_chat.messages[1].text, "@gemini");
+        assert_eq!(app.ui.group_chat.messages[1].agent, Some(AgentName::Gemini));
+        assert_eq!(app.ui.room_input.content, "");
+        assert_eq!(app.ui.selected_thread, Some(1));
+    }
+
+    #[tokio::test]
+    async fn picker_can_route_prompt_to_existing_agent_session() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
         let backend = Arc::new(TestBackend::with_agents(vec![
             ok_agent(AgentName::Codex),
             ok_agent(AgentName::Claude),
         ]));
-        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        let mut app =
+            App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
         app.ui.status.update_agents(vec![
             ok_agent(AgentName::Codex),
             ok_agent(AgentName::Claude),
         ]);
-        app.ui.focus = Focus::Input;
+        app.ui.focus = Focus::RoomInput;
         app.ui.threads.push(ThreadEntry {
             thread_id: "thread-codex".into(),
             agent: AgentName::Codex,
@@ -1793,13 +2847,29 @@ mod tests {
         });
         app.select_thread(0);
         app.ui.chat_states.insert(
-            "thread-codex".into(),
-            ChatState::new("thread-codex".into(), AgentName::Codex),
+            "thread-codex-1234".into(),
+            ChatState::new("thread-codex-1234".into(), AgentName::Codex),
         );
-        app.ui.input.content = "@codex explain the diff".into();
-        app.ui.input.cursor_pos = app.ui.input.content.len();
+        app.ui.threads[0].thread_id = "thread-codex-1234".into();
+        app.ui.room_input.content = "@codex".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
         app.sync_input_agent_picker();
 
+        let tokens: Vec<String> = app
+            .ui
+            .room_agent_mention_candidates()
+            .into_iter()
+            .map(|candidate| candidate.token)
+            .collect();
+        assert!(tokens.contains(&"codex".to_owned()));
+        assert!(tokens.contains(&"codex#thread-c".to_owned()));
+        assert!(app.handle_key(press(KeyCode::Down)).await);
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+        assert_eq!(app.ui.room_input.content, "@codex#thread-c ");
+
+        app.ui.room_input.content.push_str("explain the diff");
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+        app.sync_input_agent_picker();
         assert!(app.handle_key(press(KeyCode::Enter)).await);
 
         assert!(backend
@@ -1813,7 +2883,15 @@ mod tests {
                 .lock()
                 .expect("sent messages lock")
                 .as_slice(),
-            &[("thread-codex".to_owned(), "explain the diff".to_owned())]
+            &[(
+                "thread-codex-1234".to_owned(),
+                "explain the diff".to_owned()
+            )]
+        );
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        assert_eq!(
+            app.ui.group_chat.messages[0].text,
+            "@codex#thread-c explain the diff"
         );
     }
 
@@ -1874,16 +2952,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idle_thread_state_finishes_streaming_assistant_cursor() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-codex-1234".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp/ws"),
+            state: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+        });
+        let mut chat = ChatState::new("thread-codex-1234".into(), AgentName::Codex);
+        chat.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "assistant-1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 1,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "assistant-1".into(),
+                text: "partial".into(),
+            },
+        ]);
+        app.ui.chat_states.insert("thread-codex-1234".into(), chat);
+
+        assert!(
+            app.handle_event(AppEvent::ManagerEvent(ManagerEvent::ThreadStateChanged {
+                thread_id: "thread-codex-1234".into(),
+                old: ThreadState::Running {
+                    turn_started_at_ms: 0,
+                },
+                new: ThreadState::Idle,
+                at_ms: 2,
+            }))
+            .await
+        );
+
+        assert!(!app.ui.chat_states["thread-codex-1234"].messages[0].is_streaming);
+    }
+
+    #[tokio::test]
     async fn esc_moves_focus_without_quitting() {
         let backend = Arc::new(TestBackend::new());
         let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-        app.ui.focus = Focus::Chat;
+        app.ui.focus = Focus::RoomChat;
 
         let redraw = app.handle_key(press(KeyCode::Esc)).await;
 
         assert!(redraw);
-        assert_eq!(app.ui.focus, Focus::ThreadList);
+        assert_eq!(app.ui.focus, Focus::RoomList);
         assert!(!app.should_quit());
+    }
+
+    #[tokio::test]
+    async fn enter_on_agent_list_opens_detail_and_esc_from_agent_chat_closes_it() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-1".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+        app.ui.chat_states.insert(
+            "thread-1".into(),
+            ChatState::new("thread-1".into(), AgentName::Codex),
+        );
+        app.select_thread(0);
+        app.ui.focus = Focus::AgentList;
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+        assert!(app.ui.agent_detail_visible);
+        assert_eq!(app.ui.focus, Focus::AgentChat);
+
+        assert!(app.handle_key(press(KeyCode::Esc)).await);
+        assert!(!app.ui.agent_detail_visible);
+        assert_eq!(app.ui.focus, Focus::AgentList);
     }
 
     #[tokio::test]
@@ -1901,8 +3046,9 @@ mod tests {
             ChatState::new("thread-1".into(), AgentName::Codex),
         );
         app.select_thread(0);
-        app.ui.focus = Focus::Input;
-        app.ui.panel_areas.chat = Rect::new(20, 0, 60, 20);
+        app.ui.focus = Focus::RoomInput;
+        app.ui.agent_detail_visible = true;
+        app.ui.panel_areas.agent_chat = Rect::new(20, 0, 60, 20);
         if let Some(chat) = app.ui.current_chat_mut() {
             chat.update_max_scroll(40);
         }
@@ -1916,7 +3062,7 @@ mod tests {
             .await;
 
         assert!(redraw);
-        assert_eq!(app.ui.focus, Focus::Chat);
+        assert_eq!(app.ui.focus, Focus::AgentChat);
         assert!(app
             .ui
             .current_chat_mut()
@@ -1940,7 +3086,7 @@ mod tests {
             state: ThreadState::Idle,
         });
         app.select_thread(0);
-        app.ui.panel_areas.thread_list = Rect::new(0, 0, 20, 10);
+        app.ui.panel_areas.agent_list = Rect::new(0, 0, 20, 10);
 
         let redraw = app
             .handle_mouse(MouseEvent {
@@ -1951,7 +3097,7 @@ mod tests {
             .await;
 
         assert!(redraw);
-        assert_eq!(app.ui.focus, Focus::ThreadList);
+        assert_eq!(app.ui.focus, Focus::AgentList);
         assert_eq!(app.ui.selected_thread, Some(1));
     }
 
@@ -1959,8 +3105,8 @@ mod tests {
     async fn clicking_thread_list_blank_area_focuses_thread_list() {
         let backend = Arc::new(TestBackend::new());
         let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-        app.ui.panel_areas.thread_list = Rect::new(0, 0, 20, 10);
-        app.ui.focus = Focus::Chat;
+        app.ui.panel_areas.room_list = Rect::new(0, 0, 20, 10);
+        app.ui.focus = Focus::RoomChat;
 
         let redraw = app
             .handle_mouse(MouseEvent {
@@ -1972,7 +3118,7 @@ mod tests {
             .await;
 
         assert!(redraw);
-        assert_eq!(app.ui.focus, Focus::ThreadList);
+        assert_eq!(app.ui.focus, Focus::RoomList);
     }
 
     #[tokio::test]
@@ -2003,7 +3149,8 @@ mod tests {
         ]);
         app.ui.chat_states.insert("thread-1".into(), chat);
         app.select_thread(0);
-        app.ui.panel_areas.chat = Rect::new(0, 0, 40, 10);
+        app.ui.agent_detail_visible = true;
+        app.ui.panel_areas.agent_chat = Rect::new(0, 0, 40, 10);
         super::TEST_CLIPBOARD
             .lock()
             .expect("test clipboard lock")
@@ -2064,7 +3211,7 @@ mod tests {
         );
         app.hydrated_threads.insert("thread-1".into());
         app.select_thread(0);
-        app.ui.focus = Focus::ThreadList;
+        app.ui.focus = Focus::AgentList;
 
         let redraw = app.handle_key(press(KeyCode::Delete)).await;
 
@@ -2103,7 +3250,7 @@ mod tests {
         );
         app.hydrated_threads.insert("thread-1".into());
         app.select_thread(0);
-        app.ui.focus = Focus::ThreadList;
+        app.ui.focus = Focus::AgentList;
 
         assert!(app.handle_key(press(KeyCode::Delete)).await);
         let redraw = app.handle_key(press(KeyCode::Enter)).await;

@@ -11,10 +11,20 @@ use unicode_width::UnicodeWidthChar;
 use super::theme::{ASSISTANT_LABEL, BORDER_FG, REASONING_STYLE, USER_LABEL};
 use super::GroupChatState;
 
-pub fn render_group_chat(f: &mut Frame, area: Rect, state: &mut GroupChatState) {
+pub fn render_group_chat(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    state: &mut GroupChatState,
+    focused: bool,
+) {
     let block = super::theme::border_block()
-        .title("Group Chat")
-        .border_style(ratatui::style::Style::new().fg(BORDER_FG));
+        .title(title)
+        .border_style(if focused {
+            super::theme::FOCUSED_BORDER
+        } else {
+            ratatui::style::Style::new().fg(BORDER_FG)
+        });
     let inner = block.inner(area);
     if inner.width == 0 || inner.height == 0 {
         f.render_widget(block, area);

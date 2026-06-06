@@ -2,12 +2,14 @@ pub mod agent_picker;
 pub mod chat;
 pub mod group_chat;
 pub mod input_bar;
+pub mod room_list;
 pub mod status_bar;
 pub mod theme;
 pub mod thread_list;
 
 use crate::translation::ChatState;
-use crate::ui::input_bar::InputState;
+use crate::ui::input_bar::{AgentMentionCandidate, InputState};
+use crate::ui::room_list::RoomEntry;
 use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
@@ -32,20 +34,28 @@ pub struct ThreadEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-    ThreadList,
-    Chat,
-    Input,
+    RoomList,
+    RoomChat,
+    AgentList,
+    AgentChat,
+    RoomInput,
+    AgentInput,
 }
 
 pub struct UiState {
     pub status: StatusBarState,
+    pub rooms: Vec<RoomEntry>,
+    pub selected_room: Option<usize>,
+    pub room_list_state: ListState,
     pub threads: Vec<ThreadEntry>,
     pub selected_thread: Option<usize>,
-    pub thread_list_state: ListState,
+    pub agent_list_state: ListState,
     pub group_chat: GroupChatState,
     pub agent_picker: Option<AgentPickerState>,
     pub chat_states: HashMap<String, ChatState>,
-    pub input: InputState,
+    pub room_input: InputState,
+    pub agent_input: InputState,
+    pub agent_detail_visible: bool,
     pub focus: Focus,
     pub error_flash: Option<(String, Instant)>,
     pub panel_areas: PanelAreas,
@@ -72,24 +82,31 @@ pub struct GroupChatState {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PanelAreas {
-    pub thread_list: Rect,
-    pub group_chat: Rect,
-    pub chat: Rect,
-    pub input: Rect,
+    pub room_list: Rect,
+    pub room_chat: Rect,
+    pub agent_list: Rect,
+    pub agent_chat: Rect,
+    pub room_input: Rect,
+    pub agent_input: Rect,
 }
 
 impl UiState {
     pub fn new(readonly: bool) -> Self {
         Self {
             status: StatusBarState::new(),
+            rooms: Vec::new(),
+            selected_room: None,
+            room_list_state: ListState::default(),
             threads: Vec::new(),
             selected_thread: None,
-            thread_list_state: ListState::default(),
+            agent_list_state: ListState::default(),
             group_chat: GroupChatState::new(),
             agent_picker: None,
             chat_states: HashMap::new(),
-            input: InputState::new(readonly),
-            focus: Focus::ThreadList,
+            room_input: InputState::new(readonly),
+            agent_input: InputState::new(readonly),
+            agent_detail_visible: false,
+            focus: Focus::RoomList,
             error_flash: None,
             panel_areas: PanelAreas::default(),
             delete_confirm: None,
@@ -109,6 +126,27 @@ impl UiState {
 
     pub fn set_error(&mut self, msg: String) {
         self.error_flash = Some((msg, Instant::now()));
+    }
+
+    pub fn current_room(&self) -> Option<&RoomEntry> {
+        self.selected_room.and_then(|index| self.rooms.get(index))
+    }
+
+    pub fn room_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
+        let mut candidates: Vec<AgentMentionCandidate> = self
+            .status
+            .agents
+            .iter()
+            .map(|agent| AgentMentionCandidate::installed(agent.name, agent.status.clone()))
+            .collect();
+        candidates.extend(self.threads.iter().map(|thread| {
+            AgentMentionCandidate::existing(
+                thread.agent,
+                thread.thread_id.clone(),
+                short_thread_id(&thread.thread_id),
+            )
+        }));
+        candidates
     }
 }
 
@@ -176,11 +214,19 @@ impl GroupChatState {
 }
 
 pub fn render_ui(f: &mut Frame, state: &mut UiState) {
-    state.input.focused = matches!(state.focus, Focus::Input);
-    let chat_focused = matches!(state.focus, Focus::Chat);
-    let thread_list_focused = matches!(state.focus, Focus::ThreadList);
-    let input_height =
-        input_bar::required_height(&state.input).min(f.area().height.saturating_sub(1));
+    state.room_input.focused = matches!(state.focus, Focus::RoomInput);
+    state.agent_input.focused = matches!(state.focus, Focus::AgentInput);
+
+    let available_height = f.area().height.saturating_sub(1);
+    let room_input_height = input_bar::required_height(&state.room_input, f.area().width);
+    let detail_agent_width = f.area().width.saturating_mul(35) / 100;
+    let agent_input_height = input_bar::required_height(&state.agent_input, detail_agent_width);
+    let input_height = if state.agent_detail_visible {
+        room_input_height.max(agent_input_height)
+    } else {
+        room_input_height
+    }
+    .min(available_height);
 
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -193,46 +239,11 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
 
     status_bar::render_status_bar(f, outer[0], &state.status);
 
-    let middle = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-        .split(outer[1]);
-    let left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(middle[0]);
-    state.panel_areas = PanelAreas {
-        thread_list: left[0],
-        group_chat: left[1],
-        chat: middle[1],
-        input: outer[2],
-    };
-
-    thread_list::render_thread_list(
-        f,
-        left[0],
-        &state.threads,
-        state.selected_thread,
-        &mut state.thread_list_state,
-        thread_list_focused,
-    );
-    group_chat::render_group_chat(f, left[1], &mut state.group_chat);
-
-    if let Some(chat) = state.current_chat_mut() {
-        chat::render_chat(f, middle[1], chat, chat_focused);
+    if state.agent_detail_visible {
+        render_detail_mode(f, outer[1], outer[2], state);
     } else {
-        let placeholder = ratatui::widgets::Paragraph::new(
-            "No thread selected\n\nPress `n` to pick an agent, or type `@codex` / `@claude` / `@gemini` / `@opencode` below.\nUse `Tab` to move focus and `PgUp`/`PgDn` to scroll chat.",
-        )
-        .block(theme::border_block().title("Chat").border_style(if chat_focused {
-            theme::FOCUSED_BORDER
-        } else {
-            ratatui::style::Style::new().fg(theme::BORDER_FG)
-        }));
-        f.render_widget(placeholder, middle[1]);
+        render_overview_mode(f, outer[1], outer[2], state);
     }
-
-    input_bar::render_input_bar(f, outer[2], &state.input, state.status.agents.as_slice());
 
     if let Some(picker) = state.agent_picker.as_ref() {
         agent_picker::render_agent_picker(f, state.status.agents.as_slice(), picker);
@@ -241,6 +252,153 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
     if let Some(confirm) = state.delete_confirm.as_ref() {
         render_delete_confirm(f, confirm);
     }
+}
+
+fn render_overview_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut UiState) {
+    let room_title = state
+        .current_room()
+        .map(|room| format!("Chat Room: {}", room.title))
+        .unwrap_or_else(|| "Chat Room".to_owned());
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(55),
+            Constraint::Percentage(25),
+        ])
+        .split(middle);
+
+    state.panel_areas = PanelAreas {
+        room_list: columns[0],
+        room_chat: columns[1],
+        agent_list: columns[2],
+        agent_chat: Rect::default(),
+        room_input: input_area,
+        agent_input: Rect::default(),
+    };
+
+    room_list::render_room_list(
+        f,
+        columns[0],
+        &state.rooms,
+        state.selected_room,
+        &mut state.room_list_state,
+        matches!(state.focus, Focus::RoomList),
+    );
+    group_chat::render_group_chat(
+        f,
+        columns[1],
+        room_title.as_str(),
+        &mut state.group_chat,
+        matches!(state.focus, Focus::RoomChat),
+    );
+    thread_list::render_thread_list(
+        f,
+        columns[2],
+        "Agents",
+        &state.threads,
+        state.selected_thread,
+        &mut state.agent_list_state,
+        matches!(state.focus, Focus::AgentList),
+    );
+    let mention_candidates = state.room_agent_mention_candidates();
+    input_bar::render_input_bar(
+        f,
+        input_area,
+        "Chat Room Input",
+        "Type @ to choose an agent or send to the room",
+        &state.room_input,
+        mention_candidates.as_slice(),
+    );
+}
+
+fn render_detail_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut UiState) {
+    let room_title = state
+        .current_room()
+        .map(|room| format!("Chat Room: {}", room.title))
+        .unwrap_or_else(|| "Chat Room".to_owned());
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(45),
+            Constraint::Percentage(20),
+            Constraint::Percentage(35),
+        ])
+        .split(middle);
+    let inputs = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(input_area);
+
+    state.panel_areas = PanelAreas {
+        room_list: Rect::default(),
+        room_chat: columns[0],
+        agent_list: columns[1],
+        agent_chat: columns[2],
+        room_input: inputs[0],
+        agent_input: inputs[1],
+    };
+
+    group_chat::render_group_chat(
+        f,
+        columns[0],
+        room_title.as_str(),
+        &mut state.group_chat,
+        matches!(state.focus, Focus::RoomChat),
+    );
+    thread_list::render_thread_list(
+        f,
+        columns[1],
+        "Agents",
+        &state.threads,
+        state.selected_thread,
+        &mut state.agent_list_state,
+        matches!(state.focus, Focus::AgentList),
+    );
+    let agent_chat_focused = matches!(state.focus, Focus::AgentChat);
+    if let Some(chat) = state.current_chat_mut() {
+        chat::render_chat(f, columns[2], chat, agent_chat_focused);
+    } else {
+        render_agent_chat_placeholder(f, columns[2], agent_chat_focused);
+    }
+
+    let mention_candidates = state.room_agent_mention_candidates();
+    input_bar::render_input_bar(
+        f,
+        inputs[0],
+        "Chat Room Input",
+        "Type @ to choose an agent or send to the room",
+        &state.room_input,
+        mention_candidates.as_slice(),
+    );
+    input_bar::render_input_bar(
+        f,
+        inputs[1],
+        "Agent Input",
+        "Talk directly to the selected agent",
+        &state.agent_input,
+        &[],
+    );
+}
+
+fn short_thread_id(thread_id: &str) -> String {
+    thread_id[..8.min(thread_id.len())].to_owned()
+}
+
+fn render_agent_chat_placeholder(f: &mut Frame, area: Rect, focused: bool) {
+    let paragraph = ratatui::widgets::Paragraph::new(
+        "No agent selected\n\nChoose an agent from the list to inspect its detailed transcript.",
+    )
+    .block(
+        theme::border_block()
+            .title("Agent Detail")
+            .border_style(if focused {
+                theme::FOCUSED_BORDER
+            } else {
+                ratatui::style::Style::new().fg(theme::BORDER_FG)
+            }),
+    );
+    f.render_widget(paragraph, area);
 }
 
 fn render_delete_confirm(f: &mut Frame, state: &DeleteConfirmState) {

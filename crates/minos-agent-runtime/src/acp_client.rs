@@ -52,6 +52,12 @@ enum Outbound {
         result: Value,
         ack: oneshot::Sender<Result<(), MinosError>>,
     },
+    Error {
+        id: Value,
+        code: i64,
+        message: String,
+        ack: oneshot::Sender<Result<(), MinosError>>,
+    },
 }
 
 #[derive(Debug)]
@@ -200,6 +206,31 @@ impl AcpClient {
         })?
     }
 
+    pub async fn reply_error(
+        &self,
+        id: Value,
+        code: i64,
+        message: String,
+    ) -> Result<(), MinosError> {
+        let (ack, rx) = oneshot::channel();
+        self.outbound_tx
+            .send(Outbound::Error {
+                id,
+                code,
+                message,
+                ack,
+            })
+            .await
+            .map_err(|_| MinosError::AcpProtocolError {
+                method: "<reply_error>".into(),
+                message: "acp client pump has shut down".into(),
+            })?;
+        rx.await.map_err(|_| MinosError::AcpProtocolError {
+            method: "<reply_error>".into(),
+            message: "acp client dropped the error reply ack".into(),
+        })?
+    }
+
     pub async fn next_inbound(&self) -> Option<Inbound> {
         self.inbound_rx.lock().await.recv().await
     }
@@ -238,6 +269,10 @@ async fn pump_loop(
                     Outbound::Reply { id, result, ack } => {
                         let frame = minos_acp_protocol::make_response(id, result);
                         let _ = ack.send(write_frame(&mut stdin_writer, "<reply>", &frame).await);
+                    }
+                    Outbound::Error { id, code, message, ack } => {
+                        let frame = minos_acp_protocol::make_error(id, code, message, None);
+                        let _ = ack.send(write_frame(&mut stdin_writer, "<reply_error>", &frame).await);
                     }
                 }
             }

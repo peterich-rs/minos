@@ -85,11 +85,26 @@ pub trait AcpClientNotification {
 |--------|--------|
 | `session/cancel` | `{ sessionId }` |
 
+#### McpServer
+
+Gemini CLI 0.45.0 ACP stdio MCP servers are serialized without a transport tag. `env` is an array of `{name, value}` pairs:
+
+```json
+{
+  "name": "minos_chat",
+  "command": "/path/to/minos-tui",
+  "args": ["chat-mcp", "--db-path", "...", "--default-room-id", "..."],
+  "env": []
+}
+```
+
+Do not send Codex/OpenCode-style `transportType: "stdio"` or an object-shaped `env`; Gemini rejects that shape during `session/new`.
+
 #### Agent → Client Requests (server-initiated)
 
 | Method | Request | Response |
 |--------|---------|----------|
-| `session/request_permission` | `{ sessionId, toolCall, options }` | `{ outcome }` |
+| `session/request_permission` | `{ sessionId, toolCall, options }` | `{ outcome: { outcome: "cancelled" } }` or `{ outcome: { outcome: "selected", optionId } }` |
 | `fs/read_text_file` | `{ sessionId, path, line, limit }` | `{ content }` |
 | `fs/write_text_file` | `{ sessionId, path, content }` | `{}` |
 | `terminal/create` | `{ sessionId, command, args, cwd, env }` | `{ terminalId }` |
@@ -156,6 +171,19 @@ pub enum ToolCallKind { Edit, Diff, Terminal, Other }
 
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus { Pending, InProgress, Completed, Cancelled }
+```
+
+#### RequestPermissionOutcome
+
+Gemini CLI 0.45.0 uses a nested discriminated union for permission replies:
+
+```rust
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "outcome", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum RequestPermissionOutcome {
+    Selected { option_id: String },
+    Cancelled,
+}
 ```
 
 ### 3.4 AcpClient (stdio pump)
@@ -252,7 +280,7 @@ Translation rules:
 
 ### 3.7 Approval Flow Alignment
 
-Gemini ACP 审批与 Codex 审批完全对齐，复用 Minos backend 现有 `ApprovalService`：
+当前 TUI/runtime 实现先对 Gemini ACP `session/request_permission` 做保守自动取消，避免 `session/prompt` 因未回复 server request 而永久挂起：
 
 ```
 Gemini CLI (Agent)           Minos daemon (Client)          Backend         Mobile
@@ -260,19 +288,14 @@ Gemini CLI (Agent)           Minos daemon (Client)          Backend         Mobi
      │ session/request_permission   │                           │               │
      │ {sessionId, toolCall, opts}  │                           │               │
      ├─────────────────────────────►│                           │               │
-     │                              │ write approval_requests   │               │
-     │                              ├──────────────────────────►│               │
-     │                              │                           │ durable_event │
-     │                              │                           ├──────────────►│
-     │                              │                           │               │ UI 展示
-     │                              │                           │◄──────────────┤
-     │                              │  host_command             │ 用户决定       │
-     │                              │◄──────────────────────────┤               │
-     │  { id, result: {outcome} }   │                           │               │
+     │  { id, result:               │                           │               │
+     │    { outcome:                │                           │               │
+     │      { outcome:"cancelled" } │                           │               │
+     │    }}                        │                           │               │
      │◄─────────────────────────────┤                           │               │
 ```
 
-No changes needed to backend `ApprovalService` or mobile client approval UI.
+完整审批对齐仍是后续工作：把 Gemini `options[].optionId` 映射进现有 `ApprovalService`，由用户选择后回复 `{ outcome: { outcome: "selected", optionId } }`，取消时回复 `{ outcome: { outcome: "cancelled" } }`。
 
 ### 3.8 File System Proxy
 

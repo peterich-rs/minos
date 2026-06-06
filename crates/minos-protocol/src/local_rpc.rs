@@ -4,7 +4,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReadGroupChatParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_seq: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 }
@@ -13,6 +17,10 @@ pub struct ReadGroupChatParams {
 pub struct ReadGroupChatResponse {
     pub log_path: String,
     pub messages: Vec<LocalGroupChatMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_before_seq: Option<u64>,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,7 +90,13 @@ pub enum LocalManagerEvent {
     InstanceCrashed {
         workspace: String,
         affected_threads: Vec<String>,
+        #[serde(default = "default_instance_crashed_reason")]
+        reason: crate::PauseReason,
     },
+}
+
+fn default_instance_crashed_reason() -> crate::PauseReason {
+    crate::PauseReason::InstanceReaped
 }
 
 #[rpc(server, client, namespace = "minos_local")]

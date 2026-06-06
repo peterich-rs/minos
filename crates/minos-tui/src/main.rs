@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::backend::BackendKind;
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -21,6 +21,9 @@ mod ui;
 #[derive(Parser, Debug)]
 #[command(name = "minos-tui", about = "Minos Agent TUI - local debug console")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     #[arg(short, long)]
     agent: Option<String>,
 
@@ -41,6 +44,21 @@ struct Cli {
 
     #[arg(long)]
     daemon_url: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    #[command(name = "chat-mcp", hide = true)]
+    ChatMcp(ChatMcpArgs),
+}
+
+#[derive(Parser, Debug)]
+struct ChatMcpArgs {
+    #[arg(long)]
+    db_path: Option<std::path::PathBuf>,
+
+    #[arg(long)]
+    default_room_id: Option<String>,
 }
 
 fn parse_agent_name(s: &str) -> Result<AgentName> {
@@ -129,15 +147,20 @@ fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::ChatMcp(args)) = cli.command {
+        return minos_chat_store::mcp::serve_stdio(args.db_path, args.default_room_id).await;
+    }
+
     validate_backend_args(&cli)?;
-    let log_path = logging::resolve_log_path(&cli.workspace, cli.log_file.clone());
+    let workspace = std::fs::canonicalize(&cli.workspace).unwrap_or_else(|_| cli.workspace.clone());
+    let log_path = logging::resolve_log_path(&workspace, cli.log_file.clone());
     logging::init(&log_path)?;
 
     let max_instances = cli.max_instances.unwrap_or(3);
     let backend: Arc<dyn crate::backend::AgentBackend> = match cli.backend {
         BackendKind::Embedded => Arc::new(
             crate::backend::EmbeddedBackend::new(
-                cli.workspace.clone(),
+                workspace.clone(),
                 max_instances,
                 std::time::Duration::from_secs(300),
             )
@@ -148,12 +171,13 @@ async fn main() -> Result<()> {
         ),
     };
 
-    let mut app = app::App::new(backend.clone(), cli.readonly, cli.workspace.clone());
+    let mut app = app::App::new(backend.clone(), cli.readonly, workspace.clone());
     app.init().await?;
 
     let mut terminal = setup_terminal()?;
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.set_event_sender(tx.clone());
 
     let ingest_rx = backend.subscribe_ingest().await;
     event::spawn_ingest_pump(ingest_rx, tx.clone());
@@ -166,8 +190,7 @@ async fn main() -> Result<()> {
 
     if let Some(agent_str) = &cli.agent {
         let agent = parse_agent_name(agent_str)?;
-        let workspace = cli.workspace.clone();
-        backend.start_agent(agent, workspace).await?;
+        backend.start_agent(agent, workspace.clone()).await?;
     }
 
     terminal.draw(|f| {
@@ -204,6 +227,7 @@ mod tests {
 
     fn test_cli(backend: BackendKind) -> Cli {
         Cli {
+            command: None,
             agent: None,
             workspace: ".".into(),
             readonly: false,

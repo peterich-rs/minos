@@ -120,12 +120,16 @@ impl GeminiAcpInstance {
         Ok(())
     }
 
-    pub async fn new_session(&self, cwd: &Path) -> Result<NewSessionResponse, MinosError> {
+    pub async fn new_session(
+        &self,
+        cwd: &Path,
+        mcp_servers: Vec<McpServer>,
+    ) -> Result<NewSessionResponse, MinosError> {
         let resp = self
             .client
             .call_typed(NewSessionParams {
                 cwd: cwd.to_string_lossy().to_string(),
-                mcp_servers: vec![],
+                mcp_servers,
                 additional_directories: None,
             })
             .await?;
@@ -137,13 +141,14 @@ impl GeminiAcpInstance {
         &self,
         session_id: &str,
         cwd: &Path,
+        mcp_servers: Option<Vec<McpServer>>,
     ) -> Result<ResumeSessionResponse, MinosError> {
         let resp = self
             .client
             .call_typed(ResumeSessionParams {
                 session_id: session_id.to_string(),
                 cwd: cwd.to_string_lossy().to_string(),
-                mcp_servers: Some(vec![]),
+                mcp_servers,
                 additional_directories: None,
             })
             .await?;
@@ -244,6 +249,15 @@ pub fn spawn_acp_pump(
                         }),
                         ts_ms: chrono::Utc::now().timestamp_millis(),
                     });
+                    if let Err(error) = reply_to_acp_server_request(&client, id, &method).await {
+                        tracing::warn!(
+                            target: "minos_agent_runtime::gemini_driver",
+                            error = %error,
+                            method = %method,
+                            thread_id = %thread_id,
+                            "failed to reply to gemini ACP server request"
+                        );
+                    }
                 }
                 Some(crate::acp_client::Inbound::Closed) => {
                     info!(target: "minos_agent_runtime::gemini_driver", thread_id = %thread_id, "gemini ACP stream closed");
@@ -262,4 +276,47 @@ pub fn spawn_acp_pump(
             }
         }
     })
+}
+
+async fn reply_to_acp_server_request(
+    client: &AcpClient,
+    id: serde_json::Value,
+    method: &str,
+) -> Result<(), MinosError> {
+    match method {
+        "session/request_permission" => {
+            let result = serde_json::to_value(RequestPermissionResponse {
+                outcome: RequestPermissionOutcome::Cancelled,
+            })
+            .map_err(|error| MinosError::AcpProtocolError {
+                method: method.into(),
+                message: format!("encode permission cancellation failed: {error}"),
+            })?;
+            client.reply(id, result).await
+        }
+        "fs/read_text_file"
+        | "fs/write_text_file"
+        | "terminal/create"
+        | "terminal/output"
+        | "terminal/wait_for_exit"
+        | "terminal/kill"
+        | "terminal/release" => {
+            client
+                .reply_error(
+                    id,
+                    -32000,
+                    format!("Minos Gemini ACP client does not support {method}"),
+                )
+                .await
+        }
+        _ => {
+            client
+                .reply_error(
+                    id,
+                    -32601,
+                    format!("unsupported Gemini ACP server request method: {method}"),
+                )
+                .await
+        }
+    }
 }

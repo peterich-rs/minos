@@ -68,6 +68,26 @@ pub fn make_response(id: serde_json::Value, result: serde_json::Value) -> serde_
     })
 }
 
+pub fn make_error(
+    id: serde_json::Value,
+    code: i64,
+    message: impl Into<String>,
+    data: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut error = serde_json::json!({
+        "code": code,
+        "message": message.into(),
+    });
+    if let Some(data) = data {
+        error["data"] = data;
+    }
+    serde_json::json!({
+        "jsonrpc": JSONRPC_VERSION,
+        "id": id,
+        "error": error,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +118,14 @@ mod tests {
         assert_eq!(frame["jsonrpc"], "2.0");
         assert_eq!(frame["id"], "req-1");
         assert_eq!(frame["result"]["outcome"], "allow");
+    }
+
+    #[test]
+    fn make_error_includes_jsonrpc_error_payload() {
+        let frame = make_error(serde_json::json!("req-2"), -32601, "not supported", None);
+        assert_eq!(frame["jsonrpc"], "2.0");
+        assert_eq!(frame["id"], "req-2");
+        assert_eq!(frame["error"]["code"], -32601);
+        assert_eq!(frame["error"]["message"], "not supported");
     }
 }

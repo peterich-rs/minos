@@ -22,6 +22,7 @@ async fn opencode_real_smoke_create_session_and_prompt() {
         port: 4199,
         password,
         subprocess_env: Arc::new(std::collections::HashMap::new()),
+        opencode_config_content: None,
     };
 
     let mut instance = minos_agent_runtime::OpencodeServerInstance::spawn(&workspace, config)

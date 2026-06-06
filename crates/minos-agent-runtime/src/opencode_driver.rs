@@ -29,6 +29,7 @@ pub struct OpencodeServerConfig {
     pub port: u16,
     pub password: String,
     pub subprocess_env: Arc<HashMap<String, String>>,
+    pub opencode_config_content: Option<String>,
 }
 
 pub struct OpencodeServerInstance {
@@ -53,6 +54,13 @@ impl OpencodeServerInstance {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if let Some(content) = config.opencode_config_content.as_deref().filter(|_| {
+            !config
+                .subprocess_env
+                .contains_key("OPENCODE_CONFIG_CONTENT")
+        }) {
+            cmd.env("OPENCODE_CONFIG_CONTENT", content);
+        }
 
         #[cfg(unix)]
         {
@@ -475,6 +483,7 @@ mod tests {
                 port: 4311,
                 password: "pw".into(),
                 subprocess_env: Arc::new(HashMap::new()),
+                opencode_config_content: None,
             },
             child: None,
             http_client: Client::builder().build().expect("client should build"),
@@ -506,6 +515,7 @@ mod tests {
                 port: addr.port(),
                 password: "pw".into(),
                 subprocess_env: Arc::new(HashMap::new()),
+                opencode_config_content: None,
             },
             child: None,
             http_client: Client::builder()

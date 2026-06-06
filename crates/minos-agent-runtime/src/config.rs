@@ -25,8 +25,16 @@ pub struct AgentRuntimeConfig {
     pub handshake_call_timeout: Duration,
     pub approval_request_timeout: Duration,
     pub subprocess_env: Arc<std::collections::HashMap<String, String>>,
+    pub chat_mcp: Option<ChatMcpConfig>,
     #[cfg(feature = "test-support")]
     pub test_ws_url: Option<Url>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMcpConfig {
+    pub server_bin: PathBuf,
+    pub server_args: Vec<String>,
+    pub db_path: PathBuf,
 }
 
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,9 +58,32 @@ impl AgentRuntimeConfig {
             handshake_call_timeout: DEFAULT_HANDSHAKE_CALL_TIMEOUT,
             approval_request_timeout: DEFAULT_APPROVAL_REQUEST_TIMEOUT,
             subprocess_env: Arc::new(std::collections::HashMap::new()),
+            chat_mcp: None,
             #[cfg(feature = "test-support")]
             test_ws_url: None,
         }
+    }
+
+    pub fn enable_default_chat_mcp(&mut self) -> anyhow::Result<()> {
+        self.chat_mcp = Some(ChatMcpConfig {
+            server_bin: PathBuf::from("minos-chat-mcp"),
+            server_args: Vec::new(),
+            db_path: minos_chat_store::default_db_path()?,
+        });
+        Ok(())
+    }
+
+    pub fn enable_chat_mcp_with_command(
+        &mut self,
+        server_bin: PathBuf,
+        server_args: Vec<String>,
+    ) -> anyhow::Result<()> {
+        self.chat_mcp = Some(ChatMcpConfig {
+            server_bin,
+            server_args,
+            db_path: minos_chat_store::default_db_path()?,
+        });
+        Ok(())
     }
 }
 

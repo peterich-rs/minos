@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 minos-agent-runtime = { path = "../minos-agent-runtime" }
+minos-chat-store = { path = "../minos-chat-store" }
 minos-ui-protocol = { path = "../minos-ui-protocol" }
 minos-domain = { path = "../minos-domain" }
 minos-cli-detect = { path = "../minos-cli-detect" }

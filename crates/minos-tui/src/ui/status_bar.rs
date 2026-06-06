@@ -60,7 +60,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState) {
         spans.push(Span::styled(label, style));
     }
     spans.push(Span::raw(
-        "  n new-thread  @agent route  Tab focus  wheel/PgUp/PgDn scroll  Esc cancel/focus  Ctrl+C interrupt/quit  Ctrl+Q quit",
+        "  n new-agent  @agent route  Tab focus  Enter inspect/send  Esc back/close-detail  wheel/PgUp/PgDn scroll  Ctrl+C interrupt  Ctrl+Q quit",
     ));
     let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: true });
     f.render_widget(paragraph, area);

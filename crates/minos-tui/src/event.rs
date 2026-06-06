@@ -1,9 +1,21 @@
 use crossterm::event::{KeyEvent, MouseEvent};
 use minos_agent_runtime::{ManagerEvent, RawIngest};
+use minos_domain::AgentName;
+use std::path::PathBuf;
 
 pub enum AppEvent {
     Ingest(RawIngest),
     ManagerEvent(ManagerEvent),
+    AgentStartedForPrompt {
+        agent: AgentName,
+        thread_id: String,
+        cwd: PathBuf,
+        text: String,
+    },
+    SendMessageFailed {
+        thread_id: String,
+        error: String,
+    },
     Key(KeyEvent),
     Mouse(MouseEvent),
     Resize(u16, u16),

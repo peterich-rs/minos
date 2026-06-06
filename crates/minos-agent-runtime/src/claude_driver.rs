@@ -42,6 +42,7 @@ impl ClaudeNdjsonSession {
         manager_tx: broadcast::Sender<ManagerEvent>,
         events_tx: broadcast::Sender<RawIngest>,
         subprocess_env: &Arc<HashMap<String, String>>,
+        mcp_config_json: Option<&str>,
     ) -> anyhow::Result<Self> {
         let mut args: Vec<String> = vec![
             "-p".into(),
@@ -57,6 +58,11 @@ impl ClaudeNdjsonSession {
         } else if let Some(sid) = session_id {
             args.push("--session-id".into());
             args.push(sid.into());
+        }
+        if let Some(config_json) = mcp_config_json {
+            args.push("--mcp-config".into());
+            args.push(config_json.into());
+            args.push("--strict-mcp-config".into());
         }
 
         let mut cmd = Command::new(cli_path);

@@ -352,9 +352,11 @@ fn local_manager_to_runtime(event: LocalManagerEvent) -> ManagerEvent {
         LocalManagerEvent::InstanceCrashed {
             workspace,
             affected_threads,
+            reason,
         } => ManagerEvent::InstanceCrashed {
             workspace: PathBuf::from(workspace),
             affected_threads,
+            reason: proto_pause_reason_to_runtime(&reason),
         },
     }
 }

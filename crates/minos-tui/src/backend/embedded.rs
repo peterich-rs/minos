@@ -20,6 +20,26 @@ impl EmbeddedBackend {
     ) -> Result<Self> {
         let shell_env = capture_user_shell_env().await;
         let mut config = minos_agent_runtime::AgentRuntimeConfig::new(workspace_root);
+        let chat_mcp_result = match std::env::current_exe() {
+            Ok(current_exe) => {
+                config.enable_chat_mcp_with_command(current_exe, vec!["chat-mcp".into()])
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_tui::backend::embedded",
+                    error = %error,
+                    "failed to resolve current executable for chat MCP; falling back to PATH"
+                );
+                config.enable_default_chat_mcp()
+            }
+        };
+        if let Err(error) = chat_mcp_result {
+            tracing::warn!(
+                target: "minos_tui::backend::embedded",
+                error = %error,
+                "failed to enable default chat MCP"
+            );
+        }
         config.subprocess_env = Arc::new(shell_env);
         let caps = InstanceCaps {
             max_instances,

@@ -3,7 +3,9 @@
 // else honest.
 #![allow(unsafe_code)]
 
+use crate::approvals::NonApprovalContext;
 use crate::codex_client::{CodexClient, Inbound};
+use crate::config::ChatMcpConfig;
 use crate::instance::AppServerInstance;
 use crate::manager_event::ManagerEvent;
 use crate::process::CodexProcess;
@@ -148,6 +150,7 @@ impl AgentManager {
         let _ = manager_tx.send(ManagerEvent::InstanceCrashed {
             workspace,
             affected_threads: tids,
+            reason: PauseReason::InstanceReaped,
         });
         let child_opt = inst.child.lock().await.take();
         drop(inst);
@@ -487,8 +490,16 @@ impl AgentManager {
         }
         let mut resumed = false;
         let mut provider_session_id = None;
+        let chat_mcp = resolve_chat_mcp_server(self.config.chat_mcp.as_ref(), workspace);
         if let Some(session_id) = resume_session_id {
-            match instance.resume_session(session_id, workspace).await {
+            match instance
+                .resume_session(
+                    session_id,
+                    workspace,
+                    Some(chat_mcp.iter().map(gemini_mcp_server).collect()),
+                )
+                .await
+            {
                 Ok(_) => {
                     resumed = true;
                     provider_session_id = Some(session_id.to_string());
@@ -506,7 +517,7 @@ impl AgentManager {
         }
         if !resumed {
             let response = instance
-                .new_session(workspace)
+                .new_session(workspace, chat_mcp.iter().map(gemini_mcp_server).collect())
                 .await
                 .map_err(|error| anyhow::anyhow!("gemini ACP session/new failed: {error}"))?;
             provider_session_id = Some(response.session_id);
@@ -540,11 +551,13 @@ impl AgentManager {
             .unwrap_or_else(|| PathBuf::from(AgentName::Opencode.bin_name()));
         let port = pick_free_port(self.config.opencode_port_range.clone())?;
         let password = uuid::Uuid::new_v4().to_string();
+        let chat_mcp = resolve_chat_mcp_server(self.config.chat_mcp.as_ref(), workspace);
         let config = crate::opencode_driver::OpencodeServerConfig {
             opencode_bin: bin,
             port,
             password,
             subprocess_env: self.config.subprocess_env.clone(),
+            opencode_config_content: chat_mcp.as_ref().map(opencode_config_content),
         };
         let instance =
             crate::opencode_driver::OpencodeServerInstance::spawn(workspace, config).await?;
@@ -640,6 +653,7 @@ impl AgentManager {
                 let _ = watcher_mgr_tx.send(ManagerEvent::InstanceCrashed {
                     workspace: watcher_inst.workspace.clone(),
                     affected_threads: affected,
+                    reason: PauseReason::CodexCrashed,
                 });
             });
             return Ok(inst);
@@ -658,7 +672,13 @@ impl AgentManager {
 
         let listen_arg = format!("ws://127.0.0.1:{port}");
         let spawn_policies = resolve_session_policies(policies, &self.config.subprocess_env);
-        let args = build_codex_spawn_args(&listen_arg, &workspace_display, &spawn_policies);
+        let chat_mcp = resolve_chat_mcp_server(self.config.chat_mcp.as_ref(), workspace);
+        let args = build_codex_spawn_args(
+            &listen_arg,
+            &workspace_display,
+            &spawn_policies,
+            chat_mcp.as_ref(),
+        );
         let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
         let env = self.config.subprocess_env.clone();
         let mut process = CodexProcess::spawn(&bin, &arg_refs, &env)
@@ -757,6 +777,7 @@ impl AgentManager {
             let _ = watcher_mgr_tx.send(ManagerEvent::InstanceCrashed {
                 workspace: watcher_inst.workspace.clone(),
                 affected_threads: affected,
+                reason: PauseReason::CodexCrashed,
             });
         });
 
@@ -799,6 +820,7 @@ impl AgentManager {
         let _ = self.manager_tx.send(ManagerEvent::InstanceCrashed {
             workspace,
             affected_threads: tids,
+            reason: PauseReason::InstanceReaped,
         });
         let child_opt = inst.child.lock().await.take();
         drop(inst);
@@ -1007,6 +1029,8 @@ impl AgentManager {
         let resume_sid =
             (has_runtime_session || has_persisted_history).then_some(provider_session_id.as_str());
         let session_id = resume_sid.is_none().then_some(provider_session_id.as_str());
+        let chat_mcp = resolve_chat_mcp_server(self.config.chat_mcp.as_ref(), &handle.workspace);
+        let claude_mcp_config = chat_mcp.as_ref().map(claude_mcp_config_json);
         let session = crate::claude_driver::ClaudeNdjsonSession::start_turn(
             &cli_path,
             &handle.workspace,
@@ -1018,6 +1042,7 @@ impl AgentManager {
             self.manager_tx.clone(),
             self.events_tx.clone(),
             &self.config.subprocess_env,
+            claude_mcp_config.as_deref(),
         )
         .await?;
         self.claude_sessions
@@ -1809,10 +1834,110 @@ fn resolve_session_policies(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedChatMcpServer {
+    name: String,
+    command: String,
+    args: Vec<String>,
+}
+
+fn resolve_chat_mcp_server(
+    config: Option<&ChatMcpConfig>,
+    workspace: &Path,
+) -> Option<ResolvedChatMcpServer> {
+    let config = config?;
+    Some(ResolvedChatMcpServer {
+        name: "minos_chat".into(),
+        command: config.server_bin.display().to_string(),
+        args: config
+            .server_args
+            .iter()
+            .cloned()
+            .chain([
+                "--db-path".into(),
+                config.db_path.display().to_string(),
+                "--default-room-id".into(),
+                minos_chat_store::room_id_for_workspace(workspace),
+            ])
+            .collect(),
+    })
+}
+
+fn codex_mcp_config_args(server: &ResolvedChatMcpServer) -> Vec<String> {
+    let args_value = serde_json::Value::Array(
+        server
+            .args
+            .iter()
+            .cloned()
+            .map(serde_json::Value::String)
+            .collect(),
+    );
+    vec![
+        "-c".into(),
+        format!(
+            "mcp_servers.{}.command={}",
+            server.name,
+            toml_string(&server.command)
+        ),
+        "-c".into(),
+        format!("mcp_servers.{}.args={}", server.name, args_value),
+        "-c".into(),
+        format!("mcp_servers.{}.enabled=true", server.name),
+    ]
+}
+
+fn claude_mcp_config_json(server: &ResolvedChatMcpServer) -> String {
+    let mut servers = serde_json::Map::new();
+    servers.insert(
+        server.name.clone(),
+        serde_json::json!({
+            "command": server.command.clone(),
+            "args": server.args.clone(),
+        }),
+    );
+    serde_json::json!({ "mcpServers": servers }).to_string()
+}
+
+fn opencode_config_content(server: &ResolvedChatMcpServer) -> String {
+    let mut command = Vec::with_capacity(server.args.len() + 1);
+    command.push(server.command.clone());
+    command.extend(server.args.clone());
+    let mut mcp = serde_json::Map::new();
+    mcp.insert(
+        server.name.clone(),
+        serde_json::json!({
+            "type": "local",
+            "command": command,
+            "enabled": true,
+        }),
+    );
+    serde_json::json!({
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": mcp,
+    })
+    .to_string()
+}
+
+fn gemini_mcp_server(server: &ResolvedChatMcpServer) -> minos_acp_protocol::McpServer {
+    minos_acp_protocol::McpServer {
+        name: server.name.clone(),
+        transport: minos_acp_protocol::McpTransport::Stdio {
+            command: server.command.clone(),
+            args: server.args.clone(),
+            env: Vec::new(),
+        },
+    }
+}
+
+fn toml_string(value: &str) -> String {
+    toml::Value::String(value.to_owned()).to_string()
+}
+
 fn build_codex_spawn_args(
     listen_arg: &str,
     workspace_display: &str,
     policies: &ResolvedSessionPolicies,
+    chat_mcp: Option<&ResolvedChatMcpServer>,
 ) -> Vec<String> {
     let mut args = vec![
         "app-server".to_string(),
@@ -1836,6 +1961,9 @@ fn build_codex_spawn_args(
     args.push(sandbox_arg);
     args.push("-c".to_string());
     args.push("shell_environment_policy.inherit=all".to_string());
+    if let Some(server) = chat_mcp {
+        args.extend(codex_mcp_config_args(server));
+    }
     args
 }
 
@@ -1860,6 +1988,26 @@ fn request_turn_id(params: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+async fn non_approval_context_for_request(
+    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    instance_workspace: &Path,
+    thread_id: Option<&str>,
+) -> NonApprovalContext {
+    let request_workspace = if let Some(thread_id) = thread_id {
+        threads
+            .lock()
+            .await
+            .get(thread_id)
+            .map(|handle| handle.workspace.clone())
+    } else {
+        None
+    };
+    let workspace = request_workspace.unwrap_or_else(|| instance_workspace.to_path_buf());
+    NonApprovalContext {
+        chat_room_id: Some(minos_chat_store::room_id_for_workspace(&workspace)),
+    }
 }
 
 fn broadcast_ingest(events_tx: &broadcast::Sender<RawIngest>, ingest: RawIngest) {
@@ -1970,7 +2118,7 @@ async fn event_pump_loop(
     threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
     pending_approvals: PendingApprovals,
     manager_tx: broadcast::Sender<ManagerEvent>,
-    _workspace: PathBuf,
+    workspace: PathBuf,
     approval_request_timeout: Duration,
     crash_tx: tokio::sync::mpsc::Sender<()>,
 ) {
@@ -2100,13 +2248,9 @@ async fn event_pump_loop(
                             agent,
                         );
                     }
-                    Ok(_req) => {
-                        warn!(
-                            target: "minos_agent_runtime::manager",
-                            method = %method,
-                            "non-approval server request received; forwarding as synthetic notification",
-                        );
-                        if let Some(thread_id) = request_thread_id(&params) {
+                    Ok(req) => {
+                        let thread_id = request_thread_id(&params);
+                        if let Some(thread_id) = thread_id.clone() {
                             let agent = threads
                                 .lock()
                                 .await
@@ -2115,7 +2259,7 @@ async fn event_pump_loop(
                             let synthetic_method = format!("server_request/{method}");
                             let payload = serde_json::json!({
                                 "method": synthetic_method,
-                                "params": params,
+                                "params": params.clone(),
                             });
                             broadcast_ingest(
                                 &events_tx,
@@ -2125,6 +2269,54 @@ async fn event_pump_loop(
                                     payload,
                                     ts_ms: current_unix_ms(),
                                 },
+                            );
+                        }
+
+                        let context = non_approval_context_for_request(
+                            &threads,
+                            &workspace,
+                            thread_id.as_deref(),
+                        )
+                        .await;
+                        if let Some(reply) =
+                            crate::approvals::auto_resolve_non_approval(&req, context)
+                        {
+                            let server_name_for_log = params
+                                .get("serverName")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("");
+                            let mode_for_log = params
+                                .get("mode")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("");
+                            let thread_id_for_log = thread_id.as_deref().unwrap_or("");
+                            let reply_action = reply
+                                .get("action")
+                                .and_then(Value::as_str)
+                                .or_else(|| reply.get("answers").map(|_| "answers"))
+                                .unwrap_or("reply");
+                            info!(
+                                target: "minos_agent_runtime::manager",
+                                method = %method,
+                                server_name = %server_name_for_log,
+                                mode = %mode_for_log,
+                                thread_id = %thread_id_for_log,
+                                action = %reply_action,
+                                "non-approval server request auto-resolved",
+                            );
+                            if let Err(error) = client.reply(id.clone(), reply).await {
+                                warn!(
+                                    target: "minos_agent_runtime::manager",
+                                    error = %error,
+                                    method = %method,
+                                    "non-approval server request fallback reply failed",
+                                );
+                            }
+                        } else {
+                            warn!(
+                                target: "minos_agent_runtime::manager",
+                                method = %method,
+                                "non-approval server request received; no fallback reply available",
                             );
                         }
                     }
@@ -2202,7 +2394,7 @@ pub(crate) struct StartThreadResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AgentRuntimeConfig;
+    use crate::config::{AgentRuntimeConfig, ChatMcpConfig};
     use crate::state_machine::PauseReason;
     use crate::test_support::{FakeCodexBackend, FakeCodexServer, Step};
     use serde_json::json;
@@ -2274,7 +2466,7 @@ mod tests {
             }
         );
 
-        let args = build_codex_spawn_args("ws://127.0.0.1:9999", "/tmp/ws", &resolved);
+        let args = build_codex_spawn_args("ws://127.0.0.1:9999", "/tmp/ws", &resolved, None);
         assert!(has_arg(&args, "approval_policy=on-failure"));
         assert!(has_arg(&args, "sandbox_policy=read-only"));
     }
@@ -2319,11 +2511,63 @@ mod tests {
         )]);
 
         let resolved = resolve_session_policies(None, &env);
-        let args = build_codex_spawn_args("ws://127.0.0.1:9999", "/tmp/ws", &resolved);
+        let args = build_codex_spawn_args("ws://127.0.0.1:9999", "/tmp/ws", &resolved, None);
 
         assert_eq!(resolved, ResolvedSessionPolicies::default());
         assert!(!has_arg(&args, "approval_policy=on_request"));
         assert!(!has_arg(&args, "sandbox_policy=workspace_write"));
+    }
+
+    #[test]
+    fn codex_spawn_args_include_chat_mcp_config_when_enabled() {
+        let resolved = ResolvedSessionPolicies::default();
+        let server = ResolvedChatMcpServer {
+            name: "minos_chat".into(),
+            command: "/tmp/minos-chat-mcp".into(),
+            args: vec![
+                "--db-path".into(),
+                "/tmp/daemon.sqlite".into(),
+                "--default-room-id".into(),
+                "room-main".into(),
+            ],
+        };
+
+        let args =
+            build_codex_spawn_args("ws://127.0.0.1:9999", "/tmp/ws", &resolved, Some(&server));
+
+        assert!(has_arg(
+            &args,
+            "mcp_servers.minos_chat.command=\"/tmp/minos-chat-mcp\""
+        ));
+        assert!(has_arg(
+            &args,
+            "mcp_servers.minos_chat.args=[\"--db-path\",\"/tmp/daemon.sqlite\",\"--default-room-id\",\"room-main\"]"
+        ));
+        assert!(has_arg(&args, "mcp_servers.minos_chat.enabled=true"));
+    }
+
+    #[test]
+    fn resolve_chat_mcp_server_preserves_command_prefix_args() {
+        let config = ChatMcpConfig {
+            server_bin: "/tmp/minos-tui".into(),
+            server_args: vec!["chat-mcp".into()],
+            db_path: "/tmp/minos.sqlite".into(),
+        };
+
+        let server = resolve_chat_mcp_server(Some(&config), std::path::Path::new("/tmp/minos"))
+            .expect("chat MCP should resolve");
+
+        assert_eq!(server.command, "/tmp/minos-tui");
+        assert_eq!(
+            server.args,
+            vec![
+                "chat-mcp",
+                "--db-path",
+                "/tmp/minos.sqlite",
+                "--default-room-id",
+                "room-minos"
+            ]
+        );
     }
 
     #[tokio::test]
@@ -2452,6 +2696,191 @@ done
             mgr.thread_state(&thread_id).await,
             Some(ThreadState::Idle)
         ));
+
+        mgr.close_thread(&thread_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn gemini_session_new_uses_gemini_acp_mcp_server_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script_path = tmp.path().join("fake-gemini-mcp-shape.sh");
+        let request_path = tmp.path().join("session-new.json");
+        std::fs::write(
+            &script_path,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"authMethods":[],"agentCapabilities":{}}}\n' "$id"
+      ;;
+    session/new)
+      printf '%s\n' "$line" > "$FAKE_GEMINI_SESSION_NEW"
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"session-1"}}\n' "$id"
+      ;;
+    session/close)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.gemini_bin = Some(script_path);
+        cfg.chat_mcp = Some(ChatMcpConfig {
+            server_bin: "/tmp/minos-tui".into(),
+            server_args: vec!["chat-mcp".into()],
+            db_path: "/tmp/minos-chat.sqlite".into(),
+        });
+        cfg.subprocess_env = Arc::new(HashMap::from([(
+            "FAKE_GEMINI_SESSION_NEW".to_string(),
+            request_path.display().to_string(),
+        )]));
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let started = mgr
+            .start_agent(AgentName::Gemini, tmp.path().to_path_buf())
+            .await
+            .unwrap();
+
+        let request: Value = serde_json::from_str(&std::fs::read_to_string(request_path).unwrap())
+            .expect("session/new request should be JSON");
+        let mcp_server = &request["params"]["mcpServers"][0];
+        assert_eq!(mcp_server["name"], "minos_chat");
+        assert_eq!(mcp_server["command"], "/tmp/minos-tui");
+        assert_eq!(mcp_server["args"][0], "chat-mcp");
+        assert_eq!(mcp_server["args"][1], "--db-path");
+        assert_eq!(mcp_server["args"][2], "/tmp/minos-chat.sqlite");
+        assert!(mcp_server.get("transportType").is_none());
+        assert!(mcp_server.get("type").is_none());
+        assert_eq!(mcp_server["env"], json!([]));
+
+        mgr.close_thread(&started.thread_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn gemini_server_permission_request_is_cancelled_and_does_not_block_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script_path = tmp.path().join("fake-gemini-permission.sh");
+        let reply_path = tmp.path().join("permission-reply.json");
+        std::fs::write(
+            &script_path,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"authMethods":[],"agentCapabilities":{}}}\n' "$id"
+      ;;
+    session/new)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"session-1"}}\n' "$id"
+      ;;
+    session/prompt)
+      printf '{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"sessionId":"session-1","options":[{"optionId":"proceed_once","name":"Allow","kind":"allow_once"},{"optionId":"cancel","name":"Reject","kind":"reject_once"}],"toolCall":{"toolCallId":"tool-1","status":"pending","title":"fake tool","kind":"other"}}}\n'
+      IFS= read -r reply || exit 1
+      printf '%s\n' "$reply" > "$FAKE_GEMINI_PERMISSION_REPLY"
+      case "$reply" in
+        *'"outcome":{"outcome":"cancelled"}'*)
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"permission was cancelled"}}}}\n'
+          printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id"
+          ;;
+        *)
+          printf '{"jsonrpc":"2.0","id":"%s","error":{"code":-32000,"message":"bad permission reply"}}\n' "$id"
+          ;;
+      esac
+      ;;
+    session/close)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.gemini_bin = Some(script_path);
+        cfg.subprocess_env = Arc::new(HashMap::from([(
+            "FAKE_GEMINI_PERMISSION_REPLY".to_string(),
+            reply_path.display().to_string(),
+        )]));
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let started = mgr
+            .start_agent(AgentName::Gemini, tmp.path().to_path_buf())
+            .await
+            .unwrap();
+        let thread_id = started.thread_id.clone();
+
+        let mut rx = mgr.ingest_stream();
+        mgr.send_user_message(&thread_id, "please use a tool".into())
+            .await
+            .unwrap();
+
+        let request = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest stream should stay open");
+                if ingest.thread_id == thread_id
+                    && ingest.payload.get("kind").and_then(Value::as_str)
+                        == Some("acp_server_request")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("Gemini ACP server request should be forwarded");
+        assert_eq!(
+            request.payload.get("method").and_then(Value::as_str),
+            Some("session/request_permission")
+        );
+
+        let chunk = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest stream should stay open");
+                if ingest.thread_id == thread_id
+                    && ingest.payload.get("kind").and_then(Value::as_str)
+                        == Some("acp_notification")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("fake Gemini should continue after permission cancellation");
+        assert_eq!(
+            chunk.payload["params"]["update"]["content"]["text"],
+            "permission was cancelled"
+        );
+
+        let reply = std::fs::read_to_string(reply_path).unwrap();
+        assert!(reply.contains(r#""outcome":{"outcome":"cancelled"}"#));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if matches!(mgr.thread_state(&thread_id).await, Some(ThreadState::Idle)) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Gemini prompt task should return thread to idle");
 
         mgr.close_thread(&thread_id).await.unwrap();
     }
@@ -2850,6 +3279,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                 port: addr.port(),
                 password: "pw".into(),
                 subprocess_env: Arc::new(HashMap::new()),
+                opencode_config_content: None,
             },
             child: None,
             http_client: reqwest::Client::builder()
@@ -3306,6 +3736,208 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             json!("item/commandExecution/requestApproval")
         );
         assert!(mgr.pending_approvals.contains_key(&request_id));
+
+        server.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_elicitation_requests_are_forwarded_and_auto_cancelled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-mcp-elicit";
+        let turn_id = "turn-mcp-elicit";
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: fake_thread_start_reply(thread_id),
+            },
+            Step::EmitServerRequest {
+                method: "mcpServer/elicitation/request".into(),
+                params: json!({
+                    "elicitationId": "elic-1",
+                    "message": "Open this URL",
+                    "mode": "url",
+                    "serverName": "minos_chat",
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "url": "https://example.com"
+                }),
+            },
+            Step::ExpectResponse {
+                result: json!({ "action": "cancel" }),
+            },
+            Step::Sleep { ms: 20 },
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let mut ingest_rx = mgr.ingest_stream();
+
+        let started = mgr
+            .start_agent(AgentKind::Codex, "/w-mcp-elicit".into())
+            .await
+            .unwrap();
+        assert_eq!(started.thread_id, thread_id);
+
+        let ingest = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ingest = ingest_rx
+                    .recv()
+                    .await
+                    .expect("ingest stream should stay open");
+                if ingest.payload.get("method").and_then(Value::as_str)
+                    == Some("server_request/mcpServer/elicitation/request")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("mcp elicitation synthetic ingest should arrive");
+
+        assert_eq!(ingest.thread_id, thread_id);
+        assert_eq!(ingest.payload["params"]["threadId"], json!(thread_id));
+        assert_eq!(ingest.payload["params"]["turnId"], json!(turn_id));
+
+        server.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn minos_chat_form_elicitation_is_forwarded_and_auto_accepted_with_room() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-mcp-chat";
+        let turn_id = "turn-mcp-chat";
+        let workspace = PathBuf::from("/w-mcp-chat");
+        let room_id = minos_chat_store::room_id_for_workspace(&workspace);
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: fake_thread_start_reply(thread_id),
+            },
+            Step::EmitServerRequest {
+                method: "mcpServer/elicitation/request".into(),
+                params: json!({
+                    "message": "Select the Minos chat room to read",
+                    "mode": "form",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {
+                            "room_id": { "type": "string" }
+                        },
+                        "required": ["room_id"]
+                    },
+                    "serverName": "minos_chat",
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                }),
+            },
+            Step::ExpectResponse {
+                result: json!({
+                    "action": "accept",
+                    "content": { "room_id": room_id }
+                }),
+            },
+            Step::Sleep { ms: 20 },
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let mut ingest_rx = mgr.ingest_stream();
+
+        let started = mgr.start_agent(AgentKind::Codex, workspace).await.unwrap();
+        assert_eq!(started.thread_id, thread_id);
+
+        let ingest = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ingest = ingest_rx
+                    .recv()
+                    .await
+                    .expect("ingest stream should stay open");
+                if ingest.payload.get("method").and_then(Value::as_str)
+                    == Some("server_request/mcpServer/elicitation/request")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("mcp elicitation synthetic ingest should arrive");
+
+        assert_eq!(ingest.thread_id, thread_id);
+        assert_eq!(ingest.payload["params"]["serverName"], json!("minos_chat"));
+        assert_eq!(ingest.payload["params"]["threadId"], json!(thread_id));
+        assert_eq!(ingest.payload["params"]["turnId"], json!(turn_id));
+
+        server.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tool_request_user_input_requests_are_forwarded_and_auto_answered_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-tool-input";
+        let turn_id = "turn-tool-input";
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: fake_thread_start_reply(thread_id),
+            },
+            Step::EmitServerRequest {
+                method: "item/tool/requestUserInput".into(),
+                params: json!({
+                    "itemId": "item-1",
+                    "questions": [{
+                        "header": "Need input",
+                        "id": "q1",
+                        "question": "Pick one"
+                    }],
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                }),
+            },
+            Step::ExpectResponse {
+                result: json!({ "answers": {} }),
+            },
+            Step::Sleep { ms: 20 },
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let mut ingest_rx = mgr.ingest_stream();
+
+        mgr.start_agent(AgentKind::Codex, "/w-tool-input".into())
+            .await
+            .unwrap();
+
+        let ingest = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ingest = ingest_rx
+                    .recv()
+                    .await
+                    .expect("ingest stream should stay open");
+                if ingest.payload.get("method").and_then(Value::as_str)
+                    == Some("server_request/item/tool/requestUserInput")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("tool request user input synthetic ingest should arrive");
+
+        assert_eq!(ingest.thread_id, thread_id);
+        assert_eq!(ingest.payload["params"]["threadId"], json!(thread_id));
+        assert_eq!(ingest.payload["params"]["turnId"], json!(turn_id));
 
         server.stop().await;
     }
