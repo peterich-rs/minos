@@ -45,8 +45,12 @@ class _ShimmerBoxState extends State<ShimmerBox>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final baseColor = isDark ? const Color(0xFF27272A) : const Color(0xFFE4E4E7);
-    final shimmerColor = isDark ? const Color(0xFF3F3F46) : const Color(0xFFF4F4F5);
+    final baseColor = isDark
+        ? const Color(0xFF27272A)
+        : const Color(0xFFE4E4E7);
+    final shimmerColor = isDark
+        ? const Color(0xFF3F3F46)
+        : const Color(0xFFF4F4F5);
 
     return AnimatedBuilder(
       animation: _controller,
@@ -56,7 +60,9 @@ class _ShimmerBoxState extends State<ShimmerBox>
           height: widget.height,
           decoration: BoxDecoration(
             shape: widget.circular ? BoxShape.circle : BoxShape.rectangle,
-            borderRadius: widget.circular ? null : BorderRadius.circular(widget.borderRadius),
+            borderRadius: widget.circular
+                ? null
+                : BorderRadius.circular(widget.borderRadius),
             gradient: LinearGradient(
               begin: Alignment.centerLeft,
               end: Alignment.centerRight,

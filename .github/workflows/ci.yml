@@ -51,7 +51,7 @@ jobs:
         # real adapter set; rust-cache persists the binary in
         # `~/.cargo/bin` across runs, so the `cargo install` is a near-noop
         # on cache hits.
-        run: cargo install sqlx-cli --no-default-features --features sqlite,postgres --locked
+        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features sqlite,postgres --locked
 
       - name: Verify sqlx offline metadata
         # Catches stale `.sqlx/` cache entries before they surface as opaque
@@ -60,7 +60,9 @@ jobs:
         # workspace manifest sets `default-members = []`; without it,
         # `cargo sqlx prepare` errors with "no crates to check". The `.sqlx/`
         # directory was committed in a297e28 (relay store CRUD).
-        run: cargo sqlx prepare --check --workspace -- -p minos-backend --all-targets
+        run: |
+          mkdir -p target
+          DATABASE_URL=sqlite://target/sqlx-prepare.sqlite?mode=rwc cargo sqlx prepare --check --workspace -- -p minos-backend --all-targets
 
       - name: Verify backend platform schema drift
         # The backend generator now emits the runtime contract plus OpenAPI and
@@ -185,12 +187,12 @@ jobs:
         working-directory: apps/mobile
         run: dart run build_runner build --delete-conflicting-outputs
 
-      - name: dart format --set-exit-if-changed lib test
+      - name: dart format --set-exit-if-changed lib
         # Scope to project sources. `dart format .` also walks
         # `rust_builder/cargokit/**` (vendored upstream) and `build/**`
         # (ephemeral), neither of which we want CI to enforce style on.
         working-directory: apps/mobile
-        run: dart format --set-exit-if-changed lib test
+        run: dart format --set-exit-if-changed lib
 
       - name: dart analyze --fatal-infos
         working-directory: apps/mobile

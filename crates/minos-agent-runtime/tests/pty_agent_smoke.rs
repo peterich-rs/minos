@@ -9,6 +9,7 @@ use minos_agent_runtime::pty_agent::PtyAgent;
 use minos_domain::AgentName;
 use tokio::sync::broadcast;
 
+#[cfg(unix)]
 #[tokio::test]
 async fn pty_agent_reads_stdout_and_accepts_stdin() {
     let (tx, mut rx) = broadcast::channel::<RawIngest>(64);

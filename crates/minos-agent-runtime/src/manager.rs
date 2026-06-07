@@ -2633,6 +2633,7 @@ mod tests {
         fake.stop().await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn gemini_send_user_message_runs_acp_prompt_and_returns_idle() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2739,6 +2740,7 @@ done
         mgr.close_thread(&thread_id).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn gemini_session_new_uses_gemini_acp_mcp_server_shape() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2812,6 +2814,7 @@ done
         mgr.close_thread(&started.thread_id).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn gemini_server_permission_request_is_cancelled_and_does_not_block_prompt() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2930,6 +2933,7 @@ done
         mgr.close_thread(&thread_id).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn gemini_suspended_thread_recreates_acp_instance_before_prompt() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3017,6 +3021,7 @@ done
         mgr.close_thread(thread_id).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn claude_first_turn_uses_generated_session_id() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3081,6 +3086,7 @@ printf '{"type":"result","is_error":false}\n'
         assert!(!args.contains("--resume"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn claude_suspended_thread_starts_claude_turn_with_provider_session() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3164,6 +3170,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         ));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn running_claude_message_resumes_bound_session_and_synthesizes_user_message() {
         let tmp = tempfile::tempdir().unwrap();

@@ -227,7 +227,9 @@ class _ProjectCard extends ConsumerWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: .circular(12),
-        side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
+        side: BorderSide(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.3),
+        ),
       ),
       child: InkWell(
         borderRadius: .circular(12),
@@ -247,7 +249,9 @@ class _ProjectCard extends ConsumerWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: _projectColor(project.projectId).withValues(alpha: 0.15),
+                  color: _projectColor(
+                    project.projectId,
+                  ).withValues(alpha: 0.15),
                   borderRadius: .circular(12),
                 ),
                 child: Center(
