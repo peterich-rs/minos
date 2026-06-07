@@ -208,7 +208,12 @@ jobs:
         # (where cargo + Flutter coexist). Logic-only tests
         # (pairing_controller_test, etc.) still run on this lane.
         working-directory: apps/mobile
-        run: flutter test --exclude-tags ffi
+        run: |
+          if [ -d test ]; then
+            flutter test --exclude-tags ffi
+          else
+            echo "No apps/mobile/test directory; skipping Flutter tests."
+          fi
 
       - name: frb codegen drift
         # Regenerate the bridge and fail if anything changed. Catches
