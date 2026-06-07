@@ -194,9 +194,12 @@ jobs:
         working-directory: apps/mobile
         run: dart format --set-exit-if-changed lib
 
-      - name: dart analyze --fatal-infos
+      - name: dart analyze
         working-directory: apps/mobile
-        run: dart analyze --fatal-infos
+        # Keep analyzer warnings/errors fatal, but leave info-level lint output
+        # advisory. The prefer_shorthands plugin emits broad info diagnostics
+        # on new Flutter/Dart releases and should not block unrelated PRs.
+        run: dart analyze
 
       - name: flutter test (exclude ffi-coupled tests)
         # `minos_error_display_test.dart` is tagged `ffi` because it loads
