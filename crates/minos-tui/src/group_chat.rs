@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use minos_chat_store::{ChatAgentSession, ChatStore, NewChatMessage};
+use minos_chat_store::{ChatAgentSession, ChatMcpCommand, ChatStore, NewChatMessage};
 use minos_protocol::LocalGroupChatMessage;
 
 #[derive(Clone)]
@@ -86,6 +86,32 @@ impl GroupChatStore {
             .append_message(&self.room_id, NewChatMessage::from(message))
             .await?;
         Ok(message.into())
+    }
+
+    pub async fn claim_pending_mcp_commands(
+        &self,
+        limit: u32,
+    ) -> anyhow::Result<Vec<ChatMcpCommand>> {
+        let Some(store) = self.open().await? else {
+            return Ok(Vec::new());
+        };
+        store
+            .claim_pending_mcp_commands(&self.room_id, Some(limit))
+            .await
+    }
+
+    pub async fn complete_mcp_command(&self, seq: u64) -> anyhow::Result<()> {
+        let Some(store) = self.open().await? else {
+            return Ok(());
+        };
+        store.complete_mcp_command(seq).await
+    }
+
+    pub async fn fail_mcp_command(&self, seq: u64, error: &str) -> anyhow::Result<()> {
+        let Some(store) = self.open().await? else {
+            return Ok(());
+        };
+        store.fail_mcp_command(seq, error).await
     }
 
     async fn open(&self) -> anyhow::Result<Option<ChatStore>> {

@@ -44,6 +44,18 @@ struct Cli {
 
     #[arg(long)]
     daemon_url: Option<String>,
+
+    #[arg(long)]
+    chat_mcp_disable_read_chat: bool,
+
+    #[arg(long)]
+    chat_mcp_disable_mention_agent: bool,
+
+    #[arg(long)]
+    chat_mcp_disable_mention_user: bool,
+
+    #[arg(long)]
+    chat_mcp_allow_any_room: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -59,6 +71,21 @@ struct ChatMcpArgs {
 
     #[arg(long)]
     default_room_id: Option<String>,
+
+    #[arg(long)]
+    source_agent: Option<String>,
+
+    #[arg(long)]
+    disable_read_chat: bool,
+
+    #[arg(long)]
+    disable_mention_agent: bool,
+
+    #[arg(long)]
+    disable_mention_user: bool,
+
+    #[arg(long)]
+    allow_any_room: bool,
 }
 
 fn parse_agent_name(s: &str) -> Result<AgentName> {
@@ -78,7 +105,26 @@ fn validate_backend_args(cli: &Cli) -> Result<()> {
     if matches!(cli.backend, BackendKind::Embedded) && cli.daemon_url.is_some() {
         anyhow::bail!("--daemon-url only applies to --backend daemon");
     }
+    if matches!(cli.backend, BackendKind::Daemon) && has_chat_mcp_policy_overrides(cli) {
+        anyhow::bail!("--chat-mcp-* policy flags only apply to --backend embedded");
+    }
     Ok(())
+}
+
+fn has_chat_mcp_policy_overrides(cli: &Cli) -> bool {
+    cli.chat_mcp_disable_read_chat
+        || cli.chat_mcp_disable_mention_agent
+        || cli.chat_mcp_disable_mention_user
+        || cli.chat_mcp_allow_any_room
+}
+
+fn chat_mcp_permissions_from_cli(cli: &Cli) -> minos_chat_store::mcp::ChatMcpToolPermissions {
+    minos_chat_store::mcp::ChatMcpToolPermissions {
+        read_chat: !cli.chat_mcp_disable_read_chat,
+        mention_agent: !cli.chat_mcp_disable_mention_agent,
+        mention_user: !cli.chat_mcp_disable_mention_user,
+        allow_any_room: cli.chat_mcp_allow_any_room,
+    }
 }
 
 fn resolve_minos_home() -> Result<std::path::PathBuf> {
@@ -148,7 +194,25 @@ fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     if let Some(Command::ChatMcp(args)) = cli.command {
-        return minos_chat_store::mcp::serve_stdio(args.db_path, args.default_room_id).await;
+        let source_agent = args
+            .source_agent
+            .as_deref()
+            .map(parse_agent_name)
+            .transpose()?;
+        return minos_chat_store::mcp::serve_stdio_with_config(
+            args.db_path,
+            minos_chat_store::mcp::ChatMcpServerConfig {
+                default_room_id: args.default_room_id,
+                source_agent,
+                permissions: minos_chat_store::mcp::ChatMcpToolPermissions {
+                    read_chat: !args.disable_read_chat,
+                    mention_agent: !args.disable_mention_agent,
+                    mention_user: !args.disable_mention_user,
+                    allow_any_room: args.allow_any_room,
+                },
+            },
+        )
+        .await;
     }
 
     validate_backend_args(&cli)?;
@@ -157,12 +221,14 @@ async fn main() -> Result<()> {
     logging::init(&log_path)?;
 
     let max_instances = cli.max_instances.unwrap_or(3);
+    let chat_mcp_permissions = chat_mcp_permissions_from_cli(&cli);
     let backend: Arc<dyn crate::backend::AgentBackend> = match cli.backend {
         BackendKind::Embedded => Arc::new(
             crate::backend::EmbeddedBackend::new(
                 workspace.clone(),
                 max_instances,
                 std::time::Duration::from_secs(300),
+                chat_mcp_permissions,
             )
             .await?,
         ),
@@ -235,6 +301,10 @@ mod tests {
             log_file: None,
             backend,
             daemon_url: None,
+            chat_mcp_disable_read_chat: false,
+            chat_mcp_disable_mention_agent: false,
+            chat_mcp_disable_mention_user: false,
+            chat_mcp_allow_any_room: false,
         }
     }
 
@@ -247,6 +317,10 @@ mod tests {
         let mut embedded_cli = test_cli(BackendKind::Embedded);
         embedded_cli.daemon_url = Some("ws://127.0.0.1:43123".into());
         assert!(validate_backend_args(&embedded_cli).is_err());
+
+        let mut daemon_cli = test_cli(BackendKind::Daemon);
+        daemon_cli.chat_mcp_disable_mention_user = true;
+        assert!(validate_backend_args(&daemon_cli).is_err());
     }
 
     #[test]

@@ -3,10 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use minos_agent_runtime::{ManagerEvent, ThreadState};
+use minos_chat_store::{ChatMcpCommand, ChatMcpCommandKind};
 use minos_domain::{AgentName, AgentStatus};
 use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};
 use tracing::debug;
@@ -117,20 +119,26 @@ impl App {
             }
             AppEvent::Key(key) => self.handle_key(key).await,
             AppEvent::Mouse(mouse) => self.handle_mouse(mouse).await,
-            AppEvent::Tick => {
-                if let Some((_, instant)) = self.ui.error_flash {
-                    if instant.elapsed() > Duration::from_secs(3) {
-                        self.ui.error_flash = None;
-                        return true;
-                    }
-                }
-                self.ui
-                    .status
-                    .update_backend_state(self.backend.connection_state());
-                false
-            }
+            AppEvent::Tick => self.handle_tick().await,
             AppEvent::Resize(_, _) => true,
         }
+    }
+
+    async fn handle_tick(&mut self) -> bool {
+        let mut redraw = false;
+        if let Some((_, instant)) = self.ui.error_flash {
+            if instant.elapsed() > Duration::from_secs(3) {
+                self.ui.error_flash = None;
+                redraw = true;
+            }
+        }
+        self.ui
+            .status
+            .update_backend_state(self.backend.connection_state());
+        if self.process_pending_mcp_commands().await {
+            redraw = true;
+        }
+        redraw
     }
 
     pub fn should_quit(&self) -> bool {
@@ -1791,6 +1799,95 @@ impl App {
         Some(format!("@{} {trimmed}", thread.agent.bin_name()))
     }
 
+    async fn process_pending_mcp_commands(&mut self) -> bool {
+        let commands = match self.group_chat_store.claim_pending_mcp_commands(20).await {
+            Ok(commands) => commands,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %error,
+                    "failed to claim MCP chat commands"
+                );
+                return false;
+            }
+        };
+        let mut redraw = false;
+        for command in commands {
+            let seq = command.seq;
+            let result = self.process_mcp_command(command).await;
+            match result {
+                Ok(()) => {
+                    if let Err(error) = self.group_chat_store.complete_mcp_command(seq).await {
+                        tracing::warn!(
+                            target: "minos_tui::app",
+                            error = %error,
+                            seq,
+                            "failed to complete MCP chat command"
+                        );
+                    }
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    if let Err(mark_error) =
+                        self.group_chat_store.fail_mcp_command(seq, &message).await
+                    {
+                        tracing::warn!(
+                            target: "minos_tui::app",
+                            error = %mark_error,
+                            seq,
+                            "failed to mark MCP chat command failed"
+                        );
+                    }
+                    self.ui
+                        .set_error(format!("Failed to process MCP chat command: {message}"));
+                }
+            }
+            redraw = true;
+        }
+        redraw
+    }
+
+    async fn process_mcp_command(&mut self, command: ChatMcpCommand) -> anyhow::Result<()> {
+        match command.kind {
+            ChatMcpCommandKind::MentionAgent => {
+                let target_agent = command
+                    .target_agent
+                    .context("request_agent_help command missing target_agent")?;
+                if let Some(error) = self.agent_unavailability_error(target_agent) {
+                    anyhow::bail!(error);
+                }
+                let prompt = command.body.trim().to_owned();
+                anyhow::ensure!(!prompt.is_empty(), "request_agent_help prompt is empty");
+                let group_text = format!("@{} {prompt}", target_agent.bin_name());
+                self.dispatch_prompt_to_agent(target_agent, prompt, group_text)
+                    .await;
+                Ok(())
+            }
+            ChatMcpCommandKind::MentionUser => {
+                let body = command.body.trim();
+                anyhow::ensure!(!body.is_empty(), "mention_user message is empty");
+                let text = if body.starts_with("@user") {
+                    body.to_owned()
+                } else {
+                    format!("@user {body}")
+                };
+                self.append_group_chat_message(LocalGroupChatMessage {
+                    seq: 0,
+                    message_id: String::new(),
+                    created_at_ms: chrono::Utc::now().timestamp_millis(),
+                    kind: LocalGroupChatMessageKind::AgentResult,
+                    text,
+                    agent: command.source_agent,
+                    thread_id: None,
+                    thread_short_id: None,
+                    workspace: Some(self.workspace.display().to_string()),
+                })
+                .await;
+                Ok(())
+            }
+        }
+    }
+
     async fn record_user_group_message(&mut self, thread_id: &str, text: String) {
         let Some(message) = self.group_message(thread_id, LocalGroupChatMessageKind::User, text)
         else {
@@ -2115,6 +2212,7 @@ mod tests {
     use async_trait::async_trait;
     use crossterm::event::{KeyEventState, MouseEvent, MouseEventKind};
     use minos_agent_runtime::{RawIngest, StartAgentOutcome};
+    use minos_chat_store::{ChatStore, NewChatMcpCommand};
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
     use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
     use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};
@@ -2822,6 +2920,102 @@ mod tests {
         assert_eq!(app.ui.group_chat.messages[1].agent, Some(AgentName::Gemini));
         assert_eq!(app.ui.room_input.content, "");
         assert_eq!(app.ui.selected_thread, Some(1));
+    }
+
+    #[tokio::test]
+    async fn tick_processes_mcp_agent_help_command() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("group.sqlite");
+        let store = ChatStore::open(&db_path).await.unwrap();
+        store
+            .ensure_room("room-test", "test", "/tmp/test")
+            .await
+            .unwrap();
+        store
+            .enqueue_mcp_command(
+                "room-test",
+                NewChatMcpCommand {
+                    kind: ChatMcpCommandKind::MentionAgent,
+                    source_agent: Some(AgentName::Codex),
+                    target_agent: Some(AgentName::Gemini),
+                    body: "review the plan".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let group_store = GroupChatStore::at_path(db_path);
+        let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Gemini)]));
+        let mut app =
+            App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Gemini)]);
+
+        assert!(app.handle_event(AppEvent::Tick).await);
+
+        assert_eq!(
+            backend
+                .started
+                .lock()
+                .expect("started list lock")
+                .as_slice(),
+            &[AgentName::Gemini]
+        );
+        assert_eq!(
+            backend
+                .sent_messages
+                .lock()
+                .expect("sent messages lock")
+                .as_slice(),
+            &[("thread-1".to_owned(), "review the plan".to_owned())]
+        );
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        assert_eq!(
+            app.ui.group_chat.messages[0].text,
+            "@gemini review the plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_processes_mcp_user_mention_command() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("group.sqlite");
+        let store = ChatStore::open(&db_path).await.unwrap();
+        store
+            .ensure_room("room-test", "test", "/tmp/test")
+            .await
+            .unwrap();
+        store
+            .enqueue_mcp_command(
+                "room-test",
+                NewChatMcpCommand {
+                    kind: ChatMcpCommandKind::MentionUser,
+                    source_agent: Some(AgentName::Gemini),
+                    target_agent: None,
+                    body: "please confirm the API choice".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let group_store = GroupChatStore::at_path(db_path);
+        let backend = Arc::new(TestBackend::new());
+        let mut app =
+            App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+
+        assert!(app.handle_event(AppEvent::Tick).await);
+
+        assert!(backend
+            .started
+            .lock()
+            .expect("started list lock")
+            .is_empty());
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        let message = &app.ui.group_chat.messages[0];
+        assert_eq!(message.kind, LocalGroupChatMessageKind::AgentResult);
+        assert_eq!(message.text, "@user please confirm the API choice");
+        assert_eq!(message.agent, Some(AgentName::Gemini));
     }
 
     #[tokio::test]

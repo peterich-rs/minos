@@ -17,6 +17,7 @@ impl EmbeddedBackend {
         workspace_root: PathBuf,
         max_instances: usize,
         idle_timeout: std::time::Duration,
+        chat_mcp_permissions: minos_chat_store::mcp::ChatMcpToolPermissions,
     ) -> Result<Self> {
         let shell_env = capture_user_shell_env().await;
         let mut config = minos_agent_runtime::AgentRuntimeConfig::new(workspace_root);
@@ -33,6 +34,9 @@ impl EmbeddedBackend {
                 config.enable_default_chat_mcp()
             }
         };
+        if let Some(chat_mcp) = config.chat_mcp.as_mut() {
+            chat_mcp.permissions = chat_mcp_permissions;
+        }
         if let Err(error) = chat_mcp_result {
             tracing::warn!(
                 target: "minos_tui::backend::embedded",
