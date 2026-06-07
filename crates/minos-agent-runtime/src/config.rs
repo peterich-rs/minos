@@ -35,6 +35,7 @@ pub struct ChatMcpConfig {
     pub server_bin: PathBuf,
     pub server_args: Vec<String>,
     pub db_path: PathBuf,
+    pub permissions: minos_chat_store::mcp::ChatMcpToolPermissions,
 }
 
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -69,6 +70,7 @@ impl AgentRuntimeConfig {
             server_bin: PathBuf::from("minos-chat-mcp"),
             server_args: Vec::new(),
             db_path: minos_chat_store::default_db_path()?,
+            permissions: minos_chat_store::mcp::ChatMcpToolPermissions::default(),
         });
         Ok(())
     }
@@ -82,6 +84,7 @@ impl AgentRuntimeConfig {
             server_bin,
             server_args,
             db_path: minos_chat_store::default_db_path()?,
+            permissions: minos_chat_store::mcp::ChatMcpToolPermissions::default(),
         });
         Ok(())
     }
