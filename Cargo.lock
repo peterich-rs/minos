@@ -3295,6 +3295,7 @@ dependencies = [
 [[package]]
 name = "openwire"
 version = "0.1.0"
+source = "git+https://github.com/peterich-rs/openwire.git?rev=ee42c68ad2d90de29f4d79c215ea76ca6dff0280#ee42c68ad2d90de29f4d79c215ea76ca6dff0280"
 dependencies = [
  "base64",
  "bytes",
@@ -3322,6 +3323,7 @@ dependencies = [
 [[package]]
 name = "openwire-core"
 version = "0.1.0"
+source = "git+https://github.com/peterich-rs/openwire.git?rev=ee42c68ad2d90de29f4d79c215ea76ca6dff0280#ee42c68ad2d90de29f4d79c215ea76ca6dff0280"
 dependencies = [
  "bytes",
  "futures-core",
@@ -3342,6 +3344,7 @@ dependencies = [
 [[package]]
 name = "openwire-rustls"
 version = "0.1.0"
+source = "git+https://github.com/peterich-rs/openwire.git?rev=ee42c68ad2d90de29f4d79c215ea76ca6dff0280#ee42c68ad2d90de29f4d79c215ea76ca6dff0280"
 dependencies = [
  "bytes",
  "futures-util",
@@ -3363,6 +3366,7 @@ dependencies = [
 [[package]]
 name = "openwire-tokio"
 version = "0.1.0"
+source = "git+https://github.com/peterich-rs/openwire.git?rev=ee42c68ad2d90de29f4d79c215ea76ca6dff0280#ee42c68ad2d90de29f4d79c215ea76ca6dff0280"
 dependencies = [
  "hyper",
  "openwire-core",
