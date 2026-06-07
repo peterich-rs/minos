@@ -37,6 +37,7 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
 
       - name: Install cargo-deny
         # `cargo xtask check-all` runs `cargo deny check` only if `cargo-deny` is
@@ -118,6 +119,7 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
 
       - name: cargo test -p minos-cli-detect
         run: cargo test -p minos-cli-detect
@@ -152,6 +154,7 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
 
       - name: Install Flutter ${{ env.FLUTTER_VERSION }}
         # CI uses plain `flutter` (not fvm) to avoid the extra tool hop. The
@@ -244,6 +247,7 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
 
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
 
       - name: Install Flutter 3.41.6
         # The Flutter leg inside `cargo xtask check-all` drives `fvm flutter`.
