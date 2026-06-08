@@ -253,6 +253,48 @@ fn sorted_dedup_messages(messages: Vec<LocalGroupChatMessage>) -> Vec<LocalGroup
     messages
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minos_protocol::LocalGroupChatMessageKind;
+
+    fn group_message(seq: u64, message_id: &str, text: &str) -> LocalGroupChatMessage {
+        LocalGroupChatMessage {
+            seq,
+            message_id: message_id.to_owned(),
+            created_at_ms: i64::try_from(seq).unwrap_or(0),
+            kind: LocalGroupChatMessageKind::User,
+            text: text.to_owned(),
+            agent: Some(AgentName::Codex),
+            thread_id: Some("thread-1".into()),
+            thread_short_id: Some("thread-1".into()),
+            workspace: Some("/tmp/ws".into()),
+        }
+    }
+
+    #[test]
+    fn group_chat_merge_sorts_by_sequence_and_dedups_messages() {
+        let mut state = GroupChatState::new();
+
+        state.push_message(group_message(5, "newer", "newer local message"));
+        state.merge_messages(vec![
+            group_message(2, "older", "older daemon message"),
+            group_message(5, "newer", "duplicate local message"),
+        ]);
+
+        assert_eq!(
+            state
+                .messages
+                .iter()
+                .map(|message| message.seq)
+                .collect::<Vec<_>>(),
+            vec![2, 5]
+        );
+        assert_eq!(state.messages[0].message_id, "older");
+        assert_eq!(state.messages[1].message_id, "newer");
+    }
+}
+
 pub fn render_ui(f: &mut Frame, state: &mut UiState) {
     state.room_input.focused = matches!(state.focus, Focus::RoomInput);
     state.agent_input.focused = matches!(state.focus, Focus::AgentInput);
