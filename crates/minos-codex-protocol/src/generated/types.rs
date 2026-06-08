@@ -28755,34 +28755,48 @@ impl ::std::convert::From<&ServerRequestResolvedNotification>
 ///}
 /// ```
 /// </details>
-#[derive(
-    ::serde::Deserialize,
-    ::serde::Serialize,
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ServiceTier {
-    #[serde(rename = "fast")]
     Fast,
-    #[serde(rename = "flex")]
     Flex,
+    Other(::std::string::String),
 }
 impl ::std::convert::From<&Self> for ServiceTier {
     fn from(value: &ServiceTier) -> Self {
         value.clone()
     }
 }
+impl<'de> ::serde::Deserialize<'de> for ServiceTier {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        let value = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "fast" => Self::Fast,
+            "flex" => Self::Flex,
+            other => Self::Other(other.to_string()),
+        })
+    }
+}
+impl ::serde::Serialize for ServiceTier {
+    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
+    where
+        S: ::serde::Serializer,
+    {
+        serializer.serialize_str(match self {
+            Self::Fast => "fast",
+            Self::Flex => "flex",
+            Self::Other(value) => value.as_str(),
+        })
+    }
+}
 impl ::std::fmt::Display for ServiceTier {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        match *self {
+        match self {
             Self::Fast => f.write_str("fast"),
             Self::Flex => f.write_str("flex"),
+            Self::Other(value) => f.write_str(value),
         }
     }
 }
@@ -28792,7 +28806,7 @@ impl ::std::str::FromStr for ServiceTier {
         match value {
             "fast" => Ok(Self::Fast),
             "flex" => Ok(Self::Flex),
-            _ => Err("invalid value".into()),
+            other => Ok(Self::Other(other.to_string())),
         }
     }
 }

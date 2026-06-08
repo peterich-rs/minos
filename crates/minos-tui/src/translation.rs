@@ -222,6 +222,20 @@ impl ChatState {
                     append_text(msg, text);
                 }
             }
+            UiEventMessage::TextReplace { message_id, text } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.message_id == message_id)
+                {
+                    msg.text_parts = if text.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![TextPart::Plain(text)]
+                    };
+                }
+            }
             UiEventMessage::ReasoningDelta { message_id, text } => {
                 if let Some(msg) = self
                     .messages
@@ -233,6 +247,16 @@ impl ChatState {
                         Some(existing) => existing + &text,
                         None => text,
                     });
+                }
+            }
+            UiEventMessage::ReasoningReplace { message_id, text } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.message_id == message_id)
+                {
+                    msg.reasoning = (!text.is_empty()).then_some(text);
                 }
             }
             UiEventMessage::ToolCallPlaced {
@@ -250,16 +274,27 @@ impl ChatState {
                     let args_summary = summarize_tool_args(&name, &args_json);
                     let args_detail = compact_tool_args(&args_json)
                         .filter(|detail| !detail.is_empty() && detail != &args_summary);
-                    msg.tool_calls.push(ToolCallBlock {
-                        tool_call_id,
-                        name,
-                        args_summary,
-                        args_detail,
-                        output_summary: None,
-                        output_detail: None,
-                        is_error: false,
-                        is_expanded: is_diff_like(&args_json),
-                    });
+                    if let Some(existing) = msg
+                        .tool_calls
+                        .iter_mut()
+                        .find(|tc| tc.tool_call_id == tool_call_id)
+                    {
+                        existing.name = name;
+                        existing.args_summary = args_summary;
+                        existing.args_detail = args_detail;
+                        existing.is_expanded |= is_diff_like(&args_json);
+                    } else {
+                        msg.tool_calls.push(ToolCallBlock {
+                            tool_call_id,
+                            name,
+                            args_summary,
+                            args_detail,
+                            output_summary: None,
+                            output_detail: None,
+                            is_error: false,
+                            is_expanded: is_diff_like(&args_json),
+                        });
+                    }
                 }
             }
             UiEventMessage::ToolCallCompleted {
@@ -1185,6 +1220,119 @@ mod tests {
             Some("ok")
         );
         assert!(!cs.messages[0].tool_calls[0].is_error);
+    }
+
+    #[test]
+    fn duplicate_tool_call_placed_updates_existing_tool_block() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![UiEventMessage::MessageStarted {
+            message_id: "m1".into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        }]);
+        cs.apply_ui_events(vec![UiEventMessage::ToolCallPlaced {
+            message_id: "m1".into(),
+            tool_call_id: "tool-1".into(),
+            name: "commandExecution".into(),
+            args_json: r#"{"command":"ls"}"#.into(),
+        }]);
+        cs.apply_ui_events(vec![UiEventMessage::ToolCallPlaced {
+            message_id: "m1".into(),
+            tool_call_id: "tool-1".into(),
+            name: "commandExecution".into(),
+            args_json: r#"{"command":"ls -la"}"#.into(),
+        }]);
+
+        assert_eq!(cs.messages[0].tool_calls.len(), 1);
+        assert!(cs.messages[0].tool_calls[0].args_summary.contains("ls -la"));
+    }
+
+    #[test]
+    fn codex_raw_events_render_final_text_and_keep_tool_on_original_message() {
+        let mut cs = ChatState::new("thr".into(), AgentName::Codex);
+        for raw in [
+            serde_json::json!({"method":"item/started","params":{
+                "item":{"type":"agentMessage","id":"a1","text":""},
+                "threadId":"thr","turnId":"t1"
+            }}),
+            serde_json::json!({"method":"item/agentMessage/delta","params":{
+                "itemId":"a1","delta":"partial"
+            }}),
+            serde_json::json!({"method":"item/started","params":{
+                "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"inProgress"},
+                "threadId":"thr","turnId":"t1"
+            }}),
+            serde_json::json!({"method":"item/started","params":{
+                "item":{"type":"agentMessage","id":"a2","text":""},
+                "threadId":"thr","turnId":"t1"
+            }}),
+            serde_json::json!({"method":"item/completed","params":{
+                "item":{"type":"agentMessage","id":"a1","text":"partial final answer"},
+                "threadId":"thr","turnId":"t1","completedAtMs":2
+            }}),
+            serde_json::json!({"method":"item/completed","params":{
+                "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"completed","aggregatedOutput":"ok","exitCode":0},
+                "threadId":"thr","turnId":"t1","completedAtMs":3
+            }}),
+        ] {
+            let events = cs.translation_state.translate(&raw);
+            cs.apply_ui_events(events);
+        }
+
+        assert_eq!(cs.messages.len(), 2);
+        assert_eq!(
+            cs.messages[0].text_parts,
+            vec![TextPart::Plain("partial final answer".into())]
+        );
+        assert_eq!(cs.messages[0].tool_calls.len(), 1);
+        assert_eq!(
+            cs.messages[0].tool_calls[0].output_summary.as_deref(),
+            Some("ok")
+        );
+        assert!(cs.messages[1].tool_calls.is_empty());
+    }
+
+    #[test]
+    fn text_replace_uses_completed_agent_message_as_authoritative() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![UiEventMessage::MessageStarted {
+            message_id: "m1".into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        }]);
+        cs.apply_ui_events(vec![UiEventMessage::TextDelta {
+            message_id: "m1".into(),
+            text: "partial ans".into(),
+        }]);
+        cs.apply_ui_events(vec![UiEventMessage::TextReplace {
+            message_id: "m1".into(),
+            text: "partial answer with final sentence".into(),
+        }]);
+
+        assert_eq!(
+            cs.messages[0].text_parts,
+            vec![TextPart::Plain("partial answer with final sentence".into())]
+        );
+    }
+
+    #[test]
+    fn reasoning_replace_uses_completed_reasoning_as_authoritative() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![UiEventMessage::MessageStarted {
+            message_id: "m1".into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        }]);
+        cs.apply_ui_events(vec![UiEventMessage::ReasoningDelta {
+            message_id: "m1".into(),
+            text: "old".into(),
+        }]);
+        cs.apply_ui_events(vec![UiEventMessage::ReasoningReplace {
+            message_id: "m1".into(),
+            text: "final thinking".into(),
+        }]);
+
+        assert_eq!(cs.messages[0].reasoning.as_deref(), Some("final thinking"));
     }
 
     #[test]

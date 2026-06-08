@@ -4,7 +4,7 @@
 
 use minos_codex_protocol::{
     AgentMessageDeltaNotification, CommandExecutionRequestApprovalParams, InitializeParams,
-    ThreadStartResponse,
+    ServiceTier, ThreadStartResponse,
 };
 use pretty_assertions::assert_eq;
 use serde::{de::DeserializeOwned, Serialize};
@@ -54,6 +54,23 @@ fn initialize_params_round_trip() {
 #[test]
 fn thread_start_response_round_trip() {
     round_trip::<ThreadStartResponse>("tests/fixtures/thread_start_response.json");
+}
+
+#[test]
+fn thread_start_response_accepts_new_service_tier_values() {
+    let raw = std::fs::read_to_string("tests/fixtures/thread_start_response.json").unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    value["serviceTier"] = serde_json::json!("priority");
+
+    let typed: ThreadStartResponse = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        typed.service_tier,
+        Some(ServiceTier::Other("priority".into()))
+    );
+    assert_eq!(
+        serde_json::to_value(typed).unwrap()["serviceTier"],
+        serde_json::json!("priority")
+    );
 }
 
 #[test]
