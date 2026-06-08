@@ -563,6 +563,19 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_renders_as_thinking_with_markdown() {
+        let mut msg = message(MessageRole::Assistant, "final answer", false);
+        msg.reasoning = Some("# Inspect\n- read `app.rs`".into());
+
+        let lines = build_lines(&[msg], 80);
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line == "Thinking"));
+        assert!(rendered.iter().any(|line| line == "Inspect"));
+        assert!(rendered.iter().any(|line| line.contains("• read ")));
+    }
+
+    #[test]
     fn diff_lines_get_diff_styles_without_treating_markdown_bullets_as_diff() {
         let lines = build_lines(
             &[message(
