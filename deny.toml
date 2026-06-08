@@ -9,9 +9,8 @@ ignore = [
   # Transitive through ratatui 0.29. Ratatui 0.30 removes this advisory path
   # but raises MSRV to Rust 1.88 while this workspace still declares Rust 1.80.
   "RUSTSEC-2024-0436",
-  # Transitive through the pinned openwire git revision. The advisory is an
-  # unmaintained notice with no safe upgrade; revisit when openwire moves off
-  # rustls-pemfile or the workspace updates the openwire revision.
+  # Transitive through openwire-rustls 0.1.0. The advisory is an unmaintained
+  # notice with no safe upgrade; revisit when openwire moves off rustls-pemfile.
   "RUSTSEC-2025-0134",
 ]
 

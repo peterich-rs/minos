@@ -1608,10 +1608,18 @@ sealed class UiEventMessage with _$UiEventMessage {
     required String messageId,
     required String text,
   }) = UiEventMessage_TextDelta;
+  const factory UiEventMessage.textReplace({
+    required String messageId,
+    required String text,
+  }) = UiEventMessage_TextReplace;
   const factory UiEventMessage.reasoningDelta({
     required String messageId,
     required String text,
   }) = UiEventMessage_ReasoningDelta;
+  const factory UiEventMessage.reasoningReplace({
+    required String messageId,
+    required String text,
+  }) = UiEventMessage_ReasoningReplace;
   const factory UiEventMessage.toolCallPlaced({
     required String messageId,
     required String toolCallId,

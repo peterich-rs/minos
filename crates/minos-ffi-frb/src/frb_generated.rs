@@ -3847,7 +3847,15 @@ const _: fn() = || {
             let _: String = message_id;
             let _: String = text;
         }
+        crate::api::minos::UiEventMessage::TextReplace { message_id, text } => {
+            let _: String = message_id;
+            let _: String = text;
+        }
         crate::api::minos::UiEventMessage::ReasoningDelta { message_id, text } => {
+            let _: String = message_id;
+            let _: String = text;
+        }
+        crate::api::minos::UiEventMessage::ReasoningReplace { message_id, text } => {
             let _: String = message_id;
             let _: String = text;
         }
@@ -5585,12 +5593,28 @@ impl SseDecode for crate::api::minos::UiEventMessage {
             6 => {
                 let mut var_messageId = <String>::sse_decode(deserializer);
                 let mut var_text = <String>::sse_decode(deserializer);
-                return crate::api::minos::UiEventMessage::ReasoningDelta {
+                return crate::api::minos::UiEventMessage::TextReplace {
                     message_id: var_messageId,
                     text: var_text,
                 };
             }
             7 => {
+                let mut var_messageId = <String>::sse_decode(deserializer);
+                let mut var_text = <String>::sse_decode(deserializer);
+                return crate::api::minos::UiEventMessage::ReasoningDelta {
+                    message_id: var_messageId,
+                    text: var_text,
+                };
+            }
+            8 => {
+                let mut var_messageId = <String>::sse_decode(deserializer);
+                let mut var_text = <String>::sse_decode(deserializer);
+                return crate::api::minos::UiEventMessage::ReasoningReplace {
+                    message_id: var_messageId,
+                    text: var_text,
+                };
+            }
+            9 => {
                 let mut var_messageId = <String>::sse_decode(deserializer);
                 let mut var_toolCallId = <String>::sse_decode(deserializer);
                 let mut var_name = <String>::sse_decode(deserializer);
@@ -5602,7 +5626,7 @@ impl SseDecode for crate::api::minos::UiEventMessage {
                     args_json: var_argsJson,
                 };
             }
-            8 => {
+            10 => {
                 let mut var_toolCallId = <String>::sse_decode(deserializer);
                 let mut var_output = <String>::sse_decode(deserializer);
                 let mut var_isError = <bool>::sse_decode(deserializer);
@@ -5612,7 +5636,7 @@ impl SseDecode for crate::api::minos::UiEventMessage {
                     is_error: var_isError,
                 };
             }
-            9 => {
+            11 => {
                 let mut var_code = <String>::sse_decode(deserializer);
                 let mut var_message = <String>::sse_decode(deserializer);
                 let mut var_messageId = <Option<String>>::sse_decode(deserializer);
@@ -5622,7 +5646,7 @@ impl SseDecode for crate::api::minos::UiEventMessage {
                     message_id: var_messageId,
                 };
             }
-            10 => {
+            12 => {
                 let mut var_kind = <String>::sse_decode(deserializer);
                 let mut var_payloadJson = <String>::sse_decode(deserializer);
                 return crate::api::minos::UiEventMessage::Raw {
@@ -7481,8 +7505,20 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::UiEventMess
                 text.into_into_dart().into_dart(),
             ]
             .into_dart(),
-            crate::api::minos::UiEventMessage::ReasoningDelta { message_id, text } => [
+            crate::api::minos::UiEventMessage::TextReplace { message_id, text } => [
                 6.into_dart(),
+                message_id.into_into_dart().into_dart(),
+                text.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::UiEventMessage::ReasoningDelta { message_id, text } => [
+                7.into_dart(),
+                message_id.into_into_dart().into_dart(),
+                text.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::UiEventMessage::ReasoningReplace { message_id, text } => [
+                8.into_dart(),
                 message_id.into_into_dart().into_dart(),
                 text.into_into_dart().into_dart(),
             ]
@@ -7493,7 +7529,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::UiEventMess
                 name,
                 args_json,
             } => [
-                7.into_dart(),
+                9.into_dart(),
                 message_id.into_into_dart().into_dart(),
                 tool_call_id.into_into_dart().into_dart(),
                 name.into_into_dart().into_dart(),
@@ -7505,7 +7541,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::UiEventMess
                 output,
                 is_error,
             } => [
-                8.into_dart(),
+                10.into_dart(),
                 tool_call_id.into_into_dart().into_dart(),
                 output.into_into_dart().into_dart(),
                 is_error.into_into_dart().into_dart(),
@@ -7516,14 +7552,14 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::UiEventMess
                 message,
                 message_id,
             } => [
-                9.into_dart(),
+                11.into_dart(),
                 code.into_into_dart().into_dart(),
                 message.into_into_dart().into_dart(),
                 message_id.into_into_dart().into_dart(),
             ]
             .into_dart(),
             crate::api::minos::UiEventMessage::Raw { kind, payload_json } => [
-                10.into_dart(),
+                12.into_dart(),
                 kind.into_into_dart().into_dart(),
                 payload_json.into_into_dart().into_dart(),
             ]
@@ -8941,8 +8977,18 @@ impl SseEncode for crate::api::minos::UiEventMessage {
                 <String>::sse_encode(message_id, serializer);
                 <String>::sse_encode(text, serializer);
             }
-            crate::api::minos::UiEventMessage::ReasoningDelta { message_id, text } => {
+            crate::api::minos::UiEventMessage::TextReplace { message_id, text } => {
                 <i32>::sse_encode(6, serializer);
+                <String>::sse_encode(message_id, serializer);
+                <String>::sse_encode(text, serializer);
+            }
+            crate::api::minos::UiEventMessage::ReasoningDelta { message_id, text } => {
+                <i32>::sse_encode(7, serializer);
+                <String>::sse_encode(message_id, serializer);
+                <String>::sse_encode(text, serializer);
+            }
+            crate::api::minos::UiEventMessage::ReasoningReplace { message_id, text } => {
+                <i32>::sse_encode(8, serializer);
                 <String>::sse_encode(message_id, serializer);
                 <String>::sse_encode(text, serializer);
             }
@@ -8952,7 +8998,7 @@ impl SseEncode for crate::api::minos::UiEventMessage {
                 name,
                 args_json,
             } => {
-                <i32>::sse_encode(7, serializer);
+                <i32>::sse_encode(9, serializer);
                 <String>::sse_encode(message_id, serializer);
                 <String>::sse_encode(tool_call_id, serializer);
                 <String>::sse_encode(name, serializer);
@@ -8963,7 +9009,7 @@ impl SseEncode for crate::api::minos::UiEventMessage {
                 output,
                 is_error,
             } => {
-                <i32>::sse_encode(8, serializer);
+                <i32>::sse_encode(10, serializer);
                 <String>::sse_encode(tool_call_id, serializer);
                 <String>::sse_encode(output, serializer);
                 <bool>::sse_encode(is_error, serializer);
@@ -8973,13 +9019,13 @@ impl SseEncode for crate::api::minos::UiEventMessage {
                 message,
                 message_id,
             } => {
-                <i32>::sse_encode(9, serializer);
+                <i32>::sse_encode(11, serializer);
                 <String>::sse_encode(code, serializer);
                 <String>::sse_encode(message, serializer);
                 <Option<String>>::sse_encode(message_id, serializer);
             }
             crate::api::minos::UiEventMessage::Raw { kind, payload_json } => {
-                <i32>::sse_encode(10, serializer);
+                <i32>::sse_encode(12, serializer);
                 <String>::sse_encode(kind, serializer);
                 <String>::sse_encode(payload_json, serializer);
             }

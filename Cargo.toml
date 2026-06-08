@@ -50,8 +50,8 @@ axum = { version = "0.7", features = ["ws", "macros"] }
 jsonrpsee = { version = "0.24", features = ["server", "client", "ws-client", "macros"] }
 jsonwebtoken = "9"
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
-openwire = { version = "0.1.0", git = "https://github.com/peterich-rs/openwire.git", rev = "ee42c68ad2d90de29f4d79c215ea76ca6dff0280" }
-openwire-core = { version = "0.1.0", git = "https://github.com/peterich-rs/openwire.git", rev = "ee42c68ad2d90de29f4d79c215ea76ca6dff0280" }
+openwire = "0.1.0"
+openwire-core = "0.1.0"
 rustls = { version = "0.23.35", features = ["aws-lc-rs"] }
 futures-util = "0.3"
 async-trait = "0.1"

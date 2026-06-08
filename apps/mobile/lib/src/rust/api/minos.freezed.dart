@@ -4114,7 +4114,7 @@ extension UiEventMessagePatterns on UiEventMessage {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult Function( UiEventMessage_TextDelta value)?  textDelta,TResult Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult Function( UiEventMessage_Error value)?  error,TResult Function( UiEventMessage_Raw value)?  raw,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult Function( UiEventMessage_TextDelta value)?  textDelta,TResult Function( UiEventMessage_TextReplace value)?  textReplace,TResult Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult Function( UiEventMessage_Error value)?  error,TResult Function( UiEventMessage_Raw value)?  raw,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
@@ -4123,8 +4123,10 @@ return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed() when threadC
 return threadClosed(_that);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that);case UiEventMessage_TextDelta() when textDelta != null:
-return textDelta(_that);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
-return reasoningDelta(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
+return textDelta(_that);case UiEventMessage_TextReplace() when textReplace != null:
+return textReplace(_that);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
+return reasoningDelta(_that);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
+return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
 return toolCallCompleted(_that);case UiEventMessage_Error() when error != null:
 return error(_that);case UiEventMessage_Raw() when raw != null:
@@ -4146,7 +4148,7 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEventMessage_ThreadOpened value)  threadOpened,required TResult Function( UiEventMessage_ThreadTitleUpdated value)  threadTitleUpdated,required TResult Function( UiEventMessage_ThreadClosed value)  threadClosed,required TResult Function( UiEventMessage_MessageStarted value)  messageStarted,required TResult Function( UiEventMessage_MessageCompleted value)  messageCompleted,required TResult Function( UiEventMessage_TextDelta value)  textDelta,required TResult Function( UiEventMessage_ReasoningDelta value)  reasoningDelta,required TResult Function( UiEventMessage_ToolCallPlaced value)  toolCallPlaced,required TResult Function( UiEventMessage_ToolCallCompleted value)  toolCallCompleted,required TResult Function( UiEventMessage_Error value)  error,required TResult Function( UiEventMessage_Raw value)  raw,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEventMessage_ThreadOpened value)  threadOpened,required TResult Function( UiEventMessage_ThreadTitleUpdated value)  threadTitleUpdated,required TResult Function( UiEventMessage_ThreadClosed value)  threadClosed,required TResult Function( UiEventMessage_MessageStarted value)  messageStarted,required TResult Function( UiEventMessage_MessageCompleted value)  messageCompleted,required TResult Function( UiEventMessage_TextDelta value)  textDelta,required TResult Function( UiEventMessage_TextReplace value)  textReplace,required TResult Function( UiEventMessage_ReasoningDelta value)  reasoningDelta,required TResult Function( UiEventMessage_ReasoningReplace value)  reasoningReplace,required TResult Function( UiEventMessage_ToolCallPlaced value)  toolCallPlaced,required TResult Function( UiEventMessage_ToolCallCompleted value)  toolCallCompleted,required TResult Function( UiEventMessage_Error value)  error,required TResult Function( UiEventMessage_Raw value)  raw,}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened():
@@ -4155,8 +4157,10 @@ return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed():
 return threadClosed(_that);case UiEventMessage_MessageStarted():
 return messageStarted(_that);case UiEventMessage_MessageCompleted():
 return messageCompleted(_that);case UiEventMessage_TextDelta():
-return textDelta(_that);case UiEventMessage_ReasoningDelta():
-return reasoningDelta(_that);case UiEventMessage_ToolCallPlaced():
+return textDelta(_that);case UiEventMessage_TextReplace():
+return textReplace(_that);case UiEventMessage_ReasoningDelta():
+return reasoningDelta(_that);case UiEventMessage_ReasoningReplace():
+return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced():
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted():
 return toolCallCompleted(_that);case UiEventMessage_Error():
 return error(_that);case UiEventMessage_Raw():
@@ -4174,7 +4178,7 @@ return raw(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult? Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult? Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult? Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult? Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult? Function( UiEventMessage_TextDelta value)?  textDelta,TResult? Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult? Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult? Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult? Function( UiEventMessage_Error value)?  error,TResult? Function( UiEventMessage_Raw value)?  raw,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult? Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult? Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult? Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult? Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult? Function( UiEventMessage_TextDelta value)?  textDelta,TResult? Function( UiEventMessage_TextReplace value)?  textReplace,TResult? Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult? Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult? Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult? Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult? Function( UiEventMessage_Error value)?  error,TResult? Function( UiEventMessage_Raw value)?  raw,}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
@@ -4183,8 +4187,10 @@ return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed() when threadC
 return threadClosed(_that);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that);case UiEventMessage_TextDelta() when textDelta != null:
-return textDelta(_that);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
-return reasoningDelta(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
+return textDelta(_that);case UiEventMessage_TextReplace() when textReplace != null:
+return textReplace(_that);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
+return reasoningDelta(_that);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
+return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
 return toolCallCompleted(_that);case UiEventMessage_Error() when error != null:
 return error(_that);case UiEventMessage_Raw() when raw != null:
@@ -4205,7 +4211,7 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  String text)?  textDelta,TResult Function( String messageId,  String text)?  reasoningDelta,TResult Function( String messageId,  String toolCallId,  String name,  String argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  String output,  bool isError)?  toolCallCompleted,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  String text)?  textDelta,TResult Function( String messageId,  String text)?  textReplace,TResult Function( String messageId,  String text)?  reasoningDelta,TResult Function( String messageId,  String text)?  reasoningReplace,TResult Function( String messageId,  String toolCallId,  String name,  String argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  String output,  bool isError)?  toolCallCompleted,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
@@ -4213,8 +4219,10 @@ return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_Thread
 return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta() when textDelta != null:
-return textDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
-return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
+return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace() when textReplace != null:
+return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
+return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
+return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
 return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error() when error != null:
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw() when raw != null:
@@ -4236,7 +4244,7 @@ return raw(_that.kind,_that.payloadJson);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  String text)  textDelta,required TResult Function( String messageId,  String text)  reasoningDelta,required TResult Function( String messageId,  String toolCallId,  String name,  String argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  String output,  bool isError)  toolCallCompleted,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  String text)  textDelta,required TResult Function( String messageId,  String text)  textReplace,required TResult Function( String messageId,  String text)  reasoningDelta,required TResult Function( String messageId,  String text)  reasoningReplace,required TResult Function( String messageId,  String toolCallId,  String name,  String argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  String output,  bool isError)  toolCallCompleted,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened():
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated():
@@ -4244,8 +4252,10 @@ return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_Thread
 return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted():
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted():
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta():
-return textDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta():
-return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced():
+return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace():
+return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta():
+return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace():
+return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced():
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted():
 return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error():
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw():
@@ -4263,7 +4273,7 @@ return raw(_that.kind,_that.payloadJson);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  String text)?  textDelta,TResult? Function( String messageId,  String text)?  reasoningDelta,TResult? Function( String messageId,  String toolCallId,  String name,  String argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  String output,  bool isError)?  toolCallCompleted,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  String text)?  textDelta,TResult? Function( String messageId,  String text)?  textReplace,TResult? Function( String messageId,  String text)?  reasoningDelta,TResult? Function( String messageId,  String text)?  reasoningReplace,TResult? Function( String messageId,  String toolCallId,  String name,  String argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  String output,  bool isError)?  toolCallCompleted,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
@@ -4271,8 +4281,10 @@ return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_Thread
 return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta() when textDelta != null:
-return textDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
-return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
+return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace() when textReplace != null:
+return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
+return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
+return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
 return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error() when error != null:
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw() when raw != null:
@@ -4712,6 +4724,74 @@ as String,
 /// @nodoc
 
 
+class UiEventMessage_TextReplace extends UiEventMessage {
+  const UiEventMessage_TextReplace({required this.messageId, required this.text}): super._();
+
+
+ final  String messageId;
+ final  String text;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEventMessage_TextReplaceCopyWith<UiEventMessage_TextReplace> get copyWith => _$UiEventMessage_TextReplaceCopyWithImpl<UiEventMessage_TextReplace>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_TextReplace&&(identical(other.messageId, messageId) || other.messageId == messageId)&&(identical(other.text, text) || other.text == text));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,messageId,text);
+
+@override
+String toString() {
+  return 'UiEventMessage.textReplace(messageId: $messageId, text: $text)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEventMessage_TextReplaceCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_TextReplaceCopyWith(UiEventMessage_TextReplace value, $Res Function(UiEventMessage_TextReplace) _then) = _$UiEventMessage_TextReplaceCopyWithImpl;
+@useResult
+$Res call({
+ String messageId, String text
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEventMessage_TextReplaceCopyWithImpl<$Res>
+    implements $UiEventMessage_TextReplaceCopyWith<$Res> {
+  _$UiEventMessage_TextReplaceCopyWithImpl(this._self, this._then);
+
+  final UiEventMessage_TextReplace _self;
+  final $Res Function(UiEventMessage_TextReplace) _then;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? messageId = null,Object? text = null,}) {
+  return _then(UiEventMessage_TextReplace(
+messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
+as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
 class UiEventMessage_ReasoningDelta extends UiEventMessage {
   const UiEventMessage_ReasoningDelta({required this.messageId, required this.text}): super._();
 
@@ -4768,6 +4848,74 @@ class _$UiEventMessage_ReasoningDeltaCopyWithImpl<$Res>
 /// with the given fields replaced by the non-null parameter values.
 @pragma('vm:prefer-inline') $Res call({Object? messageId = null,Object? text = null,}) {
   return _then(UiEventMessage_ReasoningDelta(
+messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
+as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class UiEventMessage_ReasoningReplace extends UiEventMessage {
+  const UiEventMessage_ReasoningReplace({required this.messageId, required this.text}): super._();
+
+
+ final  String messageId;
+ final  String text;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEventMessage_ReasoningReplaceCopyWith<UiEventMessage_ReasoningReplace> get copyWith => _$UiEventMessage_ReasoningReplaceCopyWithImpl<UiEventMessage_ReasoningReplace>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_ReasoningReplace&&(identical(other.messageId, messageId) || other.messageId == messageId)&&(identical(other.text, text) || other.text == text));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,messageId,text);
+
+@override
+String toString() {
+  return 'UiEventMessage.reasoningReplace(messageId: $messageId, text: $text)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEventMessage_ReasoningReplaceCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_ReasoningReplaceCopyWith(UiEventMessage_ReasoningReplace value, $Res Function(UiEventMessage_ReasoningReplace) _then) = _$UiEventMessage_ReasoningReplaceCopyWithImpl;
+@useResult
+$Res call({
+ String messageId, String text
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEventMessage_ReasoningReplaceCopyWithImpl<$Res>
+    implements $UiEventMessage_ReasoningReplaceCopyWith<$Res> {
+  _$UiEventMessage_ReasoningReplaceCopyWithImpl(this._self, this._then);
+
+  final UiEventMessage_ReasoningReplace _self;
+  final $Res Function(UiEventMessage_ReasoningReplace) _then;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? messageId = null,Object? text = null,}) {
+  return _then(UiEventMessage_ReasoningReplace(
 messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
 as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
 as String,

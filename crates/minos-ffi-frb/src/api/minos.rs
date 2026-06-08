@@ -1159,7 +1159,15 @@ pub enum _UiEventMessage {
         message_id: String,
         text: String,
     },
+    TextReplace {
+        message_id: String,
+        text: String,
+    },
     ReasoningDelta {
+        message_id: String,
+        text: String,
+    },
+    ReasoningReplace {
         message_id: String,
         text: String,
     },

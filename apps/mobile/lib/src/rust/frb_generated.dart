@@ -3910,30 +3910,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           text: dco_decode_String(raw[2]),
         );
       case 6:
-        return UiEventMessage_ReasoningDelta(
+        return UiEventMessage_TextReplace(
           messageId: dco_decode_String(raw[1]),
           text: dco_decode_String(raw[2]),
         );
       case 7:
+        return UiEventMessage_ReasoningDelta(
+          messageId: dco_decode_String(raw[1]),
+          text: dco_decode_String(raw[2]),
+        );
+      case 8:
+        return UiEventMessage_ReasoningReplace(
+          messageId: dco_decode_String(raw[1]),
+          text: dco_decode_String(raw[2]),
+        );
+      case 9:
         return UiEventMessage_ToolCallPlaced(
           messageId: dco_decode_String(raw[1]),
           toolCallId: dco_decode_String(raw[2]),
           name: dco_decode_String(raw[3]),
           argsJson: dco_decode_String(raw[4]),
         );
-      case 8:
+      case 10:
         return UiEventMessage_ToolCallCompleted(
           toolCallId: dco_decode_String(raw[1]),
           output: dco_decode_String(raw[2]),
           isError: dco_decode_bool(raw[3]),
         );
-      case 9:
+      case 11:
         return UiEventMessage_Error(
           code: dco_decode_String(raw[1]),
           message: dco_decode_String(raw[2]),
           messageId: dco_decode_opt_String(raw[3]),
         );
-      case 10:
+      case 12:
         return UiEventMessage_Raw(
           kind: dco_decode_String(raw[1]),
           payloadJson: dco_decode_String(raw[2]),
@@ -5561,11 +5571,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 6:
         var var_messageId = sse_decode_String(deserializer);
         var var_text = sse_decode_String(deserializer);
-        return UiEventMessage_ReasoningDelta(
+        return UiEventMessage_TextReplace(
           messageId: var_messageId,
           text: var_text,
         );
       case 7:
+        var var_messageId = sse_decode_String(deserializer);
+        var var_text = sse_decode_String(deserializer);
+        return UiEventMessage_ReasoningDelta(
+          messageId: var_messageId,
+          text: var_text,
+        );
+      case 8:
+        var var_messageId = sse_decode_String(deserializer);
+        var var_text = sse_decode_String(deserializer);
+        return UiEventMessage_ReasoningReplace(
+          messageId: var_messageId,
+          text: var_text,
+        );
+      case 9:
         var var_messageId = sse_decode_String(deserializer);
         var var_toolCallId = sse_decode_String(deserializer);
         var var_name = sse_decode_String(deserializer);
@@ -5576,7 +5600,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           name: var_name,
           argsJson: var_argsJson,
         );
-      case 8:
+      case 10:
         var var_toolCallId = sse_decode_String(deserializer);
         var var_output = sse_decode_String(deserializer);
         var var_isError = sse_decode_bool(deserializer);
@@ -5585,7 +5609,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           output: var_output,
           isError: var_isError,
         );
-      case 9:
+      case 11:
         var var_code = sse_decode_String(deserializer);
         var var_message = sse_decode_String(deserializer);
         var var_messageId = sse_decode_opt_String(deserializer);
@@ -5594,7 +5618,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           message: var_message,
           messageId: var_messageId,
         );
-      case 10:
+      case 12:
         var var_kind = sse_decode_String(deserializer);
         var var_payloadJson = sse_decode_String(deserializer);
         return UiEventMessage_Raw(kind: var_kind, payloadJson: var_payloadJson);
@@ -7106,11 +7130,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(5, serializer);
         sse_encode_String(messageId, serializer);
         sse_encode_String(text, serializer);
-      case UiEventMessage_ReasoningDelta(
+      case UiEventMessage_TextReplace(
         messageId: final messageId,
         text: final text,
       ):
         sse_encode_i_32(6, serializer);
+        sse_encode_String(messageId, serializer);
+        sse_encode_String(text, serializer);
+      case UiEventMessage_ReasoningDelta(
+        messageId: final messageId,
+        text: final text,
+      ):
+        sse_encode_i_32(7, serializer);
+        sse_encode_String(messageId, serializer);
+        sse_encode_String(text, serializer);
+      case UiEventMessage_ReasoningReplace(
+        messageId: final messageId,
+        text: final text,
+      ):
+        sse_encode_i_32(8, serializer);
         sse_encode_String(messageId, serializer);
         sse_encode_String(text, serializer);
       case UiEventMessage_ToolCallPlaced(
@@ -7119,7 +7157,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         name: final name,
         argsJson: final argsJson,
       ):
-        sse_encode_i_32(7, serializer);
+        sse_encode_i_32(9, serializer);
         sse_encode_String(messageId, serializer);
         sse_encode_String(toolCallId, serializer);
         sse_encode_String(name, serializer);
@@ -7129,7 +7167,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         output: final output,
         isError: final isError,
       ):
-        sse_encode_i_32(8, serializer);
+        sse_encode_i_32(10, serializer);
         sse_encode_String(toolCallId, serializer);
         sse_encode_String(output, serializer);
         sse_encode_bool(isError, serializer);
@@ -7138,12 +7176,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         message: final message,
         messageId: final messageId,
       ):
-        sse_encode_i_32(9, serializer);
+        sse_encode_i_32(11, serializer);
         sse_encode_String(code, serializer);
         sse_encode_String(message, serializer);
         sse_encode_opt_String(messageId, serializer);
       case UiEventMessage_Raw(kind: final kind, payloadJson: final payloadJson):
-        sse_encode_i_32(10, serializer);
+        sse_encode_i_32(12, serializer);
         sse_encode_String(kind, serializer);
         sse_encode_String(payloadJson, serializer);
     }
