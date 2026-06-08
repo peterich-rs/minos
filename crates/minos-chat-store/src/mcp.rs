@@ -7,6 +7,8 @@ use serde_json::{json, Map, Value};
 
 use crate::{ChatMcpCommandKind, ChatStore, NewChatMcpCommand};
 
+const SERVER_INSTRUCTIONS: &str = "This MCP server exposes the Minos teamwork chat room bound to the current agent session. Use list_chat_messages to read recent room history before answering when the user or another agent refers to chat context, coordination, previous replies, or current room state. Use request_agent_help to ask another Minos agent in the same room for focused help. Use mention_user only for concise user-visible updates that should appear in the room.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChatMcpToolPermissions {
     pub read_chat: bool,
@@ -130,7 +132,8 @@ async fn handle_request(
                 "serverInfo": {
                     "name": "minos-chat",
                     "version": env!("CARGO_PKG_VERSION")
-                }
+                },
+                "instructions": SERVER_INSTRUCTIONS
             }
         })),
         "tools/list" => Ok(json!({
@@ -435,6 +438,34 @@ mod tests {
             source_agent: Some(AgentName::Codex),
             permissions: ChatMcpToolPermissions::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn initialize_returns_teamwork_instructions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ChatStore::open(&tmp.path().join("chat.sqlite"))
+            .await
+            .unwrap();
+
+        let response = handle_request(
+            &store,
+            &bound_config("room-main"),
+            json!(1),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"}
+            }),
+        )
+        .await
+        .unwrap();
+
+        let instructions = response["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("Minos teamwork chat room"));
+        assert!(instructions.contains("list_chat_messages"));
+        assert!(instructions.contains("request_agent_help"));
+        assert!(instructions.contains("mention_user"));
     }
 
     #[tokio::test]

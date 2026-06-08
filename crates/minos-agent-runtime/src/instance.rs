@@ -71,7 +71,13 @@ impl AppServerInstance {
         &self,
         cwd: &Path,
     ) -> anyhow::Result<crate::manager::StartThreadResult> {
-        crate::manager::rpc_start_thread(&self.client, cwd, HANDSHAKE_FALLBACK_TIMEOUT).await
+        crate::manager::rpc_start_thread(
+            &self.client,
+            cwd,
+            HANDSHAKE_FALLBACK_TIMEOUT,
+            Some(crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS),
+        )
+        .await
     }
 
     /// Resume an existing codex thread under the same `thread_id`.

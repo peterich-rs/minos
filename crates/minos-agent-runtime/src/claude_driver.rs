@@ -44,26 +44,7 @@ impl ClaudeNdjsonSession {
         subprocess_env: &Arc<HashMap<String, String>>,
         mcp_config_json: Option<&str>,
     ) -> anyhow::Result<Self> {
-        let mut args: Vec<String> = vec![
-            "-p".into(),
-            user_text.into(),
-            "--output-format".into(),
-            "stream-json".into(),
-            "--verbose".into(),
-            "--include-partial-messages".into(),
-        ];
-        if let Some(sid) = resume_session_id {
-            args.push("--resume".into());
-            args.push(sid.into());
-        } else if let Some(sid) = session_id {
-            args.push("--session-id".into());
-            args.push(sid.into());
-        }
-        if let Some(config_json) = mcp_config_json {
-            args.push("--mcp-config".into());
-            args.push(config_json.into());
-            args.push("--strict-mcp-config".into());
-        }
+        let args = build_claude_args(user_text, session_id, resume_session_id, mcp_config_json);
 
         let mut cmd = Command::new(cli_path);
         cmd.args(&args)
@@ -214,6 +195,37 @@ impl ClaudeNdjsonSession {
     }
 }
 
+fn build_claude_args(
+    user_text: &str,
+    session_id: Option<&str>,
+    resume_session_id: Option<&str>,
+    mcp_config_json: Option<&str>,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-p".into(),
+        user_text.into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--verbose".into(),
+        "--include-partial-messages".into(),
+    ];
+    if let Some(sid) = resume_session_id {
+        args.push("--resume".into());
+        args.push(sid.into());
+    } else if let Some(sid) = session_id {
+        args.push("--session-id".into());
+        args.push(sid.into());
+    }
+    if let Some(config_json) = mcp_config_json {
+        args.push("--mcp-config".into());
+        args.push(config_json.into());
+        args.push("--strict-mcp-config".into());
+    }
+    args.push("--append-system-prompt".into());
+    args.push(crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS.into());
+    args
+}
+
 async fn sync_thread_from_payload(
     payload: &Value,
     thread_id: &str,
@@ -272,6 +284,30 @@ mod tests {
 
     fn val(s: &str) -> Value {
         serde_json::from_str(s).expect("json fixture should parse")
+    }
+
+    #[test]
+    fn claude_args_include_mcp_config_and_minos_system_prompt_append() {
+        let args = build_claude_args(
+            "hello",
+            Some("session-1"),
+            None,
+            Some(r#"{"mcpServers":{"minos_chat":{"command":"minos-chat-mcp"}}}"#),
+        );
+
+        assert!(args.windows(2).any(|pair| pair == ["-p", "hello"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--session-id", "session-1"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair[0] == "--mcp-config" && pair[1].contains(r#""minos_chat""#) }));
+        assert!(args.iter().any(|arg| arg == "--strict-mcp-config"));
+        assert!(args.windows(2).any(|pair| {
+            pair[0] == "--append-system-prompt"
+                && pair[1].contains("Minos teamwork mode")
+                && pair[1].contains("minos_chat")
+        }));
     }
 
     #[test]

@@ -15,6 +15,7 @@ mod backend;
 mod event;
 mod group_chat;
 mod logging;
+mod skills;
 mod translation;
 mod ui;
 
@@ -219,6 +220,20 @@ async fn main() -> Result<()> {
     let workspace = std::fs::canonicalize(&cli.workspace).unwrap_or_else(|_| cli.workspace.clone());
     let log_path = logging::resolve_log_path(&workspace, cli.log_file.clone());
     logging::init(&log_path)?;
+    match skills::install_global_agent_skills() {
+        Ok(report) => {
+            tracing::info!(
+                count = report.installed_paths.len(),
+                "installed Minos teamwork skills"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "failed to install Minos teamwork skills; agents may need manual skill setup"
+            );
+        }
+    }
 
     let max_instances = cli.max_instances.unwrap_or(3);
     let chat_mcp_permissions = chat_mcp_permissions_from_cli(&cli);

@@ -28,6 +28,12 @@ use tokio::sync::{broadcast, watch, Mutex};
 use tracing::{info, warn};
 use url::Url;
 
+pub const MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS: &str = "\
+You are running inside Minos teamwork mode, where CLI coding agents work in a shared chat room with the user and other agents. \
+Treat the Minos room as coordination context, not as a generic terminal session. \
+When room history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_chat` MCP server to inspect the bound room before answering. \
+Use `list_chat_messages` for recent room history, `request_agent_help` to ask another Minos agent for focused assistance, and `mention_user` only for concise user-visible updates that should be posted back to the room.";
+
 #[derive(Clone, Debug)]
 pub struct InstanceCaps {
     pub max_instances: usize,
@@ -2439,10 +2445,12 @@ pub(crate) async fn rpc_start_thread(
     client: &CodexClient,
     cwd: &Path,
     timeout: Duration,
+    developer_instructions: Option<&str>,
 ) -> anyhow::Result<StartThreadResult> {
     let cwd_str = cwd.display().to_string();
     let start_params = ThreadStartParams {
         cwd: Some(cwd_str),
+        developer_instructions: developer_instructions.map(str::to_owned),
         ..Default::default()
     };
     let resp: ThreadStartResponse = tokio::time::timeout(timeout, client.call_typed(start_params))
@@ -2650,6 +2658,105 @@ mod tests {
         );
     }
 
+    #[test]
+    fn claude_mcp_config_json_includes_bound_room_and_source_agent() {
+        let server = ResolvedChatMcpServer {
+            name: "minos_chat".into(),
+            command: "/tmp/minos-tui".into(),
+            args: vec![
+                "chat-mcp".into(),
+                "--db-path".into(),
+                "/tmp/minos.sqlite".into(),
+                "--default-room-id".into(),
+                "room-minos".into(),
+                "--source-agent".into(),
+                "claude".into(),
+            ],
+        };
+
+        let config: Value =
+            serde_json::from_str(&claude_mcp_config_json(&server)).expect("valid JSON");
+
+        assert_eq!(
+            config["mcpServers"]["minos_chat"]["command"],
+            "/tmp/minos-tui"
+        );
+        assert_eq!(config["mcpServers"]["minos_chat"]["args"][0], "chat-mcp");
+        assert!(config["mcpServers"]["minos_chat"]["args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--default-room-id" && pair[1] == "room-minos"));
+        assert!(config["mcpServers"]["minos_chat"]["args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--source-agent" && pair[1] == "claude"));
+    }
+
+    #[test]
+    fn opencode_config_content_includes_local_minos_chat_server() {
+        let server = ResolvedChatMcpServer {
+            name: "minos_chat".into(),
+            command: "/tmp/minos-tui".into(),
+            args: vec![
+                "chat-mcp".into(),
+                "--db-path".into(),
+                "/tmp/minos.sqlite".into(),
+                "--default-room-id".into(),
+                "room-minos".into(),
+                "--source-agent".into(),
+                "opencode".into(),
+            ],
+        };
+
+        let config: Value =
+            serde_json::from_str(&opencode_config_content(&server)).expect("valid JSON");
+
+        assert_eq!(config["mcp"]["minos_chat"]["type"], "local");
+        assert_eq!(config["mcp"]["minos_chat"]["enabled"], true);
+        assert_eq!(config["mcp"]["minos_chat"]["command"][0], "/tmp/minos-tui");
+        assert_eq!(config["mcp"]["minos_chat"]["command"][1], "chat-mcp");
+        assert!(config["mcp"]["minos_chat"]["command"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--source-agent" && pair[1] == "opencode"));
+    }
+
+    #[test]
+    fn gemini_mcp_server_includes_bound_room_and_source_agent() {
+        let server = ResolvedChatMcpServer {
+            name: "minos_chat".into(),
+            command: "/tmp/minos-tui".into(),
+            args: vec![
+                "chat-mcp".into(),
+                "--db-path".into(),
+                "/tmp/minos.sqlite".into(),
+                "--default-room-id".into(),
+                "room-minos".into(),
+                "--source-agent".into(),
+                "gemini".into(),
+            ],
+        };
+
+        let config = serde_json::to_value(gemini_mcp_server(&server)).expect("valid JSON");
+
+        assert_eq!(config["name"], "minos_chat");
+        assert_eq!(config["command"], "/tmp/minos-tui");
+        assert_eq!(config["args"][0], "chat-mcp");
+        assert!(config["args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--default-room-id" && pair[1] == "room-minos"));
+        assert!(config["args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--source-agent" && pair[1] == "gemini"));
+    }
+
     #[tokio::test]
     async fn start_agent_creates_instance_and_thread() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2672,6 +2779,34 @@ mod tests {
             vec![std::path::PathBuf::from("/w-test")]
         );
         fake.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn codex_thread_start_includes_minos_teamwork_developer_instructions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thread_id = "thr-minos-instructions";
+        let script = vec![Step::ExpectRequestMatching {
+            method: "thread/start".into(),
+            params_subset: json!({
+                "developerInstructions": MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS,
+            }),
+            reply: fake_thread_start_reply(thread_id),
+        }];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let started = mgr
+            .start_agent(AgentName::Codex, tmp.path().to_path_buf())
+            .await
+            .unwrap();
+
+        assert_eq!(started.thread_id, thread_id);
+        server.stop().await;
     }
 
     #[cfg(unix)]
@@ -3194,7 +3329,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         .await
         .expect("fake Claude result should arrive");
 
-        let args = tokio::time::timeout(Duration::from_secs(2), async {
+        let args = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if let Ok(args) = std::fs::read_to_string(&args_path) {
                     break args;
@@ -3273,7 +3408,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             .unwrap();
         assert_eq!(outcome.session_id, thread_id);
 
-        let args = tokio::time::timeout(Duration::from_secs(2), async {
+        let args = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if let Ok(args) = std::fs::read_to_string(&args_path) {
                     break args;

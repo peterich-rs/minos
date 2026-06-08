@@ -51,6 +51,13 @@ pub enum Step {
         method: String,
         reply: serde_json::Value,
     },
+    /// Read one client request, assert its method and selected params, then
+    /// reply like `ExpectRequest`.
+    ExpectRequestMatching {
+        method: String,
+        params_subset: serde_json::Value,
+        reply: serde_json::Value,
+    },
     /// Read one client notification frame and assert its method/params.
     ExpectNotification {
         method: String,
@@ -234,6 +241,50 @@ async fn run_script(
                     return;
                 }
             }
+            Step::ExpectRequestMatching {
+                method,
+                params_subset,
+                reply,
+            } => {
+                let frame = match rx.next().await {
+                    Some(Ok(Message::Text(t))) => t.to_string(),
+                    Some(Ok(Message::Binary(b))) => {
+                        String::from_utf8(b.to_vec()).unwrap_or_default()
+                    }
+                    Some(Ok(other)) => {
+                        panic!("FakeCodexServer: expected text/binary frame, got {other:?}");
+                    }
+                    Some(Err(e)) => panic!("FakeCodexServer: WS read error: {e}"),
+                    None => {
+                        panic!("FakeCodexServer: WS closed before ExpectRequestMatching({method})")
+                    }
+                };
+                let parsed: serde_json::Value = serde_json::from_str(&frame)
+                    .unwrap_or_else(|e| panic!("FakeCodexServer: bad JSON from client: {e}"));
+                let got_method = parsed
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                assert_eq!(
+                    got_method, method,
+                    "FakeCodexServer: method mismatch on ExpectRequestMatching"
+                );
+                assert_json_subset(
+                    parsed.get("params").unwrap_or(&serde_json::Value::Null),
+                    &params_subset,
+                    "params",
+                );
+                let id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": reply,
+                });
+                if let Err(e) = tx.send(Message::text(response.to_string())).await {
+                    tracing::warn!(error = %e, "FakeCodexServer: send reply failed");
+                    return;
+                }
+            }
             Step::ExpectNotification { method, params } => {
                 let frame = match rx.next().await {
                     Some(Ok(Message::Text(t))) => t.to_string(),
@@ -323,6 +374,27 @@ async fn run_script(
                 return;
             }
         }
+    }
+}
+
+fn assert_json_subset(actual: &serde_json::Value, expected: &serde_json::Value, path: &str) {
+    match expected {
+        serde_json::Value::Object(expected_map) => {
+            let actual_map = actual
+                .as_object()
+                .unwrap_or_else(|| panic!("FakeCodexServer: {path} is not an object"));
+            for (key, expected_value) in expected_map {
+                let next_path = format!("{path}.{key}");
+                let actual_value = actual_map.get(key).unwrap_or_else(|| {
+                    panic!("FakeCodexServer: missing expected subset key {next_path}")
+                });
+                assert_json_subset(actual_value, expected_value, &next_path);
+            }
+        }
+        _ => assert_eq!(
+            actual, expected,
+            "FakeCodexServer: JSON subset mismatch at {path}"
+        ),
     }
 }
 
