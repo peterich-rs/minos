@@ -124,6 +124,11 @@ impl UiState {
         self.chat_states.get_mut(&id.thread_id)
     }
 
+    pub fn current_chat(&self) -> Option<&ChatState> {
+        let id = self.selected_thread.and_then(|i| self.threads.get(i))?;
+        self.chat_states.get(&id.thread_id)
+    }
+
     pub fn set_error(&mut self, msg: String) {
         self.error_flash = Some((msg, Instant::now()));
     }
@@ -161,13 +166,29 @@ impl GroupChatState {
     }
 
     pub fn replace_messages(&mut self, messages: Vec<LocalGroupChatMessage>) {
-        self.messages = messages;
+        self.messages = sorted_dedup_messages(messages);
         self.scroll_to_bottom();
     }
 
     pub fn push_message(&mut self, message: LocalGroupChatMessage) {
-        self.messages.push(message);
+        self.merge_messages(std::iter::once(message));
         self.scroll_to_bottom();
+    }
+
+    pub fn merge_messages<I>(&mut self, messages: I)
+    where
+        I: IntoIterator<Item = LocalGroupChatMessage>,
+    {
+        self.messages.extend(messages);
+        self.messages = sorted_dedup_messages(std::mem::take(&mut self.messages));
+    }
+
+    pub fn last_seq(&self) -> u64 {
+        self.messages
+            .iter()
+            .map(|message| message.seq)
+            .max()
+            .unwrap_or(0)
     }
 
     pub fn update_max_scroll(&mut self, max_scroll: u16) {
@@ -211,6 +232,25 @@ impl GroupChatState {
         self.auto_scroll = true;
         self.scroll_offset = 0;
     }
+}
+
+fn sorted_dedup_messages(messages: Vec<LocalGroupChatMessage>) -> Vec<LocalGroupChatMessage> {
+    let mut keyed = HashMap::<String, LocalGroupChatMessage>::new();
+    for message in messages {
+        let key = if message.message_id.is_empty() {
+            format!(
+                "seq:{}:{}:{}",
+                message.seq, message.created_at_ms, message.text
+            )
+        } else {
+            message.message_id.clone()
+        };
+        keyed.insert(key, message);
+    }
+
+    let mut messages: Vec<_> = keyed.into_values().collect();
+    messages.sort_by_key(|message| (message.seq, message.created_at_ms));
+    messages
 }
 
 pub fn render_ui(f: &mut Frame, state: &mut UiState) {
@@ -371,11 +411,23 @@ fn render_detail_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut
         &state.room_input,
         mention_candidates.as_slice(),
     );
+    let pending_agent_request = state
+        .current_chat()
+        .and_then(ChatState::active_pending_request)
+        .is_some();
     input_bar::render_input_bar(
         f,
         inputs[1],
-        "Agent Input",
-        "Talk directly to the selected agent",
+        if pending_agent_request {
+            "Agent Input: Reply Required"
+        } else {
+            "Agent Input"
+        },
+        if pending_agent_request {
+            "Reply to the pending agent request"
+        } else {
+            "Talk directly to the selected agent"
+        },
         &state.agent_input,
         &[],
     );

@@ -9,6 +9,12 @@ pub const REASONING_STYLE: Style = Style::new().fg(Color::DarkGray);
 pub const TOOL_NAME_STYLE: Style = Style::new().fg(Color::Magenta);
 pub const TOOL_SUCCESS: Style = Style::new().fg(Color::Green);
 pub const TOOL_ERROR: Style = Style::new().fg(Color::Red);
+pub const MARKDOWN_HEADING: Style = Style::new().fg(Color::White).add_modifier(Modifier::BOLD);
+pub const MARKDOWN_CODE: Style = Style::new().fg(Color::Yellow);
+pub const MARKDOWN_QUOTE: Style = Style::new().fg(Color::DarkGray);
+pub const DIFF_ADD: Style = Style::new().fg(Color::Green);
+pub const DIFF_DEL: Style = Style::new().fg(Color::Red);
+pub const DIFF_HUNK: Style = Style::new().fg(Color::Cyan);
 pub const STREAMING_CURSOR: Style = Style::new()
     .fg(Color::White)
     .add_modifier(Modifier::SLOW_BLINK);

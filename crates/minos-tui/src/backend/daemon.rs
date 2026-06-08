@@ -10,11 +10,13 @@ use minos_agent_runtime::{
 };
 use minos_domain::{AgentDescriptor, AgentName};
 use minos_protocol::{
-    CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams, InterruptThreadRequest,
-    ListClisResponse, LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot,
-    PauseReason as ProtoPauseReason, ReadThreadParams, ReadThreadRawHistoryResponse,
+    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams,
+    InterruptThreadRequest, ListClisResponse, LocalGroupChatMessage, LocalIngestFrame,
+    LocalManagerEvent, LocalThreadSnapshot, PauseReason as ProtoPauseReason, ReadGroupChatParams,
+    ReadThreadParams, ReadThreadRawHistoryResponse, RespondOpencodePermissionRequest,
     SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState,
 };
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::broadcast;
@@ -212,6 +214,42 @@ impl AgentBackend for DaemonBackend {
         Ok(())
     }
 
+    async fn send_approval_decision(
+        &self,
+        request_id: &str,
+        thread_id: &str,
+        decision: Value,
+    ) -> Result<()> {
+        let request = ApprovalDecisionRequest {
+            request_id: request_id.to_owned(),
+            thread_id: thread_id.to_owned(),
+            decision,
+        };
+        self.client
+            .request::<(), _>("minos_local_approval_decision", [request])
+            .await
+            .context("RPC minos_local_approval_decision failed")?;
+        Ok(())
+    }
+
+    async fn respond_opencode_permission(
+        &self,
+        thread_id: &str,
+        permission_id: &str,
+        response: &str,
+    ) -> Result<()> {
+        let request = RespondOpencodePermissionRequest {
+            thread_id: thread_id.to_owned(),
+            permission_id: permission_id.to_owned(),
+            response: response.to_owned(),
+        };
+        self.client
+            .request::<(), _>("minos_local_respond_opencode_permission", [request])
+            .await
+            .context("RPC minos_local_respond_opencode_permission failed")?;
+        Ok(())
+    }
+
     async fn interrupt_thread(&self, thread_id: &str) -> Result<()> {
         let request = InterruptThreadRequest {
             thread_id: thread_id.to_owned(),
@@ -295,6 +333,28 @@ impl AgentBackend for DaemonBackend {
             .context("RPC minos_local_read_thread_raw_history failed")
     }
 
+    async fn read_group_chat(
+        &self,
+        room_id: &str,
+        after_seq: Option<u64>,
+        before_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<LocalGroupChatMessage>> {
+        let request = ReadGroupChatParams {
+            room_id: Some(room_id.to_owned()),
+            after_seq,
+            before_seq,
+            limit: Some(limit),
+        };
+        let mut response: minos_protocol::ReadGroupChatResponse = self
+            .client
+            .request("minos_local_read_group_chat", [request])
+            .await
+            .context("RPC minos_local_read_group_chat failed")?;
+        response.messages.sort_by_key(|message| message.seq);
+        Ok(response.messages)
+    }
+
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {
         self.ingest_tx.subscribe()
     }
@@ -315,10 +375,17 @@ impl AgentBackend for DaemonBackend {
 }
 
 fn local_ingest_to_raw(frame: LocalIngestFrame) -> RawIngest {
+    let mut payload = frame.payload;
+    if frame.seq > 0 {
+        if let serde_json::Value::Object(map) = &mut payload {
+            map.entry("_local_seq")
+                .or_insert_with(|| serde_json::Value::from(frame.seq));
+        }
+    }
     RawIngest {
         thread_id: frame.thread_id,
         agent: frame.agent,
-        payload: frame.payload,
+        payload,
         ts_ms: frame.ts_ms,
     }
 }

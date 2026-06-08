@@ -91,48 +91,32 @@ fn build_lines(messages: &[RenderedMessage], separator_width: u16) -> Vec<Line<'
         for part in &msg.text_parts {
             match part {
                 TextPart::Plain(text) => {
-                    for line_text in text.split('\n') {
-                        lines.push(Line::from(Span::raw(line_text.to_owned())));
-                    }
+                    push_markdown_lines(&mut lines, text, Style::default());
                 }
                 TextPart::Code { lang, code } => {
-                    lines.push(Line::from(Span::styled(
-                        format!("┌─ {} ─", lang),
-                        ratatui::style::Style::new().fg(BORDER_FG),
-                    )));
-                    for code_line in code.split('\n') {
-                        lines.push(Line::from(vec![
-                            Span::styled("│ ", ratatui::style::Style::new().fg(BORDER_FG)),
-                            Span::raw(code_line.to_owned()),
-                        ]));
-                    }
-                    lines.push(Line::from(Span::styled(
-                        "└──",
-                        ratatui::style::Style::new().fg(BORDER_FG),
-                    )));
+                    push_code_block(&mut lines, lang, code);
                 }
             }
         }
 
         if let Some(reasoning) = &msg.reasoning {
-            for r_line in reasoning.split('\n') {
-                lines.push(Line::from(Span::styled(r_line.to_owned(), REASONING_STYLE)));
-            }
+            lines.push(Line::from(Span::styled("Thinking", REASONING_STYLE)));
+            push_markdown_lines(&mut lines, reasoning, REASONING_STYLE);
         }
 
         for tc in &msg.tool_calls {
-            let status_icon = if tc.output_summary.is_none() {
-                Span::styled("⏳", ratatui::style::Style::default())
+            let status_label = if tc.output_summary.is_none() {
+                Span::styled("running", ratatui::style::Style::default())
             } else if tc.is_error {
-                Span::styled("✗", TOOL_ERROR)
+                Span::styled("failed", TOOL_ERROR)
             } else {
-                Span::styled("✓", TOOL_SUCCESS)
+                Span::styled("done", TOOL_SUCCESS)
             };
             let mut tc_spans = vec![
-                Span::raw("🔧 "),
+                Span::raw("Tool "),
                 Span::styled(tc.name.clone(), TOOL_NAME_STYLE),
-                Span::raw(" "),
-                status_icon,
+                Span::raw(" · "),
+                status_label,
             ];
             if !tc.args_summary.is_empty() {
                 tc_spans.push(Span::raw(format!(" {}", tc.args_summary)));
@@ -142,21 +126,11 @@ fn build_lines(messages: &[RenderedMessage], separator_width: u16) -> Vec<Line<'
                 lines.push(Line::from(tc_spans.clone()));
                 if let Some(args) = &tc.args_detail {
                     emitted_detail = true;
-                    for detail_line in args.split('\n') {
-                        lines.push(Line::from(vec![
-                            Span::styled("    args: ", ratatui::style::Style::new().fg(BORDER_FG)),
-                            Span::raw(detail_line.to_owned()),
-                        ]));
-                    }
+                    push_tool_detail_lines(&mut lines, "args", args);
                 }
-                if let Some(output) = &tc.output_summary {
+                if let Some(output) = tc.output_detail.as_ref().or(tc.output_summary.as_ref()) {
                     emitted_detail = true;
-                    for detail_line in output.split('\n') {
-                        lines.push(Line::from(vec![
-                            Span::styled("    out: ", ratatui::style::Style::new().fg(BORDER_FG)),
-                            Span::raw(detail_line.to_owned()),
-                        ]));
-                    }
+                    push_tool_detail_lines(&mut lines, "out", output);
                 }
                 if emitted_detail {
                     continue;
@@ -182,6 +156,176 @@ fn build_lines(messages: &[RenderedMessage], separator_width: u16) -> Vec<Line<'
     }
 
     lines
+}
+
+fn push_markdown_lines(lines: &mut Vec<Line<'static>>, text: &str, base_style: Style) {
+    let mut in_code = false;
+    let mut code_lang = String::new();
+    let mut code = String::new();
+
+    for raw_line in text.split('\n') {
+        if let Some(lang) = raw_line.trim_start().strip_prefix("```") {
+            if in_code {
+                push_code_block(lines, &code_lang, code.trim_end_matches('\n'));
+                code.clear();
+                code_lang.clear();
+                in_code = false;
+            } else {
+                in_code = true;
+                code_lang = lang.trim().to_owned();
+            }
+            continue;
+        }
+
+        if in_code {
+            code.push_str(raw_line);
+            code.push('\n');
+            continue;
+        }
+
+        lines.push(markdown_line(raw_line, base_style));
+    }
+
+    if in_code {
+        push_code_block(lines, &code_lang, code.trim_end_matches('\n'));
+    }
+}
+
+fn markdown_line(raw: &str, base_style: Style) -> Line<'static> {
+    let trimmed = raw.trim_start();
+    let indent = &raw[..raw.len().saturating_sub(trimmed.len())];
+
+    if trimmed.starts_with('#') {
+        let content = trimmed.trim_start_matches('#').trim_start();
+        return Line::from(vec![
+            Span::raw(indent.to_owned()),
+            Span::styled(content.to_owned(), super::theme::MARKDOWN_HEADING),
+        ]);
+    }
+    if let Some(content) = trimmed.strip_prefix("> ") {
+        return Line::from(vec![
+            Span::raw(indent.to_owned()),
+            Span::styled("│ ", super::theme::MARKDOWN_QUOTE),
+            Span::styled(content.to_owned(), super::theme::MARKDOWN_QUOTE),
+        ]);
+    }
+    if is_markdown_rule(trimmed) {
+        return Line::from(Span::styled(
+            "─".repeat(trimmed.len().max(3)),
+            ratatui::style::Style::new().fg(BORDER_FG),
+        ));
+    }
+    if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+        let content = trimmed[2..].to_owned();
+        let mut spans = vec![
+            Span::raw(indent.to_owned()),
+            Span::styled("• ", super::theme::MARKDOWN_HEADING),
+        ];
+        spans.extend(inline_markdown_spans(&content, base_style));
+        return Line::from(spans);
+    }
+    if is_diff_line(trimmed) {
+        return Line::from(Span::styled(raw.to_owned(), diff_style(trimmed)));
+    }
+
+    Line::from(inline_markdown_spans(raw, base_style))
+}
+
+fn inline_markdown_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('`') {
+        if start > 0 {
+            spans.push(Span::styled(rest[..start].to_owned(), base_style));
+        }
+        let after = &rest[start + 1..];
+        if let Some(end) = after.find('`') {
+            spans.push(Span::styled(
+                after[..end].to_owned(),
+                super::theme::MARKDOWN_CODE,
+            ));
+            rest = &after[end + 1..];
+        } else {
+            spans.push(Span::styled("`".to_owned(), base_style));
+            rest = after;
+        }
+    }
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest.to_owned(), base_style));
+    }
+    spans
+}
+
+fn push_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code: &str) {
+    let label = if lang.trim().is_empty() {
+        "code"
+    } else {
+        lang.trim()
+    };
+    let diff_block = is_diff_block(label, code);
+    lines.push(Line::from(Span::styled(
+        format!("┌─ {label} ─"),
+        ratatui::style::Style::new().fg(BORDER_FG),
+    )));
+    for code_line in code.split('\n') {
+        let style = if diff_block && is_diff_line(code_line) {
+            diff_style(code_line)
+        } else {
+            super::theme::MARKDOWN_CODE
+        };
+        lines.push(Line::from(vec![
+            Span::styled("│ ", ratatui::style::Style::new().fg(BORDER_FG)),
+            Span::styled(code_line.to_owned(), style),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        "└──",
+        ratatui::style::Style::new().fg(BORDER_FG),
+    )));
+}
+
+fn push_tool_detail_lines(lines: &mut Vec<Line<'static>>, label: &str, text: &str) {
+    lines.push(Line::from(Span::styled(
+        format!("  {label}:"),
+        ratatui::style::Style::new().fg(BORDER_FG),
+    )));
+    push_markdown_lines(lines, text, Style::default());
+}
+
+fn is_markdown_rule(line: &str) -> bool {
+    line.len() >= 3 && line.chars().all(|ch| matches!(ch, '-' | '*' | '_'))
+}
+
+fn is_diff_line(line: &str) -> bool {
+    line.starts_with('+')
+        || line.starts_with('-')
+        || line.starts_with("@@")
+        || line.starts_with("diff --git")
+}
+
+fn is_diff_block(lang: &str, code: &str) -> bool {
+    let lang = lang.to_ascii_lowercase();
+    lang.contains("diff")
+        || lang.contains("patch")
+        || code.contains("diff --git")
+        || code.contains("\n@@")
+        || code.starts_with("@@")
+        || code.contains("*** Begin Patch")
+        || code
+            .lines()
+            .any(|line| line.starts_with("+++ ") || line.starts_with("--- "))
+}
+
+fn diff_style(line: &str) -> Style {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        super::theme::DIFF_ADD
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        super::theme::DIFF_DEL
+    } else if line.starts_with("@@") || line.starts_with("diff --git") {
+        super::theme::DIFF_HUNK
+    } else {
+        super::theme::MARKDOWN_CODE
+    }
 }
 
 #[derive(Clone)]
@@ -398,6 +542,65 @@ mod tests {
         let lines = build_lines(&[message(MessageRole::Assistant, "thinking", true)], 80);
 
         assert!(lines.iter().any(|line| line_text(line).contains('▓')));
+    }
+
+    #[test]
+    fn markdown_headings_lists_inline_code_and_fences_render_structurally() {
+        let lines = build_lines(
+            &[message(
+                MessageRole::Assistant,
+                "# Plan\n- run `cargo test`\n```rust\nfn main() {}\n```",
+                false,
+            )],
+            80,
+        );
+
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+        assert!(rendered.iter().any(|line| line == "Plan"));
+        assert!(rendered.iter().any(|line| line.contains("• run ")));
+        assert!(rendered.iter().any(|line| line.contains("┌─ rust ─")));
+        assert!(rendered.iter().any(|line| line.contains("fn main() {}")));
+    }
+
+    #[test]
+    fn diff_lines_get_diff_styles_without_treating_markdown_bullets_as_diff() {
+        let lines = build_lines(
+            &[message(
+                MessageRole::Assistant,
+                "- markdown bullet\n```diff\n@@ -1 +1\n-old\n+new\n```",
+                false,
+            )],
+            80,
+        );
+
+        let bullet = lines
+            .iter()
+            .find(|line| line_text(line).contains("markdown bullet"))
+            .expect("bullet line");
+        assert!(line_text(bullet).starts_with("• "));
+        let added = lines
+            .iter()
+            .find(|line| line_text(line).contains("+new"))
+            .expect("added diff line");
+        assert_eq!(added.spans[1].style, super::super::theme::DIFF_ADD);
+    }
+
+    #[test]
+    fn non_diff_code_blocks_do_not_color_markdown_lists_as_diff() {
+        let lines = build_lines(
+            &[message(
+                MessageRole::Assistant,
+                "```text\n- markdown bullet\n```",
+                false,
+            )],
+            80,
+        );
+
+        let bullet = lines
+            .iter()
+            .find(|line| line_text(line).contains("- markdown bullet"))
+            .expect("code line");
+        assert_eq!(bullet.spans[1].style, super::super::theme::MARKDOWN_CODE);
     }
 
     #[test]

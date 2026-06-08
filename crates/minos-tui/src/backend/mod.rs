@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use minos_agent_runtime::{ManagerEvent, RawIngest, StartAgentOutcome};
 use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;
+use minos_protocol::LocalGroupChatMessage;
+use serde_json::Value;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 
@@ -41,6 +43,20 @@ pub trait AgentBackend: Send + Sync {
 
     async fn send_message(&self, thread_id: &str, text: &str) -> Result<()>;
 
+    async fn send_approval_decision(
+        &self,
+        request_id: &str,
+        thread_id: &str,
+        decision: Value,
+    ) -> Result<()>;
+
+    async fn respond_opencode_permission(
+        &self,
+        thread_id: &str,
+        permission_id: &str,
+        response: &str,
+    ) -> Result<()>;
+
     async fn interrupt_thread(&self, thread_id: &str) -> Result<()>;
 
     async fn close_thread(&self, thread_id: &str) -> Result<()>;
@@ -57,6 +73,14 @@ pub trait AgentBackend: Send + Sync {
         from_seq: Option<u64>,
         limit: u32,
     ) -> Result<minos_protocol::local_rpc::ReadThreadRawHistoryResponse>;
+
+    async fn read_group_chat(
+        &self,
+        room_id: &str,
+        after_seq: Option<u64>,
+        before_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<LocalGroupChatMessage>>;
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest>;
 

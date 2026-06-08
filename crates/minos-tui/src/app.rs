@@ -16,7 +16,7 @@ use tracing::debug;
 use crate::backend::AgentBackend;
 use crate::event::AppEvent;
 use crate::group_chat::GroupChatStore;
-use crate::translation::{ChatSelectionPoint, ChatState};
+use crate::translation::{ChatSelectionPoint, ChatState, PendingAgentRequestKind};
 use crate::ui::{
     room_list::RoomEntry, AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState,
 };
@@ -27,6 +27,8 @@ pub struct App {
     should_quit: bool,
     workspace: PathBuf,
     hydrated_threads: HashSet<String>,
+    thread_watermarks: HashMap<String, u64>,
+    applied_ingest_fingerprints: HashSet<String>,
     group_chat_store: GroupChatStore,
     recorded_agent_results: HashMap<String, String>,
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<AppEvent>>,
@@ -57,6 +59,8 @@ impl App {
             should_quit: false,
             workspace,
             hydrated_threads: HashSet::new(),
+            thread_watermarks: HashMap::new(),
+            applied_ingest_fingerprints: HashSet::new(),
             group_chat_store,
             recorded_agent_results: HashMap::new(),
             event_tx: None,
@@ -80,6 +84,18 @@ impl App {
     pub async fn handle_event(&mut self, event: AppEvent) -> bool {
         match event {
             AppEvent::Ingest(ingest) => {
+                if !self.ui.chat_states.contains_key(&ingest.thread_id) {
+                    debug!(
+                        agent = %ingest.agent.bin_name(),
+                        thread_id = %ingest.thread_id,
+                        "dropping ingest event because no chat state exists"
+                    );
+                    return false;
+                }
+                let seq = local_seq_from_payload(&ingest.payload);
+                if !self.mark_ingest_applied(&ingest.thread_id, seq, &ingest.payload) {
+                    return false;
+                }
                 if let Some(chat) = self.ui.chat_states.get_mut(&ingest.thread_id) {
                     let events = chat.translation_state.translate(&ingest.payload);
                     debug!(
@@ -93,11 +109,6 @@ impl App {
                     self.record_agent_group_result_if_done(&thread_id).await;
                     return true;
                 }
-                debug!(
-                    agent = %ingest.agent.bin_name(),
-                    thread_id = %ingest.thread_id,
-                    "dropping ingest event because no chat state exists"
-                );
                 false
             }
             AppEvent::ManagerEvent(event) => self.handle_manager_event(event).await,
@@ -136,6 +147,9 @@ impl App {
             .status
             .update_backend_state(self.backend.connection_state());
         if self.process_pending_mcp_commands().await {
+            redraw = true;
+        }
+        if self.refresh_group_chat_from_backend().await {
             redraw = true;
         }
         redraw
@@ -230,9 +244,19 @@ impl App {
                 }
             };
 
-            if let Some(chat) = self.ui.chat_states.get_mut(thread_id) {
-                for frame in response.events {
-                    let events = chat.translation_state.translate(&frame.payload);
+            for frame in response.events {
+                let mut payload = frame.payload;
+                if frame.seq > 0 {
+                    if let serde_json::Value::Object(map) = &mut payload {
+                        map.entry("_local_seq")
+                            .or_insert_with(|| serde_json::Value::from(frame.seq));
+                    }
+                }
+                if !self.mark_ingest_applied(thread_id, frame.seq, &payload) {
+                    continue;
+                }
+                if let Some(chat) = self.ui.chat_states.get_mut(thread_id) {
+                    let events = chat.translation_state.translate(&payload);
                     chat.apply_ui_events(events);
                 }
             }
@@ -264,6 +288,39 @@ impl App {
                 entry.insert(ChatState::new(thread_id.to_owned(), agent));
             }
         }
+    }
+
+    fn mark_ingest_applied(
+        &mut self,
+        thread_id: &str,
+        seq: u64,
+        payload: &serde_json::Value,
+    ) -> bool {
+        let fingerprint = ingest_fingerprint(thread_id, payload);
+        if self.applied_ingest_fingerprints.contains(&fingerprint) {
+            if seq > 0 {
+                let watermark = self
+                    .thread_watermarks
+                    .entry(thread_id.to_owned())
+                    .or_insert(0);
+                *watermark = (*watermark).max(seq);
+            }
+            return false;
+        }
+
+        if seq > 0 {
+            let watermark = self
+                .thread_watermarks
+                .entry(thread_id.to_owned())
+                .or_insert(0);
+            if seq <= *watermark {
+                return false;
+            }
+            *watermark = seq;
+        }
+
+        self.applied_ingest_fingerprints.insert(fingerprint);
+        true
     }
 
     async fn handle_manager_event(&mut self, event: ManagerEvent) -> bool {
@@ -1097,6 +1154,9 @@ impl App {
         self.ui.threads.remove(index);
         self.ui.chat_states.remove(thread_id);
         self.hydrated_threads.remove(thread_id);
+        self.thread_watermarks.remove(thread_id);
+        self.applied_ingest_fingerprints
+            .retain(|fingerprint| !fingerprint.starts_with(&format!("{thread_id}:")));
 
         if self.ui.threads.is_empty() {
             self.ui.selected_thread = None;
@@ -1416,9 +1476,86 @@ impl App {
                 .set_error("No agent selected for direct chat.".into());
             return true;
         };
+        if let Some(pending) = self
+            .ui
+            .chat_states
+            .get(&thread_id)
+            .and_then(ChatState::active_pending_request)
+            .cloned()
+        {
+            self.ui.agent_input.take_input();
+            return self
+                .submit_pending_agent_request(thread_id, pending.kind, text)
+                .await;
+        }
         let group_text = self.group_user_text_for_thread(&thread_id, text.as_str());
         self.ui.agent_input.take_input();
         self.send_text_to_thread(thread_id, text, group_text).await
+    }
+
+    async fn submit_pending_agent_request(
+        &mut self,
+        thread_id: String,
+        pending: PendingAgentRequestKind,
+        text: String,
+    ) -> bool {
+        let request_id = match &pending {
+            PendingAgentRequestKind::CodexUserInput { request_id, .. }
+            | PendingAgentRequestKind::CodexApproval { request_id, .. } => request_id.clone(),
+            PendingAgentRequestKind::OpencodePermission { permission_id, .. } => {
+                permission_id.clone()
+            }
+        };
+
+        let result = match pending {
+            PendingAgentRequestKind::CodexUserInput {
+                request_id,
+                question_ids,
+            } => {
+                let ids = if question_ids.is_empty() {
+                    vec!["answer".to_owned()]
+                } else {
+                    question_ids
+                };
+                let decision = codex_user_input_decision(ids.as_slice(), text.as_str());
+                self.backend
+                    .send_approval_decision(&request_id, &thread_id, decision)
+                    .await
+            }
+            PendingAgentRequestKind::CodexApproval { request_id, method } => {
+                let decision = codex_approval_decision(&method, text.as_str());
+                self.backend
+                    .send_approval_decision(&request_id, &thread_id, decision)
+                    .await
+            }
+            PendingAgentRequestKind::OpencodePermission {
+                permission_id,
+                approve_response,
+                decline_response,
+            } => {
+                let response = opencode_permission_response(
+                    text.as_str(),
+                    &approve_response,
+                    &decline_response,
+                );
+                self.backend
+                    .respond_opencode_permission(&thread_id, &permission_id, &response)
+                    .await
+            }
+        };
+
+        match result {
+            Ok(()) => {
+                if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
+                    chat.resolve_pending_request(&request_id);
+                }
+            }
+            Err(error) => {
+                self.ui
+                    .set_error(format!("Failed to answer agent request: {error}"));
+            }
+        }
+        true
     }
 
     async fn invite_agent_to_room(&mut self, agent: AgentName, group_text: String) -> bool {
@@ -1548,6 +1685,8 @@ impl App {
             chat.scroll_to_bottom();
         }
 
+        self.hydrate_thread_if_needed(&thread_id).await;
+
         if let Some(group_text) = group_text {
             self.record_user_group_message(&thread_id, group_text).await;
         }
@@ -1577,7 +1716,6 @@ impl App {
             return true;
         }
 
-        self.hydrate_thread_if_needed(&thread_id).await;
         if let Err(e) = self.backend.resume_thread(&thread_id).await {
             tracing::debug!(
                 target: "minos_tui::app",
@@ -1693,6 +1831,10 @@ impl App {
     }
 
     async fn load_group_chat_history(&mut self) {
+        if self.load_group_chat_history_from_backend().await {
+            return;
+        }
+
         let sessions = match self.group_chat_store.list_agent_sessions().await {
             Ok(sessions) => sessions,
             Err(error) => {
@@ -1720,6 +1862,69 @@ impl App {
                     .set_error(format!("Failed to load group chat history: {error}"));
             }
         }
+    }
+
+    async fn load_group_chat_history_from_backend(&mut self) -> bool {
+        if !matches!(
+            self.backend.connection_state(),
+            crate::backend::BackendConnectionState::Connected { .. }
+        ) {
+            return false;
+        }
+
+        let room_id = self.group_chat_store.room_id().to_owned();
+        match self
+            .backend
+            .read_group_chat(&room_id, None, None, 500)
+            .await
+        {
+            Ok(messages) => {
+                self.restore_agent_entries_from_group_messages(messages.as_slice());
+                self.ui.group_chat.replace_messages(messages);
+                true
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %error,
+                    "failed to load daemon group chat history"
+                );
+                false
+            }
+        }
+    }
+
+    async fn refresh_group_chat_from_backend(&mut self) -> bool {
+        if !matches!(
+            self.backend.connection_state(),
+            crate::backend::BackendConnectionState::Connected { .. }
+        ) {
+            return false;
+        }
+        let after_seq = self.ui.group_chat.last_seq();
+        let room_id = self.group_chat_store.room_id().to_owned();
+        let messages = match self
+            .backend
+            .read_group_chat(&room_id, Some(after_seq), None, 100)
+            .await
+        {
+            Ok(messages) => messages,
+            Err(error) => {
+                tracing::debug!(
+                    target: "minos_tui::app",
+                    error = %error,
+                    after_seq,
+                    "failed to refresh daemon group chat"
+                );
+                return false;
+            }
+        };
+        if messages.is_empty() {
+            return false;
+        }
+        self.restore_agent_entries_from_group_messages(messages.as_slice());
+        self.ui.group_chat.merge_messages(messages);
+        true
     }
 
     fn restore_agent_entries_from_group_sessions(
@@ -2073,6 +2278,82 @@ fn parse_agent_name(value: &str) -> Option<AgentName> {
         .find(|agent| agent.bin_name() == normalized.as_str())
 }
 
+fn local_seq_from_payload(payload: &serde_json::Value) -> u64 {
+    payload
+        .get("_local_seq")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| payload.get("seq").and_then(serde_json::Value::as_u64))
+        .unwrap_or(0)
+}
+
+fn ingest_fingerprint(thread_id: &str, payload: &serde_json::Value) -> String {
+    let mut payload = payload.clone();
+    if let serde_json::Value::Object(map) = &mut payload {
+        map.remove("_local_seq");
+    }
+    let payload = serde_json::to_string(&payload).unwrap_or_else(|_| payload.to_string());
+    format!("{thread_id}:{payload}")
+}
+
+fn codex_user_input_decision(question_ids: &[String], text: &str) -> serde_json::Value {
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let mut answers = serde_json::Map::new();
+    for (index, question_id) in question_ids.iter().enumerate() {
+        let answer = if question_ids.len() > 1 {
+            lines.get(index).copied().unwrap_or_else(|| text.trim())
+        } else {
+            text.trim()
+        };
+        answers.insert(
+            question_id.clone(),
+            serde_json::json!({ "answers": [answer] }),
+        );
+    }
+    serde_json::json!({ "answers": answers })
+}
+
+fn codex_approval_decision(method: &str, text: &str) -> serde_json::Value {
+    let approved = is_affirmative(text);
+    match method {
+        "applyPatchApproval" | "execCommandApproval" => {
+            serde_json::json!({ "decision": if approved { "approved" } else { "denied" } })
+        }
+        "item/permissions/requestApproval" => {
+            serde_json::json!({ "permissions": {}, "scope": "turn" })
+        }
+        _ => serde_json::json!({ "decision": if approved { "accept" } else { "decline" } }),
+    }
+}
+
+fn opencode_permission_response(
+    text: &str,
+    approve_response: &str,
+    decline_response: &str,
+) -> String {
+    if is_affirmative(text) {
+        approve_response.to_owned()
+    } else {
+        decline_response.to_owned()
+    }
+}
+
+fn is_affirmative(text: &str) -> bool {
+    let normalized = text
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "y" | "yes" | "approve" | "approved" | "accept" | "allow" | "ok" | "true"
+    )
+}
+
 fn rect_contains(area: ratatui::layout::Rect, column: u16, row: u16) -> bool {
     area.width > 0
         && area.height > 0
@@ -2226,6 +2507,9 @@ mod tests {
         detected_agents: Vec<AgentDescriptor>,
         started: Mutex<Vec<AgentName>>,
         sent_messages: Mutex<Vec<(String, String)>>,
+        approval_decisions: Mutex<Vec<(String, String, serde_json::Value)>>,
+        opencode_permission_responses: Mutex<Vec<(String, String, String)>>,
+        group_chat_pages: Mutex<VecDeque<Vec<LocalGroupChatMessage>>>,
         next_thread: Mutex<usize>,
         interrupted: Mutex<Vec<String>>,
         closed: Mutex<Vec<String>>,
@@ -2252,6 +2536,9 @@ mod tests {
                 detected_agents,
                 started: Mutex::new(Vec::new()),
                 sent_messages: Mutex::new(Vec::new()),
+                approval_decisions: Mutex::new(Vec::new()),
+                opencode_permission_responses: Mutex::new(Vec::new()),
+                group_chat_pages: Mutex::new(VecDeque::new()),
                 next_thread: Mutex::new(0),
                 interrupted: Mutex::new(Vec::new()),
                 closed: Mutex::new(Vec::new()),
@@ -2298,6 +2585,11 @@ mod tests {
                 .insert(thread_id.to_owned(), VecDeque::from(pages));
             self
         }
+
+        fn with_group_chat_pages(self, pages: Vec<Vec<LocalGroupChatMessage>>) -> Self {
+            *self.group_chat_pages.lock().expect("group chat pages lock") = VecDeque::from(pages);
+            self
+        }
     }
 
     #[async_trait]
@@ -2332,6 +2624,36 @@ mod tests {
                 .lock()
                 .expect("sent messages lock")
                 .push((thread_id.to_owned(), text.to_owned()));
+            Ok(())
+        }
+
+        async fn send_approval_decision(
+            &self,
+            request_id: &str,
+            thread_id: &str,
+            decision: serde_json::Value,
+        ) -> Result<()> {
+            self.approval_decisions
+                .lock()
+                .expect("approval decisions lock")
+                .push((request_id.to_owned(), thread_id.to_owned(), decision));
+            Ok(())
+        }
+
+        async fn respond_opencode_permission(
+            &self,
+            thread_id: &str,
+            permission_id: &str,
+            response: &str,
+        ) -> Result<()> {
+            self.opencode_permission_responses
+                .lock()
+                .expect("opencode permission responses lock")
+                .push((
+                    thread_id.to_owned(),
+                    permission_id.to_owned(),
+                    response.to_owned(),
+                ));
             Ok(())
         }
 
@@ -2393,6 +2715,21 @@ mod tests {
                     events: Vec::new(),
                     next_seq: None,
                 }))
+        }
+
+        async fn read_group_chat(
+            &self,
+            _room_id: &str,
+            _after_seq: Option<u64>,
+            _before_seq: Option<u64>,
+            _limit: u32,
+        ) -> Result<Vec<LocalGroupChatMessage>> {
+            Ok(self
+                .group_chat_pages
+                .lock()
+                .expect("group chat pages lock")
+                .pop_front()
+                .unwrap_or_default())
         }
 
         async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {
@@ -2853,6 +3190,149 @@ mod tests {
         assert_eq!(app.ui.threads[1].agent, AgentName::Gemini);
         assert!(app.ui.chat_states.contains_key("thread-codex-1234"));
         assert!(app.ui.chat_states.contains_key("thread-gemini-5678"));
+    }
+
+    #[tokio::test]
+    async fn daemon_group_history_loads_from_backend_and_restores_agent_entries() {
+        let backend = Arc::new(
+            TestBackend::new()
+                .with_connection_state(BackendConnectionState::Connected {
+                    endpoint: "ws://127.0.0.1:1".into(),
+                })
+                .with_group_chat_pages(vec![vec![LocalGroupChatMessage {
+                    seq: 7,
+                    message_id: "m-daemon-1".into(),
+                    created_at_ms: 20,
+                    kind: LocalGroupChatMessageKind::User,
+                    text: "@opencode inspect this".into(),
+                    agent: Some(AgentName::Opencode),
+                    thread_id: Some("thread-opencode-1234".into()),
+                    thread_short_id: Some("thread-o".into()),
+                    workspace: Some("/tmp/daemon-ws".into()),
+                }]]),
+        );
+        let mut app = App::new(backend, false, PathBuf::from("/tmp/default"));
+
+        app.load_group_chat_history().await;
+
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        assert_eq!(app.ui.group_chat.messages[0].seq, 7);
+        assert_eq!(app.ui.threads.len(), 1);
+        assert_eq!(app.ui.threads[0].thread_id, "thread-opencode-1234");
+        assert_eq!(app.ui.threads[0].agent, AgentName::Opencode);
+        assert_eq!(app.ui.threads[0].workspace, PathBuf::from("/tmp/daemon-ws"));
+    }
+
+    #[tokio::test]
+    async fn agent_input_answers_pending_question_without_group_echo_or_prompt() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-codex-1234".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+        });
+        let mut chat = ChatState::new("thread-codex-1234".into(), AgentName::Codex);
+        chat.apply_ui_events(vec![UiEventMessage::Raw {
+            kind: "approval/request".into(),
+            payload_json: serde_json::json!({
+                "request_id": "req-1",
+                "method": "item/tool/requestUserInput",
+                "params": {
+                    "questions": [{
+                        "header": "Need input",
+                        "id": "q1",
+                        "question": "Pick one"
+                    }]
+                }
+            })
+            .to_string(),
+        }]);
+        app.ui.chat_states.insert("thread-codex-1234".into(), chat);
+        app.select_thread(0);
+        app.ui.focus = Focus::AgentInput;
+        app.ui.agent_input.content = "blue".into();
+        app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert!(app.ui.group_chat.messages.is_empty());
+        assert!(backend
+            .sent_messages
+            .lock()
+            .expect("sent messages lock")
+            .is_empty());
+        let decisions = backend
+            .approval_decisions
+            .lock()
+            .expect("approval decisions lock");
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].0, "req-1");
+        assert_eq!(decisions[0].1, "thread-codex-1234");
+        assert_eq!(
+            decisions[0].2,
+            serde_json::json!({ "answers": { "q1": { "answers": ["blue"] } } })
+        );
+        assert!(app
+            .ui
+            .chat_states
+            .get("thread-codex-1234")
+            .expect("chat state")
+            .pending_requests
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn agent_input_answers_opencode_permission() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-opencode-1234".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+        });
+        let mut chat = ChatState::new("thread-opencode-1234".into(), AgentName::Opencode);
+        chat.apply_ui_events(vec![UiEventMessage::Raw {
+            kind: "opencode/permission.updated".into(),
+            payload_json: serde_json::json!({
+                "permissionID": "perm-1",
+                "title": "Run shell",
+                "options": [
+                    {"optionId": "proceed_once", "kind": "allow_once"},
+                    {"optionId": "cancel", "kind": "reject_once"}
+                ]
+            })
+            .to_string(),
+        }]);
+        app.ui
+            .chat_states
+            .insert("thread-opencode-1234".into(), chat);
+        app.select_thread(0);
+        app.ui.focus = Focus::AgentInput;
+        app.ui.agent_input.content = "yes".into();
+        app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert!(app.ui.group_chat.messages.is_empty());
+        let responses = backend
+            .opencode_permission_responses
+            .lock()
+            .expect("permission responses lock");
+        assert_eq!(
+            responses.as_slice(),
+            &[(
+                "thread-opencode-1234".to_owned(),
+                "perm-1".to_owned(),
+                "proceed_once".to_owned()
+            )]
+        );
     }
 
     #[tokio::test]

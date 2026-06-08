@@ -64,6 +64,7 @@ pub struct ChatState {
     pub agent: AgentName,
     pub translation_state: AgentTranslationState,
     pub messages: Vec<RenderedMessage>,
+    pub pending_requests: Vec<PendingAgentRequest>,
     pub scroll_offset: u16,
     pub auto_scroll: bool,
     pub max_scroll: u16,
@@ -77,6 +78,7 @@ impl ChatState {
             thread_id,
             agent,
             messages: Vec::new(),
+            pending_requests: Vec::new(),
             scroll_offset: 0,
             auto_scroll: true,
             max_scroll: 0,
@@ -179,6 +181,17 @@ impl ChatState {
         }
     }
 
+    pub fn active_pending_request(&self) -> Option<&PendingAgentRequest> {
+        self.pending_requests.last()
+    }
+
+    pub fn resolve_pending_request(&mut self, request_id: &str) -> bool {
+        let before = self.pending_requests.len();
+        self.pending_requests
+            .retain(|request| request.id() != request_id);
+        self.pending_requests.len() != before
+    }
+
     fn apply_ui_event(&mut self, event: UiEventMessage) {
         match event {
             UiEventMessage::MessageStarted {
@@ -243,8 +256,9 @@ impl ChatState {
                         args_summary,
                         args_detail,
                         output_summary: None,
+                        output_detail: None,
                         is_error: false,
-                        is_expanded: false,
+                        is_expanded: is_diff_like(&args_json),
                     });
                 }
             }
@@ -259,7 +273,11 @@ impl ChatState {
                         .iter_mut()
                         .find(|tc| tc.tool_call_id == tool_call_id)
                     {
-                        tc.output_summary = Some(truncate_str(&output, 200));
+                        tc.output_summary = Some(summarize_tool_output(&output));
+                        tc.output_detail = tool_output_detail(&output);
+                        if is_diff_like(&output) {
+                            tc.is_expanded = true;
+                        }
                         tc.is_error = is_error;
                         break;
                     }
@@ -299,6 +317,9 @@ impl ChatState {
                 }
             }
             UiEventMessage::Raw { kind, payload_json } => {
+                if self.apply_raw_request_event(&kind, &payload_json) {
+                    return;
+                }
                 debug!(
                     raw_kind = %kind,
                     payload_bytes = payload_json.len(),
@@ -318,6 +339,79 @@ impl ChatState {
                     error: None,
                 });
             }
+        }
+    }
+
+    fn apply_raw_request_event(&mut self, kind: &str, payload_json: &str) -> bool {
+        match kind {
+            "approval/request" => {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(payload_json) else {
+                    return false;
+                };
+                let Some(request) = PendingAgentRequest::from_approval_request(&value) else {
+                    return false;
+                };
+                self.push_pending_request_message(request);
+                true
+            }
+            "approval/timeout" => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload_json) {
+                    if let Some(request_id) =
+                        value.get("request_id").and_then(serde_json::Value::as_str)
+                    {
+                        self.resolve_pending_request(request_id);
+                        self.messages.push(RenderedMessage::system(format!(
+                            "Request timed out: {request_id}"
+                        )));
+                        return true;
+                    }
+                }
+                false
+            }
+            "opencode/permission.updated" => {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(payload_json) else {
+                    return false;
+                };
+                if opencode_permission_is_completed(&value) {
+                    if let Some(permission_id) = opencode_permission_id(&value) {
+                        self.resolve_pending_request(&permission_id);
+                    }
+                    return true;
+                }
+                let Some(request) = PendingAgentRequest::from_opencode_permission(&value) else {
+                    return false;
+                };
+                self.push_pending_request_message(request);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn push_pending_request_message(&mut self, request: PendingAgentRequest) {
+        if self
+            .pending_requests
+            .iter()
+            .any(|pending| pending.id() == request.id())
+        {
+            return;
+        }
+        let prompt = request.prompt.clone();
+        self.pending_requests.push(request);
+        self.messages.push(RenderedMessage::system(prompt));
+    }
+}
+
+impl RenderedMessage {
+    fn system(text: String) -> Self {
+        Self {
+            message_id: String::new(),
+            role: MessageRole::System,
+            text_parts: vec![TextPart::Plain(text)],
+            tool_calls: Vec::new(),
+            reasoning: None,
+            is_streaming: false,
+            error: None,
         }
     }
 }
@@ -469,6 +563,49 @@ fn compact_tool_args(args_json: &str) -> Option<String> {
         .map(|text| truncate_str(&one_line(&text), 500))
 }
 
+fn summarize_tool_output(output: &str) -> String {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if is_diff_like(trimmed) {
+        let add = trimmed
+            .lines()
+            .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+            .count();
+        let del = trimmed
+            .lines()
+            .filter(|line| line.starts_with('-') && !line.starts_with("---"))
+            .count();
+        return format!("diff +{add} -{del}");
+    }
+    truncate_str(&one_line(trimmed), 220)
+}
+
+fn tool_output_detail(output: &str) -> Option<String> {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if is_diff_like(trimmed) || trimmed.len() > 220 || trimmed.contains('\n') {
+        return Some(truncate_str(trimmed, 6000));
+    }
+    None
+}
+
+fn is_diff_like(text: &str) -> bool {
+    text.contains("diff --git")
+        || text.contains("\n@@")
+        || text.starts_with("@@")
+        || text.contains("*** Begin Patch")
+        || text.contains("*** Update File:")
+        || text.contains("*** Add File:")
+        || text.contains("*** Delete File:")
+        || text
+            .lines()
+            .any(|line| line.starts_with("+++ ") || line.starts_with("--- "))
+}
+
 fn parse_tool_args(args_json: &str) -> Option<serde_json::Value> {
     let trimmed = args_json.trim();
     if trimmed.is_empty() {
@@ -591,6 +728,352 @@ pub struct RenderedMessage {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingAgentRequest {
+    pub prompt: String,
+    pub kind: PendingAgentRequestKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingAgentRequestKind {
+    CodexUserInput {
+        request_id: String,
+        question_ids: Vec<String>,
+    },
+    CodexApproval {
+        request_id: String,
+        method: String,
+    },
+    OpencodePermission {
+        permission_id: String,
+        approve_response: String,
+        decline_response: String,
+    },
+}
+
+impl PendingAgentRequest {
+    pub fn id(&self) -> &str {
+        match &self.kind {
+            PendingAgentRequestKind::CodexUserInput { request_id, .. }
+            | PendingAgentRequestKind::CodexApproval { request_id, .. } => request_id,
+            PendingAgentRequestKind::OpencodePermission { permission_id, .. } => permission_id,
+        }
+    }
+
+    fn from_approval_request(value: &serde_json::Value) -> Option<Self> {
+        let request_id = value.get("request_id")?.as_str()?.to_owned();
+        let method = value.get("method")?.as_str()?.to_owned();
+        let params = value.get("params").unwrap_or(&serde_json::Value::Null);
+
+        if method == "item/tool/requestUserInput" {
+            let questions = params
+                .get("questions")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let question_ids = questions
+                .iter()
+                .filter_map(|question| question.get("id").and_then(serde_json::Value::as_str))
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let prompt = format_user_input_prompt(&questions);
+            return Some(Self {
+                prompt,
+                kind: PendingAgentRequestKind::CodexUserInput {
+                    request_id,
+                    question_ids,
+                },
+            });
+        }
+
+        Some(Self {
+            prompt: format_approval_prompt(&method, params),
+            kind: PendingAgentRequestKind::CodexApproval { request_id, method },
+        })
+    }
+
+    fn from_opencode_permission(value: &serde_json::Value) -> Option<Self> {
+        if opencode_permission_is_completed(value) {
+            return None;
+        }
+
+        let permission_id = opencode_permission_id(value)?;
+        let title = find_string_by_keys(value, &["title", "name", "tool", "action"])
+            .unwrap_or_else(|| "permission request".to_owned());
+        let description =
+            find_string_by_keys(value, &["description", "message", "reason"]).unwrap_or_default();
+        let prompt = if description.is_empty() {
+            format!("Opencode asks for permission: {title}")
+        } else {
+            format!("Opencode asks for permission: {title}\n{description}")
+        };
+        Some(Self {
+            prompt,
+            kind: PendingAgentRequestKind::OpencodePermission {
+                permission_id,
+                approve_response: find_permission_option_response(value, true)
+                    .unwrap_or_else(|| "accept".to_owned()),
+                decline_response: find_permission_option_response(value, false)
+                    .unwrap_or_else(|| "reject".to_owned()),
+            },
+        })
+    }
+}
+
+fn find_permission_option_response(value: &serde_json::Value, approve: bool) -> Option<String> {
+    let options = find_array_by_key(value, "options")?;
+    for option in options {
+        let label = find_string_by_keys(
+            option,
+            &[
+                "kind",
+                "name",
+                "label",
+                "title",
+                "description",
+                "optionId",
+                "id",
+            ],
+        )
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+        let is_match = if approve {
+            label.contains("allow")
+                || label.contains("approve")
+                || label.contains("accept")
+                || label.contains("yes")
+                || label.contains("proceed")
+        } else {
+            label.contains("reject")
+                || label.contains("deny")
+                || label.contains("decline")
+                || label.contains("cancel")
+                || label.contains("no")
+        };
+        if !is_match {
+            continue;
+        }
+        if let Some(response) =
+            find_string_by_keys(option, &["optionId", "optionID", "id", "value"])
+        {
+            return Some(response);
+        }
+    }
+    None
+}
+
+fn opencode_permission_id(value: &serde_json::Value) -> Option<String> {
+    let keys = ["permissionID", "permissionId", "permission_id", "id"];
+    direct_string_by_keys(value, &keys)
+        .or_else(|| {
+            value
+                .get("properties")
+                .and_then(|properties| direct_string_by_keys(properties, &keys))
+        })
+        .or_else(|| {
+            value
+                .get("permission")
+                .and_then(|permission| direct_string_by_keys(permission, &keys))
+                .or_else(|| {
+                    value
+                        .get("properties")
+                        .and_then(|properties| properties.get("permission"))
+                        .and_then(|permission| direct_string_by_keys(permission, &keys))
+                })
+        })
+        .or_else(|| {
+            value
+                .get("permission")
+                .filter(|permission| !permission.is_object())
+                .and_then(json_value_summary)
+                .or_else(|| {
+                    value
+                        .get("properties")
+                        .and_then(|properties| properties.get("permission"))
+                        .filter(|permission| !permission.is_object())
+                        .and_then(json_value_summary)
+                })
+        })
+        .or_else(|| find_string_by_keys(value, &["permissionID", "permissionId", "permission_id"]))
+}
+
+fn opencode_permission_is_completed(value: &serde_json::Value) -> bool {
+    let Some(status) = find_permission_status(value) else {
+        return false;
+    };
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "approved" | "accepted" | "rejected" | "declined" | "denied" | "completed"
+    )
+}
+
+fn find_permission_status(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("permission")
+        .or_else(|| {
+            value
+                .get("properties")
+                .and_then(|props| props.get("permission"))
+        })
+        .and_then(|permission| find_string_by_keys(permission, &["status", "state"]))
+        .or_else(|| {
+            value
+                .get("status")
+                .or_else(|| value.get("state"))
+                .and_then(json_value_summary)
+        })
+        .or_else(|| find_string_by_keys(value, &["status", "state"]))
+}
+
+fn find_array_by_key<'a>(
+    value: &'a serde_json::Value,
+    key: &str,
+) -> Option<&'a Vec<serde_json::Value>> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(array) = map.get(key).and_then(serde_json::Value::as_array) {
+                return Some(array);
+            }
+            map.values().find_map(|child| find_array_by_key(child, key))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .find_map(|child| find_array_by_key(child, key)),
+        _ => None,
+    }
+}
+
+fn format_user_input_prompt(questions: &[serde_json::Value]) -> String {
+    if questions.is_empty() {
+        return "Agent asks for input. Type your answer in Agent Input.".into();
+    }
+
+    let mut lines = vec!["Agent asks for input:".to_owned()];
+    for question in questions {
+        let header = question
+            .get("header")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let text = question
+            .get("question")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Question");
+        let id = question
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if header.is_empty() {
+            lines.push(format!("- {text} [{id}]"));
+        } else {
+            lines.push(format!("- {header}: {text} [{id}]"));
+        }
+        if let Some(options) = question
+            .get("options")
+            .and_then(serde_json::Value::as_array)
+        {
+            for option in options {
+                let label = option
+                    .get("label")
+                    .or_else(|| option.get("value"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let description = option
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if !label.is_empty() && !description.is_empty() {
+                    lines.push(format!("  - {label}: {description}"));
+                } else if !label.is_empty() {
+                    lines.push(format!("  - {label}"));
+                }
+            }
+        }
+    }
+    lines.push("Reply in Agent Input; Shift+Enter inserts a newline.".into());
+    lines.join("\n")
+}
+
+fn format_approval_prompt(method: &str, params: &serde_json::Value) -> String {
+    let summary = match method {
+        "item/commandExecution/requestApproval" => {
+            find_string_by_keys(params, &["command", "cmd", "script"]).unwrap_or_default()
+        }
+        "item/fileChange/requestApproval" => {
+            find_string_by_keys(params, &["file", "path", "file_path", "filePath"])
+                .unwrap_or_default()
+        }
+        _ => find_string_by_keys(params, &["reason", "message", "title"]).unwrap_or_default(),
+    };
+    if summary.is_empty() {
+        format!("Approval required: {method}\nType yes to approve, anything else to decline.")
+    } else {
+        format!("Approval required: {method}\n{summary}\nType yes to approve, anything else to decline.")
+    }
+}
+
+fn find_string_by_keys(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    find_string_by_keys_inner(value, keys, 0)
+}
+
+fn direct_string_by_keys(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    let serde_json::Value::Object(map) = value else {
+        return None;
+    };
+    keys.iter()
+        .find_map(|key| map.get(*key).and_then(json_value_summary))
+}
+
+fn find_string_by_keys_inner(
+    value: &serde_json::Value,
+    keys: &[&str],
+    depth: usize,
+) -> Option<String> {
+    if depth > 5 {
+        return None;
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(text) = map.get(*key).and_then(json_value_summary) {
+                    return Some(text);
+                }
+            }
+            map.values()
+                .find_map(|child| find_string_by_keys_inner(child, keys, depth + 1))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .find_map(|child| find_string_by_keys_inner(child, keys, depth + 1)),
+        _ => None,
+    }
+}
+
+fn json_value_summary(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => (!text.trim().is_empty()).then(|| text.to_owned()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Array(values) => {
+            let parts = values
+                .iter()
+                .filter_map(json_value_summary)
+                .collect::<Vec<_>>();
+            (!parts.is_empty()).then(|| parts.join(" "))
+        }
+        serde_json::Value::Object(map) => {
+            for key in [
+                "title", "name", "path", "command", "cmd", "message", "reason",
+            ] {
+                if let Some(text) = map.get(key).and_then(json_value_summary) {
+                    return Some(text);
+                }
+            }
+            None
+        }
+        serde_json::Value::Null => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChatSelectionPoint {
     pub row: usize,
@@ -633,6 +1116,7 @@ pub struct ToolCallBlock {
     pub args_summary: String,
     pub args_detail: Option<String>,
     pub output_summary: Option<String>,
+    pub output_detail: Option<String>,
     pub is_error: bool,
     pub is_expanded: bool,
 }
@@ -719,6 +1203,22 @@ mod tests {
     }
 
     #[test]
+    fn markdown_list_tool_output_is_not_summarized_as_diff() {
+        let output = "- first item\n- second item";
+
+        assert!(!is_diff_like(output));
+        assert_eq!(summarize_tool_output(output), "- first item - second item");
+    }
+
+    #[test]
+    fn diff_tool_output_summarizes_changed_lines() {
+        let output = "@@ -1 +1\n-old\n+new";
+
+        assert!(is_diff_like(output));
+        assert_eq!(summarize_tool_output(output), "diff +1 -1");
+    }
+
+    #[test]
     fn raw_events_do_not_render_large_payloads_into_chat() {
         let mut cs = ChatState::new("t1".into(), AgentName::Codex);
 
@@ -728,6 +1228,78 @@ mod tests {
         }]);
 
         assert!(cs.messages.is_empty());
+    }
+
+    #[test]
+    fn opencode_permission_update_creates_pending_request() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
+
+        cs.apply_ui_events(vec![UiEventMessage::Raw {
+            kind: "opencode/permission.updated".into(),
+            payload_json: serde_json::json!({
+                "type": "permission.updated",
+                "properties": {
+                    "permission": {
+                        "id": "perm-1",
+                        "title": "Run shell",
+                        "options": [
+                            {"optionId": "allow_once", "kind": "allow"},
+                            {"optionId": "reject_once", "kind": "reject"}
+                        ]
+                    }
+                }
+            })
+            .to_string(),
+        }]);
+
+        assert_eq!(cs.pending_requests.len(), 1);
+        assert_eq!(cs.pending_requests[0].id(), "perm-1");
+        assert!(cs.pending_requests[0].prompt.contains("Run shell"));
+        assert_eq!(
+            cs.pending_requests[0].kind,
+            PendingAgentRequestKind::OpencodePermission {
+                permission_id: "perm-1".into(),
+                approve_response: "allow_once".into(),
+                decline_response: "reject_once".into()
+            }
+        );
+        assert_eq!(cs.messages.len(), 1);
+    }
+
+    #[test]
+    fn opencode_permission_completion_clears_pending_request() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
+
+        cs.apply_ui_events(vec![UiEventMessage::Raw {
+            kind: "opencode/permission.updated".into(),
+            payload_json: serde_json::json!({
+                "permissionID": "perm-1",
+                "title": "Run shell",
+                "options": [
+                    {"optionId": "allow_once", "kind": "allow"},
+                    {"optionId": "reject_once", "kind": "reject"}
+                ]
+            })
+            .to_string(),
+        }]);
+        assert_eq!(cs.pending_requests.len(), 1);
+
+        cs.apply_ui_events(vec![UiEventMessage::Raw {
+            kind: "opencode/permission.updated".into(),
+            payload_json: serde_json::json!({
+                "type": "permission.updated",
+                "properties": {
+                    "permission": {
+                        "id": "perm-1",
+                        "status": "rejected"
+                    }
+                }
+            })
+            .to_string(),
+        }]);
+
+        assert!(cs.pending_requests.is_empty());
+        assert_eq!(cs.messages.len(), 1);
     }
 
     #[test]

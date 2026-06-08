@@ -5,6 +5,8 @@ use minos_agent_runtime::{AgentManager, InstanceCaps, ManagerEvent, RawIngest, S
 use minos_cli_detect::{capture_user_shell_env, detect_all, RealCommandRunner};
 use minos_domain::AgentName;
 use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
+use minos_protocol::LocalGroupChatMessage;
+use serde_json::Value;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::broadcast;
 
@@ -78,6 +80,30 @@ impl AgentBackend for EmbeddedBackend {
             .map_err(Into::into)
     }
 
+    async fn send_approval_decision(
+        &self,
+        request_id: &str,
+        thread_id: &str,
+        decision: Value,
+    ) -> Result<()> {
+        self.manager
+            .resolve_approval(request_id, thread_id, decision)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn respond_opencode_permission(
+        &self,
+        thread_id: &str,
+        permission_id: &str,
+        response: &str,
+    ) -> Result<()> {
+        self.manager
+            .respond_opencode_permission(thread_id, permission_id, response)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn interrupt_thread(&self, thread_id: &str) -> Result<()> {
         self.manager
             .interrupt_thread(thread_id)
@@ -127,6 +153,18 @@ impl AgentBackend for EmbeddedBackend {
             events: Vec::new(),
             next_seq: None,
         })
+    }
+
+    async fn read_group_chat(
+        &self,
+        _room_id: &str,
+        _after_seq: Option<u64>,
+        _before_seq: Option<u64>,
+        _limit: u32,
+    ) -> Result<Vec<LocalGroupChatMessage>> {
+        Err(anyhow::anyhow!(
+            "embedded mode does not expose group chat RPC"
+        ))
     }
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {

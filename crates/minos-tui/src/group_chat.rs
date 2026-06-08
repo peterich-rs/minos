@@ -62,6 +62,10 @@ impl GroupChatStore {
         Ok(messages)
     }
 
+    pub fn room_id(&self) -> &str {
+        &self.room_id
+    }
+
     pub async fn list_agent_sessions(&self) -> anyhow::Result<Vec<ChatAgentSession>> {
         let Some(store) = self.open().await? else {
             return Ok(Vec::new());
