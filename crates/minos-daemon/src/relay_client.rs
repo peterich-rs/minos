@@ -25,6 +25,7 @@
 //! - All other errors fall back to exponential-backoff reconnect
 //!   (1s → 2s → 4s → 8s → 16s → 30s cap, no max attempts).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,29 @@ use crate::rpc_server::{invoke_host_command, RpcServerImpl};
 const OUTBOUND_QUEUE_DEPTH: usize = 64;
 const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
+const HOST_COMMAND_RESULT_CACHE_CAPACITY: usize = 512;
+
+type HostCommandCache = Arc<Mutex<HashMap<String, HostCommandCacheEntry>>>;
+
+#[derive(Clone)]
+enum HostCommandCacheEntry {
+    InFlight,
+    Completed(HostCommandResultSnapshot),
+}
+
+#[derive(Clone)]
+struct HostCommandResultSnapshot {
+    succeeded: bool,
+    result: Option<Value>,
+    error: Option<Value>,
+    finished_at_ms: i64,
+}
+
+enum HostCommandRouteAction {
+    Start,
+    InFlight,
+    Replay(HostCommandResultSnapshot),
+}
 
 struct Inner {
     /// Shutdown signal — one-shot, captured behind a `Mutex` so a repeat
@@ -113,6 +137,7 @@ impl RelayClient {
 
         let (out_tx, out_rx) = mpsc::channel::<ClientFrame>(OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let host_command_cache = Arc::new(Mutex::new(HashMap::new()));
 
         let secret_store = Arc::new(StdMutex::new(secret));
         let http = match RelayHttpClient::new(&backend_url, self_device_id, mac_name.clone()) {
@@ -142,6 +167,7 @@ impl RelayClient {
             peer_tx,
             out_tx: out_tx.clone(),
             out_rx,
+            host_command_cache,
             http: http.clone(),
             rpc_server,
             peer_store: persistence.peer_store,
@@ -267,6 +293,7 @@ struct DispatchCtx {
     peer_tx: watch::Sender<PeerState>,
     out_tx: mpsc::Sender<ClientFrame>,
     out_rx: mpsc::Receiver<ClientFrame>,
+    host_command_cache: HostCommandCache,
     http: Arc<RelayHttpClient>,
     rpc_server: Option<Arc<RpcServerImpl>>,
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
@@ -388,8 +415,7 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
         }
     };
 
-    let _ = ctx.link_tx.send(RelayLinkState::Connected);
-    tracing::info!(target: "minos_daemon::relay_client", "relay link up");
+    tracing::info!(target: "minos_daemon::relay_client", "relay websocket upgraded");
     refresh_peers_from_backend(ctx, secret.as_ref()).await;
 
     Box::pin(dispatch_loop(ws, ctx, shutdown_rx)).await
@@ -400,7 +426,7 @@ async fn refresh_peers_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSec
         apply_peers_snapshot(ctx, Vec::new());
         return;
     };
-    match ctx.http.get_me_peers(secret).await {
+    match ctx.http.get_host_peers(secret).await {
         Ok(peers) => apply_peers_snapshot(ctx, peers),
         Err(e) => {
             tracing::warn!(
@@ -610,6 +636,10 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 ?topics,
                 "subscription acknowledged"
             );
+            let host_topic = format!("host:{}", ctx.self_device_id);
+            if topics.iter().any(|topic| topic == &host_topic) {
+                let _ = ctx.link_tx.send(RelayLinkState::Connected);
+            }
         }
         ServerFrame::DurableEvent { kind, payload, .. } => {
             route_durable_event(&kind, &payload, ctx).await;
@@ -692,7 +722,6 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
                 method,
                 "received host command"
             );
-
             let Some(rpc_server) = ctx.rpc_server.clone() else {
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
@@ -705,23 +734,58 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
             let ack = build_host_command_ack(&command_id, chrono::Utc::now().timestamp_millis());
             let _ = ctx.out_tx.send(ack).await;
 
-            let result = invoke_host_command(&method, params, &rpc_server).await;
-            let finished_at_ms = chrono::Utc::now().timestamp_millis();
-            let response = build_host_command_result(
-                &command_id,
-                result.is_ok(),
-                result.ok(),
-                None,
-                finished_at_ms,
-            );
-            if let Err(e) = ctx.out_tx.send(response).await {
-                tracing::warn!(
-                    target: "minos_daemon::relay_client",
-                    error = %e,
-                    command_id,
-                    "failed to enqueue host command result"
-                );
+            match remember_host_command_start(&ctx.host_command_cache, &command_id).await {
+                HostCommandRouteAction::Start => {}
+                HostCommandRouteAction::InFlight => return,
+                HostCommandRouteAction::Replay(snapshot) => {
+                    let response = build_host_command_result(
+                        &command_id,
+                        snapshot.succeeded,
+                        snapshot.result,
+                        snapshot.error,
+                        snapshot.finished_at_ms,
+                    );
+                    let _ = ctx.out_tx.send(response).await;
+                    return;
+                }
             }
+
+            let out_tx = ctx.out_tx.clone();
+            let host_command_cache = Arc::clone(&ctx.host_command_cache);
+            tokio::spawn(async move {
+                let result = invoke_host_command(&method, params, &rpc_server).await;
+                let finished_at_ms = chrono::Utc::now().timestamp_millis();
+                let (succeeded, result, error) = match result {
+                    Ok(result) => (true, Some(result), None),
+                    Err(error) => (false, None, Some(error)),
+                };
+                remember_host_command_result(
+                    &host_command_cache,
+                    &command_id,
+                    HostCommandResultSnapshot {
+                        succeeded,
+                        result: result.clone(),
+                        error: error.clone(),
+                        finished_at_ms,
+                    },
+                )
+                .await;
+                let response = build_host_command_result(
+                    &command_id,
+                    succeeded,
+                    result,
+                    error,
+                    finished_at_ms,
+                );
+                if let Err(e) = out_tx.send(response).await {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        error = %e,
+                        command_id,
+                        "failed to enqueue host command result"
+                    );
+                }
+            });
         }
         "host_linked" | "host_unlinked" => {
             tracing::debug!(
@@ -750,6 +814,56 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
                 "ignoring durable event on host side"
             );
         }
+    }
+}
+
+async fn remember_host_command_start(
+    cache: &HostCommandCache,
+    command_id: &str,
+) -> HostCommandRouteAction {
+    if command_id.is_empty() {
+        return HostCommandRouteAction::Start;
+    }
+
+    let mut entries = cache.lock().await;
+    match entries.get(command_id).cloned() {
+        Some(HostCommandCacheEntry::InFlight) => HostCommandRouteAction::InFlight,
+        Some(HostCommandCacheEntry::Completed(snapshot)) => {
+            HostCommandRouteAction::Replay(snapshot)
+        }
+        None => {
+            entries.insert(command_id.to_string(), HostCommandCacheEntry::InFlight);
+            prune_host_command_cache(&mut entries);
+            HostCommandRouteAction::Start
+        }
+    }
+}
+
+async fn remember_host_command_result(
+    cache: &HostCommandCache,
+    command_id: &str,
+    snapshot: HostCommandResultSnapshot,
+) {
+    if command_id.is_empty() {
+        return;
+    }
+
+    let mut entries = cache.lock().await;
+    entries.insert(
+        command_id.to_string(),
+        HostCommandCacheEntry::Completed(snapshot),
+    );
+    prune_host_command_cache(&mut entries);
+}
+
+fn prune_host_command_cache(entries: &mut HashMap<String, HostCommandCacheEntry>) {
+    while entries.len() > HOST_COMMAND_RESULT_CACHE_CAPACITY {
+        let Some(key) = entries.iter().find_map(|(command_id, entry)| {
+            matches!(entry, HostCommandCacheEntry::Completed(_)).then(|| command_id.clone())
+        }) else {
+            break;
+        };
+        entries.remove(&key);
     }
 }
 
@@ -883,10 +997,24 @@ pub fn build_host_stream_event(topic: &str, kind: &str, payload: Value) -> Clien
 // ─── URL helpers ───────────────────────────────────────────────────────
 
 fn build_ws_url(base_url: &str, ticket: &str) -> String {
-    let ws_url = base_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
+    let ws_url = websocket_base(base_url);
     format!("{ws_url}/ws/host?ticket={ticket}")
+}
+
+fn websocket_base(base_url: &str) -> String {
+    let Ok(url) = url::Url::parse(base_url) else {
+        return base_url.trim_end_matches('/').to_string();
+    };
+    let scheme = match url.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        other => other,
+    };
+    let Some(host) = url.host_str() else {
+        return base_url.trim_end_matches('/').to_string();
+    };
+    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+    format!("{scheme}://{host}{port}")
 }
 
 #[cfg(test)]
@@ -907,6 +1035,14 @@ mod tests {
         assert_eq!(
             build_ws_url("wss://example.com", "ticket-xyz"),
             "wss://example.com/ws/host?ticket=ticket-xyz"
+        );
+    }
+
+    #[test]
+    fn build_ws_url_strips_legacy_devices_path() {
+        assert_eq!(
+            build_ws_url("ws://127.0.0.1:8787/devices", "ticket-abc"),
+            "ws://127.0.0.1:8787/ws/host?ticket=ticket-abc"
         );
     }
 }

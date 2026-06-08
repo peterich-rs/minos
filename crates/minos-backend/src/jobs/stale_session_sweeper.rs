@@ -32,7 +32,7 @@ impl Job for StaleSessionSweeperJob {
     }
 
     async fn tick(&self, ctx: &JobContext) -> Result<JobOutcome, JobError> {
-        let cutoff_ms = chrono::Utc::now().timestamp_millis() - STALE_THRESHOLD_MS;
+        let _cutoff_ms = chrono::Utc::now().timestamp_millis() - STALE_THRESHOLD_MS;
 
         // Mark agent sessions as stale if their host hasn't been seen recently.
         // This is a lightweight check that doesn't modify state yet.

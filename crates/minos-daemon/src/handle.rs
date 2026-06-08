@@ -86,7 +86,9 @@ impl DaemonHandle {
     ) -> Result<Arc<Self>, MinosError> {
         Self::start_with_local_rpc(config, self_device_id, peer, secret, mac_name, None).await
     }
+}
 
+impl DaemonHandle {
     /// Extended entry point that optionally starts a local JSON-RPC server
     /// for TUI-daemon communication. When `local_rpc_config` is `None`, the
     /// behaviour is identical to [`start`].
@@ -244,7 +246,10 @@ impl DaemonHandle {
             }),
         }))
     }
+}
 
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+impl DaemonHandle {
     /// Snapshot the current relay-link state. Cheap — just a `watch`
     /// borrow.
     #[must_use]

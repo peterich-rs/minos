@@ -25,7 +25,7 @@ use crate::http::BackendState;
 const LIST_CLIS_METHOD: &str = "minos_list_clis";
 const LIST_HOST_SKILLS_METHOD: &str = "minos_list_host_skills";
 const WRITE_HOST_SKILL_CONFIG_METHOD: &str = "minos_write_host_skill_config";
-const LIST_CLIS_TIMEOUT: Duration = Duration::from_secs(10);
+const LIST_CLIS_TIMEOUT: Duration = Duration::from_secs(15);
 const HOST_SKILLS_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn router() -> Router<BackendState> {

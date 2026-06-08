@@ -41,6 +41,12 @@ pub struct ConnectionState {
     pub created_at_ms: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableSendResult {
+    Delivered,
+    AlreadySeen,
+}
+
 impl ConnectionState {
     #[must_use]
     pub fn new(
@@ -90,8 +96,34 @@ impl ConnectionState {
         true
     }
 
+    #[must_use]
+    pub fn has_seen_durable_event(&self, event_id: &str) -> bool {
+        read_lock(&self.seen_durable_event_ids)
+            .iter()
+            .any(|existing| existing == event_id)
+    }
+
     pub fn send(&self, frame: ServerFrame) -> Result<(), mpsc::error::TrySendError<ServerFrame>> {
         self.push.try_send(frame)
+    }
+
+    pub fn send_durable_event(
+        &self,
+        event_id: &str,
+        frame: ServerFrame,
+    ) -> Result<DurableSendResult, mpsc::error::TrySendError<ServerFrame>> {
+        let mut seen = write_lock(&self.seen_durable_event_ids);
+        if seen.iter().any(|existing| existing == event_id) {
+            return Ok(DurableSendResult::AlreadySeen);
+        }
+
+        self.push.try_send(frame)?;
+        seen.push_back(event_id.to_string());
+        if seen.len() > SEEN_DURABLE_EVENT_IDS_CAPACITY {
+            let _ = seen.pop_front();
+        }
+
+        Ok(DurableSendResult::Delivered)
     }
 }
 

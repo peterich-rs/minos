@@ -17,6 +17,7 @@
 //! modules into a running backend (step 10).
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(deprecated))]
 
 pub mod agent_sessions;
 pub mod app;

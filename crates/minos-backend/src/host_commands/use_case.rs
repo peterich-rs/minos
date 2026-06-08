@@ -17,7 +17,7 @@ use crate::store::{durable_event_log, host_commands, outbox_events, AsStorePool,
 
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
 const APPROVAL_COMMAND_METHOD: &str = "minos_approval_decision";
-const COMMAND_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const COMMAND_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const POLLER_RETRY_DELAY: Duration = Duration::from_secs(1);
 const LATE_REPLY_GRACE_MS: i64 = 30_000;
 

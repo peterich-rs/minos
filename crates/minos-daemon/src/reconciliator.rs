@@ -163,7 +163,15 @@ impl Reconciliator {
             for row in rows {
                 let seq = u64::try_from(row.seq).unwrap_or(0);
                 all_seqs.push(seq);
-                let payload: serde_json::Value = serde_json::from_slice(&row.payload)?;
+                let mut payload: serde_json::Value = serde_json::from_slice(&row.payload)?;
+                if let serde_json::Value::Object(map) = &mut payload {
+                    map.entry("seq")
+                        .or_insert_with(|| serde_json::Value::Number(row.seq.into()));
+                    map.entry("agent")
+                        .or_insert_with(|| serde_json::Value::String(agent_str.to_string()));
+                    map.entry("ts_ms")
+                        .or_insert_with(|| serde_json::Value::Number(row.ts_ms.into()));
+                }
                 let topic = format!("agent_session:{}", row.thread_id);
                 let kind = payload
                     .get("method")

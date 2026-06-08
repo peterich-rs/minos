@@ -645,19 +645,16 @@ fn delta_to_ui_event(
     }
 
     match (part_kind, field) {
-        (TrackedPartKind::Reasoning, "text") | (TrackedPartKind::Reasoning, "") => {
-            Some(UiEventMessage::ReasoningDelta {
+        (TrackedPartKind::Reasoning, "text" | "") => Some(UiEventMessage::ReasoningDelta {
+            message_id: message_id.to_string(),
+            text: delta,
+        }),
+        (TrackedPartKind::Text | TrackedPartKind::Other, "text" | "") => {
+            Some(UiEventMessage::TextDelta {
                 message_id: message_id.to_string(),
                 text: delta,
             })
         }
-        (TrackedPartKind::Text, "text")
-        | (TrackedPartKind::Text, "")
-        | (TrackedPartKind::Other, "text")
-        | (TrackedPartKind::Other, "") => Some(UiEventMessage::TextDelta {
-            message_id: message_id.to_string(),
-            text: delta,
-        }),
         _ => None,
     }
 }
@@ -688,7 +685,7 @@ fn collect_text_parts(content: Option<&Value>) -> String {
 }
 
 fn normalize_user_text(text: &str) -> String {
-    text.trim().split_whitespace().collect::<Vec<_>>().join(" ")
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn start_message(

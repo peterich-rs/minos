@@ -4,9 +4,9 @@
 //!
 //! Plan 05 Phase L.1 / spec §10.3 / plan 08b Phase 12 Task 12.1.
 //!
-//! Phase 2 Task 2.3 made `/v1/pairing/consume` bearer-gated for the
-//! `ios-client` role, so every subcommand must establish auth before it
-//! pairs. Phase 12 Task 12.1 split the binary into three subcommands:
+//! Phase 2 Task 2.3 made pairing bearer-gated for the `ios-client` role,
+//! so every subcommand must establish auth before it pairs. Phase 12 Task
+//! 12.1 split the binary into three subcommands:
 //!
 //! - `pair` — register a throwaway account if necessary then redeem a
 //!   pairing token. Inbound WS frames are printed to stderr until the
@@ -57,10 +57,10 @@ use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use http::{Method, Request};
 use minos_domain::defaults::DEV_BACKEND_URL;
-use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceRole, MinosError, PairingToken};
+use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceRole, MinosError};
 use minos_mobile::http::MobileHttpClient;
 use minos_mobile::{MobileClient, PersistedPairingState};
-use minos_protocol::{Envelope, PairConsumeRequest};
+use minos_protocol::Envelope;
 use openwire::{Client as OpenwireClient, RequestBody};
 use openwire_core::websocket::Message;
 use std::time::Duration;
@@ -154,7 +154,7 @@ async fn main() -> Result<()> {
             // Pair-only: try login first so the same throwaway email can
             // be reused across runs without colliding on EmailTaken.
             let auth = login_or_register(&backend, &email, &password).await?;
-            run_pair_then_tail(&backend, &token, &device_name, auth.access_token).await
+            run_pair_then_tail(&backend, &token, &device_name, auth).await
         }
         Cmd::Register {
             backend,
@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
             // typo on a reused email doesn't silently fall through to
             // login.
             let auth = register_account(&backend, &email, &password).await?;
-            run_pair_then_tail(&backend, &token, &device_name, auth.access_token).await
+            run_pair_then_tail(&backend, &token, &device_name, auth).await
         }
         Cmd::SmokeSession {
             backend,
@@ -204,6 +204,7 @@ fn parse_agent(s: &str) -> Result<AgentName> {
 
 /// Register an account via HTTP. Returns the freshly issued auth tuple.
 struct RegisteredAuth {
+    device_id: DeviceId,
     access_token: String,
     refresh_token: String,
     account_id: String,
@@ -224,6 +225,7 @@ async fn register_account(backend: &str, email: &str, password: &str) -> Result<
         resp.account.account_id, resp.account.email
     );
     Ok(RegisteredAuth {
+        device_id,
         access_token: resp.access_token,
         refresh_token: resp.refresh_token,
         account_id: resp.account.account_id,
@@ -246,6 +248,7 @@ async fn login_or_register(backend: &str, email: &str, password: &str) -> Result
                 resp.account.account_id, resp.account.email
             );
             Ok(RegisteredAuth {
+                device_id,
                 access_token: resp.access_token,
                 refresh_token: resp.refresh_token,
                 account_id: resp.account.account_id,
@@ -265,23 +268,19 @@ async fn run_pair_then_tail(
     backend: &str,
     token: &str,
     device_name: &str,
-    access_token: String,
+    auth: RegisteredAuth,
 ) -> Result<()> {
-    let device_id = DeviceId::new();
+    let device_id = auth.device_id;
     let http =
         MobileHttpClient::new(backend, device_id, device_name).context("build MobileHttpClient")?;
-    let pair_req = PairConsumeRequest {
-        token: PairingToken(token.to_string()),
-        device_name: device_name.to_string(),
-    };
-    eprintln!("→ POST /v1/pairing/consume token={token}");
+    eprintln!("→ POST /v1/pairing/confirm token={token}");
     let pair_resp = http
-        .pair_consume(pair_req, &access_token)
+        .pair_confirm(token, &auth.access_token)
         .await
-        .context("POST /v1/pairing/consume")?;
+        .context("POST /v1/pairing/confirm")?;
     eprintln!(
-        "← peer_device_id={} peer_name={}",
-        pair_resp.peer_device_id, pair_resp.peer_name
+        "← host_installation_id={} status={}",
+        pair_resp.host_installation_id, pair_resp.status
     );
 
     let mut request = Request::builder()
@@ -309,7 +308,7 @@ async fn run_pair_then_tail(
     );
     request.headers_mut().insert(
         "Authorization",
-        format!("Bearer {access_token}")
+        format!("Bearer {}", auth.access_token)
             .parse()
             .context("encode authorization header")?,
     );

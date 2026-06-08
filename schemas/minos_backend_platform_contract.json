@@ -19,10 +19,11 @@
       "Opens a real sqlx Postgres pool for the runtime store handle",
       "Queries current_database() and version() for boot diagnostics",
       "Serves /health/* and /metrics against the live external SQL pool",
-      "Serves /v1/auth/* plus formal pairing and ticket-issuance endpoints under /v1/host/*, /v1/pairing/*, and /v1/realtime/ws-ticket"
+      "Mounts the full /v1 route tree instead of a reduced external-sql-only router",
+      "Serves /ws/client and /ws/host for realtime ticket auth, session activation, forwarding, regular ingest persistence, and UI fanout"
     ],
     "runtime_blockers": [
-      "Most remaining /v1 handlers and all /ws handlers still rely on SQLite-only services and store queries",
+      "Most remaining /v1 handlers plus approval-driven realtime flows still rely on SQLite-only services and store queries",
       "Many store modules under crates/minos-backend/src/store still use SQLite-specific SQL placeholders and transactions",
       "The embedded migration set under crates/minos-backend/migrations is SQLite-only"
     ]
@@ -51,7 +52,7 @@
     "MINOS_CACHE_BACKEND must be redis for HTTP-serving prod nodes",
     "MINOS_MESSAGE_BUS_BACKEND must be redis for HTTP-serving prod nodes",
     "MINOS_REDIS_URL is required whenever redis runtime adapters are selected",
-    "MINOS_STORAGE_MODE=external-sql now boots platform probes on Postgres and serves /v1/auth/* plus formal pairing/ticket-issuance endpoints, but most remaining /v1 and all /ws still stop at SQLite-specific store blockers"
+    "MINOS_STORAGE_MODE=external-sql now mounts the full /v1 route tree and admits regular /ws traffic; unported handlers must fail at their own surface boundary instead of the top-level router"
   ],
   "routes": [
     {
@@ -77,8 +78,22 @@
     },
     {
       "method": "GET",
+      "path": "/health/jobs",
+      "probe_path": "/health/jobs",
+      "surface": "platform",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
       "path": "/metrics",
       "probe_path": "/metrics",
+      "surface": "platform",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/openapi.json",
+      "probe_path": "/openapi.json",
       "surface": "platform",
       "auth": "public"
     },
@@ -179,6 +194,27 @@
       "probe_path": "/v1/host/installations/self",
       "surface": "host_api",
       "auth": "host_installation"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host-commands/list-clis",
+      "probe_path": "/v1/host-commands/list-clis",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host-commands/list-host-skills",
+      "probe_path": "/v1/host-commands/list-host-skills",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host-commands/write-host-skill-config",
+      "probe_path": "/v1/host-commands/write-host-skill-config",
+      "surface": "account_api",
+      "auth": "account_bearer"
     },
     {
       "method": "POST",
@@ -534,6 +570,41 @@
       "method": "POST",
       "path": "/v1/threads/last-seq",
       "probe_path": "/v1/threads/last-seq",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/notifications/tokens/register",
+      "probe_path": "/v1/notifications/tokens/register",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/notifications/tokens/unregister",
+      "probe_path": "/v1/notifications/tokens/unregister",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/notifications/tokens/list",
+      "probe_path": "/v1/notifications/tokens/list",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/notifications/preferences/get",
+      "probe_path": "/v1/notifications/preferences/get",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/notifications/preferences/update",
+      "probe_path": "/v1/notifications/preferences/update",
       "surface": "account_api",
       "auth": "account_bearer"
     }

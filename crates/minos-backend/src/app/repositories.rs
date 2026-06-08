@@ -2771,6 +2771,7 @@ impl PushTokensRepository for StoreBackedPushTokensRepository {
     }
 }
 
+#[allow(dead_code)]
 struct StubPushTokensRepository;
 
 #[async_trait]

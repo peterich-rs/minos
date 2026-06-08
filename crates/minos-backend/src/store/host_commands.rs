@@ -227,11 +227,14 @@ pub async fn ack(
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE host_commands
-                    SET status = 'acked', ack_at_ms = ?
+                    SET status = CASE
+                            WHEN status = 'pending' THEN 'acked'
+                            ELSE status
+                        END,
+                        ack_at_ms = ?
                   WHERE command_id = ?
-                    AND status = 'pending'
-                    AND ack_at_ms IS NULL
-                    AND finished_at_ms IS NULL",
+                    AND status IN ('pending', 'acked', 'succeeded', 'failed')
+                    AND ack_at_ms IS NULL",
         )
         .bind(ack_at_ms)
         .bind(command_id)
@@ -240,11 +243,14 @@ pub async fn ack(
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE host_commands
-                    SET status = 'acked', ack_at_ms = $1
+                    SET status = CASE
+                            WHEN status = 'pending' THEN 'acked'
+                            ELSE status
+                        END,
+                        ack_at_ms = $1
                   WHERE command_id = $2
-                    AND status = 'pending'
-                    AND ack_at_ms IS NULL
-                    AND finished_at_ms IS NULL",
+                    AND status IN ('pending', 'acked', 'succeeded', 'failed')
+                    AND ack_at_ms IS NULL",
         )
         .bind(ack_at_ms)
         .bind(command_id)
@@ -531,6 +537,44 @@ mod tests {
         .unwrap());
 
         let row = get(&pool, "cmd-1").await.unwrap().unwrap();
+        assert_eq!(row.status, HostCommandStatus::Succeeded);
+        assert_eq!(row.ack_at_ms, Some(T0 + 100));
+        assert_eq!(row.finished_at_ms, Some(T0 + 300));
+        assert_eq!(row.response_json, Some(serde_json::json!({ "ok": true })));
+    }
+
+    #[tokio::test]
+    async fn ack_after_finish_preserves_terminal_status_and_records_ack_time() {
+        let pool = memory_pool().await;
+        let host = seed_host(&pool).await;
+
+        enqueue(
+            &pool,
+            "cmd-finish-before-ack",
+            host,
+            None,
+            "minos_health",
+            &serde_json::Value::Null,
+            None,
+            T0 + 5_000,
+            T0,
+        )
+        .await
+        .unwrap();
+
+        assert!(finish(
+            &pool,
+            "cmd-finish-before-ack",
+            HostCommandTerminalStatus::Succeeded,
+            Some(&serde_json::json!({ "ok": true })),
+            None,
+            T0 + 300,
+        )
+        .await
+        .unwrap());
+        assert!(ack(&pool, "cmd-finish-before-ack", T0 + 100).await.unwrap());
+
+        let row = get(&pool, "cmd-finish-before-ack").await.unwrap().unwrap();
         assert_eq!(row.status, HostCommandStatus::Succeeded);
         assert_eq!(row.ack_at_ms, Some(T0 + 100));
         assert_eq!(row.finished_at_ms, Some(T0 + 300));

@@ -282,7 +282,20 @@ pub async fn ack(
               WHERE outbox_id = ?
                 AND status = 'claimed'
                 AND ack_at_ms IS NULL
-                AND dead_at_ms IS NULL",
+                AND dead_at_ms IS NULL
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM durable_event_log d
+                     WHERE d.topic_kind = outbox_events.topic_kind
+                       AND d.event_id = outbox_events.event_id
+                       AND json_extract(d.payload_json, '$.kind') = 'host_command_issued'
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM host_commands h
+                            WHERE h.command_id = json_extract(d.payload_json, '$.command_id')
+                              AND (h.ack_at_ms IS NOT NULL OR h.finished_at_ms IS NOT NULL)
+                       )
+                )",
         )
         .bind(ack_at_ms)
         .bind(outbox_id)
@@ -295,7 +308,20 @@ pub async fn ack(
               WHERE outbox_id = $2
                 AND status = 'claimed'
                 AND ack_at_ms IS NULL
-                AND dead_at_ms IS NULL",
+                AND dead_at_ms IS NULL
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM durable_event_log d
+                     WHERE d.topic_kind = outbox_events.topic_kind
+                       AND d.event_id = outbox_events.event_id
+                       AND d.payload_json ->> 'kind' = 'host_command_issued'
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM host_commands h
+                            WHERE h.command_id = d.payload_json ->> 'command_id'
+                              AND (h.ack_at_ms IS NOT NULL OR h.finished_at_ms IS NOT NULL)
+                       )
+                )",
         )
         .bind(ack_at_ms)
         .bind(outbox_id)
@@ -305,6 +331,71 @@ pub async fn ack(
     }
     .map_err(store_err("outbox_events::ack"))?;
     Ok(result == 1)
+}
+
+pub async fn ack_pending_host_command_events(
+    store: &impl AsStorePool,
+    command_id: &str,
+    ack_at_ms: i64,
+) -> Result<u64, BackendError> {
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE outbox_events
+                SET status = 'acked', ack_at_ms = ?
+              WHERE status = 'pending'
+                AND ack_at_ms IS NULL
+                AND dead_at_ms IS NULL
+                AND EXISTS (
+                    SELECT 1
+                      FROM durable_event_log d
+                     WHERE d.topic_kind = outbox_events.topic_kind
+                       AND d.event_id = outbox_events.event_id
+                       AND json_extract(d.payload_json, '$.kind') = 'host_command_issued'
+                       AND json_extract(d.payload_json, '$.command_id') = ?
+                )
+                AND EXISTS (
+                    SELECT 1
+                      FROM host_commands h
+                     WHERE h.command_id = ?
+                       AND (h.ack_at_ms IS NOT NULL OR h.finished_at_ms IS NOT NULL)
+                )",
+        )
+        .bind(ack_at_ms)
+        .bind(command_id)
+        .bind(command_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE outbox_events
+                SET status = 'acked', ack_at_ms = $1
+              WHERE status = 'pending'
+                AND ack_at_ms IS NULL
+                AND dead_at_ms IS NULL
+                AND EXISTS (
+                    SELECT 1
+                      FROM durable_event_log d
+                     WHERE d.topic_kind = outbox_events.topic_kind
+                       AND d.event_id = outbox_events.event_id
+                       AND d.payload_json ->> 'kind' = 'host_command_issued'
+                       AND d.payload_json ->> 'command_id' = $2
+                )
+                AND EXISTS (
+                    SELECT 1
+                      FROM host_commands h
+                     WHERE h.command_id = $3
+                       AND (h.ack_at_ms IS NOT NULL OR h.finished_at_ms IS NOT NULL)
+                )",
+        )
+        .bind(ack_at_ms)
+        .bind(command_id)
+        .bind(command_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(store_err("outbox_events::ack_pending_host_command_events"))?;
+    Ok(result)
 }
 
 pub async fn retry(
@@ -468,8 +559,11 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::devices;
     use crate::store::durable_event_log;
+    use crate::store::host_commands;
     use crate::store::test_support::{memory_pool, T0};
+    use minos_domain::{DeviceId, DeviceRole};
 
     #[tokio::test]
     async fn claim_retry_and_ack_round_trip() {
@@ -548,6 +642,140 @@ mod tests {
             row.last_error_json,
             Some(serde_json::json!({ "kind": "temporary" }))
         );
+    }
+
+    #[tokio::test]
+    async fn ack_refuses_host_command_until_command_is_observed() {
+        let pool = memory_pool().await;
+        let host_id = DeviceId::new();
+        devices::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        durable_event_log::append(
+            &pool,
+            "evt-host-command",
+            &format!("host:{host_id}"),
+            "host",
+            1,
+            &host_id.to_string(),
+            &serde_json::json!({
+                "kind": "host_command_issued",
+                "command_id": "cmd-1",
+                "host_installation_id": host_id.to_string(),
+                "method": "minos_health",
+                "params": null,
+                "deadline_at_ms": T0 + 1_000,
+                "at_ms": T0
+            }),
+            T0,
+        )
+        .await
+        .unwrap();
+        host_commands::enqueue(
+            &pool,
+            "cmd-1",
+            host_id,
+            None,
+            "minos_health",
+            &serde_json::Value::Null,
+            None,
+            T0 + 1_000,
+            T0,
+        )
+        .await
+        .unwrap();
+        enqueue(&pool, "out-host-command", "host", "evt-host-command", T0)
+            .await
+            .unwrap();
+
+        let claimed = claim_available(&pool, "worker-1", T0, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(!ack(&pool, "out-host-command", T0 + 1).await.unwrap());
+
+        let row = get(&pool, "out-host-command").await.unwrap().unwrap();
+        assert_eq!(row.status, OutboxStatus::Claimed);
+        assert_eq!(row.ack_at_ms, None);
+
+        assert!(host_commands::ack(&pool, "cmd-1", T0 + 2).await.unwrap());
+        assert!(ack(&pool, "out-host-command", T0 + 3).await.unwrap());
+
+        let row = get(&pool, "out-host-command").await.unwrap().unwrap();
+        assert_eq!(row.status, OutboxStatus::Acked);
+        assert_eq!(row.ack_at_ms, Some(T0 + 3));
+    }
+
+    #[tokio::test]
+    async fn ack_pending_host_command_events_marks_observed_command_outbox() {
+        let pool = memory_pool().await;
+        let host_id = DeviceId::new();
+        devices::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        durable_event_log::append(
+            &pool,
+            "evt-host-command-pending",
+            &format!("host:{host_id}"),
+            "host",
+            1,
+            &host_id.to_string(),
+            &serde_json::json!({
+                "kind": "host_command_issued",
+                "command_id": "cmd-pending",
+                "host_installation_id": host_id.to_string(),
+                "method": "minos_health",
+                "params": null,
+                "deadline_at_ms": T0 + 1_000,
+                "at_ms": T0
+            }),
+            T0,
+        )
+        .await
+        .unwrap();
+        host_commands::enqueue(
+            &pool,
+            "cmd-pending",
+            host_id,
+            None,
+            "minos_health",
+            &serde_json::Value::Null,
+            None,
+            T0 + 1_000,
+            T0,
+        )
+        .await
+        .unwrap();
+        enqueue(
+            &pool,
+            "out-host-command-pending",
+            "host",
+            "evt-host-command-pending",
+            T0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            ack_pending_host_command_events(&pool, "cmd-pending", T0 + 1)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(host_commands::ack(&pool, "cmd-pending", T0 + 2)
+            .await
+            .unwrap());
+        assert_eq!(
+            ack_pending_host_command_events(&pool, "cmd-pending", T0 + 3)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let row = get(&pool, "out-host-command-pending")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, OutboxStatus::Acked);
+        assert_eq!(row.ack_at_ms, Some(T0 + 3));
     }
 
     #[tokio::test]

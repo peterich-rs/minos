@@ -25,7 +25,7 @@
 - follow-up policy 在决定重试时会调用 `ctx.listener().retry(&ctx, retries, reason)`，然后重建请求并再次进入网络链路。
 - 对于正常返回的 Rustls TLS 握手错误，`RustlsTlsConnector::connect()` 会在 `tls_start` 之后显式发出 `tls_failed`；握手成功则会发出 `tls_end`。
 - `openwire` 自带集成测试已经覆盖了 TLS 失败后继续 fallback 的场景，预期事件里应出现 `connect_race_lost ... reason=tls_failed`。
-- 当前 workspace 使用的是 vendored `third_party/openwire`，且 `openwire` 默认 feature 仍包含 `tls-rustls` 与 `platform-verifier`；`minos-mobile` 没有显式替换 TLS connector，所以 Android Rust 侧确实会走 `rustls-platform-verifier` 做证书校验。
+- 当前 workspace 使用的是固定到 `peterich-rs/openwire` main commit 的 git 依赖，且 `openwire` 默认 feature 仍包含 `tls-rustls` 与 `platform-verifier`；`minos-mobile` 没有显式替换 TLS connector，所以 Android Rust 侧确实会走 `rustls-platform-verifier` 做证书校验。
 - 但这条链路的 TLS 引擎仍然是 `tokio-rustls` / `rustls`，不是 Android 原生 TLS socket 实现；这里“走平台”只体现在证书校验器，不体现在 TLS 实现本身。
 - `rustls-platform-verifier` 在 Android 上除了 cargo feature 之外，还要求两件额外集成：把 `rustls-platform-verifier-android` 的 AAR 打进 APK，以及在发起网络请求前调用 `rustls_platform_verifier::android::init_with_env(...)` 完成运行时初始化。
 - 本仓库在本次修复前缺少上述两件 Android 集成，因此虽然源码层面声明了 `platform-verifier`，但运行时并没有形成完整可用的 Android verifier 路径。
@@ -44,20 +44,20 @@
 
 - `minos-mobile` 的 `openwire_trace` 已补充 `retry` / `redirect` 事件日志。
 - `minos-mobile` 的 `openwire_trace` 已为每次 DNS 开始分配本地 `dial_attempt` 序号，并把 `dial_attempt`、`retry_count`、`redirect_count` 带入 DNS / route / connect / TLS / response / error 日志。
-- workspace 依赖已从 git checkout 切换为 vendored `third_party/openwire` path 依赖，后续可以直接在仓库内修改和验证 `openwire` 源码。
+- workspace 依赖已固定到 `peterich-rs/openwire` main 的可复现 git rev；本地仍可保留 `third_party/openwire` 参考 checkout，但 CI 和 fresh checkout 不再依赖被 `.gitignore` 排除的本机目录。
 - `crates/minos-ffi-frb` 已新增 Android JNI 导出，用于在 App 启动时调用 `rustls_platform_verifier::android::init_with_env(...)`。
 - `apps/mobile/android/app/src/main/kotlin/minos/ai/android/MainActivity.kt` 已在 `onCreate()` 中加载 `minos_ffi_frb` 并执行 verifier 初始化；真机冷启动日志已确认出现 `MinosMainActivity: initialized rustls-platform-verifier`。
 - `apps/mobile/android/app/build.gradle.kts` 已补上 `rustls-platform-verifier-android` 对应的本地 Maven/AAR 依赖接入，并已通过 `./gradlew :app:assembleDebug` 验证整个 Android 打包链路可用。
-- vendored `third_party/openwire` 已新增两类库层诊断：`openwire-rustls` 会记录当前使用的是 `platform-verifier` 还是 `native-root-store`；`fast_fallback` 会记录 route task drop / abort / receiver-closed 等生命周期异常。
+- 固定的 `openwire` rev 已包含两类库层诊断：`openwire-rustls` 会记录当前使用的是 `platform-verifier` 还是 `native-root-store`；`fast_fallback` 会记录 route task drop / abort / receiver-closed 等生命周期异常。
 
 ## 仍然存在的歧义
 
 - 第一次 `tls_start` 之后究竟是 TLS future 被取消、panic、短路退出，还是某个上层 future 提前结束，目前 app 侧日志还无法分辨。
 - `dial_route_plan()` 会在接收端拿不到任何 `Finished` 结果时合成 `route_exhausted`，但当前 app 侧 trace 看不到 route task 为什么没有回报结果。
-- 这已经超出 app 侧 listener 能观测到的边界；若要继续收敛，需要在 vendored `third_party/openwire` 里给 route task 生命周期和 TLS future 取消路径补更细事件。
+- 这已经超出 app 侧 listener 能观测到的边界；若要继续收敛，需要在 `peterich-rs/openwire` 里给 route task 生命周期和 TLS future 取消路径补更细事件，然后更新本仓库固定的 openwire rev。
 
 ## 建议的下一步验证
 
 - 现在 Android verifier 初始化和 AAR 打包已经补上，下一步最值得做的是在真机上再走一次登录，确认原先的 `tls_start` 后静默消失是否已经消失。
 - 复现时优先关注三类新证据：`MinosMainActivity` 的初始化日志、`openwire::tls` 的 `verifier_backend=platform-verifier` 日志、以及 `fast_fallback` 的 route-task drop / abort 日志。
-- 如果补完 Android verifier 集成后问题直接消失，说明前一次异常大概率就是 verifier 路径未初始化导致；如果问题仍在，则新的 vendored `openwire` 诊断足以继续把范围收紧到 route task / TLS future 生命周期。
+- 如果补完 Android verifier 集成后问题直接消失，说明前一次异常大概率就是 verifier 路径未初始化导致；如果问题仍在，则当前固定 `openwire` rev 的诊断足以继续把范围收紧到 route task / TLS future 生命周期。

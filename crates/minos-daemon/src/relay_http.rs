@@ -1,19 +1,22 @@
 //! HTTP client for the backend's `/v1/*` control plane.
 //!
-//! Built on `openwire`. Stamps the same `X-Device-*`
-//! headers as the WS client and shares the same event-listener tracing
-//! surface used by the relay WebSocket. Used by `RelayClient` to issue
-//! pairing tokens, run POST-first control-plane queries, and forget
-//! pairings without going through the multiplexed envelope.
+//! Built on `openwire`. Used by `RelayClient` to issue formal host pairing
+//! codes, fetch short-lived realtime tickets, run POST-first control-plane
+//! queries, and forget pairings without going through the realtime socket.
 
 use std::sync::Once;
 use std::time::Duration;
 
-use http::{header::CONTENT_TYPE, Method, Request, Response, StatusCode};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ed25519_dalek::{Signer, SigningKey};
+use http::{
+    header::{AUTHORIZATION, CONTENT_TYPE},
+    Method, Request, Response, StatusCode,
+};
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use minos_protocol::{
     HostPeerSummary, HostWsTicketResponse, MePeerResponse, MePeersResponse, PairingQrPayload,
-    RequestPairingQrParams, RequestPairingQrResponse,
+    RequestPairingQrResponse,
 };
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::Deserialize;
@@ -22,6 +25,46 @@ use crate::openwire_trace::{logger_interceptor, OpenwireTraceFactory};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 static INSTALL_RUSTLS_PROVIDER: Once = Once::new();
+const BOOTSTRAP_NONCE_PATH: &str = "/v1/host/bootstrap/nonce";
+const REQUEST_CODE_PATH: &str = "/v1/host/pairing/request-code";
+const HOST_WS_TICKET_PATH: &str = "/v1/host/realtime/ws-ticket";
+const HOST_SELF_PATH: &str = "/v1/host/installations/self";
+
+#[derive(Debug, serde::Serialize)]
+struct BootstrapNonceRequest {
+    installation_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BootstrapNonceData {
+    nonce: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct HostPairingRequestCodeRequest {
+    installation_id: String,
+    nonce: String,
+    public_key: Option<String>,
+    signature: String,
+    host_display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseEnvelope<T> {
+    data: T,
+}
+
+#[derive(Debug, Deserialize)]
+struct HostSelfData {
+    links: Vec<HostSelfLinkSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HostSelfLinkSummary {
+    linked_via_installation_id: String,
+    link_display_name: String,
+    paired_at_ms: i64,
+}
 
 #[derive(Debug, Deserialize)]
 struct ErrorEnvelope {
@@ -40,6 +83,7 @@ pub struct RelayHttpClient {
     device_id: DeviceId,
     device_role: &'static str,
     device_name: String,
+    host_signing_key: SigningKey,
 }
 
 impl RelayHttpClient {
@@ -64,12 +108,18 @@ impl RelayHttpClient {
             .map_err(|e| MinosError::BackendInternal {
                 message: format!("openwire build: {e}"),
             })?;
+        let mut host_key_seed = [0_u8; 32];
+        getrandom::fill(&mut host_key_seed).map_err(|e| MinosError::BackendInternal {
+            message: format!("generate host bootstrap signing key: {e}"),
+        })?;
+
         Ok(Self {
             client,
             base,
             device_id,
             device_role: "agent-host",
             device_name,
+            host_signing_key: SigningKey::from_bytes(&host_key_seed),
         })
     }
 
@@ -77,20 +127,27 @@ impl RelayHttpClient {
         &self,
         host_display_name: String,
     ) -> Result<PairingQrPayload, MinosError> {
-        let url = format!("{}/v1/pairing/tokens", self.base);
+        let nonce = self.fetch_bootstrap_nonce().await?;
+        let url = format!("{}{}", self.base, REQUEST_CODE_PATH);
         let request = self.request_with_json(
             Method::POST,
             &url,
             None,
             true,
-            &RequestPairingQrParams { host_display_name },
+            &HostPairingRequestCodeRequest {
+                installation_id: self.device_id.to_string(),
+                nonce: nonce.clone(),
+                public_key: Some(self.host_public_key()),
+                signature: self.host_signature(REQUEST_CODE_PATH, &nonce),
+                host_display_name: Some(host_display_name),
+            },
         )?;
         let resp = self.execute(&url, request).await?;
         let status = resp.status();
         if status.is_success() {
-            let body: RequestPairingQrResponse =
+            let envelope: ResponseEnvelope<RequestPairingQrResponse> =
                 decode_success_json(resp, "RequestPairingQrResponse").await?;
-            Ok(body.qr_payload)
+            Ok(envelope.data.qr_payload)
         } else {
             Err(decode_error(resp).await)
         }
@@ -180,31 +237,95 @@ impl RelayHttpClient {
         Err(decode_error(resp).await)
     }
 
+    pub async fn get_host_peers(
+        &self,
+        token: &DeviceSecret,
+    ) -> Result<Vec<HostPeerSummary>, MinosError> {
+        let url = format!("{}{}", self.base, HOST_SELF_PATH);
+        let request = self.request_host_bearer_without_body(Method::POST, &url, token, false)?;
+        let resp = self.execute(&url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let envelope: ResponseEnvelope<HostSelfData> =
+                decode_success_json(resp, "HostSelfData").await?;
+            let mut peers = Vec::with_capacity(envelope.data.links.len());
+            for link in envelope.data.links {
+                let mobile_device_id = uuid::Uuid::parse_str(&link.linked_via_installation_id)
+                    .map(DeviceId)
+                    .map_err(|e| MinosError::BackendInternal {
+                        message: format!("decode host self linked device id: {e}"),
+                    })?;
+                peers.push(HostPeerSummary {
+                    mobile_device_id,
+                    mobile_device_name: link.link_display_name,
+                    account_email: String::new(),
+                    paired_at_ms: link.paired_at_ms,
+                    last_active_at_ms: link.paired_at_ms,
+                    online: false,
+                });
+            }
+            return Ok(peers);
+        }
+        Err(decode_error(resp).await)
+    }
+
     /// Fetch a short-lived ws-ticket for the host realtime gateway.
     ///
-    /// Calls `POST /v1/host/realtime/ws-ticket` with the host's device
-    /// headers. The backend returns a `ResponseEnvelope { data, meta }`
+    /// Calls `POST /v1/host/realtime/ws-ticket` with the host installation
+    /// bearer token. The backend returns a `ResponseEnvelope { data, meta }`
     /// where `data` matches [`HostWsTicketResponse`].
     pub async fn fetch_host_ws_ticket(
         &self,
         secret: &DeviceSecret,
     ) -> Result<HostWsTicketResponse, MinosError> {
-        let url = format!("{}/v1/host/realtime/ws-ticket", self.base);
-        let request = self.request_without_body(Method::POST, &url, Some(secret), true)?;
+        let url = format!("{}{}", self.base, HOST_WS_TICKET_PATH);
+        let request = self.request_host_bearer_without_body(Method::POST, &url, secret, true)?;
         let resp = self.execute(&url, request).await?;
         let status = resp.status();
         if status.is_success() {
             // The backend wraps the ticket in ResponseEnvelope { data, meta }.
             // Deserialize the outer envelope and extract `data`.
-            #[derive(serde::Deserialize)]
-            struct Envelope<T> {
-                data: T,
-            }
-            let envelope: Envelope<HostWsTicketResponse> =
+            let envelope: ResponseEnvelope<HostWsTicketResponse> =
                 decode_success_json(resp, "HostWsTicketResponse").await?;
             return Ok(envelope.data);
         }
         Err(decode_error(resp).await)
+    }
+
+    async fn fetch_bootstrap_nonce(&self) -> Result<String, MinosError> {
+        let url = format!("{}{}", self.base, BOOTSTRAP_NONCE_PATH);
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            None,
+            false,
+            &BootstrapNonceRequest {
+                installation_id: self.device_id.to_string(),
+            },
+        )?;
+        let resp = self.execute(&url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let envelope: ResponseEnvelope<BootstrapNonceData> =
+                decode_success_json(resp, "BootstrapNonceData").await?;
+            return Ok(envelope.data.nonce);
+        }
+        Err(decode_error(resp).await)
+    }
+
+    fn host_public_key(&self) -> String {
+        format!(
+            "ed25519:{}",
+            URL_SAFE_NO_PAD.encode(self.host_signing_key.verifying_key().to_bytes())
+        )
+    }
+
+    fn host_signature(&self, path: &str, nonce: &str) -> String {
+        let payload = format!("{}:{nonce}:{path}", self.device_id);
+        format!(
+            "ed25519-sig:{}",
+            URL_SAFE_NO_PAD.encode(self.host_signing_key.sign(payload.as_bytes()).to_bytes())
+        )
     }
 
     fn request_with_json<T>(
@@ -241,6 +362,25 @@ impl RelayHttpClient {
             RequestBody::absent(),
             url,
         )
+    }
+
+    fn request_host_bearer_without_body(
+        &self,
+        method: Method,
+        url: &str,
+        token: &DeviceSecret,
+        include_device_name: bool,
+    ) -> Result<Request<RequestBody>, MinosError> {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(url)
+            .header("x-device-id", self.device_id.to_string())
+            .header("x-device-role", self.device_role)
+            .header(AUTHORIZATION, format!("Bearer {}", token.as_str()));
+        if include_device_name {
+            req = req.header("x-device-name", &self.device_name);
+        }
+        self.finish_request(req, RequestBody::absent(), url)
     }
 
     fn request_builder(
@@ -379,11 +519,15 @@ mod tests {
         let request = client
             .request_with_json(
                 Method::POST,
-                "https://example.com/v1/pairing/tokens",
+                "https://example.com/v1/host/pairing/request-code",
                 None,
                 true,
-                &RequestPairingQrParams {
-                    host_display_name: "Minos Mac".into(),
+                &HostPairingRequestCodeRequest {
+                    installation_id: client.device_id.to_string(),
+                    nonce: "test-nonce".into(),
+                    public_key: Some(client.host_public_key()),
+                    signature: client.host_signature(REQUEST_CODE_PATH, "test-nonce"),
+                    host_display_name: Some("Minos Mac".into()),
                 },
             )
             .unwrap();

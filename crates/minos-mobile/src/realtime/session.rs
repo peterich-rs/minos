@@ -54,7 +54,9 @@ impl RealtimeSession {
         }
         subscription_mgr.add_topic(&account_topic, 0).await;
 
-        // Main loop
+        // Main loop. The optional app-to-WS command channel may be absent for
+        // read-only clients; closing it must not tear down the socket.
+        let mut inbound_frames_closed = false;
         loop {
             tokio::select! {
                 maybe_msg = read.next() => {
@@ -76,8 +78,11 @@ impl RealtimeSession {
                         _ => {}
                     }
                 }
-                maybe_frame = inbound_client_frames.recv() => {
-                    let Some(frame) = maybe_frame else { break };
+                maybe_frame = inbound_client_frames.recv(), if !inbound_frames_closed => {
+                    let Some(frame) = maybe_frame else {
+                        inbound_frames_closed = true;
+                        continue;
+                    };
                     let json = match serde_json::to_string(&frame) {
                         Ok(j) => j,
                         Err(_) => continue,

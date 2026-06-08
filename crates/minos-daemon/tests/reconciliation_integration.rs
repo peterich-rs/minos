@@ -22,7 +22,7 @@
 use minos_daemon::reconciliator::Reconciliator;
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
-use minos_protocol::Envelope;
+use minos_protocol::realtime::ClientFrame;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -75,7 +75,7 @@ async fn reconciliation_replays_missing_seqs() {
             .await
             .unwrap(),
     );
-    let (relay_out_tx, mut relay_out_rx) = mpsc::channel::<Envelope>(256);
+    let (relay_out_tx, mut relay_out_rx) = mpsc::channel::<ClientFrame>(256);
     let writer = Arc::new(EventWriter::spawn(store.clone(), relay_out_tx.clone()));
 
     let seqs: Vec<u64> = (1..=100).collect();
@@ -91,8 +91,12 @@ async fn reconciliation_replays_missing_seqs() {
     while let Ok(Some(env)) =
         tokio::time::timeout(std::time::Duration::from_millis(500), relay_out_rx.recv()).await
     {
-        if let Envelope::Ingest { thread_id, seq, .. } = env {
-            assert_eq!(thread_id, "thr-X");
+        if let ClientFrame::HostStreamEvent { topic, payload, .. } = env {
+            assert_eq!(topic, "agent_session:thr-X");
+            let seq = payload
+                .get("seq")
+                .and_then(serde_json::Value::as_u64)
+                .expect("replayed payload contains seq");
             got.push(seq);
         }
     }
@@ -111,7 +115,7 @@ async fn reconciliation_falls_back_to_jsonl_on_gap() {
             .await
             .unwrap(),
     );
-    let (relay_out_tx, _relay_out_rx) = mpsc::channel::<Envelope>(1024);
+    let (relay_out_tx, _relay_out_rx) = mpsc::channel::<ClientFrame>(1024);
     let writer = Arc::new(EventWriter::spawn(store.clone(), relay_out_tx.clone()));
 
     // Seed seqs 1..=100 minus 60..=70.

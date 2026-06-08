@@ -9,7 +9,7 @@ fn should_run() -> bool {
 }
 
 #[tokio::test]
-#[ignore]
+#[ignore = "requires a local opencode CLI and is opt-in via MINOS_XTASK_WITH_OPENCODE"]
 async fn opencode_real_smoke_create_session_and_prompt() {
     if !should_run() {
         return;

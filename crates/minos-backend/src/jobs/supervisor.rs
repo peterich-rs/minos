@@ -81,7 +81,7 @@ async fn run_job_loop(
     let mut consecutive_backoff = 0u32;
 
     loop {
-        let tick_start = tokio::time::Instant::now();
+        let _tick_start = tokio::time::Instant::now();
 
         let result = tokio::time::timeout(tick_deadline, job.tick(&ctx)).await;
 

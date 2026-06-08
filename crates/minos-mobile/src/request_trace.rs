@@ -202,9 +202,13 @@ fn trim_summary(value: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as TestMutex;
+
+    static TEST_LOCK: TestMutex<()> = TestMutex::new(());
 
     #[test]
     fn recent_returns_updated_snapshot() {
+        let _guard = TEST_LOCK.lock().unwrap();
         clear();
         let id = start(
             RequestTransport::Http,
@@ -227,6 +231,7 @@ mod tests {
 
     #[test]
     fn ring_is_bounded() {
+        let _guard = TEST_LOCK.lock().unwrap();
         const PREFIX: &str = "bounded_thr_";
         clear();
         for i in 0..(RING_CAPACITY + 5) {

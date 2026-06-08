@@ -790,7 +790,7 @@ pub fn router(state: BackendState) -> Router {
     }
 
     // Initialize rate limiter for sensitive endpoints.
-    let rate_limiter = rate_limit::RateLimiter::from_env();
+    let _rate_limiter = rate_limit::RateLimiter::from_env();
     tracing::info!(
         target: "minos_backend::startup",
         "rate limiter initialized for sensitive endpoints"

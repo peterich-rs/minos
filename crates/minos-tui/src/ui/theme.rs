@@ -2,6 +2,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 pub const USER_LABEL: Style = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
 pub const ASSISTANT_LABEL: Style = Style::new().fg(Color::Green).add_modifier(Modifier::BOLD);
+#[allow(dead_code)]
 pub const SYSTEM_LABEL: Style = Style::new().fg(Color::Yellow);
 pub const ERROR_STYLE: Style = Style::new().fg(Color::Red).add_modifier(Modifier::BOLD);
 pub const REASONING_STYLE: Style = Style::new().fg(Color::DarkGray);

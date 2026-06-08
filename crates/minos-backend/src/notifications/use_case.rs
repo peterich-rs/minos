@@ -129,8 +129,10 @@ pub struct DefaultNotificationService {
     store: StoreHandle,
     channels: Vec<Arc<dyn PushChannel>>,
     /// Default cooldown for conversation messages (30 seconds).
+    #[allow(dead_code)]
     message_cooldown_ms: i64,
     /// Default cooldown for approval requests (5 seconds).
+    #[allow(dead_code)]
     approval_cooldown_ms: i64,
 }
 

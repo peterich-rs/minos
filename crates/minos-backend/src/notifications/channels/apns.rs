@@ -19,8 +19,11 @@ use super::{PushAttempt, PushChannel, PushKind, PushSendError, PushSendOutcome};
 
 /// APNs push channel. Reads configuration from environment on construction.
 pub struct ApnsChannel {
+    #[allow(dead_code)]
     key_path: String,
+    #[allow(dead_code)]
     key_id: String,
+    #[allow(dead_code)]
     team_id: String,
     topic: String,
     sandbox: bool,

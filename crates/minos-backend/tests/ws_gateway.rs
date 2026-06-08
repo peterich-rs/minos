@@ -200,19 +200,49 @@ async fn send_input(
         .map_err(|error| anyhow::anyhow!("send input failed: {error}"))
 }
 
-async fn wait_for_host_command_row(
+async fn wait_for_host_command_terminal_row(
     relay: &Relay,
     command_id: &str,
 ) -> anyhow::Result<store::host_commands::HostCommandRow> {
     let deadline = tokio::time::Instant::now() + RECV_TIMEOUT;
     loop {
         if let Some(row) = store::host_commands::get(&relay.pool, command_id).await? {
-            if row.status != store::host_commands::HostCommandStatus::Pending {
+            if matches!(
+                row.status,
+                store::host_commands::HostCommandStatus::Succeeded
+                    | store::host_commands::HostCommandStatus::Failed
+            ) {
                 return Ok(row);
             }
         }
         if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for host command row {command_id} to update");
+            anyhow::bail!("timed out waiting for host command row {command_id} to finish");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_host_command_outbox_acked(relay: &Relay, command_id: &str) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + RECV_TIMEOUT;
+    loop {
+        let (total, unsettled): (i64, i64) = sqlx::query_as(
+            "SELECT COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN o.status = 'acked' THEN 0 ELSE 1 END), 0) AS unsettled
+               FROM outbox_events o
+               JOIN durable_event_log d
+                 ON d.topic_kind = o.topic_kind
+                AND d.event_id = o.event_id
+              WHERE json_extract(d.payload_json, '$.kind') = 'host_command_issued'
+                AND json_extract(d.payload_json, '$.command_id') = ?",
+        )
+        .bind(command_id)
+        .fetch_one(&relay.pool)
+        .await?;
+        if total > 0 && unsettled == 0 {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for host command outbox {command_id} to ack");
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -448,7 +478,7 @@ async fn host_replays_durable_command_and_accepts_ack_result() -> anyhow::Result
     )
     .await?;
 
-    let row = wait_for_host_command_row(&relay, &command_id).await?;
+    let row = wait_for_host_command_terminal_row(&relay, &command_id).await?;
     assert_eq!(
         row.status,
         store::host_commands::HostCommandStatus::Succeeded
@@ -746,12 +776,34 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
-    match recv_server_frame(&mut host_ws).await? {
-        ServerFrame::DurableEvent { kind, .. } => {
+    let replayed_start_command_id = match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::DurableEvent { kind, payload, .. } => {
             assert_eq!(kind, "host_command_issued");
+            payload["command_id"].as_str().unwrap().to_string()
         }
         other => panic!("expected replay DurableEvent, got {other:?}"),
-    }
+    };
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostCommandAck {
+            command_id: replayed_start_command_id.clone(),
+            ack_at_ms: 1_500,
+        },
+    )
+    .await?;
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostCommandResult {
+            command_id: replayed_start_command_id.clone(),
+            status: "succeeded".into(),
+            result: Some(serde_json::json!({ "session_id": output.session_id })),
+            error: None,
+            finished_at_ms: 1_600,
+        },
+    )
+    .await?;
+    wait_for_host_command_terminal_row(&relay, &replayed_start_command_id).await?;
+    wait_for_host_command_outbox_acked(&relay, &replayed_start_command_id).await?;
 
     let send_output = send_input(
         &relay,

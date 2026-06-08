@@ -19,8 +19,8 @@ minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
-# Pinned to =2.11.1 to keep the runtime lockstep with the
-# `flutter_rust_bridge_codegen 2.11.1` tool installed for this workspace; the
+# Pinned to =2.12.0 to keep the runtime lockstep with the
+# `flutter_rust_bridge_codegen 2.12.0` tool installed for this workspace; the
 # generated `frb_generated.rs` embeds a codegen-version constant that must
 # match the runtime exactly, else the generated boilerplate fails to compile.
 flutter_rust_bridge = "=2.12.0"

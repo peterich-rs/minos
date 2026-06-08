@@ -13,7 +13,7 @@ fn should_run() -> bool {
 }
 
 #[tokio::test]
-#[ignore]
+#[ignore = "requires a local claude CLI and is opt-in via MINOS_XTASK_WITH_CLAUDE"]
 async fn claude_real_smoke_start_and_chat() {
     if !should_run() {
         return;

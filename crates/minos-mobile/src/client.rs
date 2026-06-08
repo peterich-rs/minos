@@ -369,7 +369,7 @@ impl MobileClient {
         self.pair_with_qr_json_inner(qr_json, backend_url).await
     }
 
-    /// Scan a QR v2 payload (raw JSON). Calls `POST /v1/pairing/consume`
+    /// Scan a QR v2 payload (raw JSON). Calls `POST /v1/pairing/confirm`
     /// over HTTP at the compile-time `BACKEND_URL`, records the paired
     /// Mac as the active forward target, opens the authenticated
     /// WebSocket, and transitions [`ConnectionState`] through
@@ -408,7 +408,7 @@ impl MobileClient {
         }
         let _ = self.state_tx.send(ConnectionState::Pairing);
 
-        // Phase 2 made `/v1/pairing/consume` bearer-gated for ios-client.
+        // Formal account pairing is bearer-gated for mobile clients.
         // Caller must already be authenticated (register/login set
         // auth_session). Surface the missing-bearer case as Unauthorized
         // rather than a raw HTTP 401, since UI hint is the same.
@@ -422,25 +422,14 @@ impl MobileClient {
                 })?
         };
 
-        // Step 1: redeem the pairing token over HTTP. The backend records
-        // both device-secret hashes and pushes Event::Paired to the Mac
-        // before returning, so by the time we get the response the Mac is
-        // already updated.
+        // Step 1: confirm the formal pairing code over HTTP. The backend
+        // records the account-host link and returns the host installation id.
         let http = crate::http::MobileHttpClient::new(
             backend_url,
             self.device_id,
             self.self_name.clone(),
         )?;
-        let pair_resp = match http
-            .pair_consume(
-                minos_protocol::PairConsumeRequest {
-                    token: minos_domain::PairingToken(qr.pairing_token),
-                    device_name: self.self_name.clone(),
-                },
-                &access,
-            )
-            .await
-        {
+        let pair_resp = match http.pair_confirm(&qr.pairing_token, &access).await {
             Ok(resp) => resp,
             Err(error @ MinosError::Unauthorized { .. }) => {
                 self.clear_auth_session_and_disconnect().await;
@@ -448,14 +437,17 @@ impl MobileClient {
             }
             Err(error) => return Err(error),
         };
+        let host_id = Uuid::parse_str(&pair_resp.host_installation_id)
+            .map(minos_domain::DeviceId)
+            .map_err(|error| MinosError::BackendInternal {
+                message: format!("pair_confirm returned invalid host_installation_id: {error}"),
+            })?;
 
         // Persist the device id (rebound across runs) and remember the
         // newly-paired Mac as the active forward target. Bearer-only post
         // ADR-0020 — no DeviceSecret is minted to the iOS rail.
         self.store.save_device(&self.device_id).await?;
-        self.store
-            .save_active_host(&pair_resp.peer_device_id)
-            .await?;
+        self.store.save_active_host(&host_id).await?;
 
         // Step 2: open the WS bearer-authenticated. The reconnect loop
         // re-uses the same auth_session.
@@ -1206,9 +1198,7 @@ impl MobileClient {
     }
 
     fn build_websocket_url(base_url: &str, ticket: &str) -> String {
-        let ws_url = base_url
-            .replace("https://", "wss://")
-            .replace("http://", "ws://");
+        let ws_url = websocket_base(base_url);
         format!("{ws_url}/ws/client?ticket={ticket}")
     }
 
@@ -1282,7 +1272,8 @@ impl MobileClient {
         access_token: Option<&str>,
     ) -> Result<String, MinosError> {
         let access = access_token.ok_or(MinosError::NotConnected)?;
-        let http = self.http_client_no_secret()?;
+        let http =
+            crate::http::MobileHttpClient::new(base_url, self.device_id, self.self_name.clone())?;
         let ticket_resp = http
             .fetch_ws_ticket(access, &self.device_id.to_string())
             .await?;
@@ -1290,13 +1281,7 @@ impl MobileClient {
         if let Some(gateway_url) = ticket_resp.gateway_url {
             // The backend returns a relative gateway URL like "/ws/client?ticket=..."
             if gateway_url.starts_with('/') {
-                Ok(format!(
-                    "{}{}",
-                    base_url
-                        .replace("https://", "wss://")
-                        .replace("http://", "ws://"),
-                    gateway_url
-                ))
+                Ok(format!("{}{}", websocket_base(base_url), gateway_url))
             } else {
                 Ok(gateway_url)
             }
@@ -1311,6 +1296,22 @@ impl MobileClient {
             h.abort();
         }
     }
+}
+
+fn websocket_base(base_url: &str) -> String {
+    let Ok(url) = url::Url::parse(base_url) else {
+        return base_url.trim_end_matches('/').to_string();
+    };
+    let scheme = match url.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        other => other,
+    };
+    let Some(host) = url.host_str() else {
+        return base_url.trim_end_matches('/').to_string();
+    };
+    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+    format!("{scheme}://{host}{port}")
 }
 
 /// Map an OpenWire websocket failure into a typed `MinosError`, picking

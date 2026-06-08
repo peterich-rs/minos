@@ -301,7 +301,7 @@ fn parse_params<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, Val
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minos_agent_runtime::test_support::{FakeCodexBackend, FakeCodexServer, Step};
+    use minos_agent_runtime::test_support::FakeCodexBackend;
     use minos_agent_runtime::{AgentManager, AgentRuntimeConfig, InstanceCaps};
     use minos_cli_detect::CommandOutcome;
     use std::time::Duration;
@@ -350,6 +350,7 @@ mod tests {
         })
     }
 
+    #[allow(dead_code)]
     fn fake_thread_start_reply(thread_id: &str) -> serde_json::Value {
         json!({
             "approvalPolicy": "never",
@@ -375,6 +376,7 @@ mod tests {
         })
     }
 
+    #[allow(dead_code)]
     fn command_approval_params(thread_id: &str, turn_id: &str) -> serde_json::Value {
         json!({
             "itemId": "item-1",

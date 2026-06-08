@@ -124,6 +124,7 @@ where
     decode_consumed_token(issuer_device_id, "peek_usable_token")
 }
 
+#[allow(dead_code)]
 pub(crate) async fn peek_usable_token_with_postgres_executor<'e, E>(
     executor: E,
     token_hash_candidate: &str,
@@ -192,6 +193,7 @@ where
     decode_consumed_token(issuer_device_id, "consume_token")
 }
 
+#[allow(dead_code)]
 pub(crate) async fn consume_token_with_postgres_executor<'e, E>(
     executor: E,
     token_hash_candidate: &str,

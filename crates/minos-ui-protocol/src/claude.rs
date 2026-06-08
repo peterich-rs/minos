@@ -60,7 +60,7 @@ pub fn translate(
             })?;
 
     match event_type {
-        "system" => translate_system(state, raw),
+        "system" => Ok(translate_system(state, raw)),
         "stream_event" => translate_stream_event(state, raw),
         "assistant" => Ok(translate_assistant_message(state, raw)),
         "result" => Ok(translate_result(state, raw)),
@@ -107,24 +107,21 @@ fn translate_synthetic_user_message(raw: &Value) -> Option<Vec<UiEventMessage>> 
     Some(events)
 }
 
-fn translate_system(
-    state: &mut ClaudeTranslatorState,
-    raw: &Value,
-) -> Result<Vec<UiEventMessage>, TranslationError> {
+fn translate_system(state: &mut ClaudeTranslatorState, raw: &Value) -> Vec<UiEventMessage> {
     let subtype = raw.get("subtype").and_then(Value::as_str).unwrap_or("");
     if subtype == "init" {
-        return Ok(vec![UiEventMessage::ThreadOpened {
+        return vec![UiEventMessage::ThreadOpened {
             thread_id: state.thread_id.clone(),
             agent: AgentName::Claude,
             title: None,
             opened_at_ms: 0,
-        }]);
+        }];
     }
 
-    Ok(vec![UiEventMessage::Raw {
+    vec![UiEventMessage::Raw {
         kind: format!("claude/system/{subtype}"),
         payload_json: serde_json::to_string(raw).unwrap_or_default(),
-    }])
+    }]
 }
 
 fn translate_stream_event(
@@ -180,11 +177,7 @@ fn translate_content_block_start(
     state: &mut ClaudeTranslatorState,
     event: &Value,
 ) -> Vec<UiEventMessage> {
-    let index = event
-        .get("index")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or(usize::MAX);
+    let index = content_block_index(event);
     let block = event.get("content_block").cloned().unwrap_or(Value::Null);
     let block_type = block.get("type").and_then(Value::as_str).unwrap_or("");
 
@@ -215,11 +208,7 @@ fn translate_content_block_delta(
     state: &mut ClaudeTranslatorState,
     event: &Value,
 ) -> Vec<UiEventMessage> {
-    let index = event
-        .get("index")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or(usize::MAX);
+    let index = content_block_index(event);
     let delta = event.get("delta").cloned().unwrap_or(Value::Null);
     let delta_type = delta.get("type").and_then(Value::as_str).unwrap_or("");
 
@@ -267,11 +256,7 @@ fn translate_content_block_stop(
     state: &mut ClaudeTranslatorState,
     event: &Value,
 ) -> Vec<UiEventMessage> {
-    let index = event
-        .get("index")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or(usize::MAX);
+    let index = content_block_index(event);
 
     match state.blocks.remove(&index) {
         Some(StreamBlockState::ToolUse {
@@ -295,6 +280,14 @@ fn translate_content_block_stop(
         }
         _ => Vec::new(),
     }
+}
+
+fn content_block_index(event: &Value) -> usize {
+    event
+        .get("index")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(usize::MAX)
 }
 
 fn translate_assistant_message(

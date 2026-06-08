@@ -182,7 +182,7 @@ async fn process_batch(
         frames.push(ClientFrame::HostStreamEvent {
             topic,
             kind,
-            payload: job.ingest.payload.clone(),
+            payload: host_stream_payload(&job.ingest, seq),
         });
     }
     if let Err(e) = tx.commit().await {
@@ -197,6 +197,19 @@ async fn process_batch(
     for frame in frames {
         let _ = relay_out.send(frame).await;
     }
+}
+
+fn host_stream_payload(ingest: &RawIngest, seq: u64) -> Value {
+    let mut payload = ingest.payload.clone();
+    if let Value::Object(map) = &mut payload {
+        map.entry("seq")
+            .or_insert_with(|| Value::Number(serde_json::Number::from(seq)));
+        map.entry("agent")
+            .or_insert_with(|| serde_json::to_value(ingest.agent).unwrap_or(Value::Null));
+        map.entry("ts_ms")
+            .or_insert_with(|| Value::Number(serde_json::Number::from(ingest.ts_ms)));
+    }
+    payload
 }
 
 pub(crate) fn provider_session_id_from_ingest(ingest: &RawIngest) -> Option<String> {
@@ -394,7 +407,7 @@ mod tests {
             assert_eq!(seq, (i + 1) as u64);
         }
 
-        for i in 0..5 {
+        for _i in 0..5 {
             let frame = relay_rx.recv().await.unwrap();
             match frame {
                 ClientFrame::HostStreamEvent {

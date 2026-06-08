@@ -3,15 +3,13 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
+import 'api/minos.dart';
 import 'dart:async';
 import 'dart:convert';
-
-import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
-
-import 'api/minos.dart';
 import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Main entrypoint of the Rust API
 class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
@@ -2770,9 +2768,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
       case 0:
-        return const AgentStatus_Ok();
+        return AgentStatus_Ok();
       case 1:
-        return const AgentStatus_Missing();
+        return AgentStatus_Missing();
       case 2:
         return AgentStatus_Error(reason: dco_decode_String(raw[1]));
       default:
@@ -2803,13 +2801,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
       case 0:
-        return const AuthStateFrame_Unauthenticated();
+        return AuthStateFrame_Unauthenticated();
       case 1:
         return AuthStateFrame_Authenticated(
           account: dco_decode_box_autoadd_auth_summary(raw[1]),
         );
       case 2:
-        return const AuthStateFrame_Refreshing();
+        return AuthStateFrame_Refreshing();
       case 3:
         return AuthStateFrame_RefreshFailed(
           error: dco_decode_box_autoadd_minos_error(raw[1]),
@@ -2989,11 +2987,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
       case 0:
-        return const ConnectionState_Disconnected();
+        return ConnectionState_Disconnected();
       case 1:
-        return const ConnectionState_Pairing();
+        return ConnectionState_Pairing();
       case 2:
-        return const ConnectionState_Connected();
+        return ConnectionState_Connected();
       case 3:
         return ConnectionState_Reconnecting(attempt: dco_decode_u_32(raw[1]));
       default:
@@ -3489,7 +3487,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 2:
         return MinosError_Disconnected(reason: dco_decode_String(raw[1]));
       case 3:
-        return const MinosError_PairingTokenInvalid();
+        return MinosError_PairingTokenInvalid();
       case 4:
         return MinosError_PairingStateMismatch(
           actual: dco_decode_pairing_state(raw[1]),
@@ -3549,55 +3547,62 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           message: dco_decode_String(raw[2]),
         );
       case 19:
-        return const MinosError_AgentAlreadyRunning();
+        return MinosError_GeminiSpawnFailed(message: dco_decode_String(raw[1]));
       case 20:
-        return const MinosError_AgentNotRunning();
+        return MinosError_AcpProtocolError(
+          method: dco_decode_String(raw[1]),
+          message: dco_decode_String(raw[2]),
+        );
       case 21:
+        return MinosError_AgentAlreadyRunning();
+      case 22:
+        return MinosError_AgentNotRunning();
+      case 23:
         return MinosError_AgentNotSupported(
           agent: dco_decode_agent_name(raw[1]),
         );
-      case 22:
-        return const MinosError_AgentSessionIdMismatch();
-      case 23:
+      case 24:
+        return MinosError_AgentSessionIdMismatch();
+      case 25:
         return MinosError_IngestSeqConflict(
           threadId: dco_decode_String(raw[1]),
           seq: dco_decode_u_64(raw[2]),
         );
-      case 24:
+      case 26:
         return MinosError_ThreadNotFound(threadId: dco_decode_String(raw[1]));
-      case 25:
+      case 27:
         return MinosError_TranslationNotImplemented(
           agent: dco_decode_agent_name(raw[1]),
         );
-      case 26:
+      case 28:
         return MinosError_TranslationFailed(
           agent: dco_decode_agent_name(raw[1]),
           message: dco_decode_String(raw[2]),
         );
-      case 27:
+      case 29:
         return MinosError_PairingQrVersionUnsupported(
           version: dco_decode_u_8(raw[1]),
         );
-      case 28:
-        return const MinosError_Timeout();
-      case 29:
-        return const MinosError_NotConnected();
       case 30:
-        return const MinosError_RequestDropped();
+        return MinosError_Timeout();
       case 31:
-        return MinosError_AuthRefreshFailed(message: dco_decode_String(raw[1]));
+        return MinosError_NotConnected();
       case 32:
-        return const MinosError_EmailTaken();
+        return MinosError_RequestDropped();
       case 33:
-        return const MinosError_WeakPassword();
+        return MinosError_AuthRefreshFailed(message: dco_decode_String(raw[1]));
       case 34:
-        return MinosError_RateLimited(retryAfterS: dco_decode_u_32(raw[1]));
+        return MinosError_EmailTaken();
       case 35:
-        return const MinosError_InvalidCredentials();
+        return MinosError_WeakPassword();
       case 36:
-        return MinosError_AgentStartFailed(reason: dco_decode_String(raw[1]));
+        return MinosError_RateLimited(retryAfterS: dco_decode_u_32(raw[1]));
       case 37:
-        return const MinosError_PairingTokenExpired();
+        return MinosError_InvalidCredentials();
+      case 38:
+        return MinosError_AgentStartFailed(reason: dco_decode_String(raw[1]));
+      case 39:
+        return MinosError_PairingTokenExpired();
       default:
         throw Exception("unreachable");
     }
@@ -3796,15 +3801,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
       case 0:
-        return const ThreadEndReason_UserStopped();
+        return ThreadEndReason_UserStopped();
       case 1:
-        return const ThreadEndReason_AgentDone();
+        return ThreadEndReason_AgentDone();
       case 2:
         return ThreadEndReason_Crashed(message: dco_decode_String(raw[1]));
       case 3:
-        return const ThreadEndReason_Timeout();
+        return ThreadEndReason_Timeout();
       case 4:
-        return const ThreadEndReason_HostDisconnected();
+        return ThreadEndReason_HostDisconnected();
       default:
         throw Exception("unreachable");
     }
@@ -3991,7 +3996,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_String(deserializer);
+    var inner = sse_decode_String(deserializer);
     return AnyhowException(inner);
   }
 
@@ -4081,17 +4086,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   String sse_decode_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_list_prim_u_8_strict(deserializer);
+    var inner = sse_decode_list_prim_u_8_strict(deserializer);
     return utf8.decoder.convert(inner);
   }
 
   @protected
   AgentDescriptor sse_decode_agent_descriptor(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_name = sse_decode_agent_name(deserializer);
-    final var_path = sse_decode_opt_String(deserializer);
-    final var_version = sse_decode_opt_String(deserializer);
-    final var_status = sse_decode_agent_status(deserializer);
+    var var_name = sse_decode_agent_name(deserializer);
+    var var_path = sse_decode_opt_String(deserializer);
+    var var_version = sse_decode_opt_String(deserializer);
+    var var_status = sse_decode_agent_status(deserializer);
     return AgentDescriptor(
       name: var_name,
       path: var_path,
@@ -4103,7 +4108,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   AgentName sse_decode_agent_name(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return AgentName.values[inner];
   }
 
@@ -4111,14 +4116,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AgentStatus sse_decode_agent_status(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final tag_ = sse_decode_i_32(deserializer);
+    var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        return const AgentStatus_Ok();
+        return AgentStatus_Ok();
       case 1:
-        return const AgentStatus_Missing();
+        return AgentStatus_Missing();
       case 2:
-        final var_reason = sse_decode_String(deserializer);
+        var var_reason = sse_decode_String(deserializer);
         return AgentStatus_Error(reason: var_reason);
       default:
         throw UnimplementedError('');
@@ -4128,14 +4133,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   AgentSummary sse_decode_agent_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_agentId = sse_decode_String(deserializer);
-    final var_ownerAccountId = sse_decode_String(deserializer);
-    final var_name = sse_decode_String(deserializer);
-    final var_description = sse_decode_String(deserializer);
-    final var_runtimeAgent = sse_decode_String(deserializer);
-    final var_model = sse_decode_String(deserializer);
-    final var_createdAtMs = sse_decode_i_64(deserializer);
-    final var_updatedAtMs = sse_decode_i_64(deserializer);
+    var var_agentId = sse_decode_String(deserializer);
+    var var_ownerAccountId = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_description = sse_decode_String(deserializer);
+    var var_runtimeAgent = sse_decode_String(deserializer);
+    var var_model = sse_decode_String(deserializer);
+    var var_createdAtMs = sse_decode_i_64(deserializer);
+    var var_updatedAtMs = sse_decode_i_64(deserializer);
     return AgentSummary(
       agentId: var_agentId,
       ownerAccountId: var_ownerAccountId,
@@ -4152,17 +4157,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AuthStateFrame sse_decode_auth_state_frame(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final tag_ = sse_decode_i_32(deserializer);
+    var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        return const AuthStateFrame_Unauthenticated();
+        return AuthStateFrame_Unauthenticated();
       case 1:
-        final var_account = sse_decode_box_autoadd_auth_summary(deserializer);
+        var var_account = sse_decode_box_autoadd_auth_summary(deserializer);
         return AuthStateFrame_Authenticated(account: var_account);
       case 2:
-        return const AuthStateFrame_Refreshing();
+        return AuthStateFrame_Refreshing();
       case 3:
-        final var_error = sse_decode_box_autoadd_minos_error(deserializer);
+        var var_error = sse_decode_box_autoadd_minos_error(deserializer);
         return AuthStateFrame_RefreshFailed(error: var_error);
       default:
         throw UnimplementedError('');
@@ -4172,8 +4177,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   AuthSummary sse_decode_auth_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_accountId = sse_decode_String(deserializer);
-    final var_email = sse_decode_String(deserializer);
+    var var_accountId = sse_decode_String(deserializer);
+    var var_email = sse_decode_String(deserializer);
     return AuthSummary(accountId: var_accountId, email: var_email);
   }
 
@@ -4186,7 +4191,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   AgentName sse_decode_box_autoadd_agent_name(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_agent_name(deserializer);
+    return (sse_decode_agent_name(deserializer));
   }
 
   @protected
@@ -4194,7 +4199,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_auth_summary(deserializer);
+    return (sse_decode_auth_summary(deserializer));
   }
 
   @protected
@@ -4202,7 +4207,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_chat_message_reply_summary(deserializer);
+    return (sse_decode_chat_message_reply_summary(deserializer));
   }
 
   @protected
@@ -4210,7 +4215,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_create_project_request(deserializer);
+    return (sse_decode_create_project_request(deserializer));
   }
 
   @protected
@@ -4218,13 +4223,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_delete_project_request(deserializer);
+    return (sse_decode_delete_project_request(deserializer));
   }
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_i_64(deserializer);
+    return (sse_decode_i_64(deserializer));
   }
 
   @protected
@@ -4232,7 +4237,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_list_project_threads_params(deserializer);
+    return (sse_decode_list_project_threads_params(deserializer));
   }
 
   @protected
@@ -4240,13 +4245,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_list_threads_params(deserializer);
+    return (sse_decode_list_threads_params(deserializer));
   }
 
   @protected
   MinosError sse_decode_box_autoadd_minos_error(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_minos_error(deserializer);
+    return (sse_decode_minos_error(deserializer));
   }
 
   @protected
@@ -4254,7 +4259,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_persisted_pairing_state(deserializer);
+    return (sse_decode_persisted_pairing_state(deserializer));
   }
 
   @protected
@@ -4262,7 +4267,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_read_thread_params(deserializer);
+    return (sse_decode_read_thread_params(deserializer));
   }
 
   @protected
@@ -4270,25 +4275,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_thread_end_reason(deserializer);
+    return (sse_decode_thread_end_reason(deserializer));
   }
 
   @protected
   int sse_decode_box_autoadd_u_16(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_u_16(deserializer);
+    return (sse_decode_u_16(deserializer));
   }
 
   @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_u_32(deserializer);
+    return (sse_decode_u_32(deserializer));
   }
 
   @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_u_64(deserializer);
+    return (sse_decode_u_64(deserializer));
   }
 
   @protected
@@ -4296,7 +4301,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_update_project_request(deserializer);
+    return (sse_decode_update_project_request(deserializer));
   }
 
   @protected
@@ -4304,7 +4309,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return sse_decode_user_summary(deserializer);
+    return (sse_decode_user_summary(deserializer));
   }
 
   @protected
@@ -4312,10 +4317,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_messageId = sse_decode_String(deserializer);
-    final var_sender = sse_decode_user_summary(deserializer);
-    final var_text = sse_decode_String(deserializer);
-    final var_recalledAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_messageId = sse_decode_String(deserializer);
+    var var_sender = sse_decode_user_summary(deserializer);
+    var var_text = sse_decode_String(deserializer);
+    var var_recalledAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return ChatMessageReplySummary(
       messageId: var_messageId,
       sender: var_sender,
@@ -4329,17 +4334,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_messageId = sse_decode_String(deserializer);
-    final var_conversationId = sse_decode_String(deserializer);
-    final var_sender = sse_decode_user_summary(deserializer);
-    final var_text = sse_decode_String(deserializer);
-    final var_createdAtMs = sse_decode_i_64(deserializer);
-    final var_replyTo = sse_decode_opt_box_autoadd_chat_message_reply_summary(
+    var var_messageId = sse_decode_String(deserializer);
+    var var_conversationId = sse_decode_String(deserializer);
+    var var_sender = sse_decode_user_summary(deserializer);
+    var var_text = sse_decode_String(deserializer);
+    var var_createdAtMs = sse_decode_i_64(deserializer);
+    var var_replyTo = sse_decode_opt_box_autoadd_chat_message_reply_summary(
       deserializer,
     );
-    final var_recalledAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    final var_mentionedAccountIds = sse_decode_list_String(deserializer);
-    final var_senderType = sse_decode_sender_type(deserializer);
+    var var_recalledAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_mentionedAccountIds = sse_decode_list_String(deserializer);
+    var var_senderType = sse_decode_sender_type(deserializer);
     return ChatMessageSummary(
       messageId: var_messageId,
       conversationId: var_conversationId,
@@ -4357,16 +4362,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ConnectionState sse_decode_connection_state(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final tag_ = sse_decode_i_32(deserializer);
+    var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        return const ConnectionState_Disconnected();
+        return ConnectionState_Disconnected();
       case 1:
-        return const ConnectionState_Pairing();
+        return ConnectionState_Pairing();
       case 2:
-        return const ConnectionState_Connected();
+        return ConnectionState_Connected();
       case 3:
-        final var_attempt = sse_decode_u_32(deserializer);
+        var var_attempt = sse_decode_u_32(deserializer);
         return ConnectionState_Reconnecting(attempt: var_attempt);
       default:
         throw UnimplementedError('');
@@ -4377,14 +4382,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ConversationAgentMembersResponse
   sse_decode_conversation_agent_members_response(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_agents = sse_decode_list_agent_summary(deserializer);
+    var var_agents = sse_decode_list_agent_summary(deserializer);
     return ConversationAgentMembersResponse(agents: var_agents);
   }
 
   @protected
   ConversationKind sse_decode_conversation_kind(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return ConversationKind.values[inner];
   }
 
@@ -4393,7 +4398,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_members = sse_decode_list_user_summary(deserializer);
+    var var_members = sse_decode_list_user_summary(deserializer);
     return ConversationMembersResponse(members: var_members);
   }
 
@@ -4402,7 +4407,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_lastReadAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_lastReadAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return ConversationReadResponse(lastReadAtMs: var_lastReadAtMs);
   }
 
@@ -4411,7 +4416,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_conversationId = sse_decode_String(deserializer);
+    var var_conversationId = sse_decode_String(deserializer);
     return ConversationResponse(conversationId: var_conversationId);
   }
 
@@ -4420,17 +4425,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_conversationId = sse_decode_String(deserializer);
-    final var_kind = sse_decode_conversation_kind(deserializer);
-    final var_title = sse_decode_String(deserializer);
-    final var_counterpart = sse_decode_opt_box_autoadd_user_summary(
-      deserializer,
-    );
-    final var_memberCount = sse_decode_u_32(deserializer);
-    final var_lastMessagePreview = sse_decode_opt_String(deserializer);
-    final var_lastMessageAtMs = sse_decode_i_64(deserializer);
-    final var_unreadCount = sse_decode_u_32(deserializer);
-    final var_unreadMentionCount = sse_decode_u_32(deserializer);
+    var var_conversationId = sse_decode_String(deserializer);
+    var var_kind = sse_decode_conversation_kind(deserializer);
+    var var_title = sse_decode_String(deserializer);
+    var var_counterpart = sse_decode_opt_box_autoadd_user_summary(deserializer);
+    var var_memberCount = sse_decode_u_32(deserializer);
+    var var_lastMessagePreview = sse_decode_opt_String(deserializer);
+    var var_lastMessageAtMs = sse_decode_i_64(deserializer);
+    var var_unreadCount = sse_decode_u_32(deserializer);
+    var var_unreadMentionCount = sse_decode_u_32(deserializer);
     return ConversationSummary(
       conversationId: var_conversationId,
       kind: var_kind,
@@ -4449,9 +4452,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_conversations = sse_decode_list_conversation_summary(
-      deserializer,
-    );
+    var var_conversations = sse_decode_list_conversation_summary(deserializer);
     return ConversationsResponse(conversations: var_conversations);
   }
 
@@ -4460,8 +4461,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_name = sse_decode_String(deserializer);
-    final var_workspaceSlug = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_workspaceSlug = sse_decode_String(deserializer);
     return CreateProjectRequest(
       name: var_name,
       workspaceSlug: var_workspaceSlug,
@@ -4473,7 +4474,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_project = sse_decode_project_summary(deserializer);
+    var var_project = sse_decode_project_summary(deserializer);
     return CreateProjectResponse(project: var_project);
   }
 
@@ -4482,14 +4483,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_projectId = sse_decode_String(deserializer);
+    var var_projectId = sse_decode_String(deserializer);
     return DeleteProjectRequest(projectId: var_projectId);
   }
 
   @protected
   ErrorKind sse_decode_error_kind(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return ErrorKind.values[inner];
   }
 
@@ -4498,7 +4499,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return FriendRequestStatus.values[inner];
   }
 
@@ -4507,12 +4508,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_requestId = sse_decode_String(deserializer);
-    final var_from = sse_decode_user_summary(deserializer);
-    final var_to = sse_decode_user_summary(deserializer);
-    final var_status = sse_decode_friend_request_status(deserializer);
-    final var_createdAtMs = sse_decode_i_64(deserializer);
-    final var_resolvedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_requestId = sse_decode_String(deserializer);
+    var var_from = sse_decode_user_summary(deserializer);
+    var var_to = sse_decode_user_summary(deserializer);
+    var var_status = sse_decode_friend_request_status(deserializer);
+    var var_createdAtMs = sse_decode_i_64(deserializer);
+    var var_resolvedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return FriendRequestSummary(
       requestId: var_requestId,
       from: var_from,
@@ -4528,8 +4529,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_incoming = sse_decode_list_friend_request_summary(deserializer);
-    final var_outgoing = sse_decode_list_friend_request_summary(deserializer);
+    var var_incoming = sse_decode_list_friend_request_summary(deserializer);
+    var var_outgoing = sse_decode_list_friend_request_summary(deserializer);
     return FriendRequestsResponse(
       incoming: var_incoming,
       outgoing: var_outgoing,
@@ -4539,10 +4540,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   FriendSummary sse_decode_friend_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_accountId = sse_decode_String(deserializer);
-    final var_minosId = sse_decode_String(deserializer);
-    final var_displayName = sse_decode_String(deserializer);
-    final var_createdAtMs = sse_decode_i_64(deserializer);
+    var var_accountId = sse_decode_String(deserializer);
+    var var_minosId = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
+    var var_createdAtMs = sse_decode_i_64(deserializer);
     return FriendSummary(
       accountId: var_accountId,
       minosId: var_minosId,
@@ -4554,28 +4555,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   FriendsResponse sse_decode_friends_response(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_friends = sse_decode_list_friend_summary(deserializer);
+    var var_friends = sse_decode_list_friend_summary(deserializer);
     return FriendsResponse(friends: var_friends);
   }
 
   @protected
   HostSkillError sse_decode_host_skill_error(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_path = sse_decode_String(deserializer);
-    final var_message = sse_decode_String(deserializer);
+    var var_path = sse_decode_String(deserializer);
+    var var_message = sse_decode_String(deserializer);
     return HostSkillError(path: var_path, message: var_message);
   }
 
   @protected
   HostSkillSummary sse_decode_host_skill_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_name = sse_decode_String(deserializer);
-    final var_path = sse_decode_String(deserializer);
-    final var_description = sse_decode_String(deserializer);
-    final var_enabled = sse_decode_bool(deserializer);
-    final var_scope = sse_decode_String(deserializer);
-    final var_displayName = sse_decode_opt_String(deserializer);
-    final var_shortDescription = sse_decode_opt_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_path = sse_decode_String(deserializer);
+    var var_description = sse_decode_String(deserializer);
+    var var_enabled = sse_decode_bool(deserializer);
+    var var_scope = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_opt_String(deserializer);
+    var var_shortDescription = sse_decode_opt_String(deserializer);
     return HostSkillSummary(
       name: var_name,
       path: var_path,
@@ -4590,9 +4591,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   HostSkillsEntry sse_decode_host_skills_entry(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_cwd = sse_decode_String(deserializer);
-    final var_errors = sse_decode_list_host_skill_error(deserializer);
-    final var_skills = sse_decode_list_host_skill_summary(deserializer);
+    var var_cwd = sse_decode_String(deserializer);
+    var var_errors = sse_decode_list_host_skill_error(deserializer);
+    var var_skills = sse_decode_list_host_skill_summary(deserializer);
     return HostSkillsEntry(
       cwd: var_cwd,
       errors: var_errors,
@@ -4603,10 +4604,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   HostSummaryDto sse_decode_host_summary_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_hostDeviceId = sse_decode_String(deserializer);
-    final var_hostDisplayName = sse_decode_String(deserializer);
-    final var_pairedAtMs = sse_decode_i_64(deserializer);
-    final var_pairedViaDeviceId = sse_decode_String(deserializer);
+    var var_hostDeviceId = sse_decode_String(deserializer);
+    var var_hostDisplayName = sse_decode_String(deserializer);
+    var var_pairedAtMs = sse_decode_i_64(deserializer);
+    var var_pairedViaDeviceId = sse_decode_String(deserializer);
     return HostSummaryDto(
       hostDeviceId: var_hostDeviceId,
       hostDisplayName: var_hostDisplayName,
@@ -4630,7 +4631,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   Lang sse_decode_lang(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return Lang.values[inner];
   }
 
@@ -4638,8 +4639,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<String> sse_decode_list_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <String>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <String>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_String(deserializer));
     }
@@ -4652,8 +4653,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <AgentDescriptor>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AgentDescriptor>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_agent_descriptor(deserializer));
     }
@@ -4666,8 +4667,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <AgentSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AgentSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_agent_summary(deserializer));
     }
@@ -4680,8 +4681,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <ChatMessageSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ChatMessageSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_chat_message_summary(deserializer));
     }
@@ -4693,8 +4694,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_messages = sse_decode_list_chat_message_summary(deserializer);
-    final var_nextBeforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_messages = sse_decode_list_chat_message_summary(deserializer);
+    var var_nextBeforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return ListChatMessagesResponse(
       messages: var_messages,
       nextBeforeTsMs: var_nextBeforeTsMs,
@@ -4707,8 +4708,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <ConversationSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ConversationSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_conversation_summary(deserializer));
     }
@@ -4721,8 +4722,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <FriendRequestSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <FriendRequestSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_friend_request_summary(deserializer));
     }
@@ -4735,8 +4736,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <FriendSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <FriendSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_friend_summary(deserializer));
     }
@@ -4749,8 +4750,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <HostSkillError>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HostSkillError>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_host_skill_error(deserializer));
     }
@@ -4763,8 +4764,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <HostSkillSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HostSkillSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_host_skill_summary(deserializer));
     }
@@ -4777,8 +4778,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <HostSkillsEntry>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HostSkillsEntry>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_host_skills_entry(deserializer));
     }
@@ -4790,7 +4791,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_data = sse_decode_list_host_skills_entry(deserializer);
+    var var_data = sse_decode_list_host_skills_entry(deserializer);
     return ListHostSkillsResponse(data: var_data);
   }
 
@@ -4800,8 +4801,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <HostSummaryDto>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HostSummaryDto>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_host_summary_dto(deserializer));
     }
@@ -4812,8 +4813,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<LogRecord> sse_decode_list_log_record(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <LogRecord>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <LogRecord>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_log_record(deserializer));
     }
@@ -4823,7 +4824,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final len_ = sse_decode_i_32(deserializer);
+    var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
   }
 
@@ -4833,8 +4834,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <ProjectSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ProjectSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_project_summary(deserializer));
     }
@@ -4846,9 +4847,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_projectId = sse_decode_String(deserializer);
-    final var_limit = sse_decode_u_32(deserializer);
-    final var_beforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_projectId = sse_decode_String(deserializer);
+    var var_limit = sse_decode_u_32(deserializer);
+    var var_beforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return ListProjectThreadsParams(
       projectId: var_projectId,
       limit: var_limit,
@@ -4861,7 +4862,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_threads = sse_decode_list_thread_summary(deserializer);
+    var var_threads = sse_decode_list_thread_summary(deserializer);
     return ListProjectThreadsResponse(threads: var_threads);
   }
 
@@ -4870,7 +4871,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_projects = sse_decode_list_project_summary(deserializer);
+    var var_projects = sse_decode_list_project_summary(deserializer);
     return ListProjectsResponse(projects: var_projects);
   }
 
@@ -4880,8 +4881,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <RequestTraceRecord>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <RequestTraceRecord>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_request_trace_record(deserializer));
     }
@@ -4894,8 +4895,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <ThreadSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ThreadSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_thread_summary(deserializer));
     }
@@ -4907,9 +4908,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_limit = sse_decode_u_32(deserializer);
-    final var_beforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    final var_agent = sse_decode_opt_box_autoadd_agent_name(deserializer);
+    var var_limit = sse_decode_u_32(deserializer);
+    var var_beforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_agent = sse_decode_opt_box_autoadd_agent_name(deserializer);
     return ListThreadsParams(
       limit: var_limit,
       beforeTsMs: var_beforeTsMs,
@@ -4922,8 +4923,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_threads = sse_decode_list_thread_summary(deserializer);
-    final var_nextBeforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_threads = sse_decode_list_thread_summary(deserializer);
+    var var_nextBeforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return ListThreadsResponse(
       threads: var_threads,
       nextBeforeTsMs: var_nextBeforeTsMs,
@@ -4936,8 +4937,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <UiEventMessage>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <UiEventMessage>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_ui_event_message(deserializer));
     }
@@ -4948,8 +4949,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<UserSummary> sse_decode_list_user_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final len_ = sse_decode_i_32(deserializer);
-    final ans_ = <UserSummary>[];
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <UserSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_user_summary(deserializer));
     }
@@ -4959,17 +4960,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   LogLevel sse_decode_log_level(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return LogLevel.values[inner];
   }
 
   @protected
   LogRecord sse_decode_log_record(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_level = sse_decode_log_level(deserializer);
-    final var_target = sse_decode_String(deserializer);
-    final var_message = sse_decode_String(deserializer);
-    final var_tsMs = sse_decode_i_64(deserializer);
+    var var_level = sse_decode_log_level(deserializer);
+    var var_target = sse_decode_String(deserializer);
+    var var_message = sse_decode_String(deserializer);
+    var var_tsMs = sse_decode_i_64(deserializer);
     return LogRecord(
       level: var_level,
       target: var_target,
@@ -4981,7 +4982,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   MessageRole sse_decode_message_role(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return MessageRole.values[inner];
   }
 
@@ -4989,144 +4990,154 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MinosError sse_decode_minos_error(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final tag_ = sse_decode_i_32(deserializer);
+    var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        final var_addr = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_addr = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_BindFailed(addr: var_addr, message: var_message);
       case 1:
-        final var_url = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_url = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_ConnectFailed(url: var_url, message: var_message);
       case 2:
-        final var_reason = sse_decode_String(deserializer);
+        var var_reason = sse_decode_String(deserializer);
         return MinosError_Disconnected(reason: var_reason);
       case 3:
-        return const MinosError_PairingTokenInvalid();
+        return MinosError_PairingTokenInvalid();
       case 4:
-        final var_actual = sse_decode_pairing_state(deserializer);
+        var var_actual = sse_decode_pairing_state(deserializer);
         return MinosError_PairingStateMismatch(actual: var_actual);
       case 5:
-        final var_deviceId = sse_decode_String(deserializer);
+        var var_deviceId = sse_decode_String(deserializer);
         return MinosError_DeviceNotTrusted(deviceId: var_deviceId);
       case 6:
-        final var_path = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_path = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_StoreIo(path: var_path, message: var_message);
       case 7:
-        final var_path = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_path = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_StoreCorrupt(path: var_path, message: var_message);
       case 8:
-        final var_bin = sse_decode_String(deserializer);
-        final var_timeoutMs = sse_decode_u_64(deserializer);
+        var var_bin = sse_decode_String(deserializer);
+        var var_timeoutMs = sse_decode_u_64(deserializer);
         return MinosError_CliProbeTimeout(
           bin: var_bin,
           timeoutMs: var_timeoutMs,
         );
       case 9:
-        final var_bin = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_bin = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_CliProbeFailed(bin: var_bin, message: var_message);
       case 10:
-        final var_method = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_method = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_RpcCallFailed(
           method: var_method,
           message: var_message,
         );
       case 11:
-        final var_reason = sse_decode_String(deserializer);
+        var var_reason = sse_decode_String(deserializer);
         return MinosError_Unauthorized(reason: var_reason);
       case 12:
-        final var_expected = sse_decode_String(deserializer);
-        final var_actual = sse_decode_String(deserializer);
+        var var_expected = sse_decode_String(deserializer);
+        var var_actual = sse_decode_String(deserializer);
         return MinosError_ConnectionStateMismatch(
           expected: var_expected,
           actual: var_actual,
         );
       case 13:
-        final var_version = sse_decode_u_8(deserializer);
+        var var_version = sse_decode_u_8(deserializer);
         return MinosError_EnvelopeVersionUnsupported(version: var_version);
       case 14:
-        final var_peerDeviceId = sse_decode_String(deserializer);
+        var var_peerDeviceId = sse_decode_String(deserializer);
         return MinosError_PeerOffline(peerDeviceId: var_peerDeviceId);
       case 15:
-        final var_message = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_BackendInternal(message: var_message);
       case 16:
-        final var_message = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_CodexSpawnFailed(message: var_message);
       case 17:
-        final var_url = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_url = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_CodexConnectFailed(
           url: var_url,
           message: var_message,
         );
       case 18:
-        final var_method = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_method = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_CodexProtocolError(
           method: var_method,
           message: var_message,
         );
       case 19:
-        return const MinosError_AgentAlreadyRunning();
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_GeminiSpawnFailed(message: var_message);
       case 20:
-        return const MinosError_AgentNotRunning();
+        var var_method = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_AcpProtocolError(
+          method: var_method,
+          message: var_message,
+        );
       case 21:
-        final var_agent = sse_decode_agent_name(deserializer);
-        return MinosError_AgentNotSupported(agent: var_agent);
+        return MinosError_AgentAlreadyRunning();
       case 22:
-        return const MinosError_AgentSessionIdMismatch();
+        return MinosError_AgentNotRunning();
       case 23:
-        final var_threadId = sse_decode_String(deserializer);
-        final var_seq = sse_decode_u_64(deserializer);
+        var var_agent = sse_decode_agent_name(deserializer);
+        return MinosError_AgentNotSupported(agent: var_agent);
+      case 24:
+        return MinosError_AgentSessionIdMismatch();
+      case 25:
+        var var_threadId = sse_decode_String(deserializer);
+        var var_seq = sse_decode_u_64(deserializer);
         return MinosError_IngestSeqConflict(
           threadId: var_threadId,
           seq: var_seq,
         );
-      case 24:
-        final var_threadId = sse_decode_String(deserializer);
-        return MinosError_ThreadNotFound(threadId: var_threadId);
-      case 25:
-        final var_agent = sse_decode_agent_name(deserializer);
-        return MinosError_TranslationNotImplemented(agent: var_agent);
       case 26:
-        final var_agent = sse_decode_agent_name(deserializer);
-        final var_message = sse_decode_String(deserializer);
+        var var_threadId = sse_decode_String(deserializer);
+        return MinosError_ThreadNotFound(threadId: var_threadId);
+      case 27:
+        var var_agent = sse_decode_agent_name(deserializer);
+        return MinosError_TranslationNotImplemented(agent: var_agent);
+      case 28:
+        var var_agent = sse_decode_agent_name(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return MinosError_TranslationFailed(
           agent: var_agent,
           message: var_message,
         );
-      case 27:
-        final var_version = sse_decode_u_8(deserializer);
-        return MinosError_PairingQrVersionUnsupported(version: var_version);
-      case 28:
-        return const MinosError_Timeout();
       case 29:
-        return const MinosError_NotConnected();
+        var var_version = sse_decode_u_8(deserializer);
+        return MinosError_PairingQrVersionUnsupported(version: var_version);
       case 30:
-        return const MinosError_RequestDropped();
+        return MinosError_Timeout();
       case 31:
-        final var_message = sse_decode_String(deserializer);
-        return MinosError_AuthRefreshFailed(message: var_message);
+        return MinosError_NotConnected();
       case 32:
-        return const MinosError_EmailTaken();
+        return MinosError_RequestDropped();
       case 33:
-        return const MinosError_WeakPassword();
+        var var_message = sse_decode_String(deserializer);
+        return MinosError_AuthRefreshFailed(message: var_message);
       case 34:
-        final var_retryAfterS = sse_decode_u_32(deserializer);
-        return MinosError_RateLimited(retryAfterS: var_retryAfterS);
+        return MinosError_EmailTaken();
       case 35:
-        return const MinosError_InvalidCredentials();
+        return MinosError_WeakPassword();
       case 36:
-        final var_reason = sse_decode_String(deserializer);
-        return MinosError_AgentStartFailed(reason: var_reason);
+        var var_retryAfterS = sse_decode_u_32(deserializer);
+        return MinosError_RateLimited(retryAfterS: var_retryAfterS);
       case 37:
-        return const MinosError_PairingTokenExpired();
+        return MinosError_InvalidCredentials();
+      case 38:
+        var var_reason = sse_decode_String(deserializer);
+        return MinosError_AgentStartFailed(reason: var_reason);
+      case 39:
+        return MinosError_PairingTokenExpired();
       default:
         throw UnimplementedError('');
     }
@@ -5137,10 +5148,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_accountId = sse_decode_String(deserializer);
-    final var_email = sse_decode_String(deserializer);
-    final var_minosId = sse_decode_String(deserializer);
-    final var_displayName = sse_decode_opt_String(deserializer);
+    var var_accountId = sse_decode_String(deserializer);
+    var var_email = sse_decode_String(deserializer);
+    var var_minosId = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_opt_String(deserializer);
     return MyProfileResponse(
       accountId: var_accountId,
       email: var_email,
@@ -5154,7 +5165,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_String(deserializer);
+      return (sse_decode_String(deserializer));
     } else {
       return null;
     }
@@ -5167,7 +5178,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_box_autoadd_agent_name(deserializer);
+      return (sse_decode_box_autoadd_agent_name(deserializer));
     } else {
       return null;
     }
@@ -5181,7 +5192,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_box_autoadd_chat_message_reply_summary(deserializer);
+      return (sse_decode_box_autoadd_chat_message_reply_summary(deserializer));
     } else {
       return null;
     }
@@ -5192,7 +5203,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_box_autoadd_i_64(deserializer);
+      return (sse_decode_box_autoadd_i_64(deserializer));
     } else {
       return null;
     }
@@ -5205,7 +5216,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_box_autoadd_thread_end_reason(deserializer);
+      return (sse_decode_box_autoadd_thread_end_reason(deserializer));
     } else {
       return null;
     }
@@ -5216,7 +5227,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_box_autoadd_u_16(deserializer);
+      return (sse_decode_box_autoadd_u_16(deserializer));
     } else {
       return null;
     }
@@ -5227,7 +5238,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_box_autoadd_u_32(deserializer);
+      return (sse_decode_box_autoadd_u_32(deserializer));
     } else {
       return null;
     }
@@ -5238,7 +5249,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_box_autoadd_u_64(deserializer);
+      return (sse_decode_box_autoadd_u_64(deserializer));
     } else {
       return null;
     }
@@ -5251,7 +5262,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return sse_decode_box_autoadd_user_summary(deserializer);
+      return (sse_decode_box_autoadd_user_summary(deserializer));
     } else {
       return null;
     }
@@ -5260,7 +5271,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   PairingState sse_decode_pairing_state(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return PairingState.values[inner];
   }
 
@@ -5269,12 +5280,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_deviceId = sse_decode_opt_String(deserializer);
-    final var_accessToken = sse_decode_opt_String(deserializer);
-    final var_accessExpiresAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    final var_refreshToken = sse_decode_opt_String(deserializer);
-    final var_accountId = sse_decode_opt_String(deserializer);
-    final var_accountEmail = sse_decode_opt_String(deserializer);
+    var var_deviceId = sse_decode_opt_String(deserializer);
+    var var_accessToken = sse_decode_opt_String(deserializer);
+    var var_accessExpiresAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_refreshToken = sse_decode_opt_String(deserializer);
+    var var_accountId = sse_decode_opt_String(deserializer);
+    var var_accountEmail = sse_decode_opt_String(deserializer);
     return PersistedPairingState(
       deviceId: var_deviceId,
       accessToken: var_accessToken,
@@ -5288,12 +5299,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   ProjectSummary sse_decode_project_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_projectId = sse_decode_String(deserializer);
-    final var_name = sse_decode_String(deserializer);
-    final var_workspaceSlug = sse_decode_String(deserializer);
-    final var_createdAtMs = sse_decode_i_64(deserializer);
-    final var_updatedAtMs = sse_decode_i_64(deserializer);
-    final var_threadCount = sse_decode_u_32(deserializer);
+    var var_projectId = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_workspaceSlug = sse_decode_String(deserializer);
+    var var_createdAtMs = sse_decode_i_64(deserializer);
+    var var_updatedAtMs = sse_decode_i_64(deserializer);
+    var var_threadCount = sse_decode_u_32(deserializer);
     return ProjectSummary(
       projectId: var_projectId,
       name: var_name,
@@ -5307,9 +5318,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   ReadThreadParams sse_decode_read_thread_params(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_threadId = sse_decode_String(deserializer);
-    final var_fromSeq = sse_decode_opt_box_autoadd_u_64(deserializer);
-    final var_limit = sse_decode_u_32(deserializer);
+    var var_threadId = sse_decode_String(deserializer);
+    var var_fromSeq = sse_decode_opt_box_autoadd_u_64(deserializer);
+    var var_limit = sse_decode_u_32(deserializer);
     return ReadThreadParams(
       threadId: var_threadId,
       fromSeq: var_fromSeq,
@@ -5322,9 +5333,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_uiEvents = sse_decode_list_ui_event_message(deserializer);
-    final var_nextSeq = sse_decode_opt_box_autoadd_u_64(deserializer);
-    final var_threadEndReason = sse_decode_opt_box_autoadd_thread_end_reason(
+    var var_uiEvents = sse_decode_list_ui_event_message(deserializer);
+    var var_nextSeq = sse_decode_opt_box_autoadd_u_64(deserializer);
+    var var_threadEndReason = sse_decode_opt_box_autoadd_thread_end_reason(
       deserializer,
     );
     return ReadThreadResponse(
@@ -5339,19 +5350,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_id = sse_decode_u_64(deserializer);
-    final var_transport = sse_decode_request_trace_transport(deserializer);
-    final var_method = sse_decode_String(deserializer);
-    final var_target = sse_decode_String(deserializer);
-    final var_threadId = sse_decode_opt_String(deserializer);
-    final var_requestSummary = sse_decode_opt_String(deserializer);
-    final var_responseSummary = sse_decode_opt_String(deserializer);
-    final var_errorDetail = sse_decode_opt_String(deserializer);
-    final var_status = sse_decode_request_trace_status(deserializer);
-    final var_statusCode = sse_decode_opt_box_autoadd_u_16(deserializer);
-    final var_startedAtMs = sse_decode_i_64(deserializer);
-    final var_completedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    final var_durationMs = sse_decode_opt_box_autoadd_u_32(deserializer);
+    var var_id = sse_decode_u_64(deserializer);
+    var var_transport = sse_decode_request_trace_transport(deserializer);
+    var var_method = sse_decode_String(deserializer);
+    var var_target = sse_decode_String(deserializer);
+    var var_threadId = sse_decode_opt_String(deserializer);
+    var var_requestSummary = sse_decode_opt_String(deserializer);
+    var var_responseSummary = sse_decode_opt_String(deserializer);
+    var var_errorDetail = sse_decode_opt_String(deserializer);
+    var var_status = sse_decode_request_trace_status(deserializer);
+    var var_statusCode = sse_decode_opt_box_autoadd_u_16(deserializer);
+    var var_startedAtMs = sse_decode_i_64(deserializer);
+    var var_completedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_durationMs = sse_decode_opt_box_autoadd_u_32(deserializer);
     return RequestTraceRecord(
       id: var_id,
       transport: var_transport,
@@ -5374,7 +5385,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return RequestTraceStatus.values[inner];
   }
 
@@ -5383,22 +5394,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return RequestTraceTransport.values[inner];
   }
 
   @protected
   SenderType sse_decode_sender_type(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
+    var inner = sse_decode_i_32(deserializer);
     return SenderType.values[inner];
   }
 
   @protected
   SocialEventFrame sse_decode_social_event_frame(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_conversationId = sse_decode_String(deserializer);
-    final var_message = sse_decode_chat_message_summary(deserializer);
+    var var_conversationId = sse_decode_String(deserializer);
+    var var_message = sse_decode_chat_message_summary(deserializer);
     return SocialEventFrame(
       conversationId: var_conversationId,
       message: var_message,
@@ -5409,19 +5420,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ThreadEndReason sse_decode_thread_end_reason(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final tag_ = sse_decode_i_32(deserializer);
+    var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        return const ThreadEndReason_UserStopped();
+        return ThreadEndReason_UserStopped();
       case 1:
-        return const ThreadEndReason_AgentDone();
+        return ThreadEndReason_AgentDone();
       case 2:
-        final var_message = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
         return ThreadEndReason_Crashed(message: var_message);
       case 3:
-        return const ThreadEndReason_Timeout();
+        return ThreadEndReason_Timeout();
       case 4:
-        return const ThreadEndReason_HostDisconnected();
+        return ThreadEndReason_HostDisconnected();
       default:
         throw UnimplementedError('');
     }
@@ -5430,14 +5441,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   ThreadSummary sse_decode_thread_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_threadId = sse_decode_String(deserializer);
-    final var_agent = sse_decode_agent_name(deserializer);
-    final var_title = sse_decode_opt_String(deserializer);
-    final var_firstTsMs = sse_decode_i_64(deserializer);
-    final var_lastTsMs = sse_decode_i_64(deserializer);
-    final var_messageCount = sse_decode_u_32(deserializer);
-    final var_endedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    final var_endReason = sse_decode_opt_box_autoadd_thread_end_reason(
+    var var_threadId = sse_decode_String(deserializer);
+    var var_agent = sse_decode_agent_name(deserializer);
+    var var_title = sse_decode_opt_String(deserializer);
+    var var_firstTsMs = sse_decode_i_64(deserializer);
+    var var_lastTsMs = sse_decode_i_64(deserializer);
+    var var_messageCount = sse_decode_u_32(deserializer);
+    var var_endedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_endReason = sse_decode_opt_box_autoadd_thread_end_reason(
       deserializer,
     );
     return ThreadSummary(
@@ -5479,10 +5490,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   UiEventFrame sse_decode_ui_event_frame(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_threadId = sse_decode_String(deserializer);
-    final var_seq = sse_decode_u_64(deserializer);
-    final var_ui = sse_decode_ui_event_message(deserializer);
-    final var_tsMs = sse_decode_i_64(deserializer);
+    var var_threadId = sse_decode_String(deserializer);
+    var var_seq = sse_decode_u_64(deserializer);
+    var var_ui = sse_decode_ui_event_message(deserializer);
+    var var_tsMs = sse_decode_i_64(deserializer);
     return UiEventFrame(
       threadId: var_threadId,
       seq: var_seq,
@@ -5495,13 +5506,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   UiEventMessage sse_decode_ui_event_message(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    final tag_ = sse_decode_i_32(deserializer);
+    var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        final var_threadId = sse_decode_String(deserializer);
-        final var_agent = sse_decode_agent_name(deserializer);
-        final var_title = sse_decode_opt_String(deserializer);
-        final var_openedAtMs = sse_decode_i_64(deserializer);
+        var var_threadId = sse_decode_String(deserializer);
+        var var_agent = sse_decode_agent_name(deserializer);
+        var var_title = sse_decode_opt_String(deserializer);
+        var var_openedAtMs = sse_decode_i_64(deserializer);
         return UiEventMessage_ThreadOpened(
           threadId: var_threadId,
           agent: var_agent,
@@ -5509,58 +5520,56 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           openedAtMs: var_openedAtMs,
         );
       case 1:
-        final var_threadId = sse_decode_String(deserializer);
-        final var_title = sse_decode_String(deserializer);
+        var var_threadId = sse_decode_String(deserializer);
+        var var_title = sse_decode_String(deserializer);
         return UiEventMessage_ThreadTitleUpdated(
           threadId: var_threadId,
           title: var_title,
         );
       case 2:
-        final var_threadId = sse_decode_String(deserializer);
-        final var_reason = sse_decode_box_autoadd_thread_end_reason(
-          deserializer,
-        );
-        final var_closedAtMs = sse_decode_i_64(deserializer);
+        var var_threadId = sse_decode_String(deserializer);
+        var var_reason = sse_decode_box_autoadd_thread_end_reason(deserializer);
+        var var_closedAtMs = sse_decode_i_64(deserializer);
         return UiEventMessage_ThreadClosed(
           threadId: var_threadId,
           reason: var_reason,
           closedAtMs: var_closedAtMs,
         );
       case 3:
-        final var_messageId = sse_decode_String(deserializer);
-        final var_role = sse_decode_message_role(deserializer);
-        final var_startedAtMs = sse_decode_i_64(deserializer);
+        var var_messageId = sse_decode_String(deserializer);
+        var var_role = sse_decode_message_role(deserializer);
+        var var_startedAtMs = sse_decode_i_64(deserializer);
         return UiEventMessage_MessageStarted(
           messageId: var_messageId,
           role: var_role,
           startedAtMs: var_startedAtMs,
         );
       case 4:
-        final var_messageId = sse_decode_String(deserializer);
-        final var_finishedAtMs = sse_decode_i_64(deserializer);
+        var var_messageId = sse_decode_String(deserializer);
+        var var_finishedAtMs = sse_decode_i_64(deserializer);
         return UiEventMessage_MessageCompleted(
           messageId: var_messageId,
           finishedAtMs: var_finishedAtMs,
         );
       case 5:
-        final var_messageId = sse_decode_String(deserializer);
-        final var_text = sse_decode_String(deserializer);
+        var var_messageId = sse_decode_String(deserializer);
+        var var_text = sse_decode_String(deserializer);
         return UiEventMessage_TextDelta(
           messageId: var_messageId,
           text: var_text,
         );
       case 6:
-        final var_messageId = sse_decode_String(deserializer);
-        final var_text = sse_decode_String(deserializer);
+        var var_messageId = sse_decode_String(deserializer);
+        var var_text = sse_decode_String(deserializer);
         return UiEventMessage_ReasoningDelta(
           messageId: var_messageId,
           text: var_text,
         );
       case 7:
-        final var_messageId = sse_decode_String(deserializer);
-        final var_toolCallId = sse_decode_String(deserializer);
-        final var_name = sse_decode_String(deserializer);
-        final var_argsJson = sse_decode_String(deserializer);
+        var var_messageId = sse_decode_String(deserializer);
+        var var_toolCallId = sse_decode_String(deserializer);
+        var var_name = sse_decode_String(deserializer);
+        var var_argsJson = sse_decode_String(deserializer);
         return UiEventMessage_ToolCallPlaced(
           messageId: var_messageId,
           toolCallId: var_toolCallId,
@@ -5568,26 +5577,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           argsJson: var_argsJson,
         );
       case 8:
-        final var_toolCallId = sse_decode_String(deserializer);
-        final var_output = sse_decode_String(deserializer);
-        final var_isError = sse_decode_bool(deserializer);
+        var var_toolCallId = sse_decode_String(deserializer);
+        var var_output = sse_decode_String(deserializer);
+        var var_isError = sse_decode_bool(deserializer);
         return UiEventMessage_ToolCallCompleted(
           toolCallId: var_toolCallId,
           output: var_output,
           isError: var_isError,
         );
       case 9:
-        final var_code = sse_decode_String(deserializer);
-        final var_message = sse_decode_String(deserializer);
-        final var_messageId = sse_decode_opt_String(deserializer);
+        var var_code = sse_decode_String(deserializer);
+        var var_message = sse_decode_String(deserializer);
+        var var_messageId = sse_decode_opt_String(deserializer);
         return UiEventMessage_Error(
           code: var_code,
           message: var_message,
           messageId: var_messageId,
         );
       case 10:
-        final var_kind = sse_decode_String(deserializer);
-        final var_payloadJson = sse_decode_String(deserializer);
+        var var_kind = sse_decode_String(deserializer);
+        var var_payloadJson = sse_decode_String(deserializer);
         return UiEventMessage_Raw(kind: var_kind, payloadJson: var_payloadJson);
       default:
         throw UnimplementedError('');
@@ -5604,17 +5613,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_projectId = sse_decode_String(deserializer);
-    final var_name = sse_decode_String(deserializer);
+    var var_projectId = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
     return UpdateProjectRequest(projectId: var_projectId, name: var_name);
   }
 
   @protected
   UserSummary sse_decode_user_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_accountId = sse_decode_String(deserializer);
-    final var_minosId = sse_decode_String(deserializer);
-    final var_displayName = sse_decode_String(deserializer);
+    var var_accountId = sse_decode_String(deserializer);
+    var var_minosId = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
     return UserSummary(
       accountId: var_accountId,
       minosId: var_minosId,
@@ -5633,7 +5642,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final var_effectiveEnabled = sse_decode_bool(deserializer);
+    var var_effectiveEnabled = sse_decode_bool(deserializer);
     return WriteHostSkillConfigResponse(effectiveEnabled: var_effectiveEnabled);
   }
 
@@ -6674,61 +6683,71 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(18, serializer);
         sse_encode_String(method, serializer);
         sse_encode_String(message, serializer);
-      case MinosError_AgentAlreadyRunning():
+      case MinosError_GeminiSpawnFailed(message: final message):
         sse_encode_i_32(19, serializer);
-      case MinosError_AgentNotRunning():
+        sse_encode_String(message, serializer);
+      case MinosError_AcpProtocolError(
+        method: final method,
+        message: final message,
+      ):
         sse_encode_i_32(20, serializer);
-      case MinosError_AgentNotSupported(agent: final agent):
+        sse_encode_String(method, serializer);
+        sse_encode_String(message, serializer);
+      case MinosError_AgentAlreadyRunning():
         sse_encode_i_32(21, serializer);
+      case MinosError_AgentNotRunning():
+        sse_encode_i_32(22, serializer);
+      case MinosError_AgentNotSupported(agent: final agent):
+        sse_encode_i_32(23, serializer);
         sse_encode_agent_name(agent, serializer);
       case MinosError_AgentSessionIdMismatch():
-        sse_encode_i_32(22, serializer);
+        sse_encode_i_32(24, serializer);
       case MinosError_IngestSeqConflict(
         threadId: final threadId,
         seq: final seq,
       ):
-        sse_encode_i_32(23, serializer);
+        sse_encode_i_32(25, serializer);
         sse_encode_String(threadId, serializer);
         sse_encode_u_64(seq, serializer);
       case MinosError_ThreadNotFound(threadId: final threadId):
-        sse_encode_i_32(24, serializer);
+        sse_encode_i_32(26, serializer);
         sse_encode_String(threadId, serializer);
       case MinosError_TranslationNotImplemented(agent: final agent):
-        sse_encode_i_32(25, serializer);
+        sse_encode_i_32(27, serializer);
         sse_encode_agent_name(agent, serializer);
       case MinosError_TranslationFailed(
         agent: final agent,
         message: final message,
       ):
-        sse_encode_i_32(26, serializer);
+        sse_encode_i_32(28, serializer);
         sse_encode_agent_name(agent, serializer);
         sse_encode_String(message, serializer);
       case MinosError_PairingQrVersionUnsupported(version: final version):
-        sse_encode_i_32(27, serializer);
+        sse_encode_i_32(29, serializer);
         sse_encode_u_8(version, serializer);
       case MinosError_Timeout():
-        sse_encode_i_32(28, serializer);
-      case MinosError_NotConnected():
-        sse_encode_i_32(29, serializer);
-      case MinosError_RequestDropped():
         sse_encode_i_32(30, serializer);
-      case MinosError_AuthRefreshFailed(message: final message):
+      case MinosError_NotConnected():
         sse_encode_i_32(31, serializer);
+      case MinosError_RequestDropped():
+        sse_encode_i_32(32, serializer);
+      case MinosError_AuthRefreshFailed(message: final message):
+        sse_encode_i_32(33, serializer);
         sse_encode_String(message, serializer);
       case MinosError_EmailTaken():
-        sse_encode_i_32(32, serializer);
-      case MinosError_WeakPassword():
-        sse_encode_i_32(33, serializer);
-      case MinosError_RateLimited(retryAfterS: final retryAfterS):
         sse_encode_i_32(34, serializer);
+      case MinosError_WeakPassword():
+        sse_encode_i_32(35, serializer);
+      case MinosError_RateLimited(retryAfterS: final retryAfterS):
+        sse_encode_i_32(36, serializer);
         sse_encode_u_32(retryAfterS, serializer);
       case MinosError_InvalidCredentials():
-        sse_encode_i_32(35, serializer);
+        sse_encode_i_32(37, serializer);
       case MinosError_AgentStartFailed(reason: final reason):
-        sse_encode_i_32(36, serializer);
+        sse_encode_i_32(38, serializer);
         sse_encode_String(reason, serializer);
       case MinosError_PairingTokenExpired():
-        sse_encode_i_32(37, serializer);
+        sse_encode_i_32(39, serializer);
     }
   }
 

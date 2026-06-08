@@ -202,6 +202,13 @@ async fn resume_thread_and_read_history() {
         )
         .await
         .unwrap();
+    assert!(
+        history
+            .events
+            .iter()
+            .all(|event| event.thread_id == thread_id),
+        "raw history should only contain events for the requested thread"
+    );
 
     glue.close_thread(minos_protocol::CloseThreadRequest {
         thread_id: thread_id.clone(),

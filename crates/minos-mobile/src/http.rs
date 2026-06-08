@@ -1,7 +1,7 @@
 //! HTTP client for the backend's `/v1/*` control plane.
 //!
 //! The mobile client uses this for the pre-WS pairing handshake (POST
-//! `/v1/pairing/consume`), for POST-first query reads such as
+//! `/v1/pairing/confirm`), for POST-first query reads such as
 //! `/v1/me/hosts/query`, and for tearing a specific pair down
 //! (`DELETE /v1/pairings/:host_device_id`). The post-pair `Forward` /
 //! `Forwarded` and event push traffic still flows over the WebSocket.
@@ -25,11 +25,10 @@ use minos_protocol::{
     ListChatMessagesResponse, ListHostClisRequest, ListHostSkillsCommandRequest,
     ListHostSkillsResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
     ListProjectsResponse, ListThreadsParams, ListThreadsResponse, LogoutRequest, MeHostsResponse,
-    MyProfileResponse, PairConsumeRequest, PairResponse, ReadThreadParams, ReadThreadResponse,
-    RealtimeWsTicketRequest, RealtimeWsTicketResponse, RefreshRequest, RefreshResponse,
-    RemoveAgentFromGroupRequest, SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest,
-    SetMinosIdRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
-    WriteHostSkillConfigResponse,
+    MyProfileResponse, ReadThreadParams, ReadThreadResponse, RealtimeWsTicketRequest,
+    RealtimeWsTicketResponse, RefreshRequest, RefreshResponse, RemoveAgentFromGroupRequest,
+    SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
+    UpdateProjectRequest, WriteHostSkillConfigCommandRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::ThreadEndReason;
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -61,6 +60,26 @@ struct WsTicketEnvelope {
 struct WsTicketData {
     ticket: String,
     gateway_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PairConfirmRequest<'a> {
+    pairing_code: &'a str,
+    client_request_id: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct PairConfirmEnvelope {
+    data: PairConfirmData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PairConfirmData {
+    pub host_installation_id: String,
+    #[allow(dead_code)]
+    pub status: String,
+    #[allow(dead_code)]
+    pub already_confirmed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -200,36 +219,40 @@ impl MobileHttpClient {
         })
     }
 
-    /// Redeem a pairing token (the QR's one-shot secret) into a long-lived
-    /// `DeviceSecret`. Phase 2 made the `ios-client` rail bearer-gated, so
-    /// callers must supply a valid `access_token` minted by `register` /
-    /// `login`. The bearer is bound to the device id by the JWT `did`
-    /// claim, so the same token must come from the same MobileClient that
-    /// is performing the pair.
-    pub async fn pair_consume(
+    /// Confirm a formal host pairing code with the logged-in account bearer.
+    pub async fn pair_confirm(
         &self,
-        req: PairConsumeRequest,
+        pairing_code: &str,
         access_token: &str,
-    ) -> Result<PairResponse, MinosError> {
-        let url = format!("{}/v1/pairing/consume", self.base);
+    ) -> Result<PairConfirmData, MinosError> {
+        let path = "/v1/pairing/confirm";
+        let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
-            "/v1/pairing/consume",
+            path,
             None,
-            Some(format!("device_name={}", req.device_name)),
+            Some("formal-pair-confirm".into()),
         );
+        let req = PairConfirmRequest {
+            pairing_code,
+            client_request_id: "mobile-pair-confirm",
+        };
         let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
-            let pair: PairResponse = decode_success_json(resp, "PairResponse").await?;
+            let envelope: PairConfirmEnvelope =
+                decode_success_json(resp, "PairConfirmEnvelope").await?;
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                Some(format!("peer_name={}", pair.peer_name)),
+                Some(format!(
+                    "host_installation_id={}",
+                    envelope.data.host_installation_id
+                )),
                 None,
             );
-            Ok(pair)
+            Ok(envelope.data)
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
@@ -1764,8 +1787,9 @@ async fn decode_refresh_response(
     Err(error)
 }
 
-/// Map an HTTP error response that carries a `{ "kind": "..." }` body to
-/// a typed `MinosError`. Used by every `/v1/auth/*` endpoint. Spec §8.1.
+/// Map an HTTP error response that carries either the old `{ "kind": "..." }`
+/// body or the current `{ "error": { "code": "..." } }` envelope to a typed
+/// `MinosError`. Used by every `/v1/auth/*` endpoint. Spec §8.1.
 async fn decode_kind_error(resp: Response<ResponseBody>) -> MinosError {
     let (parts, body) = resp.into_parts();
     let retry_after = parts
@@ -1778,6 +1802,11 @@ async fn decode_kind_error(resp: Response<ResponseBody>) -> MinosError {
     let kind = body
         .get("kind")
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            body.get("error")
+                .and_then(|v| v.get("code"))
+                .and_then(|v| v.as_str())
+        })
         .unwrap_or("unknown")
         .to_string();
     match (parts.status.as_u16(), kind.as_str()) {

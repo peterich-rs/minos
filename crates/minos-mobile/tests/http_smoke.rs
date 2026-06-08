@@ -9,10 +9,9 @@
 use minos_backend::http::{router, test_support::backend_state};
 use minos_domain::{DeviceId, DeviceRole, MinosError};
 use minos_mobile::http::MobileHttpClient;
-use minos_protocol::PairConsumeRequest;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn pair_consume_round_trips_against_real_backend() {
+async fn pair_confirm_round_trips_against_real_backend() {
     let state = backend_state().await;
     let mac_id = DeviceId::new();
     minos_backend::store::devices::insert_device(
@@ -25,15 +24,10 @@ async fn pair_consume_round_trips_against_real_backend() {
     .await
     .unwrap();
     let svc = minos_backend::pairing::PairingService::new(state.store.clone());
-    let (token, _) = svc
-        .request_token(mac_id, std::time::Duration::from_secs(300))
+    let (pairing_code, _) = svc
+        .request_code(mac_id, std::time::Duration::from_secs(300))
         .await
         .unwrap();
-
-    // Seed a live Mac session so consume can deliver Event::Paired.
-    let (handle, mut mac_outbox) =
-        minos_backend::session::SessionHandle::new(mac_id, DeviceRole::AgentHost);
-    state.registry.insert(handle);
 
     let app = router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -54,19 +48,13 @@ async fn pair_consume_round_trips_against_real_backend() {
         .unwrap();
 
     let resp = client
-        .pair_consume(
-            PairConsumeRequest {
-                token,
-                device_name: "iPhone".into(),
-            },
-            &auth.access_token,
-        )
+        .pair_confirm(&pairing_code, &auth.access_token)
         .await
         .unwrap();
 
-    assert_eq!(resp.peer_device_id, mac_id);
-    assert_eq!(resp.peer_name, "Mac");
-    let _ = mac_outbox.recv().await.unwrap(); // Event::Paired delivered
+    assert_eq!(resp.host_installation_id, mac_id.to_string());
+    assert_eq!(resp.status, "confirmed");
+    assert!(!resp.already_confirmed);
 }
 
 /// Spawn the test backend and return its bound address.

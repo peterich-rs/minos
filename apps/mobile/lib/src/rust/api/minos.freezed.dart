@@ -182,7 +182,7 @@ return error(_that.reason);case _:
 
 class AgentStatus_Ok extends AgentStatus {
   const AgentStatus_Ok(): super._();
-  
+
 
 
 
@@ -214,7 +214,7 @@ String toString() {
 
 class AgentStatus_Missing extends AgentStatus {
   const AgentStatus_Missing(): super._();
-  
+
 
 
 
@@ -246,7 +246,7 @@ String toString() {
 
 class AgentStatus_Error extends AgentStatus {
   const AgentStatus_Error({required this.reason}): super._();
-  
+
 
  final  String reason;
 
@@ -484,7 +484,7 @@ return refreshFailed(_that.error);case _:
 
 class AuthStateFrame_Unauthenticated extends AuthStateFrame {
   const AuthStateFrame_Unauthenticated(): super._();
-  
+
 
 
 
@@ -516,7 +516,7 @@ String toString() {
 
 class AuthStateFrame_Authenticated extends AuthStateFrame {
   const AuthStateFrame_Authenticated({required this.account}): super._();
-  
+
 
  final  AuthSummary account;
 
@@ -582,7 +582,7 @@ as AuthSummary,
 
 class AuthStateFrame_Refreshing extends AuthStateFrame {
   const AuthStateFrame_Refreshing(): super._();
-  
+
 
 
 
@@ -614,7 +614,7 @@ String toString() {
 
 class AuthStateFrame_RefreshFailed extends AuthStateFrame {
   const AuthStateFrame_RefreshFailed({required this.error}): super._();
-  
+
 
  final  MinosError error;
 
@@ -677,7 +677,7 @@ as MinosError,
 @override
 @pragma('vm:prefer-inline')
 $MinosErrorCopyWith<$Res> get error {
-  
+
   return $MinosErrorCopyWith<$Res>(_self.error, (value) {
     return _then(_self.copyWith(error: value));
   });
@@ -861,7 +861,7 @@ return reconnecting(_that.attempt);case _:
 
 class ConnectionState_Disconnected extends ConnectionState {
   const ConnectionState_Disconnected(): super._();
-  
+
 
 
 
@@ -893,7 +893,7 @@ String toString() {
 
 class ConnectionState_Pairing extends ConnectionState {
   const ConnectionState_Pairing(): super._();
-  
+
 
 
 
@@ -925,7 +925,7 @@ String toString() {
 
 class ConnectionState_Connected extends ConnectionState {
   const ConnectionState_Connected(): super._();
-  
+
 
 
 
@@ -957,7 +957,7 @@ String toString() {
 
 class ConnectionState_Reconnecting extends ConnectionState {
   const ConnectionState_Reconnecting({required this.attempt}): super._();
-  
+
 
  final  int attempt;
 
@@ -1062,7 +1062,7 @@ extension MinosErrorPatterns on MinosError {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_BackendInternal value)?  backendInternal,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,TResult Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult Function( MinosError_Timeout value)?  timeout,TResult Function( MinosError_NotConnected value)?  notConnected,TResult Function( MinosError_RequestDropped value)?  requestDropped,TResult Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult Function( MinosError_EmailTaken value)?  emailTaken,TResult Function( MinosError_WeakPassword value)?  weakPassword,TResult Function( MinosError_RateLimited value)?  rateLimited,TResult Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_BackendInternal value)?  backendInternal,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_GeminiSpawnFailed value)?  geminiSpawnFailed,TResult Function( MinosError_AcpProtocolError value)?  acpProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,TResult Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult Function( MinosError_Timeout value)?  timeout,TResult Function( MinosError_NotConnected value)?  notConnected,TResult Function( MinosError_RequestDropped value)?  requestDropped,TResult Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult Function( MinosError_EmailTaken value)?  emailTaken,TResult Function( MinosError_WeakPassword value)?  weakPassword,TResult Function( MinosError_RateLimited value)?  rateLimited,TResult Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -1084,7 +1084,9 @@ return peerOffline(_that);case MinosError_BackendInternal() when backendInternal
 return backendInternal(_that);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
 return codexSpawnFailed(_that);case MinosError_CodexConnectFailed() when codexConnectFailed != null:
 return codexConnectFailed(_that);case MinosError_CodexProtocolError() when codexProtocolError != null:
-return codexProtocolError(_that);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
+return codexProtocolError(_that);case MinosError_GeminiSpawnFailed() when geminiSpawnFailed != null:
+return geminiSpawnFailed(_that);case MinosError_AcpProtocolError() when acpProtocolError != null:
+return acpProtocolError(_that);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning(_that);case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
@@ -1121,7 +1123,7 @@ return pairingTokenExpired(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_BackendInternal value)  backendInternal,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_ThreadNotFound value)  threadNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,required TResult Function( MinosError_PairingQrVersionUnsupported value)  pairingQrVersionUnsupported,required TResult Function( MinosError_Timeout value)  timeout,required TResult Function( MinosError_NotConnected value)  notConnected,required TResult Function( MinosError_RequestDropped value)  requestDropped,required TResult Function( MinosError_AuthRefreshFailed value)  authRefreshFailed,required TResult Function( MinosError_EmailTaken value)  emailTaken,required TResult Function( MinosError_WeakPassword value)  weakPassword,required TResult Function( MinosError_RateLimited value)  rateLimited,required TResult Function( MinosError_InvalidCredentials value)  invalidCredentials,required TResult Function( MinosError_AgentStartFailed value)  agentStartFailed,required TResult Function( MinosError_PairingTokenExpired value)  pairingTokenExpired,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_BackendInternal value)  backendInternal,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_GeminiSpawnFailed value)  geminiSpawnFailed,required TResult Function( MinosError_AcpProtocolError value)  acpProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_ThreadNotFound value)  threadNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,required TResult Function( MinosError_PairingQrVersionUnsupported value)  pairingQrVersionUnsupported,required TResult Function( MinosError_Timeout value)  timeout,required TResult Function( MinosError_NotConnected value)  notConnected,required TResult Function( MinosError_RequestDropped value)  requestDropped,required TResult Function( MinosError_AuthRefreshFailed value)  authRefreshFailed,required TResult Function( MinosError_EmailTaken value)  emailTaken,required TResult Function( MinosError_WeakPassword value)  weakPassword,required TResult Function( MinosError_RateLimited value)  rateLimited,required TResult Function( MinosError_InvalidCredentials value)  invalidCredentials,required TResult Function( MinosError_AgentStartFailed value)  agentStartFailed,required TResult Function( MinosError_PairingTokenExpired value)  pairingTokenExpired,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
@@ -1143,7 +1145,9 @@ return peerOffline(_that);case MinosError_BackendInternal():
 return backendInternal(_that);case MinosError_CodexSpawnFailed():
 return codexSpawnFailed(_that);case MinosError_CodexConnectFailed():
 return codexConnectFailed(_that);case MinosError_CodexProtocolError():
-return codexProtocolError(_that);case MinosError_AgentAlreadyRunning():
+return codexProtocolError(_that);case MinosError_GeminiSpawnFailed():
+return geminiSpawnFailed(_that);case MinosError_AcpProtocolError():
+return acpProtocolError(_that);case MinosError_AgentAlreadyRunning():
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning():
 return agentNotRunning(_that);case MinosError_AgentNotSupported():
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch():
@@ -1176,7 +1180,7 @@ return pairingTokenExpired(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_BackendInternal value)?  backendInternal,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,TResult? Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult? Function( MinosError_Timeout value)?  timeout,TResult? Function( MinosError_NotConnected value)?  notConnected,TResult? Function( MinosError_RequestDropped value)?  requestDropped,TResult? Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult? Function( MinosError_EmailTaken value)?  emailTaken,TResult? Function( MinosError_WeakPassword value)?  weakPassword,TResult? Function( MinosError_RateLimited value)?  rateLimited,TResult? Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult? Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult? Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_BackendInternal value)?  backendInternal,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_GeminiSpawnFailed value)?  geminiSpawnFailed,TResult? Function( MinosError_AcpProtocolError value)?  acpProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,TResult? Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult? Function( MinosError_Timeout value)?  timeout,TResult? Function( MinosError_NotConnected value)?  notConnected,TResult? Function( MinosError_RequestDropped value)?  requestDropped,TResult? Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult? Function( MinosError_EmailTaken value)?  emailTaken,TResult? Function( MinosError_WeakPassword value)?  weakPassword,TResult? Function( MinosError_RateLimited value)?  rateLimited,TResult? Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult? Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult? Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -1198,7 +1202,9 @@ return peerOffline(_that);case MinosError_BackendInternal() when backendInternal
 return backendInternal(_that);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
 return codexSpawnFailed(_that);case MinosError_CodexConnectFailed() when codexConnectFailed != null:
 return codexConnectFailed(_that);case MinosError_CodexProtocolError() when codexProtocolError != null:
-return codexProtocolError(_that);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
+return codexProtocolError(_that);case MinosError_GeminiSpawnFailed() when geminiSpawnFailed != null:
+return geminiSpawnFailed(_that);case MinosError_AcpProtocolError() when acpProtocolError != null:
+return acpProtocolError(_that);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning(_that);case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
@@ -1234,7 +1240,7 @@ return pairingTokenExpired(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  backendInternal,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult Function( String threadId)?  threadNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,TResult Function( int version)?  pairingQrVersionUnsupported,TResult Function()?  timeout,TResult Function()?  notConnected,TResult Function()?  requestDropped,TResult Function( String message)?  authRefreshFailed,TResult Function()?  emailTaken,TResult Function()?  weakPassword,TResult Function( int retryAfterS)?  rateLimited,TResult Function()?  invalidCredentials,TResult Function( String reason)?  agentStartFailed,TResult Function()?  pairingTokenExpired,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  backendInternal,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function( String message)?  geminiSpawnFailed,TResult Function( String method,  String message)?  acpProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult Function( String threadId)?  threadNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,TResult Function( int version)?  pairingQrVersionUnsupported,TResult Function()?  timeout,TResult Function()?  notConnected,TResult Function()?  requestDropped,TResult Function( String message)?  authRefreshFailed,TResult Function()?  emailTaken,TResult Function()?  weakPassword,TResult Function( int retryAfterS)?  rateLimited,TResult Function()?  invalidCredentials,TResult Function( String reason)?  agentStartFailed,TResult Function()?  pairingTokenExpired,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -1255,7 +1261,9 @@ return peerOffline(_that.peerDeviceId);case MinosError_BackendInternal() when ba
 return backendInternal(_that.message);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
 return codexSpawnFailed(_that.message);case MinosError_CodexConnectFailed() when codexConnectFailed != null:
 return codexConnectFailed(_that.url,_that.message);case MinosError_CodexProtocolError() when codexProtocolError != null:
-return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
+return codexProtocolError(_that.method,_that.message);case MinosError_GeminiSpawnFailed() when geminiSpawnFailed != null:
+return geminiSpawnFailed(_that.message);case MinosError_AcpProtocolError() when acpProtocolError != null:
+return acpProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
 return agentAlreadyRunning();case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning();case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
@@ -1292,7 +1300,7 @@ return pairingTokenExpired();case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  backendInternal,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String threadId,  BigInt seq)  ingestSeqConflict,required TResult Function( String threadId)  threadNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,required TResult Function( int version)  pairingQrVersionUnsupported,required TResult Function()  timeout,required TResult Function()  notConnected,required TResult Function()  requestDropped,required TResult Function( String message)  authRefreshFailed,required TResult Function()  emailTaken,required TResult Function()  weakPassword,required TResult Function( int retryAfterS)  rateLimited,required TResult Function()  invalidCredentials,required TResult Function( String reason)  agentStartFailed,required TResult Function()  pairingTokenExpired,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  backendInternal,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function( String message)  geminiSpawnFailed,required TResult Function( String method,  String message)  acpProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String threadId,  BigInt seq)  ingestSeqConflict,required TResult Function( String threadId)  threadNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,required TResult Function( int version)  pairingQrVersionUnsupported,required TResult Function()  timeout,required TResult Function()  notConnected,required TResult Function()  requestDropped,required TResult Function( String message)  authRefreshFailed,required TResult Function()  emailTaken,required TResult Function()  weakPassword,required TResult Function( int retryAfterS)  rateLimited,required TResult Function()  invalidCredentials,required TResult Function( String reason)  agentStartFailed,required TResult Function()  pairingTokenExpired,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed():
@@ -1313,7 +1321,9 @@ return peerOffline(_that.peerDeviceId);case MinosError_BackendInternal():
 return backendInternal(_that.message);case MinosError_CodexSpawnFailed():
 return codexSpawnFailed(_that.message);case MinosError_CodexConnectFailed():
 return codexConnectFailed(_that.url,_that.message);case MinosError_CodexProtocolError():
-return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning():
+return codexProtocolError(_that.method,_that.message);case MinosError_GeminiSpawnFailed():
+return geminiSpawnFailed(_that.message);case MinosError_AcpProtocolError():
+return acpProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning():
 return agentAlreadyRunning();case MinosError_AgentNotRunning():
 return agentNotRunning();case MinosError_AgentNotSupported():
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch():
@@ -1346,7 +1356,7 @@ return pairingTokenExpired();}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  backendInternal,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String threadId)?  threadNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,TResult? Function( int version)?  pairingQrVersionUnsupported,TResult? Function()?  timeout,TResult? Function()?  notConnected,TResult? Function()?  requestDropped,TResult? Function( String message)?  authRefreshFailed,TResult? Function()?  emailTaken,TResult? Function()?  weakPassword,TResult? Function( int retryAfterS)?  rateLimited,TResult? Function()?  invalidCredentials,TResult? Function( String reason)?  agentStartFailed,TResult? Function()?  pairingTokenExpired,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  backendInternal,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function( String message)?  geminiSpawnFailed,TResult? Function( String method,  String message)?  acpProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String threadId)?  threadNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,TResult? Function( int version)?  pairingQrVersionUnsupported,TResult? Function()?  timeout,TResult? Function()?  notConnected,TResult? Function()?  requestDropped,TResult? Function( String message)?  authRefreshFailed,TResult? Function()?  emailTaken,TResult? Function()?  weakPassword,TResult? Function( int retryAfterS)?  rateLimited,TResult? Function()?  invalidCredentials,TResult? Function( String reason)?  agentStartFailed,TResult? Function()?  pairingTokenExpired,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -1367,7 +1377,9 @@ return peerOffline(_that.peerDeviceId);case MinosError_BackendInternal() when ba
 return backendInternal(_that.message);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
 return codexSpawnFailed(_that.message);case MinosError_CodexConnectFailed() when codexConnectFailed != null:
 return codexConnectFailed(_that.url,_that.message);case MinosError_CodexProtocolError() when codexProtocolError != null:
-return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
+return codexProtocolError(_that.method,_that.message);case MinosError_GeminiSpawnFailed() when geminiSpawnFailed != null:
+return geminiSpawnFailed(_that.message);case MinosError_AcpProtocolError() when acpProtocolError != null:
+return acpProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
 return agentAlreadyRunning();case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning();case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
@@ -1399,7 +1411,7 @@ return pairingTokenExpired();case _:
 
 class MinosError_BindFailed extends MinosError {
   const MinosError_BindFailed({required this.addr, required this.message}): super._();
-  
+
 
  final  String addr;
  final  String message;
@@ -1467,7 +1479,7 @@ as String,
 
 class MinosError_ConnectFailed extends MinosError {
   const MinosError_ConnectFailed({required this.url, required this.message}): super._();
-  
+
 
  final  String url;
  final  String message;
@@ -1535,7 +1547,7 @@ as String,
 
 class MinosError_Disconnected extends MinosError {
   const MinosError_Disconnected({required this.reason}): super._();
-  
+
 
  final  String reason;
 
@@ -1601,7 +1613,7 @@ as String,
 
 class MinosError_PairingTokenInvalid extends MinosError {
   const MinosError_PairingTokenInvalid(): super._();
-  
+
 
 
 
@@ -1633,7 +1645,7 @@ String toString() {
 
 class MinosError_PairingStateMismatch extends MinosError {
   const MinosError_PairingStateMismatch({required this.actual}): super._();
-  
+
 
  final  PairingState actual;
 
@@ -1699,7 +1711,7 @@ as PairingState,
 
 class MinosError_DeviceNotTrusted extends MinosError {
   const MinosError_DeviceNotTrusted({required this.deviceId}): super._();
-  
+
 
  final  String deviceId;
 
@@ -1765,7 +1777,7 @@ as String,
 
 class MinosError_StoreIo extends MinosError {
   const MinosError_StoreIo({required this.path, required this.message}): super._();
-  
+
 
  final  String path;
  final  String message;
@@ -1833,7 +1845,7 @@ as String,
 
 class MinosError_StoreCorrupt extends MinosError {
   const MinosError_StoreCorrupt({required this.path, required this.message}): super._();
-  
+
 
  final  String path;
  final  String message;
@@ -1901,7 +1913,7 @@ as String,
 
 class MinosError_CliProbeTimeout extends MinosError {
   const MinosError_CliProbeTimeout({required this.bin, required this.timeoutMs}): super._();
-  
+
 
  final  String bin;
  final  BigInt timeoutMs;
@@ -1969,7 +1981,7 @@ as BigInt,
 
 class MinosError_CliProbeFailed extends MinosError {
   const MinosError_CliProbeFailed({required this.bin, required this.message}): super._();
-  
+
 
  final  String bin;
  final  String message;
@@ -2037,7 +2049,7 @@ as String,
 
 class MinosError_RpcCallFailed extends MinosError {
   const MinosError_RpcCallFailed({required this.method, required this.message}): super._();
-  
+
 
  final  String method;
  final  String message;
@@ -2105,7 +2117,7 @@ as String,
 
 class MinosError_Unauthorized extends MinosError {
   const MinosError_Unauthorized({required this.reason}): super._();
-  
+
 
  final  String reason;
 
@@ -2171,7 +2183,7 @@ as String,
 
 class MinosError_ConnectionStateMismatch extends MinosError {
   const MinosError_ConnectionStateMismatch({required this.expected, required this.actual}): super._();
-  
+
 
  final  String expected;
  final  String actual;
@@ -2239,7 +2251,7 @@ as String,
 
 class MinosError_EnvelopeVersionUnsupported extends MinosError {
   const MinosError_EnvelopeVersionUnsupported({required this.version}): super._();
-  
+
 
  final  int version;
 
@@ -2305,7 +2317,7 @@ as int,
 
 class MinosError_PeerOffline extends MinosError {
   const MinosError_PeerOffline({required this.peerDeviceId}): super._();
-  
+
 
  final  String peerDeviceId;
 
@@ -2371,7 +2383,7 @@ as String,
 
 class MinosError_BackendInternal extends MinosError {
   const MinosError_BackendInternal({required this.message}): super._();
-  
+
 
  final  String message;
 
@@ -2437,7 +2449,7 @@ as String,
 
 class MinosError_CodexSpawnFailed extends MinosError {
   const MinosError_CodexSpawnFailed({required this.message}): super._();
-  
+
 
  final  String message;
 
@@ -2503,7 +2515,7 @@ as String,
 
 class MinosError_CodexConnectFailed extends MinosError {
   const MinosError_CodexConnectFailed({required this.url, required this.message}): super._();
-  
+
 
  final  String url;
  final  String message;
@@ -2571,7 +2583,7 @@ as String,
 
 class MinosError_CodexProtocolError extends MinosError {
   const MinosError_CodexProtocolError({required this.method, required this.message}): super._();
-  
+
 
  final  String method;
  final  String message;
@@ -2637,9 +2649,143 @@ as String,
 /// @nodoc
 
 
+class MinosError_GeminiSpawnFailed extends MinosError {
+  const MinosError_GeminiSpawnFailed({required this.message}): super._();
+
+
+ final  String message;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_GeminiSpawnFailedCopyWith<MinosError_GeminiSpawnFailed> get copyWith => _$MinosError_GeminiSpawnFailedCopyWithImpl<MinosError_GeminiSpawnFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_GeminiSpawnFailed&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,message);
+
+@override
+String toString() {
+  return 'MinosError.geminiSpawnFailed(message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_GeminiSpawnFailedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_GeminiSpawnFailedCopyWith(MinosError_GeminiSpawnFailed value, $Res Function(MinosError_GeminiSpawnFailed) _then) = _$MinosError_GeminiSpawnFailedCopyWithImpl;
+@useResult
+$Res call({
+ String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_GeminiSpawnFailedCopyWithImpl<$Res>
+    implements $MinosError_GeminiSpawnFailedCopyWith<$Res> {
+  _$MinosError_GeminiSpawnFailedCopyWithImpl(this._self, this._then);
+
+  final MinosError_GeminiSpawnFailed _self;
+  final $Res Function(MinosError_GeminiSpawnFailed) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? message = null,}) {
+  return _then(MinosError_GeminiSpawnFailed(
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_AcpProtocolError extends MinosError {
+  const MinosError_AcpProtocolError({required this.method, required this.message}): super._();
+
+
+ final  String method;
+ final  String message;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_AcpProtocolErrorCopyWith<MinosError_AcpProtocolError> get copyWith => _$MinosError_AcpProtocolErrorCopyWithImpl<MinosError_AcpProtocolError>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_AcpProtocolError&&(identical(other.method, method) || other.method == method)&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,method,message);
+
+@override
+String toString() {
+  return 'MinosError.acpProtocolError(method: $method, message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_AcpProtocolErrorCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_AcpProtocolErrorCopyWith(MinosError_AcpProtocolError value, $Res Function(MinosError_AcpProtocolError) _then) = _$MinosError_AcpProtocolErrorCopyWithImpl;
+@useResult
+$Res call({
+ String method, String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_AcpProtocolErrorCopyWithImpl<$Res>
+    implements $MinosError_AcpProtocolErrorCopyWith<$Res> {
+  _$MinosError_AcpProtocolErrorCopyWithImpl(this._self, this._then);
+
+  final MinosError_AcpProtocolError _self;
+  final $Res Function(MinosError_AcpProtocolError) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? method = null,Object? message = null,}) {
+  return _then(MinosError_AcpProtocolError(
+method: null == method ? _self.method : method // ignore: cast_nullable_to_non_nullable
+as String,message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
 class MinosError_AgentAlreadyRunning extends MinosError {
   const MinosError_AgentAlreadyRunning(): super._();
-  
+
 
 
 
@@ -2671,7 +2817,7 @@ String toString() {
 
 class MinosError_AgentNotRunning extends MinosError {
   const MinosError_AgentNotRunning(): super._();
-  
+
 
 
 
@@ -2703,7 +2849,7 @@ String toString() {
 
 class MinosError_AgentNotSupported extends MinosError {
   const MinosError_AgentNotSupported({required this.agent}): super._();
-  
+
 
  final  AgentName agent;
 
@@ -2769,7 +2915,7 @@ as AgentName,
 
 class MinosError_AgentSessionIdMismatch extends MinosError {
   const MinosError_AgentSessionIdMismatch(): super._();
-  
+
 
 
 
@@ -2801,7 +2947,7 @@ String toString() {
 
 class MinosError_IngestSeqConflict extends MinosError {
   const MinosError_IngestSeqConflict({required this.threadId, required this.seq}): super._();
-  
+
 
  final  String threadId;
  final  BigInt seq;
@@ -2869,7 +3015,7 @@ as BigInt,
 
 class MinosError_ThreadNotFound extends MinosError {
   const MinosError_ThreadNotFound({required this.threadId}): super._();
-  
+
 
  final  String threadId;
 
@@ -2935,7 +3081,7 @@ as String,
 
 class MinosError_TranslationNotImplemented extends MinosError {
   const MinosError_TranslationNotImplemented({required this.agent}): super._();
-  
+
 
  final  AgentName agent;
 
@@ -3001,7 +3147,7 @@ as AgentName,
 
 class MinosError_TranslationFailed extends MinosError {
   const MinosError_TranslationFailed({required this.agent, required this.message}): super._();
-  
+
 
  final  AgentName agent;
  final  String message;
@@ -3069,7 +3215,7 @@ as String,
 
 class MinosError_PairingQrVersionUnsupported extends MinosError {
   const MinosError_PairingQrVersionUnsupported({required this.version}): super._();
-  
+
 
  final  int version;
 
@@ -3135,7 +3281,7 @@ as int,
 
 class MinosError_Timeout extends MinosError {
   const MinosError_Timeout(): super._();
-  
+
 
 
 
@@ -3167,7 +3313,7 @@ String toString() {
 
 class MinosError_NotConnected extends MinosError {
   const MinosError_NotConnected(): super._();
-  
+
 
 
 
@@ -3199,7 +3345,7 @@ String toString() {
 
 class MinosError_RequestDropped extends MinosError {
   const MinosError_RequestDropped(): super._();
-  
+
 
 
 
@@ -3231,7 +3377,7 @@ String toString() {
 
 class MinosError_AuthRefreshFailed extends MinosError {
   const MinosError_AuthRefreshFailed({required this.message}): super._();
-  
+
 
  final  String message;
 
@@ -3297,7 +3443,7 @@ as String,
 
 class MinosError_EmailTaken extends MinosError {
   const MinosError_EmailTaken(): super._();
-  
+
 
 
 
@@ -3329,7 +3475,7 @@ String toString() {
 
 class MinosError_WeakPassword extends MinosError {
   const MinosError_WeakPassword(): super._();
-  
+
 
 
 
@@ -3361,7 +3507,7 @@ String toString() {
 
 class MinosError_RateLimited extends MinosError {
   const MinosError_RateLimited({required this.retryAfterS}): super._();
-  
+
 
  final  int retryAfterS;
 
@@ -3427,7 +3573,7 @@ as int,
 
 class MinosError_InvalidCredentials extends MinosError {
   const MinosError_InvalidCredentials(): super._();
-  
+
 
 
 
@@ -3459,7 +3605,7 @@ String toString() {
 
 class MinosError_AgentStartFailed extends MinosError {
   const MinosError_AgentStartFailed({required this.reason}): super._();
-  
+
 
  final  String reason;
 
@@ -3525,7 +3671,7 @@ as String,
 
 class MinosError_PairingTokenExpired extends MinosError {
   const MinosError_PairingTokenExpired(): super._();
-  
+
 
 
 
@@ -3735,7 +3881,7 @@ return hostDisconnected();case _:
 
 class ThreadEndReason_UserStopped extends ThreadEndReason {
   const ThreadEndReason_UserStopped(): super._();
-  
+
 
 
 
@@ -3767,7 +3913,7 @@ String toString() {
 
 class ThreadEndReason_AgentDone extends ThreadEndReason {
   const ThreadEndReason_AgentDone(): super._();
-  
+
 
 
 
@@ -3799,7 +3945,7 @@ String toString() {
 
 class ThreadEndReason_Crashed extends ThreadEndReason {
   const ThreadEndReason_Crashed({required this.message}): super._();
-  
+
 
  final  String message;
 
@@ -3865,7 +4011,7 @@ as String,
 
 class ThreadEndReason_Timeout extends ThreadEndReason {
   const ThreadEndReason_Timeout(): super._();
-  
+
 
 
 
@@ -3897,7 +4043,7 @@ String toString() {
 
 class ThreadEndReason_HostDisconnected extends ThreadEndReason {
   const ThreadEndReason_HostDisconnected(): super._();
-  
+
 
 
 
@@ -4143,7 +4289,7 @@ return raw(_that.kind,_that.payloadJson);case _:
 
 class UiEventMessage_ThreadOpened extends UiEventMessage {
   const UiEventMessage_ThreadOpened({required this.threadId, required this.agent, this.title, required this.openedAtMs}): super._();
-  
+
 
  final  String threadId;
  final  AgentName agent;
@@ -4215,7 +4361,7 @@ as PlatformInt64,
 
 class UiEventMessage_ThreadTitleUpdated extends UiEventMessage {
   const UiEventMessage_ThreadTitleUpdated({required this.threadId, required this.title}): super._();
-  
+
 
  final  String threadId;
  final  String title;
@@ -4283,7 +4429,7 @@ as String,
 
 class UiEventMessage_ThreadClosed extends UiEventMessage {
   const UiEventMessage_ThreadClosed({required this.threadId, required this.reason, required this.closedAtMs}): super._();
-  
+
 
  final  String threadId;
  final  ThreadEndReason reason;
@@ -4350,7 +4496,7 @@ as PlatformInt64,
 @override
 @pragma('vm:prefer-inline')
 $ThreadEndReasonCopyWith<$Res> get reason {
-  
+
   return $ThreadEndReasonCopyWith<$Res>(_self.reason, (value) {
     return _then(_self.copyWith(reason: value));
   });
@@ -4362,7 +4508,7 @@ $ThreadEndReasonCopyWith<$Res> get reason {
 
 class UiEventMessage_MessageStarted extends UiEventMessage {
   const UiEventMessage_MessageStarted({required this.messageId, required this.role, required this.startedAtMs}): super._();
-  
+
 
  final  String messageId;
  final  MessageRole role;
@@ -4432,7 +4578,7 @@ as PlatformInt64,
 
 class UiEventMessage_MessageCompleted extends UiEventMessage {
   const UiEventMessage_MessageCompleted({required this.messageId, required this.finishedAtMs}): super._();
-  
+
 
  final  String messageId;
  final  PlatformInt64 finishedAtMs;
@@ -4500,7 +4646,7 @@ as PlatformInt64,
 
 class UiEventMessage_TextDelta extends UiEventMessage {
   const UiEventMessage_TextDelta({required this.messageId, required this.text}): super._();
-  
+
 
  final  String messageId;
  final  String text;
@@ -4568,7 +4714,7 @@ as String,
 
 class UiEventMessage_ReasoningDelta extends UiEventMessage {
   const UiEventMessage_ReasoningDelta({required this.messageId, required this.text}): super._();
-  
+
 
  final  String messageId;
  final  String text;
@@ -4636,7 +4782,7 @@ as String,
 
 class UiEventMessage_ToolCallPlaced extends UiEventMessage {
   const UiEventMessage_ToolCallPlaced({required this.messageId, required this.toolCallId, required this.name, required this.argsJson}): super._();
-  
+
 
  final  String messageId;
  final  String toolCallId;
@@ -4708,7 +4854,7 @@ as String,
 
 class UiEventMessage_ToolCallCompleted extends UiEventMessage {
   const UiEventMessage_ToolCallCompleted({required this.toolCallId, required this.output, required this.isError}): super._();
-  
+
 
  final  String toolCallId;
  final  String output;
@@ -4778,7 +4924,7 @@ as bool,
 
 class UiEventMessage_Error extends UiEventMessage {
   const UiEventMessage_Error({required this.code, required this.message, this.messageId}): super._();
-  
+
 
  final  String code;
  final  String message;
@@ -4848,7 +4994,7 @@ as String?,
 
 class UiEventMessage_Raw extends UiEventMessage {
   const UiEventMessage_Raw({required this.kind, required this.payloadJson}): super._();
-  
+
 
  final  String kind;
  final  String payloadJson;

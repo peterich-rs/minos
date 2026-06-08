@@ -82,10 +82,10 @@ pub fn translate(
             })?;
 
     match kind {
-        "user_message" => translate_user_message(state, raw),
+        "user_message" => Ok(translate_user_message(state, raw)),
         "acp_notification" => translate_acp_notification(state, raw),
         "acp_server_request" => translate_acp_server_request(state, raw),
-        "acp_prompt_response" => translate_acp_prompt_response(state, raw),
+        "acp_prompt_response" => Ok(translate_acp_prompt_response(state, raw)),
         "acp_error" => Ok(vec![UiEventMessage::Error {
             code: raw
                 .get("code")
@@ -120,16 +120,13 @@ pub fn translate(
     }
 }
 
-fn translate_user_message(
-    state: &mut GeminiTranslatorState,
-    raw: &Value,
-) -> Result<Vec<UiEventMessage>, TranslationError> {
+fn translate_user_message(state: &mut GeminiTranslatorState, raw: &Value) -> Vec<UiEventMessage> {
     let message_id = raw
         .get("messageId")
         .and_then(Value::as_str)
         .map_or_else(|| Uuid::new_v4().to_string(), str::to_string);
     if !state.emitted_message_ids.insert(message_id.clone()) {
-        return Ok(vec![]);
+        return vec![];
     }
     let mut events = complete_open_assistant_message(
         state,
@@ -152,13 +149,13 @@ fn translate_user_message(
     if !text.is_empty() {
         events.push(UiEventMessage::TextDelta { message_id, text });
     }
-    Ok(events)
+    events
 }
 
 fn translate_acp_prompt_response(
     state: &mut GeminiTranslatorState,
     raw: &Value,
-) -> Result<Vec<UiEventMessage>, TranslationError> {
+) -> Vec<UiEventMessage> {
     let stop_reason = raw
         .get("stopReason")
         .and_then(Value::as_str)
@@ -166,10 +163,7 @@ fn translate_acp_prompt_response(
     match stop_reason {
         "end_turn" => {
             state.tool_calls.clear();
-            Ok(complete_open_assistant_message(
-                state,
-                chrono::Utc::now().timestamp_millis(),
-            ))
+            complete_open_assistant_message(state, chrono::Utc::now().timestamp_millis())
         }
         "cancelled" => {
             let now_ms = chrono::Utc::now().timestamp_millis();
@@ -180,13 +174,13 @@ fn translate_acp_prompt_response(
                 reason: ThreadEndReason::UserStopped,
                 closed_at_ms: now_ms,
             });
-            Ok(events)
+            events
         }
-        other => Ok(vec![UiEventMessage::Error {
+        other => vec![UiEventMessage::Error {
             code: format!("gemini_stop_reason_{other}"),
             message: format!("Gemini stopped with reason: {other}"),
             message_id: state.open_assistant_message_id.clone(),
-        }]),
+        }],
     }
 }
 

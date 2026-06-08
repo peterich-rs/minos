@@ -20,10 +20,12 @@ use tokio::task::JoinHandle;
 
 use crate::error::BackendError;
 use crate::session::SessionRegistry;
-use crate::store::{durable_event_log, outbox_events, StoreHandle};
+use crate::store::{durable_event_log, host_commands, outbox_events, StoreHandle};
 
 pub use event::{ApprovalResolution, DurableEvent, DurableEventEnvelope, SenderRef};
-pub use subscription::{ConnectionId, ConnectionPrincipal, ConnectionState, SubscriptionManager};
+pub use subscription::{
+    ConnectionId, ConnectionPrincipal, ConnectionState, DurableSendResult, SubscriptionManager,
+};
 pub use topic::{RealtimeTopic, TopicKind};
 const DEFAULT_PEER_TARGET_CACHE_TTL: Duration = Duration::from_secs(5);
 const CLUSTER_RECONNECT_DELAY: Duration = Duration::from_secs(1);
@@ -32,6 +34,8 @@ const OUTBOX_DISPATCH_BATCH_SIZE: u32 = 64;
 const OUTBOX_IDLE_DELAY: Duration = Duration::from_millis(100);
 const OUTBOX_RETRY_DELAY: Duration = Duration::from_millis(250);
 const OUTBOX_MAX_ATTEMPTS: u32 = 8;
+const HOST_COMMAND_ACK_WAIT: Duration = Duration::from_millis(250);
+const HOST_COMMAND_ACK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
 pub enum CacheBackendKind {
@@ -557,6 +561,31 @@ impl RealtimeFanout {
                 message: error.to_string(),
             })?;
         let (kind, payload) = durable_event_kind_payload(&row.payload_json);
+        let is_host_command = kind == "host_command_issued";
+        let host_command_id = is_host_command
+            .then(|| payload.get("command_id").and_then(Value::as_str))
+            .flatten()
+            .map(str::to_string);
+        if is_host_command && host_command_id.is_none() {
+            return Err(BackendError::StoreDecode {
+                column: "durable_event_log.payload_json.command_id".into(),
+                message: "host_command_issued event missing command_id".into(),
+            });
+        }
+        let host_command_deadline_at_ms = is_host_command
+            .then(|| {
+                payload
+                    .get("deadline_at_ms")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        if is_host_command
+            && host_command_deadline_at_ms > 0
+            && host_command_deadline_at_ms <= chrono::Utc::now().timestamp_millis()
+        {
+            return Ok(());
+        }
         self.bus
             .publish(&ClusterEvent::DurableFanout {
                 origin_instance_id: self.instance_id.clone(),
@@ -567,18 +596,64 @@ impl RealtimeFanout {
                 event_id: row.event_id.clone(),
             })
             .await?;
-        self.broadcast_durable_event_local(
-            &topic,
-            &row.event_id,
-            wire::ServerFrame::DurableEvent {
-                topic: row.topic.clone(),
-                topic_seq: row.topic_seq,
-                kind,
-                payload,
-                event_id: row.event_id.clone(),
-            },
-        );
+        let frame = wire::ServerFrame::DurableEvent {
+            topic: row.topic.clone(),
+            topic_seq: row.topic_seq,
+            kind,
+            payload,
+            event_id: row.event_id.clone(),
+        };
+        let stats = if is_host_command {
+            self.broadcast_durable_event_local_untracked(&topic, frame)
+        } else {
+            self.broadcast_durable_event_local(&topic, &row.event_id, frame)
+        };
+        if let Some(command_id) = host_command_id {
+            if self
+                .wait_for_host_command_ack(&command_id, host_command_deadline_at_ms)
+                .await?
+            {
+                return Ok(());
+            }
+            return Err(BackendError::MessageBus {
+                operation: "realtime.host_command.ack_wait".into(),
+                message: format!(
+                    "host command durable event {} was not acknowledged by host command {} on topic {} (targets={}, delivered={}, failed={})",
+                    row.event_id, command_id, row.topic, stats.targets, stats.delivered, stats.failed
+                ),
+            });
+        }
         Ok(())
+    }
+
+    async fn wait_for_host_command_ack(
+        &self,
+        command_id: &str,
+        deadline_at_ms: i64,
+    ) -> Result<bool, BackendError> {
+        let wait_deadline = tokio::time::Instant::now()
+            .checked_add(HOST_COMMAND_ACK_WAIT)
+            .unwrap_or_else(tokio::time::Instant::now);
+        loop {
+            let Some(row) = host_commands::get(&self.store, command_id).await? else {
+                return Ok(false);
+            };
+            if row.ack_at_ms.is_some() || row.finished_at_ms.is_some() {
+                return Ok(true);
+            }
+            if deadline_at_ms > 0 && deadline_at_ms <= chrono::Utc::now().timestamp_millis() {
+                return Ok(true);
+            }
+
+            let now = tokio::time::Instant::now();
+            if now >= wait_deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(
+                HOST_COMMAND_ACK_POLL_INTERVAL.min(wait_deadline.saturating_duration_since(now)),
+            )
+            .await;
+        }
     }
 
     async fn requeue_outbox_row(&self, row: &outbox_events::OutboxEventRow, message: &str) {
@@ -663,17 +738,18 @@ impl RealtimeFanout {
                         return;
                     }
                 };
-                self.broadcast_durable_event_local(
-                    &parsed_topic,
-                    &event_id,
-                    wire::ServerFrame::DurableEvent {
-                        topic,
-                        topic_seq,
-                        kind: event_kind,
-                        payload,
-                        event_id: event_id.clone(),
-                    },
-                );
+                let frame = wire::ServerFrame::DurableEvent {
+                    topic,
+                    topic_seq,
+                    kind: event_kind.clone(),
+                    payload,
+                    event_id: event_id.clone(),
+                };
+                let _ = if event_kind == "host_command_issued" {
+                    self.broadcast_durable_event_local_untracked(&parsed_topic, frame)
+                } else {
+                    self.broadcast_durable_event_local(&parsed_topic, &event_id, frame)
+                };
             }
         }
     }
@@ -700,21 +776,51 @@ impl RealtimeFanout {
         topic: &RealtimeTopic,
         event_id: &str,
         frame: wire::ServerFrame,
-    ) {
+    ) -> DurableFanoutStats {
+        let mut stats = DurableFanoutStats::default();
         for target in self.subscription_mgr.fanout_targets(topic) {
-            if !target.remember_durable_event(event_id) {
-                continue;
-            }
-            if let Err(error) = target.send(frame.clone()) {
-                tracing::warn!(
-                    target: "minos_backend::realtime",
-                    conn_id = %target.conn_id,
-                    topic = %topic.topic_string(),
-                    error = ?error,
-                    "formal gateway durable fanout dropped frame"
-                );
+            stats.targets += 1;
+            match target.send_durable_event(event_id, frame.clone()) {
+                Ok(DurableSendResult::Delivered) => stats.delivered += 1,
+                Ok(DurableSendResult::AlreadySeen) => stats.already_seen += 1,
+                Err(error) => {
+                    stats.failed += 1;
+                    tracing::warn!(
+                        target: "minos_backend::realtime",
+                        conn_id = %target.conn_id,
+                        topic = %topic.topic_string(),
+                        error = ?error,
+                        "formal gateway durable fanout dropped frame"
+                    );
+                }
             }
         }
+        stats
+    }
+
+    fn broadcast_durable_event_local_untracked(
+        &self,
+        topic: &RealtimeTopic,
+        frame: wire::ServerFrame,
+    ) -> DurableFanoutStats {
+        let mut stats = DurableFanoutStats::default();
+        for target in self.subscription_mgr.fanout_targets(topic) {
+            stats.targets += 1;
+            match target.send(frame.clone()) {
+                Ok(()) => stats.delivered += 1,
+                Err(error) => {
+                    stats.failed += 1;
+                    tracing::warn!(
+                        target: "minos_backend::realtime",
+                        conn_id = %target.conn_id,
+                        topic = %topic.topic_string(),
+                        error = ?error,
+                        "formal gateway durable fanout dropped untracked frame"
+                    );
+                }
+            }
+        }
+        stats
     }
 
     fn broadcast_social_message_local(&self, target_account_ids: &[String], envelope: Envelope) {
@@ -726,10 +832,27 @@ impl RealtimeFanout {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct DurableFanoutStats {
+    targets: usize,
+    delivered: usize,
+    already_seen: usize,
+    failed: usize,
+}
+
 fn durable_event_kind_payload(value: &Value) -> (String, Value) {
     let kind = value
         .get("kind")
         .and_then(Value::as_str)
+        .or_else(|| {
+            let looks_like_host_command = value.get("command_id").and_then(Value::as_str).is_some()
+                && value.get("method").and_then(Value::as_str).is_some()
+                && value
+                    .get("deadline_at_ms")
+                    .and_then(Value::as_i64)
+                    .is_some();
+            looks_like_host_command.then_some("host_command_issued")
+        })
         .unwrap_or("unknown")
         .to_string();
     let mut payload = value.clone();

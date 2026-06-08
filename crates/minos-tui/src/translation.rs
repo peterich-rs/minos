@@ -620,7 +620,11 @@ impl ChatSelection {
 #[derive(Debug, PartialEq)]
 pub enum TextPart {
     Plain(String),
-    Code { lang: String, code: String },
+    #[allow(dead_code)]
+    Code {
+        lang: String,
+        code: String,
+    },
 }
 
 pub struct ToolCallBlock {

@@ -18,6 +18,7 @@ pub enum AppEvent {
     },
     Key(KeyEvent),
     Mouse(MouseEvent),
+    #[allow(dead_code)]
     Resize(u16, u16),
     Tick,
 }

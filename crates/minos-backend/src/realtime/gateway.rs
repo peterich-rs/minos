@@ -9,7 +9,7 @@ use axum::{
     response::Response,
 };
 use futures::StreamExt;
-use minos_domain::{DeviceId, DeviceRole};
+use minos_domain::{AgentName, DeviceId, DeviceRole};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -19,11 +19,13 @@ use uuid::Uuid;
 use crate::auth::realtime_ticket::RealtimeTicketConsumeError;
 use crate::error::BackendError;
 use crate::http::BackendState;
+use crate::ingest::use_case::IngestCommand;
 use crate::realtime::auth::{self, SubscriptionAuthError, SubscriptionDenied};
 use crate::realtime::subscription::ConnectionState;
 use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
 use crate::store::{
-    agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands,
+    account_host_pairings, agent_sessions, agent_turn_events, agent_turns, durable_event_log,
+    host_commands, outbox_events, social,
 };
 use minos_protocol::realtime::{ClientFrame, ConnectionPrincipal, RealtimeTopic, ServerFrame};
 
@@ -545,7 +547,35 @@ async fn handle_formal_frame(
                 .await;
                 return Ok(None);
             }
-            let _ = host_commands::ack(&state.store, &command_id, ack_at_ms).await?;
+            let store = state.store.clone();
+            tokio::spawn(async move {
+                match host_commands::ack(&store, &command_id, ack_at_ms).await {
+                    Ok(_) => {
+                        if let Err(error) = outbox_events::ack_pending_host_command_events(
+                            &store,
+                            &command_id,
+                            ack_at_ms,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                target: "minos_backend::realtime::gateway",
+                                error = %error,
+                                command_id,
+                                "failed to ack pending host command outbox events"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "minos_backend::realtime::gateway",
+                            error = %error,
+                            command_id,
+                            "failed to persist host command ack"
+                        );
+                    }
+                }
+            });
             Ok(None)
         }
         ClientFrame::HostCommandResult {
@@ -576,19 +606,48 @@ async fn handle_formal_frame(
             } else {
                 Some(error.unwrap_or_else(|| serde_json::json!({ "status": status })))
             };
-            let _ = host_commands::finish(
-                &state.store,
-                &command_id,
-                if succeeded {
-                    host_commands::HostCommandTerminalStatus::Succeeded
-                } else {
-                    host_commands::HostCommandTerminalStatus::Failed
-                },
-                response_value.as_ref(),
-                error_value.as_ref(),
-                finished_at_ms,
-            )
-            .await?;
+            let store = state.store.clone();
+            tokio::spawn(async move {
+                let finish_result = host_commands::finish(
+                    &store,
+                    &command_id,
+                    if succeeded {
+                        host_commands::HostCommandTerminalStatus::Succeeded
+                    } else {
+                        host_commands::HostCommandTerminalStatus::Failed
+                    },
+                    response_value.as_ref(),
+                    error_value.as_ref(),
+                    finished_at_ms,
+                )
+                .await;
+                match finish_result {
+                    Ok(_) => {
+                        if let Err(error) = outbox_events::ack_pending_host_command_events(
+                            &store,
+                            &command_id,
+                            finished_at_ms,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                target: "minos_backend::realtime::gateway",
+                                error = %error,
+                                command_id,
+                                "failed to ack pending host command outbox events"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "minos_backend::realtime::gateway",
+                            error = %error,
+                            command_id,
+                            "failed to persist host command result"
+                        );
+                    }
+                }
+            });
             Ok(None)
         }
         ClientFrame::HostStreamEvent {
@@ -685,11 +744,14 @@ async fn handle_subscribe(
     let newly = state
         .subscription_mgr
         .add_topics(conn.conn_id, &authorized_topics);
-    if !newly.is_empty() {
+    if !authorized_topics.is_empty() {
         let _ = send_server_frame(
             ws,
             &ServerFrame::SubscribeAck {
-                topics: newly.iter().map(RealtimeTopic::topic_string).collect(),
+                topics: authorized_topics
+                    .iter()
+                    .map(RealtimeTopic::topic_string)
+                    .collect(),
                 client_request_id,
             },
         )
@@ -751,7 +813,7 @@ async fn replay_topic(
         }
 
         for row in &batch {
-            if !conn.remember_durable_event(&row.event_id) {
+            if conn.has_seen_durable_event(&row.event_id) {
                 continue;
             }
             let (kind, payload) = durable_event_kind_payload(&row.payload_json);
@@ -773,6 +835,7 @@ async fn replay_topic(
                     message: "websocket closed while replaying durable events".into(),
                 });
             }
+            let _ = conn.remember_durable_event(&row.event_id);
         }
 
         next_after = batch.last().map_or(next_after, |row| row.topic_seq);
@@ -795,14 +858,33 @@ async fn on_host_stream_event(
         operation: "gateway.host_stream.parse_topic".into(),
         message: error.to_string(),
     })?;
-    let RealtimeTopic::AgentSession(session_id) = topic.clone() else {
+    let RealtimeTopic::AgentSession(session_id) = &topic else {
         return Ok(());
     };
 
-    let session = agent_sessions::get(&state.store, &session_id)
+    if payload.get("turn_id").and_then(Value::as_str).is_some()
+        && payload.get("seq").and_then(Value::as_i64).is_some()
+    {
+        handle_formal_host_stream_event(state, upgrade, &topic, session_id, kind, payload).await?;
+    } else {
+        handle_raw_ingest_host_stream_event(state, upgrade, session_id, payload).await?;
+    }
+
+    Ok(())
+}
+
+async fn handle_formal_host_stream_event(
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    topic: &RealtimeTopic,
+    session_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Result<(), BackendError> {
+    let session = agent_sessions::get(&state.store, session_id)
         .await?
         .ok_or_else(|| BackendError::PeerOffline {
-            peer_device_id: session_id.clone(),
+            peer_device_id: session_id.to_string(),
         })?;
     let expected_host_id = upgrade.device_id.to_string();
     if session.host_device_id.as_deref() != Some(expected_host_id.as_str()) {
@@ -855,6 +937,135 @@ async fn on_host_stream_event(
         let _ = target.send(frame.clone());
     }
 
+    Ok(())
+}
+
+async fn handle_raw_ingest_host_stream_event(
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    session_id: &str,
+    payload: Value,
+) -> Result<(), BackendError> {
+    let Some(seq) = payload.get("seq").and_then(Value::as_u64) else {
+        tracing::warn!(
+            target: "minos_backend::realtime::gateway",
+            session_id,
+            "dropping raw host stream event without seq metadata"
+        );
+        return Ok(());
+    };
+    let agent = payload
+        .get("agent")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<AgentName>(value).ok())
+        .unwrap_or(AgentName::Codex);
+    let ts_ms = payload
+        .get("ts_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+    ensure_raw_agent_session(state, upgrade.device_id, session_id, agent, ts_ms).await?;
+    ensure_raw_approval_turn(state, session_id, &payload, ts_ms).await?;
+
+    state
+        .ingest
+        .execute(IngestCommand {
+            agent,
+            thread_id: session_id.to_string(),
+            seq,
+            payload,
+            ts_ms,
+            owner_device_id: upgrade.device_id,
+        })
+        .await
+}
+
+async fn ensure_raw_approval_turn(
+    state: &BackendState,
+    session_id: &str,
+    payload: &Value,
+    now_ms: i64,
+) -> Result<(), BackendError> {
+    let Some(turn_id) = raw_approval_turn_id(payload) else {
+        return Ok(());
+    };
+
+    if agent_turns::get(&state.store, turn_id).await?.is_some() {
+        return Ok(());
+    }
+
+    let existing_turns =
+        agent_turns::list_for_session(&state.store, session_id, None, u32::MAX).await?;
+    let turn_seq = existing_turns.last().map_or(1, |turn| turn.turn_seq + 1);
+
+    let _ = agent_turns::create(
+        &state.store,
+        turn_id,
+        session_id,
+        turn_seq,
+        "assistant",
+        "streaming",
+        now_ms,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    Ok(())
+}
+
+fn raw_approval_turn_id(payload: &Value) -> Option<&str> {
+    if payload.get("method").and_then(Value::as_str) != Some("approval/request") {
+        return None;
+    }
+    payload
+        .get("params")
+        .and_then(|params| params.get("turn_id"))
+        .and_then(Value::as_str)
+        .filter(|turn_id| !turn_id.is_empty())
+}
+
+async fn ensure_raw_agent_session(
+    state: &BackendState,
+    host_device_id: DeviceId,
+    session_id: &str,
+    agent: AgentName,
+    now_ms: i64,
+) -> Result<(), BackendError> {
+    if agent_sessions::get(&state.store, session_id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let Some(pair) = account_host_pairings::list_accounts_for_host(&state.store, host_device_id)
+        .await?
+        .into_iter()
+        .next()
+    else {
+        return Ok(());
+    };
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &pair.mobile_account_id,
+        "Legacy agent session",
+        std::slice::from_ref(&pair.mobile_account_id),
+        now_ms,
+    )
+    .await?;
+    let _ = agent_sessions::create(
+        &state.store,
+        session_id,
+        &conversation.conversation_id,
+        None,
+        Some(&host_device_id.to_string()),
+        Some(agent.bin_name()),
+        "running",
+        now_ms,
+        None,
+    )
+    .await?;
     Ok(())
 }
 

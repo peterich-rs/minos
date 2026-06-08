@@ -163,10 +163,10 @@ jobs:
         # pinned version here must match apps/mobile/.fvmrc so local and CI
         # runs exercise the same toolchain.
         env:
-          FLUTTER_VERSION: 3.41.6
+          FLUTTER_VERSION: 3.44.0
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.41.6
+          flutter-version: 3.44.0
           channel: stable
           cache: true
 
@@ -174,7 +174,7 @@ jobs:
         # Matches the `cargo install` pin in `cargo xtask bootstrap` so a
         # fresh CI container and a fresh local checkout resolve to the
         # same codegen binary.
-        run: cargo install flutter_rust_bridge_codegen --version "^2.11" --locked
+        run: cargo install flutter_rust_bridge_codegen --version 2.12.0 --locked
 
       - name: flutter pub get
         working-directory: apps/mobile
@@ -259,13 +259,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
 
-      - name: Install Flutter 3.41.6
+      - name: Install Flutter 3.44.0
         # The Flutter leg inside `cargo xtask check-all` drives `fvm flutter`.
-        # `fvm` needs a backing SDK; installing Flutter 3.41.6 via the action
+        # `fvm` needs a backing SDK; installing Flutter 3.44.0 via the action
         # both preps the binary and matches apps/mobile/.fvmrc.
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.41.6
+          flutter-version: 3.44.0
           channel: stable
           cache: true
 

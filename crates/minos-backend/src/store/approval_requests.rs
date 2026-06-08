@@ -109,12 +109,14 @@ pub async fn get(
 ) -> Result<Option<ApprovalRequestRow>, BackendError> {
     let row = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
-            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id, ar.method,
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json
                    FROM approval_requests ar
-                   JOIN agent_sessions s
+                   LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
+                   LEFT JOIN threads t
+                     ON t.thread_id = ar.agent_session_id
                   WHERE ar.request_id = ?",
         )
         .bind(request_id)
@@ -196,12 +198,14 @@ pub async fn list_expired_pending(
 ) -> Result<Vec<ApprovalRequestRow>, BackendError> {
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
-            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id, ar.method,
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json
                    FROM approval_requests ar
-                   JOIN agent_sessions s
+                   LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
+                   LEFT JOIN threads t
+                     ON t.thread_id = ar.agent_session_id
                   WHERE ar.state = ?
                     AND ar.deadline_at_ms <= ?
                   ORDER BY ar.deadline_at_ms ASC
@@ -274,16 +278,18 @@ pub async fn list_pending_for_hosts(
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             let mut builder = QueryBuilder::<Sqlite>::new(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id, ar.method,
+                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json
                    FROM approval_requests ar
-                   JOIN agent_sessions s
+                   LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
+                   LEFT JOIN threads t
+                     ON t.thread_id = ar.agent_session_id
                   WHERE ar.state = ",
             );
             builder.push_bind(ApprovalRequestState::Pending.as_str());
-            builder.push(" AND s.host_device_id IN (");
+            builder.push(" AND COALESCE(s.host_device_id, t.owner_device_id) IN (");
             {
                 let mut separated = builder.separated(", ");
                 for host_device_id in host_device_ids {

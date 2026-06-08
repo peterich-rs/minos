@@ -13,12 +13,12 @@ name = "minos-tui"
 path = "src/main.rs"
 
 [dependencies]
-minos-agent-runtime = { path = "../minos-agent-runtime" }
-minos-chat-store = { path = "../minos-chat-store" }
-minos-ui-protocol = { path = "../minos-ui-protocol" }
-minos-domain = { path = "../minos-domain" }
-minos-cli-detect = { path = "../minos-cli-detect" }
-minos-protocol = { path = "../minos-protocol" }
+minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0" }
+minos-chat-store = { path = "../minos-chat-store", version = "0.1.0" }
+minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
+minos-cli-detect = { path = "../minos-cli-detect", version = "0.1.0" }
+minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 ratatui = "0.29"
 crossterm = "0.28"
 tokio = { workspace = true }
@@ -35,3 +35,6 @@ unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

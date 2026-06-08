@@ -3,11 +3,9 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
+import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
-
-import '../frb_generated.dart';
-
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `parse_device_id`, `spawn_state_forwarder`
@@ -701,6 +699,8 @@ enum ErrorKind {
   codexSpawnFailed,
   codexConnectFailed,
   codexProtocolError,
+  geminiSpawnFailed,
+  acpProtocolError,
   agentAlreadyRunning,
   agentNotRunning,
   agentNotSupported,
@@ -1176,6 +1176,12 @@ sealed class MinosError with _$MinosError implements FrbException {
     required String method,
     required String message,
   }) = MinosError_CodexProtocolError;
+  const factory MinosError.geminiSpawnFailed({required String message}) =
+      MinosError_GeminiSpawnFailed;
+  const factory MinosError.acpProtocolError({
+    required String method,
+    required String message,
+  }) = MinosError_AcpProtocolError;
   const factory MinosError.agentAlreadyRunning() =
       MinosError_AgentAlreadyRunning;
   const factory MinosError.agentNotRunning() = MinosError_AgentNotRunning;
