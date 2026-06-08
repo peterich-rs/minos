@@ -1536,6 +1536,47 @@ impl AgentManager {
             .map_err(|error| anyhow::anyhow!("approval reply failed: {error}"))
     }
 
+    pub async fn respond_opencode_permission(
+        &self,
+        thread_id: &str,
+        permission_id: &str,
+        response: &str,
+    ) -> anyhow::Result<()> {
+        let handle = {
+            let threads = self.threads.lock().await;
+            threads
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("thread not found: {thread_id}"))?
+        };
+        anyhow::ensure!(
+            handle.agent == AgentName::Opencode,
+            "thread {thread_id} is not an opencode thread"
+        );
+
+        let session_id = self
+            .opencode_session_map
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("opencode session not found for thread {thread_id}"))?;
+        let instance = self
+            .opencode_instances
+            .lock()
+            .await
+            .get(&handle.workspace)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
+
+        let result = instance
+            .lock()
+            .await
+            .respond_permission(&session_id, permission_id, response)
+            .await;
+        result
+    }
+
     /// Shut every codex instance down with a polite SIGTERM to its process
     /// group, wait `grace` for them to exit, and then escalate to a
     /// group-wide SIGKILL. Drops every instance from the map. Used by
@@ -2110,7 +2151,7 @@ fn spawn_approval_timeout(
         };
 
         let elapsed_ms = pending.created_at.elapsed().as_millis();
-        if let Some(reply) = crate::approvals::auto_reject(&pending.request) {
+        if let Some(reply) = crate::approvals::timeout_reply(&pending.request) {
             if let Err(error) = pending.client.reply(pending.codex_request_id, reply).await {
                 warn!(
                     target: "minos_agent_runtime::manager",
@@ -2127,7 +2168,7 @@ fn spawn_approval_timeout(
                 request_id,
                 thread_id,
                 elapsed_ms,
-                "approval timeout fired for non-approval request",
+                "request timeout fired without a fallback reply",
             );
         }
 
@@ -3931,7 +3972,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn tool_request_user_input_requests_are_forwarded_and_auto_answered_empty() {
+    async fn tool_request_user_input_requests_are_forwarded_and_can_be_answered() {
         let tmp = tempfile::tempdir().unwrap();
         let thread_id = "thr-tool-input";
         let turn_id = "turn-tool-input";
@@ -3954,7 +3995,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                 }),
             },
             Step::ExpectResponse {
-                result: json!({ "answers": {} }),
+                result: json!({ "answers": { "q1": { "answers": ["blue"] } } }),
             },
             Step::Sleep { ms: 20 },
         ];
@@ -3964,6 +4005,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         cfg.test_ws_url = Some(
             url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
         );
+        cfg.approval_request_timeout = Duration::from_secs(5);
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
         let mut ingest_rx = mgr.ingest_stream();
 
@@ -3977,8 +4019,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .recv()
                     .await
                     .expect("ingest stream should stay open");
-                if ingest.payload.get("method").and_then(Value::as_str)
-                    == Some("server_request/item/tool/requestUserInput")
+                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/request")
                 {
                     break ingest;
                 }
@@ -3988,8 +4029,24 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         .expect("tool request user input synthetic ingest should arrive");
 
         assert_eq!(ingest.thread_id, thread_id);
-        assert_eq!(ingest.payload["params"]["threadId"], json!(thread_id));
-        assert_eq!(ingest.payload["params"]["turnId"], json!(turn_id));
+        assert_eq!(
+            ingest.payload["params"]["method"],
+            json!("item/tool/requestUserInput")
+        );
+        assert_eq!(ingest.payload["params"]["thread_id"], json!(thread_id));
+        assert_eq!(ingest.payload["params"]["turn_id"], json!(turn_id));
+        let request_id = ingest.payload["params"]["request_id"]
+            .as_str()
+            .expect("request id should be present")
+            .to_string();
+
+        mgr.resolve_approval(
+            &request_id,
+            thread_id,
+            json!({ "answers": { "q1": { "answers": ["blue"] } } }),
+        )
+        .await
+        .unwrap();
 
         server.stop().await;
     }

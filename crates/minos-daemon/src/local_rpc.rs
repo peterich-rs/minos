@@ -9,11 +9,11 @@ use minos_agent_runtime::ManagerEvent;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
-    CloseReason, CloseThreadRequest, GetThreadParams, HealthResponse, InterruptThreadRequest,
-    ListClisResponse, LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent,
-    LocalThreadSnapshot, ReadGroupChatParams, ReadGroupChatResponse, ReadThreadParams,
-    ReadThreadRawHistoryResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
-    ThreadState,
+    ApprovalDecisionRequest, CloseReason, CloseThreadRequest, GetThreadParams, HealthResponse,
+    InterruptThreadRequest, ListClisResponse, LocalDaemonRpcServer, LocalIngestFrame,
+    LocalManagerEvent, LocalThreadSnapshot, ReadGroupChatParams, ReadGroupChatResponse,
+    ReadThreadParams, ReadThreadRawHistoryResponse, RespondOpencodePermissionRequest,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -62,6 +62,23 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         req: SendUserMessageRequest,
     ) -> jsonrpsee::core::RpcResult<()> {
         self.agent.send_user_message(req).await.map_err(rpc_err)
+    }
+
+    async fn approval_decision(
+        &self,
+        req: ApprovalDecisionRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.resolve_approval(req).await.map_err(rpc_err)
+    }
+
+    async fn respond_opencode_permission(
+        &self,
+        req: RespondOpencodePermissionRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent
+            .respond_opencode_permission(req)
+            .await
+            .map_err(rpc_err)
     }
 
     async fn interrupt_thread(
@@ -314,8 +331,13 @@ fn spawn_ingest_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<LocalIngestF
         loop {
             match rx.recv().await {
                 Ok(raw) => {
+                    let seq = match agent.store().get_thread(&raw.thread_id).await {
+                        Ok(Some(row)) => u64::try_from(row.last_seq.max(0)).unwrap_or(0),
+                        Ok(None) | Err(_) => 0,
+                    };
                     let frame = LocalIngestFrame {
                         thread_id: raw.thread_id,
+                        seq,
                         agent: raw.agent,
                         payload: raw.payload,
                         ts_ms: raw.ts_ms,

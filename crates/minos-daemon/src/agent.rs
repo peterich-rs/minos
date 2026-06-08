@@ -172,6 +172,7 @@ impl AgentGlue {
                 })?;
             events.push(minos_protocol::LocalIngestFrame {
                 thread_id: thread_id.to_owned(),
+                seq: u64::try_from(event.seq.max(0)).unwrap_or(0),
                 agent,
                 payload,
                 ts_ms: event.ts_ms,
@@ -235,6 +236,16 @@ impl AgentGlue {
     pub async fn resolve_approval(&self, req: ApprovalDecisionRequest) -> Result<(), MinosError> {
         self.manager
             .resolve_approval(&req.request_id, &req.thread_id, req.decision)
+            .await
+            .map_err(map_anyhow)
+    }
+
+    pub async fn respond_opencode_permission(
+        &self,
+        req: minos_protocol::RespondOpencodePermissionRequest,
+    ) -> Result<(), MinosError> {
+        self.manager
+            .respond_opencode_permission(&req.thread_id, &req.permission_id, &req.response)
             .await
             .map_err(map_anyhow)
     }

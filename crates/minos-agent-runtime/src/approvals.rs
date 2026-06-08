@@ -30,6 +30,7 @@ pub(crate) fn is_approval_request(req: &ServerRequest) -> bool {
             | ServerRequest::CommandExecutionRequestApproval(_)
             | ServerRequest::FileChangeRequestApproval(_)
             | ServerRequest::PermissionsRequestApproval(_)
+            | ServerRequest::ToolRequestUserInput(_)
     )
 }
 
@@ -79,6 +80,29 @@ pub(crate) fn auto_reject(req: &ServerRequest) -> Option<serde_json::Value> {
     Some(value.expect("typed approval response serialisation is infallible"))
 }
 
+pub(crate) fn timeout_reply(req: &ServerRequest) -> Option<serde_json::Value> {
+    if let Some(reply) = auto_reject(req) {
+        return Some(reply);
+    }
+
+    match req {
+        ServerRequest::ToolRequestUserInput(_) => {
+            serde_json::to_value(ToolRequestUserInputResponse {
+                answers: HashMap::new(),
+            })
+            .ok()
+        }
+        ServerRequest::McpServerElicitationRequest(_)
+        | ServerRequest::ChatgptAuthTokensRefresh(_)
+        | ServerRequest::DynamicToolCall(_)
+        | ServerRequest::ApplyPatchApproval(_)
+        | ServerRequest::ExecCommandApproval(_)
+        | ServerRequest::CommandExecutionRequestApproval(_)
+        | ServerRequest::FileChangeRequestApproval(_)
+        | ServerRequest::PermissionsRequestApproval(_) => None,
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct NonApprovalContext {
     pub chat_room_id: Option<String>,
@@ -99,11 +123,7 @@ pub(crate) fn auto_resolve_non_approval(
         ServerRequest::McpServerElicitationRequest(params) => {
             serde_json::to_value(resolve_mcp_server_elicitation(params, &context))
         }
-        ServerRequest::ToolRequestUserInput(_) => {
-            serde_json::to_value(ToolRequestUserInputResponse {
-                answers: HashMap::new(),
-            })
-        }
+        ServerRequest::ToolRequestUserInput(_) => return None,
         ServerRequest::ApplyPatchApproval(_)
         | ServerRequest::ExecCommandApproval(_)
         | ServerRequest::CommandExecutionRequestApproval(_)
@@ -236,8 +256,10 @@ pub(crate) fn validate_decision(
                 "item/permissions/requestApproval",
             )
         }
-        ServerRequest::ToolRequestUserInput(_)
-        | ServerRequest::McpServerElicitationRequest(_)
+        ServerRequest::ToolRequestUserInput(_) => {
+            validate_typed::<ToolRequestUserInputResponse>(decision, "item/tool/requestUserInput")
+        }
+        ServerRequest::McpServerElicitationRequest(_)
         | ServerRequest::ChatgptAuthTokensRefresh(_)
         | ServerRequest::DynamicToolCall(_) => {
             anyhow::bail!("server request does not accept an approval decision")
@@ -359,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_reject_tool_request_user_input_returns_none() {
+    fn request_user_input_is_pending_but_not_rejected() {
         let req: ServerRequest = serde_json::from_value(json!({
             "method": "item/tool/requestUserInput",
             "params": {
@@ -374,6 +396,7 @@ mod tests {
             auto_reject(&req).is_none(),
             "non-approval requests must not auto-reject",
         );
+        assert!(is_approval_request(&req));
     }
 
     #[test]
@@ -433,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_resolve_tool_request_user_input_returns_empty_answers() {
+    fn auto_resolve_tool_request_user_input_returns_none() {
         let req: ServerRequest = serde_json::from_value(json!({
             "method": "item/tool/requestUserInput",
             "params": {
@@ -448,9 +471,51 @@ mod tests {
             }
         }))
         .expect("tool/requestUserInput params decode");
-        let reply = auto_resolve_non_approval(&req, NonApprovalContext::default())
-            .expect("user input should auto-answer empty");
+        assert!(auto_resolve_non_approval(&req, NonApprovalContext::default()).is_none());
+    }
+
+    #[test]
+    fn timeout_reply_tool_request_user_input_returns_empty_answers() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "item/tool/requestUserInput",
+            "params": {
+                "itemId": "item-1",
+                "questions": [{
+                    "header": "Need input",
+                    "id": "q1",
+                    "question": "Pick one"
+                }],
+                "threadId": "thr-1",
+                "turnId": "turn-1"
+            }
+        }))
+        .expect("tool/requestUserInput params decode");
+        let reply = timeout_reply(&req).expect("user input timeout should auto-answer empty");
         assert_eq!(reply, json!({ "answers": {} }));
+    }
+
+    #[test]
+    fn validate_decision_accepts_tool_request_user_input_answer_shape() {
+        let req: ServerRequest = serde_json::from_value(json!({
+            "method": "item/tool/requestUserInput",
+            "params": {
+                "itemId": "item-1",
+                "questions": [{
+                    "header": "Need input",
+                    "id": "q1",
+                    "question": "Pick one"
+                }],
+                "threadId": "thr-1",
+                "turnId": "turn-1"
+            }
+        }))
+        .expect("tool/requestUserInput params decode");
+        let reply = validate_decision(
+            &req,
+            &json!({ "answers": { "q1": { "answers": ["choice"] } } }),
+        )
+        .expect("valid tool input response");
+        assert_eq!(reply["answers"]["q1"]["answers"][0], json!("choice"));
     }
 
     #[test]

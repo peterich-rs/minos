@@ -62,8 +62,17 @@ pub struct ReadThreadRawHistoryResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RespondOpencodePermissionRequest {
+    pub thread_id: String,
+    pub permission_id: String,
+    pub response: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalIngestFrame {
     pub thread_id: String,
+    #[serde(default)]
+    pub seq: u64,
     pub agent: minos_domain::AgentName,
     pub payload: serde_json::Value,
     pub ts_ms: i64,
@@ -117,6 +126,18 @@ pub trait LocalDaemonRpc {
     async fn send_user_message(
         &self,
         req: crate::SendUserMessageRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    #[method(name = "approval_decision")]
+    async fn approval_decision(
+        &self,
+        req: crate::ApprovalDecisionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    #[method(name = "respond_opencode_permission")]
+    async fn respond_opencode_permission(
+        &self,
+        req: RespondOpencodePermissionRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
     #[method(name = "interrupt_thread")]

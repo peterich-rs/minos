@@ -15,9 +15,9 @@ use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
-    AgentLaunchMode, CloseThreadRequest, GetThreadParams, HealthResponse, LocalGroupChatMessage,
-    LocalGroupChatMessageKind, ReadGroupChatParams, ReadGroupChatResponse, ReadThreadParams,
-    StartAgentRequest, StartAgentResponse,
+    AgentLaunchMode, ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams, HealthResponse,
+    LocalGroupChatMessage, LocalGroupChatMessageKind, ReadGroupChatParams, ReadGroupChatResponse,
+    ReadThreadParams, StartAgentRequest, StartAgentResponse,
 };
 use tokio::sync::mpsc;
 
@@ -223,6 +223,25 @@ async fn send_user_message_round_trips() {
             [minos_protocol::SendUserMessageRequest {
                 session_id: start_resp.session_id.clone(),
                 text: "hello test".into(),
+            }],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn approval_decision_rpc_is_registered() {
+    let (_glue, _handle, tmp, _fake) = setup().await;
+    let url = discovery_addr(&tmp);
+    let client = WsClientBuilder::default().build(&url).await.unwrap();
+
+    client
+        .request::<(), _>(
+            "minos_local_approval_decision",
+            [ApprovalDecisionRequest {
+                thread_id: "thread-missing".into(),
+                request_id: "request-missing".into(),
+                decision: serde_json::json!({ "decision": "deny" }),
             }],
         )
         .await
