@@ -172,6 +172,27 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
+        "/v1/agent-sessions/start",
+        "/v1/agent-sessions/start",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/agent-sessions/send-input",
+        "/v1/agent-sessions/send-input",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/agent-sessions/stop",
+        "/v1/agent-sessions/stop",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
         "/v1/agent-sessions/list",
         "/v1/agent-sessions/list",
         "account_api",

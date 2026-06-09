@@ -57,6 +57,15 @@ abstract class MinosCoreProtocol {
 
   Future<FriendsResponse> friends();
 
+  Future<AgentSummary> registerAgent({
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+  });
+
+  Future<ListAgentsResponse> listAgents();
+
   Future<ConversationsResponse> conversations();
 
   Future<ConversationResponse> ensureDirectConversation({

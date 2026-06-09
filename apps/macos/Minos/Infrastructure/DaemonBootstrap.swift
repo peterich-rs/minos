@@ -2,9 +2,9 @@ import Foundation
 
 /// Production daemon bootstrap. Resolves the runtime backend URL from the
 /// bundled Info.plist, spawns the daemon, and wires the dual-axis observers
-/// into AppState. The Mac's own `selfDeviceId` is persisted in
-/// `local-state.json`. The daemon's long-lived `deviceSecret` now lives in
-/// the Rust-managed secrets store, so Swift no longer needs to load
+/// into AppState. The Mac's own `selfDeviceId` is persisted in the shared
+/// Rust daemon state path. The daemon's long-lived `deviceSecret` now lives
+/// in the Rust-managed secrets store, so Swift no longer needs to load
 /// or migrate it at bootstrap.
 /// The peer relationship itself lives only on the backend; the daemon
 /// repopulates its in-memory peer mirror after each successful WebSocket
@@ -23,7 +23,14 @@ enum DaemonBootstrap {
     static let defaultStartDaemon: @Sendable (RelayConfig, String) async throws
         -> any DaemonDriving = { config, macName in
         let localStatePath = AppDirectories.localStatePath()
-        let selfDeviceId = try LocalStateLoader.loadOrInit(at: localStatePath)
+        let selfDeviceId = try LocalStateLoader.loadOrInit(
+            at: localStatePath,
+            legacyPath: AppDirectories.legacyLocalStatePath()
+        )
+        AppLog.info(
+            "bootstrap",
+            "Local state ready; path=\(localStatePath.path); selfDeviceId=\(selfDeviceId)"
+        )
         return try await DaemonHandle.start(
             config: config,
             selfDeviceId: selfDeviceId,
@@ -51,6 +58,7 @@ enum DaemonBootstrap {
         let config: RelayConfig
         do {
             config = try relayConfig()
+            AppLog.info("bootstrap", "Relay config resolved; \(relayConfigLog(config))")
         } catch let error as MinosError {
             await appState.failBoot(with: error)
             return
@@ -175,6 +183,14 @@ enum DaemonBootstrap {
         return RelayConfig(backendUrl: backendUrl)
     }
 
+    private static func relayConfigLog(_ config: RelayConfig) -> String {
+        let trimmed = config.backendUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "source=baked-rust-default"
+        }
+        return "source=runtime; backendUrl=\(trimmed)"
+    }
+
     private static func infoString(_ value: Any?) -> String? {
         blankToNil(value as? String)
     }
@@ -202,7 +218,24 @@ enum DaemonBootstrap {
 // keys by default.
 
 enum AppDirectories {
-    static func localStatePath() -> URL {
+    static func localStatePath(
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        minosHome(env: env)
+            .appendingPathComponent("state", isDirectory: true)
+            .appendingPathComponent("local-state.json")
+    }
+
+    private static func minosHome(env: [String: String]) -> URL {
+        if let raw = env["MINOS_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            return URL(fileURLWithPath: raw, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".minos", isDirectory: true)
+    }
+
+    static func legacyLocalStatePath() -> URL {
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -227,22 +260,35 @@ enum LocalStateLoader {
     /// file is missing, mint a fresh DeviceId and persist it; if it's
     /// present but corrupt, surface as a Swift-side throw the bootstrap
     /// catches and converts into a `bootError`.
-    static func loadOrInit(at path: URL) throws -> DeviceId {
+    static func loadOrInit(at path: URL, legacyPath: URL? = nil) throws -> DeviceId {
         let manager = FileManager.default
+        if !manager.fileExists(atPath: path.path),
+           let legacyPath,
+           manager.fileExists(atPath: legacyPath.path) {
+            let migrated = try load(from: legacyPath)
+            try save(migrated, to: path)
+            AppLog.info(
+                "bootstrap",
+                "Migrated local state; from=\(legacyPath.path); to=\(path.path)"
+            )
+            return migrated.selfDeviceId
+        }
         if !manager.fileExists(atPath: path.path) {
             let initial = LocalStateJSON(selfDeviceId: UUID().uuidString.lowercased())
             try save(initial, to: path)
             return initial.selfDeviceId
         }
+        return try load(from: path).selfDeviceId
+    }
+
+    private static func load(from path: URL) throws -> LocalStateJSON {
         let data: Data
         do {
             data = try Data(contentsOf: path)
         } catch {
             throw MinosError.StoreIo(path: path.path, message: error.localizedDescription)
         }
-
-        let json = try decodePersistedState(data, from: path.path)
-        return json.selfDeviceId
+        return try decodePersistedState(data, from: path.path)
     }
 
     static func decodePersistedState(_ data: Data, from path: String) throws -> LocalStateJSON {

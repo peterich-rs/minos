@@ -4,6 +4,7 @@ pub mod agent;
 pub mod config;
 pub mod device_secret_store;
 pub mod handle;
+pub mod host_bootstrap_key_store;
 pub mod jsonl_recover;
 pub mod local_rpc;
 pub mod local_state;

@@ -374,6 +374,19 @@ impl SessionRegistry {
             .count()
     }
 
+    /// Count currently-live mobile-client sessions bound to `account_id`.
+    #[must_use]
+    pub fn mobile_client_session_count(&self, account_id: &str) -> usize {
+        self.0
+            .iter()
+            .filter(|entry| {
+                let handle = entry.value();
+                handle.role == DeviceRole::MobileClient
+                    && handle.account_id().as_deref() == Some(account_id)
+            })
+            .count()
+    }
+
     /// Current number of live sessions. Useful for metrics and tests;
     /// O(#shards) under the hood.
     #[must_use]

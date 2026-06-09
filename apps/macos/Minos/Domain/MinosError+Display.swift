@@ -41,6 +41,10 @@ extension MinosError {
             return .codexConnectFailed
         case .CodexProtocolError:
             return .codexProtocolError
+        case .GeminiSpawnFailed:
+            return .geminiSpawnFailed
+        case .AcpProtocolError:
+            return .acpProtocolError
         case .AgentAlreadyRunning:
             return .agentAlreadyRunning
         case .AgentNotRunning:

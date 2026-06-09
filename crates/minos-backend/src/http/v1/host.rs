@@ -31,6 +31,8 @@ struct HostSelfLinkSummary {
     linked_via_installation_id: String,
     link_display_name: String,
     paired_at_ms: i64,
+    last_active_at_ms: i64,
+    online: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -243,24 +245,35 @@ async fn post_installations_self(
 
     let mut links = Vec::with_capacity(pairs.len());
     for pair in pairs {
-        let display_name =
-            crate::store::devices::get_device(&state.store, pair.paired_via_device_id)
-                .await
-                .map_err(|error| {
-                    tracing::warn!(
-                        target: "minos_backend::v1::host",
-                        error = %error,
-                        linked_via_installation_id = %pair.paired_via_device_id,
-                        "get_device(linked_via) failed",
-                    );
-                    (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
-                })?
-                .map_or_else(|| "unknown".to_string(), |row| row.display_name);
+        let mobile = crate::store::devices::get_device(&state.store, pair.paired_via_device_id)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "minos_backend::v1::host",
+                    error = %error,
+                    linked_via_installation_id = %pair.paired_via_device_id,
+                    "get_device(linked_via) failed",
+                );
+                (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
+            })?;
+
+        let (display_name, last_active_at_ms) = if let Some(row) = mobile {
+            (row.display_name, row.last_seen_at)
+        } else {
+            tracing::warn!(
+                target: "minos_backend::v1::host",
+                linked_via_installation_id = %pair.paired_via_device_id,
+                "host link references mobile device with no devices row; using placeholder name",
+            );
+            ("unknown".to_string(), pair.paired_at_ms)
+        };
 
         links.push(HostSelfLinkSummary {
             linked_via_installation_id: pair.paired_via_device_id.to_string(),
             link_display_name: display_name,
             paired_at_ms: pair.paired_at_ms,
+            last_active_at_ms,
+            online: is_mobile_account_online(&state, &pair.mobile_account_id),
         });
     }
 
@@ -273,6 +286,10 @@ async fn post_installations_self(
         },
         request_id(&headers),
     )))
+}
+
+fn is_mobile_account_online(state: &BackendState, account_id: &str) -> bool {
+    state.registry.mobile_client_session_count(account_id) > 0
 }
 
 async fn post_realtime_ws_ticket(
@@ -362,6 +379,9 @@ fn formal_pairing_error(
     error: crate::pairing::FormalPairingError,
 ) -> (StatusCode, Json<ErrorEnvelope>) {
     match error {
+        crate::pairing::FormalPairingError::PairingNotConfirmed => {
+            (StatusCode::CONFLICT, err("pairing_not_confirmed"))
+        }
         crate::pairing::FormalPairingError::PairingCodeInvalid => {
             (StatusCode::CONFLICT, err("pairing_code_invalid"))
         }

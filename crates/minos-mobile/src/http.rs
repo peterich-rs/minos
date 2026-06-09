@@ -2,35 +2,37 @@
 //!
 //! The mobile client uses this for the pre-WS pairing handshake (POST
 //! `/v1/pairing/confirm`), for POST-first query reads such as
-//! `/v1/me/hosts/query`, and for tearing a specific pair down
+//! `/v1/pairing/list-hosts`, and for tearing a specific pair down
 //! (`DELETE /v1/pairings/:host_device_id`). The post-pair `Forward` /
 //! `Forwarded` and event push traffic still flows over the WebSocket.
 //!
 //! ADR-0020 removed the iOS device-secret rail; every iOS-originated
 //! request authenticates with the bearer alone.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use http::header::CONTENT_TYPE;
 use http::{Method, Request, Response, StatusCode};
 use minos_domain::{AgentName, DeviceId, MinosError};
 use minos_protocol::{
-    AddAgentToGroupRequest, AddGroupMemberRequest, ApprovalDecisionRequest,
+    AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, ApprovalDecisionRequest,
     AssignProjectThreadRequest, AuthRequest, AuthResponse, ConversationAgentMembersResponse,
     ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
     ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest,
     EnsureDirectConversationRequest, FriendRequestsResponse, FriendsResponse,
-    GetThreadLastSeqParams, GetThreadLastSeqResponse, ListChatMessagesRequest,
+    GetThreadLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesRequest,
     ListChatMessagesResponse, ListHostClisRequest, ListHostSkillsCommandRequest,
     ListHostSkillsResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
     ListProjectsResponse, ListThreadsParams, ListThreadsResponse, LogoutRequest, MeHostsResponse,
     MyProfileResponse, ReadThreadParams, ReadThreadResponse, RealtimeWsTicketRequest,
-    RealtimeWsTicketResponse, RefreshRequest, RefreshResponse, RemoveAgentFromGroupRequest,
-    SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
-    UpdateProjectRequest, WriteHostSkillConfigCommandRequest, WriteHostSkillConfigResponse,
+    RealtimeWsTicketResponse, RefreshRequest, RefreshResponse, RegisterAgentRequest,
+    RemoveAgentFromGroupRequest, SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest,
+    SetMinosIdRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
+    WriteHostSkillConfigResponse,
 };
-use minos_ui_protocol::ThreadEndReason;
+use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use uuid::Uuid;
@@ -82,6 +84,24 @@ pub struct PairConfirmData {
     pub already_confirmed: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct ListHostsEnvelope {
+    data: ListHostsData,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListHostsData {
+    hosts: Vec<FormalHostSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FormalHostSummary {
+    host_installation_id: String,
+    host_display_name: String,
+    paired_at_ms: i64,
+    linked_via_installation_id: String,
+}
+
 #[derive(Debug, Serialize)]
 struct SendAgentInputRequest {
     session_id: String,
@@ -99,6 +119,62 @@ pub struct SendAgentInputResponse {
 #[derive(Debug, Serialize)]
 struct StopAgentSessionRequest {
     session_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ListAgentSessionsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_started_at_ms: Option<i64>,
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentSessionsResponse {
+    sessions: Vec<FormalAgentSessionSummary>,
+    next_before_started_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadAgentSessionTurnsResponse {
+    turns: Vec<AgentTurnMetadata>,
+    events: Vec<AgentTurnEvent>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReadAgentSessionTurnsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_turn_seq: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_event_seq: Option<i64>,
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentTurnMetadata {
+    turn_id: String,
+    turn_seq: i64,
+    role: String,
+    status: String,
+    started_at_ms: i64,
+    finished_at_ms: Option<i64>,
+    summary_text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentTurnEvent {
+    turn_id: String,
+    kind: String,
+    payload: serde_json::Value,
+    #[allow(dead_code)]
+    created_at_ms: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,13 +201,13 @@ struct ListProjectAgentSessionsRequest<'a> {
 
 #[derive(Debug, Deserialize)]
 struct ProjectAgentSessionsResponse {
-    sessions: Vec<ProjectAgentSessionSummary>,
+    sessions: Vec<FormalAgentSessionSummary>,
     #[allow(dead_code)]
     next_before_started_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
-struct ProjectAgentSessionSummary {
+struct FormalAgentSessionSummary {
     session_id: String,
     #[allow(dead_code)]
     conversation_id: String,
@@ -149,7 +225,7 @@ struct ProjectAgentSessionSummary {
     end_reason: Option<ThreadEndReason>,
 }
 
-impl ProjectAgentSessionSummary {
+impl FormalAgentSessionSummary {
     fn into_thread_summary(self) -> Result<minos_protocol::ThreadSummary, MinosError> {
         let session_id = self.session_id;
         let agent = self
@@ -161,7 +237,7 @@ impl ProjectAgentSessionSummary {
             })
             .ok_or_else(|| MinosError::BackendInternal {
                 message: format!(
-                    "decode ProjectAgentSessionSummary: missing agent for {session_id}"
+                    "decode FormalAgentSessionSummary: missing agent for {session_id}"
                 ),
             })?;
 
@@ -294,14 +370,16 @@ impl MobileHttpClient {
         &self,
         access_token: &str,
     ) -> Result<MeHostsResponse, MinosError> {
-        let path = "/v1/me/hosts/query";
+        let path = "/v1/pairing/list-hosts";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
         let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
-            let body: MeHostsResponse = decode_success_json(resp, "MeHostsResponse").await?;
+            let envelope: ListHostsEnvelope =
+                decode_success_json(resp, "ListHostsEnvelope").await?;
+            let body = formal_hosts_to_me_hosts(envelope.data)?;
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
@@ -322,7 +400,7 @@ impl MobileHttpClient {
         access_token: &str,
         params: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
-        let path = "/v1/threads/query";
+        let path = "/v1/agent-sessions/list";
         let trace_id = start_http_trace(
             Method::POST.as_str(),
             path,
@@ -333,19 +411,37 @@ impl MobileHttpClient {
             )),
         );
         let url = format!("{}{path}", self.base);
-        let request = self.request_with_json(Method::POST, &url, Some(access_token), &params)?;
+        let request_body = ListAgentSessionsRequest {
+            conversation_id: None,
+            project_id: None,
+            before_started_at_ms: params.before_ts_ms,
+            limit: params.limit,
+        };
+        let request =
+            self.request_with_json(Method::POST, &url, Some(access_token), &request_body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
-            let threads: ListThreadsResponse =
-                decode_success_json(resp, "ListThreadsResponse").await?;
+            let body: AgentSessionsResponse =
+                decode_success_json(resp, "AgentSessionsResponse").await?;
+            let mut threads = body
+                .sessions
+                .into_iter()
+                .map(FormalAgentSessionSummary::into_thread_summary)
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Some(agent) = params.agent {
+                threads.retain(|thread| thread.agent == agent);
+            }
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                Some(format!("threads={}", threads.threads.len())),
+                Some(format!("threads={}", threads.len())),
                 None,
             );
-            Ok(threads)
+            Ok(ListThreadsResponse {
+                threads,
+                next_before_ts_ms: body.next_before_started_at_ms,
+            })
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
@@ -359,40 +455,59 @@ impl MobileHttpClient {
         params: ReadThreadParams,
     ) -> Result<ReadThreadResponse, MinosError> {
         let thread_id = params.thread_id.clone();
-        let path = "/v1/threads/read";
-        let trace_id = start_http_trace(
-            Method::POST.as_str(),
-            path,
-            Some(thread_id.clone()),
-            Some(format!(
-                "limit={} from_seq={:?}",
-                params.limit, params.from_seq
-            )),
-        );
-        let url = format!("{}{path}", self.base);
-        let request = self.request_with_json(Method::POST, &url, Some(access_token), &params)?;
-        let resp = self.execute_with_trace(trace_id, &url, request).await?;
-        let status = resp.status();
-        if status.is_success() {
-            let thread: ReadThreadResponse =
-                decode_success_json(resp, "ReadThreadResponse").await?;
-            request_trace::finish_success(
-                trace_id,
-                Some(status.as_u16()),
+        let after_turn_seq = optional_u64_to_i64(params.from_seq, "ReadThreadParams.from_seq")?;
+        let turn_limit = params.limit.clamp(1, 200);
+        let turns = self
+            .read_agent_session_turns(
+                access_token,
+                ReadAgentSessionTurnsRequest {
+                    session_id: Some(thread_id.clone()),
+                    turn_id: None,
+                    after_turn_seq,
+                    after_event_seq: None,
+                    limit: turn_limit,
+                },
+                Some(thread_id.clone()),
                 Some(format!(
-                    "events={} next_seq={:?} end_reason={:?}",
-                    thread.ui_events.len(),
-                    thread.next_seq,
-                    thread.thread_end_reason
+                    "read_session_turns limit={} after_turn_seq={after_turn_seq:?}",
+                    turn_limit
                 )),
-                Some(thread_id),
-            );
-            Ok(thread)
+            )
+            .await
+            .map_err(|error| map_agent_session_not_found(error, &thread_id))?;
+
+        let next_seq = if turns.turns.len() == usize::try_from(turn_limit).unwrap_or(usize::MAX) {
+            turns
+                .turns
+                .last()
+                .and_then(|turn| u64::try_from(turn.turn_seq).ok())
         } else {
-            let error = decode_error(resp).await;
-            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
-            Err(error)
+            None
+        };
+        let mut ui_events = Vec::new();
+        for turn in turns.turns {
+            let events = self
+                .read_agent_session_turns(
+                    access_token,
+                    ReadAgentSessionTurnsRequest {
+                        session_id: None,
+                        turn_id: Some(turn.turn_id.clone()),
+                        after_turn_seq: None,
+                        after_event_seq: None,
+                        limit: 200,
+                    },
+                    Some(thread_id.clone()),
+                    Some(format!("read_turn_events turn_id={}", turn.turn_id)),
+                )
+                .await
+                .map_err(|error| map_agent_session_not_found(error, &thread_id))?;
+            append_turn_ui_events(&mut ui_events, &turn, events.events);
         }
+        Ok(ReadThreadResponse {
+            ui_events,
+            next_seq,
+            thread_end_reason: None,
+        })
     }
 
     pub async fn get_thread_last_seq(
@@ -400,29 +515,78 @@ impl MobileHttpClient {
         access_token: &str,
         thread_id: &str,
     ) -> Result<GetThreadLastSeqResponse, MinosError> {
-        let path = "/v1/threads/last-seq";
+        let mut after_turn_seq = None;
+        let mut last_seq = 0_u64;
+        loop {
+            let page = self
+                .read_agent_session_turns(
+                    access_token,
+                    ReadAgentSessionTurnsRequest {
+                        session_id: Some(thread_id.into()),
+                        turn_id: None,
+                        after_turn_seq,
+                        after_event_seq: None,
+                        limit: 200,
+                    },
+                    Some(thread_id.into()),
+                    Some(format!(
+                        "get_session_last_turn after_turn_seq={after_turn_seq:?}"
+                    )),
+                )
+                .await
+                .map_err(|error| map_agent_session_not_found(error, thread_id))?;
+            let Some(last_turn) = page.turns.last() else {
+                break;
+            };
+            let Some(last_turn_seq) = u64::try_from(last_turn.turn_seq).ok() else {
+                return Err(MinosError::BackendInternal {
+                    message: format!(
+                        "decode ReadAgentSessionTurnsResponse.turn_seq: {}",
+                        last_turn.turn_seq
+                    ),
+                });
+            };
+            last_seq = last_turn_seq;
+            if page.turns.len() < 200 {
+                break;
+            }
+            after_turn_seq = Some(last_turn.turn_seq);
+        }
+        Ok(GetThreadLastSeqResponse { last_seq })
+    }
+
+    async fn read_agent_session_turns(
+        &self,
+        access_token: &str,
+        body: ReadAgentSessionTurnsRequest,
+        thread_id: Option<String>,
+        request_summary: Option<String>,
+    ) -> Result<ReadAgentSessionTurnsResponse, MinosError> {
+        let path = "/v1/agent-sessions/read-turns";
         let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(Method::POST.as_str(), path, Some(thread_id.into()), None);
-        let request = self.request_with_json(
-            Method::POST,
-            &url,
-            Some(access_token),
-            &GetThreadLastSeqParams {
-                thread_id: thread_id.into(),
-            },
-        )?;
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            thread_id.clone(),
+            request_summary,
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
-            let last_seq: GetThreadLastSeqResponse =
-                decode_success_json(resp, "GetThreadLastSeqResponse").await?;
+            let turns: ReadAgentSessionTurnsResponse =
+                decode_success_json(resp, "ReadAgentSessionTurnsResponse").await?;
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                Some(format!("last_seq={}", last_seq.last_seq)),
-                Some(thread_id.into()),
+                Some(format!(
+                    "turns={} events={}",
+                    turns.turns.len(),
+                    turns.events.len()
+                )),
+                thread_id,
             );
-            Ok(last_seq)
+            Ok(turns)
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
@@ -653,7 +817,7 @@ impl MobileHttpClient {
             let threads = body
                 .sessions
                 .into_iter()
-                .map(ProjectAgentSessionSummary::into_thread_summary)
+                .map(FormalAgentSessionSummary::into_thread_summary)
                 .collect::<Result<Vec<_>, _>>()?;
             request_trace::finish_success(
                 trace_id,
@@ -772,6 +936,56 @@ impl MobileHttpClient {
                 trace_id,
                 Some(status.as_u16()),
                 Some(format!("friends={}", body.friends.len())),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn register_agent(
+        &self,
+        access_token: &str,
+        req: RegisterAgentRequest,
+    ) -> Result<AgentSummary, MinosError> {
+        let path = "/v1/agents";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, Some(req.name.clone()));
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: AgentSummary = decode_success_json(resp, "AgentSummary").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(body.agent_id.clone()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn list_agents(&self, access_token: &str) -> Result<ListAgentsResponse, MinosError> {
+        let path = "/v1/agents/query";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ListAgentsResponse = decode_success_json(resp, "ListAgentsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("agents={}", body.agents.len())),
                 None,
             );
             Ok(body)
@@ -1690,6 +1904,271 @@ impl MobileHttpClient {
     }
 }
 
+fn formal_hosts_to_me_hosts(data: ListHostsData) -> Result<MeHostsResponse, MinosError> {
+    let mut hosts = Vec::with_capacity(data.hosts.len());
+    for host in data.hosts {
+        hosts.push(HostSummary {
+            host_device_id: parse_device_id_field(
+                "host_installation_id",
+                &host.host_installation_id,
+            )?,
+            host_display_name: host.host_display_name,
+            paired_at_ms: host.paired_at_ms,
+            paired_via_device_id: parse_device_id_field(
+                "linked_via_installation_id",
+                &host.linked_via_installation_id,
+            )?,
+        });
+    }
+    Ok(MeHostsResponse { hosts })
+}
+
+fn append_turn_ui_events(
+    ui_events: &mut Vec<UiEventMessage>,
+    turn: &AgentTurnMetadata,
+    events: Vec<AgentTurnEvent>,
+) {
+    if events.is_empty() {
+        append_turn_summary_ui_events(ui_events, turn);
+        return;
+    }
+
+    let role = message_role_from_turn_role(&turn.role);
+    let mut started_message_ids = HashSet::<String>::new();
+    for event in events {
+        let message_id = message_id_for_turn_event(turn, &event);
+        if started_message_ids.insert(message_id.clone()) {
+            ui_events.push(UiEventMessage::MessageStarted {
+                message_id: message_id.clone(),
+                role,
+                started_at_ms: turn.started_at_ms,
+            });
+        }
+        ui_events.extend(ui_events_for_turn_event(&message_id, event));
+    }
+
+    if turn_is_complete(turn) {
+        let finished_at_ms = turn.finished_at_ms.unwrap_or(turn.started_at_ms);
+        for message_id in started_message_ids {
+            ui_events.push(UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms,
+            });
+        }
+    }
+}
+
+fn append_turn_summary_ui_events(ui_events: &mut Vec<UiEventMessage>, turn: &AgentTurnMetadata) {
+    let Some(text) = turn.summary_text.as_deref().filter(|text| !text.is_empty()) else {
+        return;
+    };
+    ui_events.push(UiEventMessage::MessageStarted {
+        message_id: turn.turn_id.clone(),
+        role: message_role_from_turn_role(&turn.role),
+        started_at_ms: turn.started_at_ms,
+    });
+    ui_events.push(UiEventMessage::TextDelta {
+        message_id: turn.turn_id.clone(),
+        text: text.to_string(),
+    });
+    if turn_is_complete(turn) {
+        ui_events.push(UiEventMessage::MessageCompleted {
+            message_id: turn.turn_id.clone(),
+            finished_at_ms: turn.finished_at_ms.unwrap_or(turn.started_at_ms),
+        });
+    }
+}
+
+fn ui_events_for_turn_event(message_id: &str, event: AgentTurnEvent) -> Vec<UiEventMessage> {
+    match event.kind.as_str() {
+        "agent_text_delta" => event_text(&event.payload)
+            .map(|text| {
+                vec![UiEventMessage::TextDelta {
+                    message_id: message_id.to_string(),
+                    text,
+                }]
+            })
+            .unwrap_or_default(),
+        "agent_text_replace" => event_text(&event.payload)
+            .map(|text| {
+                vec![UiEventMessage::TextReplace {
+                    message_id: message_id.to_string(),
+                    text,
+                }]
+            })
+            .unwrap_or_default(),
+        "agent_reasoning_delta" => event_text(&event.payload)
+            .map(|text| {
+                vec![UiEventMessage::ReasoningDelta {
+                    message_id: message_id.to_string(),
+                    text,
+                }]
+            })
+            .unwrap_or_default(),
+        "agent_reasoning_replace" => event_text(&event.payload)
+            .map(|text| {
+                vec![UiEventMessage::ReasoningReplace {
+                    message_id: message_id.to_string(),
+                    text,
+                }]
+            })
+            .unwrap_or_default(),
+        "agent_tool_call" => {
+            let tool_call_id = event
+                .payload
+                .get("tool_call_id")
+                .or_else(|| event.payload.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("tool_call")
+                .to_string();
+            let name = event
+                .payload
+                .get("name")
+                .or_else(|| event.payload.get("tool_name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("tool")
+                .to_string();
+            let args_json = event
+                .payload
+                .get("args_json")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .or_else(|| event.payload.get("args").map(serde_json::Value::to_string))
+                .unwrap_or_else(|| "{}".into());
+            vec![UiEventMessage::ToolCallPlaced {
+                message_id: message_id.to_string(),
+                tool_call_id,
+                name,
+                args_json,
+            }]
+        }
+        "agent_tool_result" | "agent_tool_completed" => {
+            let tool_call_id = event
+                .payload
+                .get("tool_call_id")
+                .or_else(|| event.payload.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("tool_call")
+                .to_string();
+            let output = event
+                .payload
+                .get("output")
+                .or_else(|| event.payload.get("result"))
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| value.to_string())
+                })
+                .unwrap_or_default();
+            let is_error = event
+                .payload
+                .get("is_error")
+                .or_else(|| event.payload.get("error"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            vec![UiEventMessage::ToolCallCompleted {
+                tool_call_id,
+                output,
+                is_error,
+            }]
+        }
+        "agent_error" => {
+            let code = event
+                .payload
+                .get("code")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("agent_error")
+                .to_string();
+            let message = event
+                .payload
+                .get("message")
+                .or_else(|| event.payload.get("detail"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("agent error")
+                .to_string();
+            vec![UiEventMessage::Error {
+                code,
+                message,
+                message_id: Some(message_id.to_string()),
+            }]
+        }
+        _ => vec![UiEventMessage::Raw {
+            kind: event.kind,
+            payload_json: event.payload.to_string(),
+        }],
+    }
+}
+
+fn message_id_for_turn_event(turn: &AgentTurnMetadata, event: &AgentTurnEvent) -> String {
+    let candidate = event
+        .payload
+        .get("message_id")
+        .or_else(|| event.payload.get("msg_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&event.turn_id);
+    if candidate.is_empty() {
+        turn.turn_id.clone()
+    } else {
+        candidate.to_string()
+    }
+}
+
+fn event_text(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("text")
+        .or_else(|| payload.get("delta"))
+        .or_else(|| payload.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn message_role_from_turn_role(role: &str) -> MessageRole {
+    match role {
+        "user" => MessageRole::User,
+        "system" => MessageRole::System,
+        _ => MessageRole::Assistant,
+    }
+}
+
+fn turn_is_complete(turn: &AgentTurnMetadata) -> bool {
+    matches!(
+        turn.status.as_str(),
+        "completed" | "failed" | "cancelled" | "canceled"
+    ) || turn.finished_at_ms.is_some()
+}
+
+fn optional_u64_to_i64(value: Option<u64>, field: &str) -> Result<Option<i64>, MinosError> {
+    value
+        .map(|value| {
+            i64::try_from(value).map_err(|_| MinosError::BackendInternal {
+                message: format!("{field} exceeds i64 range: {value}"),
+            })
+        })
+        .transpose()
+}
+
+fn map_agent_session_not_found(error: MinosError, thread_id: &str) -> MinosError {
+    match error {
+        MinosError::RpcCallFailed { method, message }
+            if method.contains("404") && message.contains("agent_session_not_found") =>
+        {
+            MinosError::ThreadNotFound {
+                thread_id: thread_id.to_string(),
+            }
+        }
+        other => other,
+    }
+}
+
+fn parse_device_id_field(field: &str, value: &str) -> Result<DeviceId, MinosError> {
+    Uuid::parse_str(value)
+        .map(DeviceId)
+        .map_err(|error| MinosError::BackendInternal {
+            message: format!("decode ListHostsData.{field}: {error}"),
+        })
+}
+
 fn connect_err(url: &str, e: &WireError) -> MinosError {
     match e.response_status() {
         Some(StatusCode::UNAUTHORIZED | StatusCode::FOUND | StatusCode::FORBIDDEN) => {
@@ -1871,7 +2350,7 @@ mod tests {
 
     #[test]
     fn project_agent_session_summary_maps_to_thread_summary() {
-        let summary = ProjectAgentSessionSummary {
+        let summary = FormalAgentSessionSummary {
             session_id: "sess-1".into(),
             conversation_id: "conv-1".into(),
             project_id: Some("proj-1".into()),
@@ -1898,7 +2377,7 @@ mod tests {
 
     #[test]
     fn project_agent_session_summary_falls_back_to_agent_id_slug() {
-        let summary = ProjectAgentSessionSummary {
+        let summary = FormalAgentSessionSummary {
             session_id: "sess-2".into(),
             conversation_id: "conv-2".into(),
             project_id: Some("proj-2".into()),
@@ -1915,5 +2394,132 @@ mod tests {
 
         let thread = summary.into_thread_summary().unwrap();
         assert_eq!(thread.agent, AgentName::Claude);
+    }
+
+    #[test]
+    fn turn_summary_maps_to_user_message_events() {
+        let turn = AgentTurnMetadata {
+            turn_id: "turn-user-1".into(),
+            turn_seq: 1,
+            role: "user".into(),
+            status: "completed".into(),
+            started_at_ms: 100,
+            finished_at_ms: Some(110),
+            summary_text: Some("hello".into()),
+        };
+        let mut ui_events = Vec::new();
+
+        append_turn_ui_events(&mut ui_events, &turn, Vec::new());
+
+        assert_eq!(ui_events.len(), 3);
+        assert!(matches!(
+            &ui_events[0],
+            UiEventMessage::MessageStarted {
+                message_id,
+                role: MessageRole::User,
+                started_at_ms: 100
+            } if message_id == "turn-user-1"
+        ));
+        assert!(matches!(
+            &ui_events[1],
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "turn-user-1" && text == "hello"
+        ));
+        assert!(matches!(
+            &ui_events[2],
+            UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms: 110
+            } if message_id == "turn-user-1"
+        ));
+    }
+
+    #[test]
+    fn formal_turn_events_map_to_renderable_assistant_events() {
+        let turn = AgentTurnMetadata {
+            turn_id: "turn-assistant-1".into(),
+            turn_seq: 2,
+            role: "assistant".into(),
+            status: "completed".into(),
+            started_at_ms: 200,
+            finished_at_ms: Some(260),
+            summary_text: None,
+        };
+        let events = vec![AgentTurnEvent {
+            turn_id: "turn-assistant-1".into(),
+            kind: "agent_text_delta".into(),
+            payload: serde_json::json!({
+                "turn_id": "turn-assistant-1",
+                "seq": 1,
+                "message_id": "msg-assistant-1",
+                "delta": "hi"
+            }),
+            created_at_ms: 210,
+        }];
+        let mut ui_events = Vec::new();
+
+        append_turn_ui_events(&mut ui_events, &turn, events);
+
+        assert_eq!(ui_events.len(), 3);
+        assert!(matches!(
+            &ui_events[0],
+            UiEventMessage::MessageStarted {
+                message_id,
+                role: MessageRole::Assistant,
+                started_at_ms: 200
+            } if message_id == "msg-assistant-1"
+        ));
+        assert!(matches!(
+            &ui_events[1],
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "msg-assistant-1" && text == "hi"
+        ));
+        assert!(matches!(
+            &ui_events[2],
+            UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms: 260
+            } if message_id == "msg-assistant-1"
+        ));
+    }
+
+    #[test]
+    fn formal_hosts_response_maps_to_existing_host_summary_shape() {
+        let host_id = DeviceId::new();
+        let mobile_id = DeviceId::new();
+
+        let response = formal_hosts_to_me_hosts(ListHostsData {
+            hosts: vec![FormalHostSummary {
+                host_installation_id: host_id.to_string(),
+                host_display_name: "Mac Studio".into(),
+                paired_at_ms: 123,
+                linked_via_installation_id: mobile_id.to_string(),
+            }],
+        })
+        .unwrap();
+
+        assert_eq!(response.hosts.len(), 1);
+        assert_eq!(response.hosts[0].host_device_id, host_id);
+        assert_eq!(response.hosts[0].host_display_name, "Mac Studio");
+        assert_eq!(response.hosts[0].paired_at_ms, 123);
+        assert_eq!(response.hosts[0].paired_via_device_id, mobile_id);
+    }
+
+    #[test]
+    fn formal_hosts_response_rejects_bad_device_ids() {
+        let err = formal_hosts_to_me_hosts(ListHostsData {
+            hosts: vec![FormalHostSummary {
+                host_installation_id: "not-a-uuid".into(),
+                host_display_name: "Mac Studio".into(),
+                paired_at_ms: 123,
+                linked_via_installation_id: DeviceId::new().to_string(),
+            }],
+        })
+        .expect_err("invalid host id must not be silently accepted");
+
+        assert!(
+            matches!(err, MinosError::BackendInternal { ref message } if message.contains("host_installation_id")),
+            "unexpected error: {err:?}"
+        );
     }
 }

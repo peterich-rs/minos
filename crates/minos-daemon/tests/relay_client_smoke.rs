@@ -16,8 +16,9 @@
 //! daemon's test tree does not take a production dep on the backend; the
 //! dev-dep is scoped to this file.
 
+use std::ffi::OsString;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::Duration;
 
 use minos_backend::{
@@ -28,10 +29,10 @@ use minos_backend::{
 };
 use minos_daemon::config::RelayConfig;
 use minos_daemon::relay_client::{PersistenceCtx, RelayClient};
-use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, RelayLinkState};
+use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, PeerState, RelayLinkState};
 use pretty_assertions::assert_eq;
 use sqlx::SqlitePool;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -42,6 +43,39 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Token TTL fed into the relay state; tests exercise the ISSUANCE path,
 /// not expiry, so a generous value is fine.
 const TOKEN_TTL: Duration = Duration::from_mins(5);
+
+static MINOS_HOME_ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+struct MinosHomeGuard {
+    _lock: MutexGuard<'static, ()>,
+    previous: Option<OsString>,
+    _dir: TempDir,
+}
+
+impl MinosHomeGuard {
+    fn new() -> anyhow::Result<Self> {
+        let lock = MINOS_HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::env::var_os("MINOS_HOME");
+        let dir = tempfile::tempdir()?;
+        std::env::set_var("MINOS_HOME", dir.path());
+        Ok(Self {
+            _lock: lock,
+            previous,
+            _dir: dir,
+        })
+    }
+}
+
+impl Drop for MinosHomeGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(previous) => std::env::set_var("MINOS_HOME", previous),
+            None => std::env::remove_var("MINOS_HOME"),
+        }
+    }
+}
 
 /// In-process backend harness. Holds the axum serve task and the temp-file
 /// SQLite pool. Drop aborts the task so parallel tests don't leak tokio
@@ -154,8 +188,9 @@ async fn register_formal_host(
 
 // ── tests ────────────────────────────────────────────────────────────────
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn connect_becomes_connected() -> anyhow::Result<()> {
+    let _home = MinosHomeGuard::new()?;
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
     let persistence = test_persistence();
@@ -197,8 +232,9 @@ async fn connect_becomes_connected() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> {
+    let _home = MinosHomeGuard::new()?;
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
     let persistence = test_persistence();
@@ -229,6 +265,106 @@ async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> 
         !qr.pairing_token.as_str().is_empty(),
         "expected non-empty pairing token, got {:?}",
         qr.pairing_token
+    );
+
+    client.stop().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn qr_confirm_redeem_persists_token_and_connects() -> anyhow::Result<()> {
+    let _home = MinosHomeGuard::new()?;
+    let relay = spawn_relay().await?;
+    let backend_url = relay_url(&relay);
+    let persistence = test_persistence();
+
+    let mac_name = "Fan's MacBook Pro".to_string();
+    let host_id = DeviceId::new();
+    let (client, mut link_rx, mut peer_rx) = RelayClient::spawn(
+        test_config(),
+        host_id,
+        None,
+        None,
+        mac_name,
+        backend_url,
+        None,
+        persistence,
+    );
+
+    let qr = timeout(STEP_TIMEOUT, client.request_pairing_token())
+        .await
+        .expect("request_pairing_token did not complete within timeout")?;
+
+    timeout(STEP_TIMEOUT, async {
+        loop {
+            if matches!(*peer_rx.borrow_and_update(), PeerState::Pairing) {
+                return;
+            }
+            peer_rx
+                .changed()
+                .await
+                .expect("peer sender must stay alive");
+        }
+    })
+    .await
+    .expect("peer state did not enter Pairing");
+
+    let account = store::accounts::create(&relay.pool, "redeem-smoke@example.com", "phc").await?;
+    let mobile_id = DeviceId::new();
+    store::devices::insert_device(
+        &relay.pool,
+        mobile_id,
+        "iPhone",
+        DeviceRole::MobileClient,
+        0,
+    )
+    .await?;
+    store::devices::set_account_id(&relay.pool, &mobile_id, &account.account_id).await?;
+
+    PairingService::new(relay.pool.clone())
+        .confirm_pairing_code(
+            qr.pairing_token.as_str(),
+            &account.account_id,
+            mobile_id,
+            Some("relay-smoke-auto-redeem-confirm"),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("confirm formal pairing code failed: {error:?}"))?;
+
+    timeout(STEP_TIMEOUT, async {
+        loop {
+            if matches!(*link_rx.borrow_and_update(), RelayLinkState::Connected) {
+                return;
+            }
+            link_rx
+                .changed()
+                .await
+                .expect("link sender must stay alive");
+        }
+    })
+    .await
+    .expect("relay link did not reach Connected after redeem");
+
+    timeout(STEP_TIMEOUT, async {
+        loop {
+            if matches!(
+                peer_rx.borrow_and_update().clone(),
+                PeerState::Paired { peer_id, .. } if peer_id == mobile_id
+            ) {
+                return;
+            }
+            peer_rx
+                .changed()
+                .await
+                .expect("peer sender must stay alive");
+        }
+    })
+    .await
+    .expect("peer state did not become Paired after redeem");
+
+    assert!(
+        minos_daemon::device_secret_store::read()?.is_some(),
+        "expected redeemed host installation token to be persisted"
     );
 
     client.stop().await;

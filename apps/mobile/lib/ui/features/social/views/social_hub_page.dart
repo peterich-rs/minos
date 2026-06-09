@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -40,13 +42,13 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
           .ensureDirectConversation(friendAccountId: friend.accountId);
       if (!mounted) return;
       ref.invalidate(conversationsProvider);
-      context.push(
+      unawaited(context.push(
         '/social/chat/${response.conversationId}',
         extra: SocialChatRouteExtra(
           title: friend.displayName,
           kind: ConversationKind.direct,
         ),
-      );
+      ));
     } catch (error) {
       if (!mounted) return;
       _showSocialError(context, '打开聊天失败', error);
@@ -163,26 +165,33 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
                         child: ShadButton(
                           child: const Text('创建'),
                           onPressed: () async {
+                            final title = titleController.text.trim();
+                            if (title.isEmpty) {
+                              _showSocialInfo(rootContext, '请输入群聊名称');
+                              return;
+                            }
+                            if (selectedIds.length < 2) {
+                              _showSocialInfo(rootContext, '请选择至少 2 位好友');
+                              return;
+                            }
                             try {
                               final response = await ref
                                   .read(socialActionsProvider)
                                   .createGroupConversation(
-                                    title: titleController.text.trim(),
+                                    title: title,
                                     memberAccountIds: selectedIds.toList(),
                                   );
                               if (!context.mounted) return;
                               ref.invalidate(conversationsProvider);
                               Navigator.of(context).pop();
                               if (!mounted) return;
-                              rootContext.push(
+                              unawaited(rootContext.push(
                                 '/social/chat/${response.conversationId}',
                                 extra: SocialChatRouteExtra(
-                                  title: titleController.text.trim().isEmpty
-                                      ? '群聊'
-                                      : titleController.text.trim(),
+                                  title: title,
                                   kind: ConversationKind.group,
                                 ),
-                              );
+                              ));
                             } catch (error) {
                               if (!mounted || !rootContext.mounted) return;
                               _showSocialError(rootContext, '创建群聊失败', error);

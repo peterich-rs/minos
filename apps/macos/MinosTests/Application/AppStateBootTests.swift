@@ -154,6 +154,43 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertEqual(config.backendUrl, "")
     }
 
+    func testAppDirectoriesLocalStatePathUsesMinosHome() {
+        let path = AppDirectories.localStatePath(env: ["MINOS_HOME": "/tmp/minos-shared"])
+
+        XCTAssertEqual(path.path, "/tmp/minos-shared/state/local-state.json")
+    }
+
+    func testAppDirectoriesLocalStatePathDefaultsToRustMinosHome() {
+        let path = AppDirectories.localStatePath(env: [:])
+        let expected = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".minos", isDirectory: true)
+            .appendingPathComponent("state", isDirectory: true)
+            .appendingPathComponent("local-state.json")
+
+        XCTAssertEqual(path.path, expected.path)
+    }
+
+    func testLocalStateLoaderMigratesLegacyApplicationSupportPath() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let newPath = dir
+            .appendingPathComponent("state", isDirectory: true)
+            .appendingPathComponent("local-state.json")
+        let legacyPath = dir.appendingPathComponent("legacy-local-state.json")
+        let deviceId = "00000000-0000-0000-0000-000000000123"
+        try FileManager.default.createDirectory(
+            at: legacyPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let bytes = try XCTUnwrap(#"{"self_device_id":"\#(deviceId)"}"#.data(using: .utf8))
+        try bytes.write(to: legacyPath)
+
+        let loaded = try LocalStateLoader.loadOrInit(at: newPath, legacyPath: legacyPath)
+
+        XCTAssertEqual(loaded, deviceId)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: newPath.path))
+    }
+
     @MainActor
     func testRelayLinkObserverPushUpdatesState() async {
         let (appState, daemon) = AppStateFixtures.runningState()

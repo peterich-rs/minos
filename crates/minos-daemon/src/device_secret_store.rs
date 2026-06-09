@@ -1,8 +1,10 @@
-//! Durable storage for the host's long-lived `device-secret`.
+//! Durable storage for the host's opaque installation token.
 //!
-//! The relay depends on this value to reconnect after pairing. Keep the
-//! primary copy in the daemon's own secrets directory so every platform has
-//! the same persistence story.
+//! The file is still named `device-secret.json` for compatibility with the
+//! existing install base, but the value is the `host_installation_token`
+//! returned by `/v1/host/pairing/redeem`. The relay depends on it to validate
+//! `/v1/host/installations/self`, fetch host realtime tickets, and reconnect
+//! after relaunch.
 
 use std::{
     fs,

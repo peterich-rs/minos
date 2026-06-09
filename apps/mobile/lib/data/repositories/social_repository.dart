@@ -163,6 +163,24 @@ class SocialRepository {
     return _core.friends();
   }
 
+  Future<AgentSummary> registerAgent({
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+  }) {
+    return _core.registerAgent(
+      name: name,
+      description: description,
+      runtimeAgent: runtimeAgent,
+      model: model,
+    );
+  }
+
+  Future<ListAgentsResponse> listAgents() {
+    return _core.listAgents();
+  }
+
   Future<ConversationsResponse> conversations() {
     return _core.conversations();
   }

@@ -4,6 +4,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
+use minos_domain::AgentName;
+use minos_ui_protocol::ThreadEndReason;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_sessions::{AgentSessionError, ListAgentSessionsInput, ReadTurnsInput};
@@ -69,8 +71,24 @@ struct ListAgentSessionsRequest {
 
 #[derive(Debug, Serialize)]
 struct ListAgentSessionsResponse {
-    sessions: Vec<crate::agent_sessions::AgentSessionSummary>,
+    sessions: Vec<AgentSessionSummaryResponse>,
     next_before_started_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentSessionSummaryResponse {
+    session_id: String,
+    conversation_id: String,
+    project_id: Option<String>,
+    agent_id: Option<String>,
+    agent: Option<AgentName>,
+    status: String,
+    started_at_ms: i64,
+    ended_at_ms: Option<i64>,
+    title: Option<String>,
+    last_activity_at_ms: i64,
+    message_count: u32,
+    end_reason: Option<ThreadEndReason>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,15 +224,78 @@ async fn list_sessions(
             project_id: request.project_id,
             before_started_at_ms: request.before_started_at_ms,
             limit: request.limit,
-            caller_account_id: account_id,
+            caller_account_id: account_id.clone(),
         })
         .await
         .map_err(map_agent_session_error)?;
+    let session_ids = output
+        .sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect::<Vec<_>>();
+    let thread_summaries =
+        crate::store::threads::summaries_for_ids(&state.store, &account_id, &session_ids)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    err("internal", error.to_string()),
+                )
+            })?;
 
     Ok(Json(ListAgentSessionsResponse {
-        sessions: output.sessions,
+        sessions: output
+            .sessions
+            .into_iter()
+            .map(|session| {
+                let session_id = session.session_id.clone();
+                agent_session_summary_response(session, thread_summaries.get(&session_id))
+            })
+            .collect(),
         next_before_started_at_ms: output.next_before_started_at_ms,
     }))
+}
+
+fn agent_session_summary_response(
+    session: crate::agent_sessions::AgentSessionSummary,
+    thread: Option<&minos_protocol::ThreadSummary>,
+) -> AgentSessionSummaryResponse {
+    let agent = thread.map(|summary| summary.agent).or_else(|| {
+        session
+            .agent_id
+            .as_deref()
+            .and_then(agent_name_from_agent_id)
+    });
+    let ended_at_ms = thread
+        .and_then(|summary| summary.ended_at_ms)
+        .or(session.ended_at_ms);
+    let last_activity_at_ms = thread
+        .map(|summary| summary.last_ts_ms)
+        .unwrap_or_else(|| ended_at_ms.unwrap_or(session.started_at_ms));
+    AgentSessionSummaryResponse {
+        session_id: session.session_id,
+        conversation_id: session.conversation_id,
+        project_id: session.project_id,
+        agent_id: session.agent_id,
+        agent,
+        status: session.status,
+        started_at_ms: session.started_at_ms,
+        ended_at_ms,
+        title: thread.and_then(|summary| summary.title.clone()),
+        last_activity_at_ms,
+        message_count: thread.map(|summary| summary.message_count).unwrap_or(0),
+        end_reason: thread.and_then(|summary| summary.end_reason.clone()),
+    }
+}
+
+fn agent_name_from_agent_id(agent_id: &str) -> Option<AgentName> {
+    match agent_id {
+        "agent_codex" | "codex" => Some(AgentName::Codex),
+        "agent_claude" | "claude" => Some(AgentName::Claude),
+        "agent_gemini" | "gemini" => Some(AgentName::Gemini),
+        "agent_opencode" | "opencode" => Some(AgentName::Opencode),
+        _ => None,
+    }
 }
 
 fn map_agent_session_error(error: AgentSessionError) -> (StatusCode, Json<ErrorEnvelope>) {

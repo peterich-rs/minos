@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use super::job_trait::{Job, JobContext, JobError, JobOutcome};
 use crate::config::RuntimeMode;
-use crate::store::AsStorePool;
+use crate::store::durable_event_log;
 
 /// Cleans old entries from the durable event log and agent turn events.
 ///
@@ -35,35 +35,58 @@ impl Job for RetentionCleanerJob {
 
     async fn tick(&self, ctx: &JobContext) -> Result<JobOutcome, JobError> {
         let cutoff_ms = chrono::Utc::now().timestamp_millis() - RETENTION_WINDOW_MS;
-        let mut total_cleaned = 0u32;
-
-        match ctx.store.as_store_pool() {
-            crate::store::StorePoolRef::Sqlite(pool) => {
-                let result =
-                    sqlx::query("DELETE FROM durable_event_log WHERE created_at_ms < ? LIMIT ?")
-                        .bind(cutoff_ms)
-                        .bind(i64::from(BATCH_SIZE))
-                        .execute(pool)
-                        .await
-                        .map_err(|e| JobError::Transient(e.to_string()))?;
-                total_cleaned += result.rows_affected() as u32;
-            }
-            crate::store::StorePoolRef::Postgres(pool) => {
-                let result =
-                    sqlx::query("DELETE FROM durable_event_log WHERE created_at_ms < $1 LIMIT $2")
-                        .bind(cutoff_ms)
-                        .bind(i64::from(BATCH_SIZE))
-                        .execute(pool)
-                        .await
-                        .map_err(|e| JobError::Transient(e.to_string()))?;
-                total_cleaned += result.rows_affected() as u32;
-            }
-        }
+        let total_cleaned =
+            durable_event_log::delete_ready_for_retention(&ctx.store, cutoff_ms, BATCH_SIZE)
+                .await
+                .map_err(|e| JobError::Transient(e.to_string()))?;
+        let total_cleaned = u32::try_from(total_cleaned).map_err(|_| {
+            JobError::Fatal(format!(
+                "retention cleaner deleted more rows than u32 can report: {total_cleaned}"
+            ))
+        })?;
 
         if total_cleaned > 0 {
             Ok(JobOutcome::DidWork(total_cleaned))
         } else {
             Ok(JobOutcome::Idle)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::{self, StoreHandle};
+
+    #[tokio::test]
+    async fn tick_cleans_old_durable_events_on_sqlite() {
+        let pool = store::test_support::memory_pool().await;
+        let old_created_at_ms = chrono::Utc::now().timestamp_millis() - RETENTION_WINDOW_MS - 1_000;
+
+        durable_event_log::append(
+            &pool,
+            "evt-old",
+            "host:dev1",
+            "host",
+            1,
+            "dev1",
+            &serde_json::json!({ "kind": "old" }),
+            old_created_at_ms,
+        )
+        .await
+        .unwrap();
+
+        let ctx = JobContext {
+            store: StoreHandle::from(pool.clone()),
+            instance_id: "test-instance".to_string(),
+        };
+
+        let outcome = RetentionCleanerJob.tick(&ctx).await.unwrap();
+
+        assert_eq!(outcome, JobOutcome::DidWork(1));
+        assert!(durable_event_log::get(&pool, "host", "evt-old")
+            .await
+            .unwrap()
+            .is_none());
     }
 }

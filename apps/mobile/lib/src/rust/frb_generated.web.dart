@@ -250,6 +250,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<AgentSummary> dco_decode_list_agent_summary(dynamic raw);
 
   @protected
+  ListAgentsResponse dco_decode_list_agents_response(dynamic raw);
+
+  @protected
   List<ChatMessageSummary> dco_decode_list_chat_message_summary(dynamic raw);
 
   @protected
@@ -691,6 +694,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AgentSummary> sse_decode_list_agent_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListAgentsResponse sse_decode_list_agents_response(
     SseDeserializer deserializer,
   );
 
@@ -1273,6 +1281,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_agent_summary(
     List<AgentSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agents_response(
+    ListAgentsResponse self,
     SseSerializer serializer,
   );
 

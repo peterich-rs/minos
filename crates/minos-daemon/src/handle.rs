@@ -172,6 +172,18 @@ impl DaemonHandle {
         let last_error: Arc<StdMutex<Option<MinosError>>> = Arc::new(StdMutex::new(None));
 
         let backend_url = config.resolved_backend_url().to_owned();
+        let backend_url_source = if config.backend_url.trim().is_empty() {
+            "baked-rust-default"
+        } else {
+            "runtime-config"
+        };
+        tracing::info!(
+            target: "minos_daemon::handle",
+            self_device_id = %self_device_id,
+            backend_url = %backend_url,
+            backend_url_source,
+            "daemon runtime config resolved"
+        );
 
         // Phase D: the Reconciliator handles `Event::IngestCheckpoint`
         // frames from the backend. It needs the local store + the

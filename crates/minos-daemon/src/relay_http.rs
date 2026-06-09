@@ -13,7 +13,7 @@ use http::{
     header::{AUTHORIZATION, CONTENT_TYPE},
     Method, Request, Response, StatusCode,
 };
-use minos_domain::{DeviceId, DeviceSecret, MinosError};
+use minos_domain::{DeviceId, DeviceSecret, MinosError, PairingToken};
 use minos_protocol::{
     HostPeerSummary, HostWsTicketResponse, MePeerResponse, MePeersResponse, PairingQrPayload,
     RequestPairingQrResponse,
@@ -27,6 +27,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 static INSTALL_RUSTLS_PROVIDER: Once = Once::new();
 const BOOTSTRAP_NONCE_PATH: &str = "/v1/host/bootstrap/nonce";
 const REQUEST_CODE_PATH: &str = "/v1/host/pairing/request-code";
+const REDEEM_PATH: &str = "/v1/host/pairing/redeem";
 const HOST_WS_TICKET_PATH: &str = "/v1/host/realtime/ws-ticket";
 const HOST_SELF_PATH: &str = "/v1/host/installations/self";
 
@@ -49,9 +50,26 @@ struct HostPairingRequestCodeRequest {
     host_display_name: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct HostPairingRedeemRequest {
+    installation_id: String,
+    nonce: String,
+    public_key: Option<String>,
+    signature: String,
+    pairing_code: String,
+    client_request_id: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ResponseEnvelope<T> {
     data: T,
+}
+
+#[derive(Debug, Deserialize)]
+struct HostPairingRedeemData {
+    host_installation_id: String,
+    host_installation_token: String,
+    issued_at_ms: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +82,10 @@ struct HostSelfLinkSummary {
     linked_via_installation_id: String,
     link_display_name: String,
     paired_at_ms: i64,
+    #[serde(default)]
+    last_active_at_ms: i64,
+    #[serde(default)]
+    online: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +97,15 @@ struct ErrorEnvelope {
 struct ErrorBody {
     code: String,
     message: String,
+}
+
+pub enum PairingRedeemOutcome {
+    Pending,
+    Redeemed {
+        host_installation_id: String,
+        token: DeviceSecret,
+        issued_at_ms: i64,
+    },
 }
 
 pub struct RelayHttpClient {
@@ -92,6 +123,16 @@ impl RelayHttpClient {
         device_id: DeviceId,
         device_name: String,
     ) -> Result<Self, MinosError> {
+        let host_signing_key = crate::host_bootstrap_key_store::load_or_generate()?;
+        Self::new_with_signing_key(backend_ws_url, device_id, device_name, host_signing_key)
+    }
+
+    fn new_with_signing_key(
+        backend_ws_url: &str,
+        device_id: DeviceId,
+        device_name: String,
+        host_signing_key: SigningKey,
+    ) -> Result<Self, MinosError> {
         INSTALL_RUSTLS_PROVIDER.call_once(|| {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         });
@@ -100,6 +141,12 @@ impl RelayHttpClient {
             url: backend_ws_url.into(),
             message: "cannot derive HTTP base from backend URL".into(),
         })?;
+        tracing::info!(
+            target: "minos_daemon::relay_http",
+            backend_ws_url,
+            http_base = %base,
+            "relay HTTP client configured"
+        );
         let client = Client::builder()
             .call_timeout(HTTP_TIMEOUT)
             .application_interceptor(logger_interceptor("relay_http"))
@@ -108,18 +155,13 @@ impl RelayHttpClient {
             .map_err(|e| MinosError::BackendInternal {
                 message: format!("openwire build: {e}"),
             })?;
-        let mut host_key_seed = [0_u8; 32];
-        getrandom::fill(&mut host_key_seed).map_err(|e| MinosError::BackendInternal {
-            message: format!("generate host bootstrap signing key: {e}"),
-        })?;
-
         Ok(Self {
             client,
             base,
             device_id,
             device_role: "agent-host",
             device_name,
-            host_signing_key: SigningKey::from_bytes(&host_key_seed),
+            host_signing_key,
         })
     }
 
@@ -151,6 +193,55 @@ impl RelayHttpClient {
         } else {
             Err(decode_error(resp).await)
         }
+    }
+
+    pub async fn redeem_pairing_code(
+        &self,
+        pairing_code: &PairingToken,
+    ) -> Result<PairingRedeemOutcome, MinosError> {
+        let nonce = self.fetch_bootstrap_nonce().await?;
+        let url = format!("{}{}", self.base, REDEEM_PATH);
+        let request = self.request_with_json(
+            Method::POST,
+            &url,
+            None,
+            false,
+            &HostPairingRedeemRequest {
+                installation_id: self.device_id.to_string(),
+                nonce: nonce.clone(),
+                public_key: Some(self.host_public_key()),
+                signature: self.host_signature(REDEEM_PATH, &nonce),
+                pairing_code: pairing_code.as_str().to_string(),
+                client_request_id: Some(format!("host-redeem-{}", uuid::Uuid::new_v4())),
+            },
+        )?;
+        let resp = self.execute(&url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let envelope: ResponseEnvelope<HostPairingRedeemData> =
+                decode_success_json(resp, "HostPairingRedeemData").await?;
+            return Ok(PairingRedeemOutcome::Redeemed {
+                host_installation_id: envelope.data.host_installation_id,
+                token: DeviceSecret(envelope.data.host_installation_token),
+                issued_at_ms: envelope.data.issued_at_ms,
+            });
+        }
+
+        let error = decode_error_envelope(resp).await;
+        if status == StatusCode::CONFLICT {
+            if let Some(env) = &error {
+                if env.error.code == "pairing_not_confirmed"
+                    || (env.error.code == "pairing_state_mismatch"
+                        && env.error.message == "pending")
+                {
+                    return Ok(PairingRedeemOutcome::Pending);
+                }
+                if env.error.code == "pairing_code_invalid" {
+                    return Err(MinosError::PairingTokenInvalid);
+                }
+            }
+        }
+        Err(error_to_minos(status, error))
     }
 
     pub async fn forget_pairing(&self, secret: &DeviceSecret) -> Result<(), MinosError> {
@@ -248,23 +339,7 @@ impl RelayHttpClient {
         if status.is_success() {
             let envelope: ResponseEnvelope<HostSelfData> =
                 decode_success_json(resp, "HostSelfData").await?;
-            let mut peers = Vec::with_capacity(envelope.data.links.len());
-            for link in envelope.data.links {
-                let mobile_device_id = uuid::Uuid::parse_str(&link.linked_via_installation_id)
-                    .map(DeviceId)
-                    .map_err(|e| MinosError::BackendInternal {
-                        message: format!("decode host self linked device id: {e}"),
-                    })?;
-                peers.push(HostPeerSummary {
-                    mobile_device_id,
-                    mobile_device_name: link.link_display_name,
-                    account_email: String::new(),
-                    paired_at_ms: link.paired_at_ms,
-                    last_active_at_ms: link.paired_at_ms,
-                    online: false,
-                });
-            }
-            return Ok(peers);
+            return host_self_links_to_peer_summaries(envelope.data.links);
         }
         Err(decode_error(resp).await)
     }
@@ -441,6 +516,32 @@ fn connect_err(url: &str, e: &WireError) -> MinosError {
     }
 }
 
+fn host_self_links_to_peer_summaries(
+    links: Vec<HostSelfLinkSummary>,
+) -> Result<Vec<HostPeerSummary>, MinosError> {
+    let mut peers = Vec::with_capacity(links.len());
+    for link in links {
+        let mobile_device_id = uuid::Uuid::parse_str(&link.linked_via_installation_id)
+            .map(DeviceId)
+            .map_err(|e| MinosError::BackendInternal {
+                message: format!("decode host self linked device id: {e}"),
+            })?;
+        peers.push(HostPeerSummary {
+            mobile_device_id,
+            mobile_device_name: link.link_display_name,
+            account_email: String::new(),
+            paired_at_ms: link.paired_at_ms,
+            last_active_at_ms: if link.last_active_at_ms > 0 {
+                link.last_active_at_ms
+            } else {
+                link.paired_at_ms
+            },
+            online: link.online,
+        });
+    }
+    Ok(peers)
+}
+
 async fn decode_success_json<T>(
     resp: Response<ResponseBody>,
     type_name: &str,
@@ -458,15 +559,30 @@ where
 
 async fn decode_error(resp: Response<ResponseBody>) -> MinosError {
     let status = resp.status();
-    let body: Result<ErrorEnvelope, _> = resp.into_body().json().await;
+    let body = decode_error_envelope(resp).await;
+    error_to_minos(status, body)
+}
+
+async fn decode_error_envelope(resp: Response<ResponseBody>) -> Option<ErrorEnvelope> {
+    resp.into_body().json().await.ok()
+}
+
+fn error_to_minos(status: StatusCode, body: Option<ErrorEnvelope>) -> MinosError {
+    if status == StatusCode::UNAUTHORIZED {
+        let reason = body
+            .map(|env| format!("{}: {}", env.error.code, env.error.message))
+            .unwrap_or_else(|| "backend unauthorized".to_string());
+        return MinosError::Unauthorized { reason };
+    }
+
     match body {
-        Ok(env) => MinosError::BackendInternal {
+        Some(env) => MinosError::BackendInternal {
             message: format!(
                 "backend {} ({}): {}",
                 status, env.error.code, env.error.message
             ),
         },
-        Err(_) => MinosError::BackendInternal {
+        None => MinosError::BackendInternal {
             message: format!("backend {status}"),
         },
     }
@@ -509,10 +625,11 @@ mod tests {
 
     #[test]
     fn request_with_json_sets_application_json_content_type() {
-        let client = RelayHttpClient::new(
+        let client = RelayHttpClient::new_with_signing_key(
             "wss://example.com/devices",
             DeviceId::new(),
             "Minos Mac".into(),
+            SigningKey::from_bytes(&[7_u8; 32]),
         )
         .unwrap();
 
@@ -536,5 +653,26 @@ mod tests {
             request.headers().get(CONTENT_TYPE).unwrap(),
             "application/json"
         );
+    }
+
+    #[test]
+    fn host_self_links_preserve_presence_fields() {
+        let mobile_device_id = DeviceId::new();
+        let peers = host_self_links_to_peer_summaries(vec![HostSelfLinkSummary {
+            linked_via_installation_id: mobile_device_id.to_string(),
+            link_display_name: "Owner Phone".into(),
+            paired_at_ms: 100,
+            last_active_at_ms: 900,
+            online: true,
+        }])
+        .unwrap();
+
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].mobile_device_id, mobile_device_id);
+        assert_eq!(peers[0].mobile_device_name, "Owner Phone");
+        assert_eq!(peers[0].account_email, "");
+        assert_eq!(peers[0].paired_at_ms, 100);
+        assert_eq!(peers[0].last_active_at_ms, 900);
+        assert!(peers[0].online);
     }
 }

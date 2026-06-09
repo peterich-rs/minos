@@ -3,23 +3,26 @@
 //! The Mac daemon runs exactly one `RelayClient` in steady state. It owns
 //! a single background task that:
 //!
-//!   1. fetches a short-lived ws-ticket via `POST /v1/host/realtime/ws-ticket`;
-//!   2. opens a WSS handshake to `/ws/host?ticket=…` (no custom headers);
-//!   3. receives `ServerFrame` messages from the topic-based realtime gateway;
-//!   4. dispatches `DurableEvent::HostCommandIssued` to the local
+//!   1. stays `Unpaired` without dialing realtime until a host installation
+//!      token exists;
+//!   2. validates that token via `POST /v1/host/installations/self`;
+//!   3. fetches a short-lived ws-ticket via `POST /v1/host/realtime/ws-ticket`;
+//!   4. opens a WSS handshake to `/ws/host?ticket=…` (no custom headers);
+//!   5. receives `ServerFrame` messages from the topic-based realtime gateway;
+//!   6. dispatches `DurableEvent::HostCommandIssued` to the local
 //!      [`RpcServerImpl`] and pushes `ClientFrame::HostCommandResult` back;
-//!   5. sends `ClientFrame::HostStreamEvent` for agent ingest data.
+//!   7. sends `ClientFrame::HostStreamEvent` for agent ingest data.
 //!
-//! Pairing token issuance and `forget_peer` go through the backend's HTTP
-//! `/v1/*` control plane on a separate [`RelayHttpClient`] handle.
+//! Pairing QR issuance, redeem polling, and `forget_peer` go through the
+//! backend's HTTP `/v1/*` control plane on a separate [`RelayHttpClient`]
+//! handle.
 //!
 //! # Error handling
 //!
-//! - A connect-time HTTP 401 is treated as a terminal auth failure:
-//!   `MinosError::Unauthorized` is written into the shared `last_error` slot
-//!   and the task exits with a `Disconnected` link state.
-//! - WS close code `4401` is terminal too: `MinosError::DeviceNotTrusted`
-//!   lands in `last_error` and the task exits — re-pairing is required.
+//! - A missing host installation token is the normal unpaired state. No
+//!   ws-ticket call is attempted until pairing redeem persists a token.
+//! - HTTP 401 / WS close code `4401` clears the stale token and returns the
+//!   relay to the unpaired wait state.
 //! - WS close code `4400` (malformed frame) records
 //!   `MinosError::EnvelopeVersionUnsupported` but reconnects.
 //! - All other errors fall back to exponential-backoff reconnect
@@ -31,18 +34,18 @@ use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
-use minos_domain::{DeviceId, DeviceSecret, MinosError, PeerState, RelayLinkState};
+use minos_domain::{DeviceId, DeviceSecret, MinosError, PairingToken, PeerState, RelayLinkState};
 use minos_protocol::realtime::{ClientFrame, ServerFrame};
 use minos_protocol::HostPeerSummary;
 use minos_transport::backoff::delay_for_attempt;
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
-use crate::relay_http::RelayHttpClient;
+use crate::relay_http::{PairingRedeemOutcome, RelayHttpClient};
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
 use crate::rpc_server::{invoke_host_command, RpcServerImpl};
 
@@ -53,6 +56,9 @@ const OUTBOUND_QUEUE_DEPTH: usize = 64;
 const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 const HOST_COMMAND_RESULT_CACHE_CAPACITY: usize = 512;
+const TOKEN_WAIT_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const PAIRING_REDEEM_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const PEER_PRESENCE_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
 type HostCommandCache = Arc<Mutex<HashMap<String, HostCommandCacheEntry>>>;
 
@@ -85,12 +91,22 @@ struct Inner {
     /// The Mac's display name — sent to the backend in `RequestPairingQr`
     /// so the assembled QR carries it through to the iPhone.
     mac_name: String,
-    /// Live device secret. Pairing can mint it while this relay client is
-    /// already running, so reconnects and `forget_peer` read it through a
-    /// shared slot instead of a spawn-time snapshot.
+    /// Live host installation token. Pairing redeem can mint it while this
+    /// relay client is already running, so reconnects read it through a shared
+    /// slot instead of a spawn-time snapshot.
     secret: Arc<StdMutex<Option<DeviceSecret>>>,
+    /// Wakes the dispatch loop when pairing redeem writes a new host
+    /// installation token.
+    secret_notify: Arc<Notify>,
     /// HTTP client for the backend's `/v1/*` control plane.
     http: Arc<RelayHttpClient>,
+    /// Peer-state publisher kept so `request_pairing_token` can enter the
+    /// `Pairing` axis immediately, before the realtime socket is available.
+    peer_tx: watch::Sender<PeerState>,
+    peer_store: Arc<StdMutex<Option<PeerRecord>>>,
+    peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
+    last_error: Arc<StdMutex<Option<MinosError>>>,
+    pairing_task: Mutex<Option<JoinHandle<()>>>,
     /// Cloneable producer side of the dispatcher's outbound queue.
     /// Other in-process producers (e.g. the agent-ingest forwarder) clone
     /// this via [`RelayClient::outbound_sender`] so every host-side WS frame
@@ -140,6 +156,7 @@ impl RelayClient {
         let host_command_cache = Arc::new(Mutex::new(HashMap::new()));
 
         let secret_store = Arc::new(StdMutex::new(secret));
+        let secret_notify = Arc::new(Notify::new());
         let http = match RelayHttpClient::new(&backend_url, self_device_id, mac_name.clone()) {
             Ok(c) => Arc::new(c),
             Err(e) => {
@@ -159,20 +176,24 @@ impl RelayClient {
                 )
             }
         };
+        let peer_store = persistence.peer_store;
+        let peers_store = persistence.peers_store;
+        let last_error = persistence.last_error;
         let dispatch_ctx = DispatchCtx {
             self_device_id,
             secret: secret_store.clone(),
+            secret_notify: secret_notify.clone(),
             backend_url: backend_url.clone(),
             link_tx,
-            peer_tx,
+            peer_tx: peer_tx.clone(),
             out_tx: out_tx.clone(),
             out_rx,
             host_command_cache,
             http: http.clone(),
             rpc_server,
-            peer_store: persistence.peer_store,
-            peers_store: persistence.peers_store,
-            last_error: persistence.last_error,
+            peer_store: peer_store.clone(),
+            peers_store: peers_store.clone(),
+            last_error: last_error.clone(),
             reconciliator: persistence.reconciliator,
         };
 
@@ -183,7 +204,13 @@ impl RelayClient {
             task: Mutex::new(Some(task)),
             mac_name,
             secret: secret_store,
+            secret_notify,
             http,
+            peer_tx,
+            peer_store,
+            peers_store,
+            last_error,
+            pairing_task: Mutex::new(None),
             out_tx,
         });
 
@@ -199,12 +226,47 @@ impl RelayClient {
             .request_pairing_qr(self.inner.mac_name.clone())
             .await?;
 
-        Ok(RelayQrPayload {
+        let payload = RelayQrPayload {
             v: qr.v,
             host_display_name: qr.host_display_name,
             pairing_token: minos_domain::PairingToken(qr.pairing_token),
             expires_at_ms: qr.expires_at_ms,
-        })
+        };
+        self.start_pairing_redeem_loop(payload.pairing_token.clone(), payload.expires_at_ms)
+            .await;
+        Ok(payload)
+    }
+
+    async fn start_pairing_redeem_loop(&self, pairing_code: PairingToken, expires_at_ms: i64) {
+        let _ = self.inner.peer_tx.send(PeerState::Pairing);
+
+        let mut task = self.inner.pairing_task.lock().await;
+        if let Some(existing) = task.take() {
+            existing.abort();
+        }
+
+        let http = self.inner.http.clone();
+        let secret = self.inner.secret.clone();
+        let secret_notify = self.inner.secret_notify.clone();
+        let peer_tx = self.inner.peer_tx.clone();
+        let peer_store = self.inner.peer_store.clone();
+        let peers_store = self.inner.peers_store.clone();
+        let last_error = self.inner.last_error.clone();
+
+        *task = Some(tokio::spawn(async move {
+            run_pairing_redeem_loop(
+                http,
+                pairing_code,
+                expires_at_ms,
+                secret,
+                secret_notify,
+                peer_tx,
+                peer_store,
+                peers_store,
+                last_error,
+            )
+            .await;
+        }));
     }
 
     /// Back-compat helper for callers that still think in terms of a
@@ -268,6 +330,9 @@ impl RelayClient {
     /// Signal the dispatch task to exit and await its join. Idempotent:
     /// calling twice is a benign no-op after the first success.
     pub async fn stop(&self) {
+        if let Some(task) = self.inner.pairing_task.lock().await.take() {
+            task.abort();
+        }
         if let Some(tx) = self.inner.shutdown_tx.lock().await.take() {
             let _ = tx.send(());
         }
@@ -288,6 +353,7 @@ pub struct PersistenceCtx {
 struct DispatchCtx {
     self_device_id: DeviceId,
     secret: Arc<StdMutex<Option<DeviceSecret>>>,
+    secret_notify: Arc<Notify>,
     backend_url: String,
     link_tx: watch::Sender<RelayLinkState>,
     peer_tx: watch::Sender<PeerState>,
@@ -303,24 +369,177 @@ struct DispatchCtx {
     reconciliator: Option<Arc<crate::reconciliator::Reconciliator>>,
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn run_pairing_redeem_loop(
+    http: Arc<RelayHttpClient>,
+    pairing_code: PairingToken,
+    expires_at_ms: i64,
+    secret: Arc<StdMutex<Option<DeviceSecret>>>,
+    secret_notify: Arc<Notify>,
+    peer_tx: watch::Sender<PeerState>,
+    peer_store: Arc<StdMutex<Option<PeerRecord>>>,
+    peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
+    last_error: Arc<StdMutex<Option<MinosError>>>,
+) {
+    tracing::info!(
+        target: "minos_daemon::relay_client",
+        expires_at_ms,
+        "host pairing redeem polling started"
+    );
+
+    loop {
+        let now_ms = Utc::now().timestamp_millis();
+        if now_ms >= expires_at_ms {
+            let error = MinosError::PairingTokenExpired;
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                "host pairing redeem expired before mobile confirmation"
+            );
+            store_last_error(&last_error, error);
+            clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
+            return;
+        }
+
+        match http.redeem_pairing_code(&pairing_code).await {
+            Ok(PairingRedeemOutcome::Pending) => {
+                tracing::debug!(
+                    target: "minos_daemon::relay_client",
+                    "host pairing redeem pending mobile confirmation"
+                );
+            }
+            Ok(PairingRedeemOutcome::Redeemed {
+                host_installation_id,
+                token,
+                issued_at_ms,
+            }) => {
+                if let Err(error) = crate::device_secret_store::write(&token) {
+                    tracing::error!(
+                        target: "minos_daemon::relay_client",
+                        error = %error,
+                        "failed to persist host installation token"
+                    );
+                    store_last_error(&last_error, error);
+                    clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
+                    return;
+                }
+                if let Ok(mut guard) = secret.lock() {
+                    *guard = Some(token);
+                }
+                clear_last_error(&last_error);
+                tracing::info!(
+                    target: "minos_daemon::relay_client",
+                    host_installation_id,
+                    issued_at_ms,
+                    "host installation token redeemed and persisted"
+                );
+                secret_notify.notify_waiters();
+                return;
+            }
+            Err(error @ MinosError::PairingTokenInvalid)
+            | Err(error @ MinosError::PairingTokenExpired)
+            | Err(error @ MinosError::Unauthorized { .. }) => {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    error = %error,
+                    "host pairing redeem failed permanently"
+                );
+                store_last_error(&last_error, error);
+                clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    error = %error,
+                    "host pairing redeem failed transiently; will retry until QR expiry"
+                );
+            }
+        }
+
+        let remaining_ms = expires_at_ms.saturating_sub(Utc::now().timestamp_millis());
+        let sleep_for = PAIRING_REDEEM_POLL_INTERVAL.min(Duration::from_millis(
+            u64::try_from(remaining_ms).unwrap_or(0),
+        ));
+        tokio::time::sleep(sleep_for).await;
+    }
+}
+
+fn clear_peer_snapshot(
+    peer_store: &Arc<StdMutex<Option<PeerRecord>>>,
+    peers_store: &Arc<StdMutex<Vec<HostPeerSummary>>>,
+    peer_tx: &watch::Sender<PeerState>,
+) {
+    if let Ok(mut guard) = peers_store.lock() {
+        guard.clear();
+    }
+    if let Ok(mut guard) = peer_store.lock() {
+        *guard = None;
+    }
+    let _ = peer_tx.send(PeerState::Unpaired);
+}
+
+fn clear_host_installation_token(ctx: &DispatchCtx) {
+    if let Ok(mut guard) = ctx.secret.lock() {
+        *guard = None;
+    }
+    if let Err(error) = crate::device_secret_store::delete() {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %error,
+            "failed to delete rejected host installation token"
+        );
+        store_last_error(&ctx.last_error, error);
+    }
+    clear_peer_snapshot(&ctx.peer_store, &ctx.peers_store, &ctx.peer_tx);
+}
+
 enum CycleOutcome {
     Reconnect,
-    AuthFailed,
+    TokenRejected,
     Shutdown,
 }
 
 async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<()>) {
     let mut attempt: u32 = 0;
+    let mut logged_missing_token = false;
 
     loop {
+        let Some(secret) = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error) else {
+            let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
+            if !logged_missing_token {
+                tracing::info!(
+                    target: "minos_daemon::relay_client",
+                    backend_url = %ctx.backend_url,
+                    "no host installation token available; realtime ws-ticket fetch is disabled until pairing redeem completes"
+                );
+                logged_missing_token = true;
+            }
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => {
+                    let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
+                    return;
+                }
+                () = ctx.secret_notify.notified() => {}
+                () = tokio::time::sleep(TOKEN_WAIT_POLL_INTERVAL) => {}
+            }
+            attempt = 0;
+            continue;
+        };
+        logged_missing_token = false;
         let _ = ctx.link_tx.send(RelayLinkState::Connecting { attempt });
 
-        let outcome = Box::pin(run_once(&mut ctx, &mut shutdown_rx)).await;
+        let outcome = Box::pin(run_once(&mut ctx, &mut shutdown_rx, &secret)).await;
 
         match outcome {
-            CycleOutcome::Shutdown | CycleOutcome::AuthFailed => {
+            CycleOutcome::Shutdown => {
                 let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
                 return;
+            }
+            CycleOutcome::TokenRejected => {
+                clear_host_installation_token(&ctx);
+                let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
+                attempt = 0;
             }
             CycleOutcome::Reconnect => {
                 attempt = attempt.saturating_add(1);
@@ -346,35 +565,53 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
     }
 }
 
-async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>) -> CycleOutcome {
-    let secret = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error);
+async fn run_once(
+    ctx: &mut DispatchCtx,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+    secret: &DeviceSecret,
+) -> CycleOutcome {
+    match ctx.http.get_host_peers(secret).await {
+        Ok(peers) => apply_peers_snapshot(ctx, peers),
+        Err(e) if is_auth_error(&e) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                error = %e,
+                "host installation token rejected by self endpoint; re-pairing required"
+            );
+            store_last_error(&ctx.last_error, e);
+            return CycleOutcome::TokenRejected;
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                error = %e,
+                "failed to validate host installation before realtime connect"
+            );
+            store_last_error(&ctx.last_error, e);
+            return CycleOutcome::Reconnect;
+        }
+    }
 
     // Fetch a short-lived ws-ticket from the backend.
-    let ticket = match &secret {
-        Some(s) => match ctx.http.fetch_host_ws_ticket(s).await {
-            Ok(resp) => resp.ticket,
-            Err(e) => {
-                tracing::error!(
-                    target: "minos_daemon::relay_client",
-                    error = %e,
-                    "failed to fetch host ws-ticket — treating as auth-failure-equivalent"
-                );
-                store_last_error(&ctx.last_error, e);
-                return CycleOutcome::AuthFailed;
-            }
-        },
-        None => {
+    let ticket = match ctx.http.fetch_host_ws_ticket(secret).await {
+        Ok(resp) => resp.ticket,
+        Err(e) if is_auth_error(&e) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                error = %e,
+                "host installation token rejected while fetching ws-ticket; re-pairing required"
+            );
+            store_last_error(&ctx.last_error, e);
+            return CycleOutcome::TokenRejected;
+        }
+        Err(e) => {
             tracing::error!(
                 target: "minos_daemon::relay_client",
-                "no device secret available — cannot fetch ws-ticket"
+                error = %e,
+                "failed to fetch host ws-ticket; will reconnect with backoff"
             );
-            store_last_error(
-                &ctx.last_error,
-                MinosError::DeviceNotTrusted {
-                    device_id: ctx.self_device_id.to_string(),
-                },
-            );
-            return CycleOutcome::AuthFailed;
+            store_last_error(&ctx.last_error, e);
+            return CycleOutcome::Reconnect;
         }
     };
 
@@ -399,10 +636,10 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
                     %message,
-                    "relay handshake returned HTTP 401 — auth failure, exiting task"
+                    "relay handshake returned HTTP 401; clearing host installation token"
                 );
                 store_last_error(&ctx.last_error, MinosError::Unauthorized { reason: message });
-                return CycleOutcome::AuthFailed;
+                return CycleOutcome::TokenRejected;
             }
             Err(e) => {
                 tracing::warn!(
@@ -416,7 +653,7 @@ async fn run_once(ctx: &mut DispatchCtx, shutdown_rx: &mut oneshot::Receiver<()>
     };
 
     tracing::info!(target: "minos_daemon::relay_client", "relay websocket upgraded");
-    refresh_peers_from_backend(ctx, secret.as_ref()).await;
+    refresh_peers_from_backend(ctx, Some(secret)).await;
 
     Box::pin(dispatch_loop(ws, ctx, shutdown_rx)).await
 }
@@ -487,8 +724,11 @@ async fn dispatch_loop(
     let (mut sink, mut stream) = ws.split();
     let mut heartbeat = tokio::time::interval(RELAY_PING_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut peer_refresh = tokio::time::interval(PEER_PRESENCE_REFRESH_INTERVAL);
+    peer_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_pong_at = Instant::now();
     heartbeat.tick().await;
+    peer_refresh.tick().await;
 
     loop {
         tokio::select! {
@@ -590,6 +830,10 @@ async fn dispatch_loop(
                     );
                     return CycleOutcome::Reconnect;
                 }
+            }
+            _ = peer_refresh.tick() => {
+                let secret = ctx.secret.lock().ok().and_then(|guard| guard.clone());
+                refresh_peers_from_backend(ctx, secret.as_ref()).await;
             }
         }
     }
@@ -879,7 +1123,7 @@ fn classify_close(frame: Option<CloseFrame>, ctx: &DispatchCtx) -> CycleOutcome 
                 target: "minos_daemon::relay_client",
                 code = 4401,
                 ?reason,
-                "relay closed socket with 4401 — stale device auth, re-pair required"
+                "relay closed socket with 4401; clearing host installation token"
             );
             store_last_error(
                 &ctx.last_error,
@@ -887,7 +1131,7 @@ fn classify_close(frame: Option<CloseFrame>, ctx: &DispatchCtx) -> CycleOutcome 
                     device_id: ctx.self_device_id.to_string(),
                 },
             );
-            CycleOutcome::AuthFailed
+            CycleOutcome::TokenRejected
         }
         Some(4400) => {
             tracing::warn!(
@@ -920,6 +1164,19 @@ fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
     }
 }
 
+fn clear_last_error(slot: &Arc<StdMutex<Option<MinosError>>>) {
+    if let Ok(mut guard) = slot.lock() {
+        *guard = None;
+    }
+}
+
+fn is_auth_error(error: &MinosError) -> bool {
+    matches!(
+        error,
+        MinosError::Unauthorized { .. } | MinosError::DeviceNotTrusted { .. }
+    )
+}
+
 fn secret_snapshot(slot: &Arc<StdMutex<Option<DeviceSecret>>>) -> Option<DeviceSecret> {
     slot.lock().ok().and_then(|guard| guard.clone())
 }
@@ -939,7 +1196,7 @@ fn secret_snapshot_or_reload(
             }
             tracing::info!(
                 target: "minos_daemon::relay_client",
-                "reloaded persisted device secret before reconnect"
+                "reloaded persisted host installation token before realtime connect"
             );
             Some(secret)
         }
@@ -948,7 +1205,7 @@ fn secret_snapshot_or_reload(
             tracing::warn!(
                 target: "minos_daemon::relay_client",
                 error = %error,
-                "failed to reload persisted device secret before reconnect"
+                "failed to reload persisted host installation token before realtime connect"
             );
             store_last_error(last_error, error);
             None

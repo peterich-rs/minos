@@ -106,6 +106,7 @@ pub struct FormalRevokeOutcome {
 #[derive(Debug)]
 pub enum FormalPairingError {
     Internal(BackendError),
+    PairingNotConfirmed,
     PairingCodeInvalid,
     PairingStateMismatch { actual: String },
 }
@@ -481,6 +482,24 @@ impl PairingService {
         })?;
 
         let result: Result<HostInstallationToken, FormalPairingError> = async {
+            let row = pairing_codes::get_code_with_executor(&mut *tx, &digest)
+                .await
+                .map_err(FormalPairingError::Internal)?
+                .ok_or(FormalPairingError::PairingCodeInvalid)?;
+            if row.host_installation_id != host_installation_id || row.expires_at_ms <= now {
+                return Err(FormalPairingError::PairingCodeInvalid);
+            }
+            match row.status {
+                pairing_codes::PairingCodeStatus::Pending => {
+                    return Err(FormalPairingError::PairingNotConfirmed);
+                }
+                pairing_codes::PairingCodeStatus::Confirmed => {}
+                pairing_codes::PairingCodeStatus::Redeemed
+                | pairing_codes::PairingCodeStatus::Expired => {
+                    return Err(FormalPairingError::PairingCodeInvalid);
+                }
+            }
+
             let account_id = pairing_codes::redeem_code_with_executor(
                 &mut *tx,
                 &digest,
@@ -544,6 +563,24 @@ impl PairingService {
             .map_err(FormalPairingError::Internal)?;
 
         let result: Result<HostInstallationToken, FormalPairingError> = async {
+            let row = pairing_codes::get_code_with_postgres_executor(&mut *tx, &digest)
+                .await
+                .map_err(FormalPairingError::Internal)?
+                .ok_or(FormalPairingError::PairingCodeInvalid)?;
+            if row.host_installation_id != host_installation_id || row.expires_at_ms <= now {
+                return Err(FormalPairingError::PairingCodeInvalid);
+            }
+            match row.status {
+                pairing_codes::PairingCodeStatus::Pending => {
+                    return Err(FormalPairingError::PairingNotConfirmed);
+                }
+                pairing_codes::PairingCodeStatus::Confirmed => {}
+                pairing_codes::PairingCodeStatus::Redeemed
+                | pairing_codes::PairingCodeStatus::Expired => {
+                    return Err(FormalPairingError::PairingCodeInvalid);
+                }
+            }
+
             let account_id = pairing_codes::redeem_code_with_postgres_executor(
                 &mut *tx,
                 &digest,

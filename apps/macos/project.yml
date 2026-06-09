@@ -50,7 +50,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ai.minos.macos
         HEADER_SEARCH_PATHS: $(SRCROOT)/Minos/Generated
         LIBRARY_SEARCH_PATHS: $(SRCROOT)/../../target/xcframework/$(CONFIGURATION)
-        OTHER_LDFLAGS: "-lminos_ffi_uniffi"
+        OTHER_LDFLAGS: "-lminos_ffi_uniffi -framework SystemConfiguration"
         OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/Minos/Generated/MinosCoreFFI.modulemap"
     preBuildScripts:
       - name: Build Rust UniFFI static library

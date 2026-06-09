@@ -45,6 +45,8 @@ struct StatusIcon: View {
         case .connecting:
             return "bolt.circle"
         case .disconnected:
+            if case .unpaired = peer { return "qrcode" }
+            if case .pairing = peer { return "qrcode" }
             return "bolt.slash"
         }
     }
@@ -59,6 +61,8 @@ struct StatusIcon: View {
         case .connecting:
             return .orange
         case .disconnected:
+            if case .unpaired = peer { return .secondary }
+            if case .pairing = peer { return .accentColor }
             return .red
         }
     }

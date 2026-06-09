@@ -29,12 +29,12 @@ final class AppStateTests: XCTestCase {
     // ── Gates ──
 
     @MainActor
-    func testCanShowQrFalseWhenLinkDownEvenIfUnpaired() async {
+    func testCanShowQrTrueWhenDaemonRunningEvenIfLinkDown() async {
         let (appState, daemon) = AppStateFixtures.runningState()
         daemon.emitRelayLink(.disconnected)
         await AppStateFixtures.drainMainActor()
 
-        XCTAssertFalse(appState.canShowQr)
+        XCTAssertTrue(appState.canShowQr)
     }
 
     @MainActor
@@ -74,7 +74,7 @@ final class AppStateTests: XCTestCase {
     func testShowQrStoresPayloadAndMarksShowingQr() async throws {
         let expected = MockDaemon.makeQrPayload(hostDisplayName: "Office Mac")
         let daemon = MockDaemon(
-            currentRelayLink: .connected,
+            currentRelayLink: .disconnected,
             currentPeer: .unpaired,
             pairingQrResult: .success(expected)
         )
@@ -84,7 +84,7 @@ final class AppStateTests: XCTestCase {
             daemon: daemon,
             relayLinkSubscription: MockSubscription(),
             peerSubscription: MockSubscription(),
-            relayLink: .connected,
+            relayLink: .disconnected,
             peer: .unpaired,
             trustedDevice: nil
         )
@@ -99,6 +99,34 @@ final class AppStateTests: XCTestCase {
         let generatedAt = try XCTUnwrap(appState.currentQrGeneratedAt)
         let expiresAt = try XCTUnwrap(appState.currentQrExpiresAt)
         XCTAssertEqual(expiresAt.timeIntervalSince(generatedAt), 300, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testQrStaysVisibleWhenUnpairedRefreshArrivesDuringPairing() async throws {
+        let expected = MockDaemon.makeQrPayload(hostDisplayName: "Office Mac")
+        let daemon = MockDaemon(
+            currentRelayLink: .disconnected,
+            currentPeer: .unpaired,
+            currentPeers: [],
+            pairingQrResult: .success(expected)
+        )
+        let appState = AppState()
+
+        appState.finishBoot(
+            daemon: daemon,
+            relayLinkSubscription: MockSubscription(),
+            peerSubscription: MockSubscription(),
+            relayLink: .disconnected,
+            peer: .unpaired,
+            trustedDevice: nil
+        )
+
+        await appState.showQr()
+        await appState.applyPeer(.unpaired)
+
+        XCTAssertEqual(appState.currentQr, expected)
+        XCTAssertTrue(appState.isShowingQr)
+        XCTAssertNil(appState.displayError)
     }
 
     @MainActor

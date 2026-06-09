@@ -709,7 +709,7 @@ class _LoadingThreadState extends StatelessWidget {
 ///
 ///   - MessageStarted{user}      → opens a user MessageBubble buffer
 ///   - MessageStarted{assistant} → opens a StreamingText buffer
-///   - TextDelta                 → appends to that buffer
+///   - TextDelta/TextReplace     → appends to or replaces that buffer
 ///   - MessageCompleted          → flips bubble to non-streaming
 ///   - ReasoningDelta            → accumulates into a ReasoningSection
 ///   - ToolCallPlaced            → emits a ToolCallCard (in-flight)
@@ -760,8 +760,20 @@ class _GroupedEvents {
           }
         case UiEventMessage_TextDelta(:final messageId, :final text):
           textByMsg.putIfAbsent(messageId, StringBuffer.new).write(text);
+        case UiEventMessage_TextReplace(:final messageId, :final text):
+          textByMsg[messageId] = StringBuffer(text);
         case UiEventMessage_ReasoningDelta(:final messageId, :final text):
           reasoningByMsg.putIfAbsent(messageId, StringBuffer.new).write(text);
+          final preview = _statusPreview(text);
+          if (preview != null) {
+            reasoningStatusByMsg[messageId] = MessageBubbleStatusLine(
+              icon: Icons.psychology_outlined,
+              label: '思考中 · $preview',
+              tone: MessageBubbleStatusTone.info,
+            );
+          }
+        case UiEventMessage_ReasoningReplace(:final messageId, :final text):
+          reasoningByMsg[messageId] = StringBuffer(text);
           final preview = _statusPreview(text);
           if (preview != null) {
             reasoningStatusByMsg[messageId] = MessageBubbleStatusLine(
@@ -893,7 +905,9 @@ class _GroupedEvents {
       final String? msgId = switch (e) {
         UiEventMessage_MessageStarted(:final messageId) => messageId,
         UiEventMessage_TextDelta(:final messageId) => messageId,
+        UiEventMessage_TextReplace(:final messageId) => messageId,
         UiEventMessage_ReasoningDelta(:final messageId) => messageId,
+        UiEventMessage_ReasoningReplace(:final messageId) => messageId,
         UiEventMessage_MessageCompleted(:final messageId) => messageId,
         _ => null,
       };
@@ -1008,6 +1022,8 @@ List<ThreadUserMessageEcho> _extractUserMessageEchoes(
           texts.putIfAbsent(messageId, StringBuffer.new);
         case UiEventMessage_TextDelta(:final messageId, :final text):
           texts.putIfAbsent(messageId, StringBuffer.new).write(text);
+        case UiEventMessage_TextReplace(:final messageId, :final text):
+          texts[messageId] = StringBuffer(text);
         default:
           break;
       }

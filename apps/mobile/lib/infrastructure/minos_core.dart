@@ -173,6 +173,22 @@ class MinosCore implements MinosCoreProtocol {
   Future<FriendsResponse> friends() => _client.friends();
 
   @override
+  Future<AgentSummary> registerAgent({
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+  }) => _client.registerAgent(
+    name: name,
+    description: description,
+    runtimeAgent: runtimeAgent,
+    model: model,
+  );
+
+  @override
+  Future<ListAgentsResponse> listAgents() => _client.listAgents();
+
+  @override
   Future<ConversationsResponse> conversations() => _client.conversations();
 
   @override

@@ -180,20 +180,25 @@ fn dispatch_event(
         RealtimeEvent::StreamEvent {
             topic,
             kind,
+            seq,
             payload,
             ..
         } => match kind.as_str() {
-            "agent_text_delta" | "agent_tool_call" | "agent_error" => {
+            "agent_text_delta"
+            | "agent_text_replace"
+            | "agent_reasoning_delta"
+            | "agent_reasoning_replace"
+            | "agent_tool_call"
+            | "agent_tool_result"
+            | "agent_tool_completed"
+            | "agent_error" => {
                 let _ = ui_events_tx.send(UiEventFrame {
                     thread_id: topic
                         .strip_prefix("agent_session:")
                         .unwrap_or(topic)
                         .to_string(),
-                    seq: 0,
-                    ui: UiEventMessage::Raw {
-                        kind: kind.clone(),
-                        payload_json: payload.to_string(),
-                    },
+                    seq: seq.and_then(|value| u64::try_from(value).ok()).unwrap_or(0),
+                    ui: stream_event_to_ui(kind, payload),
                     ts_ms: chrono::Utc::now().timestamp_millis(),
                 });
             }
@@ -229,4 +234,134 @@ fn parse_chat_message(payload: &serde_json::Value) -> ChatMessageSummary {
         mentioned_account_ids: Vec::new(),
         sender_type: SenderType::User,
     })
+}
+
+fn stream_event_to_ui(kind: &str, payload: &serde_json::Value) -> UiEventMessage {
+    let message_id = payload
+        .get("message_id")
+        .or_else(|| payload.get("msg_id"))
+        .or_else(|| payload.get("turn_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("agent_message")
+        .to_string();
+    match kind {
+        "agent_text_delta" => event_text(payload)
+            .map(|text| UiEventMessage::TextDelta { message_id, text })
+            .unwrap_or_else(|| UiEventMessage::Raw {
+                kind: kind.to_string(),
+                payload_json: payload.to_string(),
+            }),
+        "agent_text_replace" => event_text(payload)
+            .map(|text| UiEventMessage::TextReplace { message_id, text })
+            .unwrap_or_else(|| UiEventMessage::Raw {
+                kind: kind.to_string(),
+                payload_json: payload.to_string(),
+            }),
+        "agent_reasoning_delta" => event_text(payload)
+            .map(|text| UiEventMessage::ReasoningDelta { message_id, text })
+            .unwrap_or_else(|| UiEventMessage::Raw {
+                kind: kind.to_string(),
+                payload_json: payload.to_string(),
+            }),
+        "agent_reasoning_replace" => event_text(payload)
+            .map(|text| UiEventMessage::ReasoningReplace { message_id, text })
+            .unwrap_or_else(|| UiEventMessage::Raw {
+                kind: kind.to_string(),
+                payload_json: payload.to_string(),
+            }),
+        "agent_tool_call" => UiEventMessage::ToolCallPlaced {
+            message_id,
+            tool_call_id: payload
+                .get("tool_call_id")
+                .or_else(|| payload.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("tool_call")
+                .to_string(),
+            name: payload
+                .get("name")
+                .or_else(|| payload.get("tool_name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("tool")
+                .to_string(),
+            args_json: payload
+                .get("args_json")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .or_else(|| payload.get("args").map(serde_json::Value::to_string))
+                .unwrap_or_else(|| "{}".into()),
+        },
+        "agent_tool_result" | "agent_tool_completed" => UiEventMessage::ToolCallCompleted {
+            tool_call_id: payload
+                .get("tool_call_id")
+                .or_else(|| payload.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("tool_call")
+                .to_string(),
+            output: payload
+                .get("output")
+                .or_else(|| payload.get("result"))
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| value.to_string())
+                })
+                .unwrap_or_default(),
+            is_error: payload
+                .get("is_error")
+                .or_else(|| payload.get("error"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        },
+        "agent_error" => UiEventMessage::Error {
+            code: payload
+                .get("code")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("agent_error")
+                .to_string(),
+            message: payload
+                .get("message")
+                .or_else(|| payload.get("detail"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("agent error")
+                .to_string(),
+            message_id: Some(message_id),
+        },
+        _ => UiEventMessage::Raw {
+            kind: kind.to_string(),
+            payload_json: payload.to_string(),
+        },
+    }
+}
+
+fn event_text(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("text")
+        .or_else(|| payload.get("delta"))
+        .or_else(|| payload.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_event_to_ui_maps_formal_text_delta() {
+        let ui = stream_event_to_ui(
+            "agent_text_delta",
+            &serde_json::json!({
+                "turn_id": "turn-1",
+                "message_id": "msg-1",
+                "delta": "hello"
+            }),
+        );
+
+        assert!(matches!(
+            ui,
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "msg-1" && text == "hello"
+        ));
+    }
 }

@@ -273,7 +273,7 @@ class _DiscordProjectsPaneState extends ConsumerState<_DiscordProjectsPane> {
     final prompt = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('新建群聊 · ${project.name}'),
+        title: Text('新建对话 · ${project.name}'),
         content: TextField(
           controller: promptController,
           autofocus: true,
@@ -308,9 +308,11 @@ class _DiscordProjectsPaneState extends ConsumerState<_DiscordProjectsPane> {
       ref.invalidate(projectListProvider);
       ref.invalidate(projectThreadsProvider(project.projectId));
       if (!context.mounted) return;
-      context.push(
-        AppRoutes.newThread,
-        extra: ThreadRouteExtra(agent: agentName),
+      unawaited(
+        context.push(
+          AppRoutes.newThread,
+          extra: ThreadRouteExtra(agent: agentName),
+        ),
       );
     } catch (error) {
       if (!context.mounted) return;
@@ -436,7 +438,7 @@ class _ProjectGroupHeader extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${project.threadCount} 个群聊 · ${project.workspaceSlug}',
+                      '${project.threadCount} 个对话 · ${project.workspaceSlug}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -447,7 +449,7 @@ class _ProjectGroupHeader extends StatelessWidget {
                 ),
               ),
               Tooltip(
-                message: '新建群聊',
+                message: '新建对话',
                 child: ShadIconButton.ghost(
                   icon: const Icon(LucideIcons.messageSquarePlus),
                   iconSize: 18,
@@ -558,9 +560,11 @@ class _ProjectThreadTile extends ConsumerWidget {
       child: InkWell(
         onTap: () {
           ref.read(selectedProjectProvider.notifier).select(projectId);
-          context.push(
-            '/thread/${thread.threadId}',
-            extra: ThreadRouteExtra(agent: thread.agent),
+          unawaited(
+            context.push(
+              '/thread/${thread.threadId}',
+              extra: ThreadRouteExtra(agent: thread.agent),
+            ),
           );
         },
         child: Padding(
@@ -671,7 +675,7 @@ class _EmptyProjectThreads extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '还没有群聊',
+            '还没有对话',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
               fontWeight: FontWeight.w600,
@@ -685,7 +689,7 @@ class _EmptyProjectThreads extends StatelessWidget {
               children: <Widget>[
                 Icon(LucideIcons.messageSquarePlus, size: 16),
                 SizedBox(width: 8),
-                Text('新建群聊'),
+                Text('新建对话'),
               ],
             ),
           ),
@@ -987,7 +991,7 @@ class _RuntimeProfilePage extends ConsumerWidget {
 
   void _openNewChat(BuildContext context, WidgetRef ref) {
     ref.read(activeSessionControllerProvider.notifier).reset();
-    context.push(AppRoutes.agentStart);
+    unawaited(context.push(AppRoutes.agentStart));
   }
 }
 

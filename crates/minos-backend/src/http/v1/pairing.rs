@@ -260,6 +260,13 @@ async fn ensure_account_client(
 
 fn formal_pairing_error(error: FormalPairingError) -> (StatusCode, Json<ErrorEnvelope>) {
     match error {
+        FormalPairingError::PairingNotConfirmed => (
+            StatusCode::CONFLICT,
+            err_body(
+                "pairing_not_confirmed",
+                "pairing code has not been confirmed",
+            ),
+        ),
         FormalPairingError::PairingCodeInvalid => (
             StatusCode::CONFLICT,
             err_body(

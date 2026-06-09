@@ -44,7 +44,7 @@ pub use minos_protocol::{
     ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
     FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
-    HostSkillSummary, HostSkillsEntry, HostSummary, ListChatMessagesResponse,
+    HostSkillSummary, HostSkillsEntry, HostSummary, ListAgentsResponse, ListChatMessagesResponse,
     ListHostSkillsResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
     ListProjectsResponse, ListThreadsParams, ListThreadsResponse, MyProfileResponse,
     ProjectSummary, ReadThreadParams, ReadThreadResponse, SearchUsersResponse, SenderType,
@@ -156,8 +156,8 @@ impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
     }
 }
 
-/// Dart-visible mirror of `minos_protocol::HostSummary`. One row in
-/// `/v1/me/hosts`.
+/// Dart-visible mirror of `minos_protocol::HostSummary`. One row returned by
+/// `/v1/pairing/list-hosts`.
 pub struct HostSummaryDto {
     pub host_device_id: String,
     pub host_display_name: String,
@@ -288,6 +288,22 @@ impl MobileClient {
 
     pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
         self.0.friends().await
+    }
+
+    pub async fn register_agent(
+        &self,
+        name: String,
+        description: String,
+        runtime_agent: String,
+        model: String,
+    ) -> Result<AgentSummary, MinosError> {
+        self.0
+            .register_agent(name, description, runtime_agent, model)
+            .await
+    }
+
+    pub async fn list_agents(&self) -> Result<ListAgentsResponse, MinosError> {
+        self.0.list_agents().await
     }
 
     pub async fn create_friend_request(
@@ -1311,6 +1327,12 @@ pub struct _AgentSummary {
     pub model: String,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListAgentsResponse))]
+pub struct _ListAgentsResponse {
+    pub agents: Vec<AgentSummary>,
 }
 
 #[allow(dead_code)]

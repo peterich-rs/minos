@@ -85,11 +85,11 @@ final class AppState: @unchecked Sendable {
 
     /// Show the "显示配对二维码…" item only when:
     /// - the daemon is running (so we have someone to ask),
-    /// - and the relay link is up (so the QR token can actually be minted).
+    /// - regardless of realtime link state. Pairing QR minting uses the
+    ///   HTTP control plane, while `relayLink` only describes the host
+    ///   realtime socket after a host installation token exists.
     var canShowQr: Bool {
-        guard phase == .running, daemon != nil else { return false }
-        if case .connected = relayLink { return true }
-        return false
+        phase == .running && daemon != nil
     }
 
     /// Show the "忘记已配对设备" item only when:
@@ -257,7 +257,7 @@ final class AppState: @unchecked Sendable {
         self.peers = peers
         trustedDevice = peers.first.map(Self.peerRecord)
 
-        if peers.isEmpty {
+        if peers.isEmpty, !isShowingQr {
             currentQr = nil
             currentQrGeneratedAt = nil
             isShowingQr = false
@@ -296,9 +296,11 @@ final class AppState: @unchecked Sendable {
             }
         case .unpaired:
             trustedDevice = nil
-            currentQr = nil
-            currentQrGeneratedAt = nil
-            isShowingQr = false
+            if !isShowingQr {
+                currentQr = nil
+                currentQrGeneratedAt = nil
+                isShowingQr = false
+            }
         case .pairing:
             break
         }

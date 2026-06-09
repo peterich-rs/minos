@@ -121,6 +121,8 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// codex side acknowledges in time.
   Future<void> interruptThread({required String threadId});
 
+  Future<ListAgentsResponse> listAgents();
+
   Future<ListChatMessagesResponse> listChatMessages({
     required String conversationId,
     PlatformInt64? beforeTsMs,
@@ -218,6 +220,13 @@ abstract class MobileClient implements RustOpaqueInterface {
   Future<AuthSummary> register({
     required String email,
     required String password,
+  });
+
+  Future<AgentSummary> registerAgent({
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
   });
 
   Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
@@ -916,8 +925,8 @@ class HostSkillsEntry {
           skills == other.skills;
 }
 
-/// Dart-visible mirror of `minos_protocol::HostSummary`. One row in
-/// `/v1/me/hosts`.
+/// Dart-visible mirror of `minos_protocol::HostSummary`. One row returned by
+/// `/v1/pairing/list-hosts`.
 class HostSummaryDto {
   final String hostDeviceId;
   final String hostDisplayName;
@@ -950,6 +959,22 @@ class HostSummaryDto {
 }
 
 enum Lang { zh, en }
+
+class ListAgentsResponse {
+  final List<AgentSummary> agents;
+
+  const ListAgentsResponse({required this.agents});
+
+  @override
+  int get hashCode => agents.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListAgentsResponse &&
+          runtimeType == other.runtimeType &&
+          agents == other.agents;
+}
 
 class ListChatMessagesResponse {
   final List<ChatMessageSummary> messages;

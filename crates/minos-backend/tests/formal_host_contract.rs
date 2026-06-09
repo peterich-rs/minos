@@ -5,6 +5,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use minos_backend::auth::jwt;
 use minos_backend::http;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
+use minos_backend::session::SessionHandle;
 use minos_backend::store::{account_host_pairings, devices};
 use minos_domain::{DeviceId, DeviceRole};
 use serde_json::json;
@@ -17,6 +18,7 @@ const REDEEM_PATH: &str = "/v1/host/pairing/redeem";
 struct HostFixture {
     host: DeviceId,
     mobile: DeviceId,
+    account_id: String,
     token: String,
     account_auth_header: String,
 }
@@ -152,7 +154,7 @@ async fn host_pairing_request_code_rejects_nonce_reuse_and_key_mismatch() {
         json!({
             "installation_id": installation_id,
             "nonce": nonce,
-            "public_key": host_public_key,
+            "public_key": host_public_key.clone(),
             "signature": sig,
             "host_display_name": "Formal Host"
         }),
@@ -264,6 +266,73 @@ async fn host_pairing_request_code_allows_omitted_public_key_after_tofu() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
+}
+
+#[tokio::test]
+async fn host_pairing_redeem_reports_not_confirmed_while_mobile_is_pending() {
+    let state = backend_state().await;
+    let installation_id = DeviceId::new().to_string();
+    let mut app = http::router(state);
+    let signing_key = signing_key(15);
+    let host_public_key = public_key(&signing_key);
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/host/bootstrap/nonce",
+        &[],
+        json!({"installation_id": installation_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let nonce = body["data"]["nonce"].as_str().unwrap().to_string();
+    let sig = signature(&signing_key, &installation_id, &nonce);
+    let (status, body) = post_json(
+        &mut app,
+        REQUEST_CODE_PATH,
+        &[],
+        json!({
+            "installation_id": installation_id,
+            "nonce": nonce,
+            "public_key": host_public_key,
+            "signature": sig,
+            "host_display_name": "Formal Host"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let pairing_code = body["data"]["qr_payload"]["pairing_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/host/bootstrap/nonce",
+        &[],
+        json!({"installation_id": installation_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let nonce = body["data"]["nonce"].as_str().unwrap().to_string();
+    let sig = signature_for_path(&signing_key, &installation_id, &nonce, REDEEM_PATH);
+
+    let (status, body) = post_json(
+        &mut app,
+        REDEEM_PATH,
+        &[],
+        json!({
+            "installation_id": installation_id,
+            "nonce": nonce,
+            "public_key": host_public_key,
+            "signature": sig,
+            "pairing_code": pairing_code,
+            "client_request_id": "redeem-before-confirm"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "body={body}");
+    assert_eq!(body["error"]["code"], "pairing_not_confirmed");
 }
 
 async fn formally_paired_host(
@@ -396,6 +465,7 @@ async fn formally_paired_host(
     HostFixture {
         host,
         mobile,
+        account_id: account.account_id,
         token,
         account_auth_header: auth_header,
     }
@@ -410,6 +480,10 @@ async fn host_installations_self_returns_host_view_without_account_pii() {
     let state = backend_state().await;
     let mut app = http::router(state.clone());
     let fixture = formally_paired_host(&state, &mut app).await;
+    let (mobile_session, _mobile_outbox) =
+        SessionHandle::new(fixture.mobile, DeviceRole::MobileClient);
+    mobile_session.set_account_id(fixture.account_id.clone());
+    state.registry.insert(mobile_session);
     let headers = host_headers(&fixture);
     let header_refs: Vec<(&str, &str)> = headers
         .iter()
@@ -437,9 +511,85 @@ async fn host_installations_self_returns_host_view_without_account_pii() {
         fixture.mobile.to_string()
     );
     assert_eq!(body["data"]["links"][0]["link_display_name"], "Owner Phone");
+    assert_eq!(body["data"]["links"][0]["last_active_at_ms"], 100);
+    assert_eq!(body["data"]["links"][0]["online"], true);
     let body_text = serde_json::to_string(&body).unwrap();
     assert!(!body_text.contains("formal-host-self@example.com"));
     assert!(body["data"]["links"][0].get("account_email").is_none());
+}
+
+#[tokio::test]
+async fn host_installations_self_uses_account_presence_not_paired_via_device_presence() {
+    let state = backend_state().await;
+    let mut app = http::router(state.clone());
+    let fixture = formally_paired_host(&state, &mut app).await;
+    let current_mobile = DeviceId::new();
+    devices::insert_device(
+        &state.store,
+        current_mobile,
+        "Current iPhone",
+        DeviceRole::MobileClient,
+        200,
+    )
+    .await
+    .unwrap();
+    devices::set_account_id(&state.store, &current_mobile, &fixture.account_id)
+        .await
+        .unwrap();
+    let (mobile_session, _mobile_outbox) =
+        SessionHandle::new(current_mobile, DeviceRole::MobileClient);
+    mobile_session.set_account_id(fixture.account_id.clone());
+    state.registry.insert(mobile_session);
+
+    let headers = host_headers(&fixture);
+    let header_refs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/host/installations/self",
+        &header_refs,
+        json!({}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(
+        body["data"]["links"][0]["linked_via_installation_id"],
+        fixture.mobile.to_string()
+    );
+    assert_eq!(body["data"]["links"][0]["online"], true);
+}
+
+#[tokio::test]
+async fn host_installations_self_does_not_count_browser_admin_as_mobile_online() {
+    let state = backend_state().await;
+    let mut app = http::router(state.clone());
+    let fixture = formally_paired_host(&state, &mut app).await;
+    let browser_id = DeviceId::new();
+    let (browser_session, _browser_outbox) =
+        SessionHandle::new(browser_id, DeviceRole::BrowserAdmin);
+    browser_session.set_account_id(fixture.account_id.clone());
+    state.registry.insert(browser_session);
+
+    let headers = host_headers(&fixture);
+    let header_refs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/host/installations/self",
+        &header_refs,
+        json!({}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(body["data"]["links"][0]["online"], false);
 }
 
 #[tokio::test]

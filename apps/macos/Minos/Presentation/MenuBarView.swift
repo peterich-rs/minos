@@ -73,7 +73,7 @@ struct MenuBarView: View {
             HStack(spacing: 8) {
                 StatusIcon(
                     link: appState.relayLink,
-                    peer: .unpaired,
+                    peer: appState.peer,
                     hasBootError: false
                 )
                 .imageScale(.large)
@@ -85,7 +85,7 @@ struct MenuBarView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            Text(appState.relayLink.displayLabel())
+            Text(hostStatusLabel)
                 .font(.subheadline.weight(.medium))
 
             Text(
@@ -95,6 +95,15 @@ struct MenuBarView: View {
             )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var hostStatusLabel: String {
+        switch appState.peer {
+        case .unpaired, .pairing:
+            return appState.peer.displayLabel()
+        case .paired:
+            return appState.relayLink.displayLabel()
         }
     }
 

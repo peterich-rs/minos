@@ -23,16 +23,16 @@ use std::time::{Duration, Instant};
 use http::{Method, Request};
 use minos_domain::{ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
-    AddAgentToGroupRequest, AddGroupMemberRequest, ApprovalDecisionRequest, AuthSummary,
-    ChatMessageSummary, ConversationAgentMembersResponse, ConversationMembersResponse,
+    AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, ApprovalDecisionRequest,
+    AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse, ConversationMembersResponse,
     ConversationReadResponse, ConversationResponse, ConversationsResponse,
     CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
     FriendRequestSummary, FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams,
-    GetThreadLastSeqResponse, HostSummary, ListChatMessagesResponse, ListClisResponse,
-    ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse, MyProfileResponse,
-    PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
-    RemoveAgentFromGroupRequest, SendChatMessageRequest, SetMinosIdRequest, UserSummary,
-    WriteHostSkillConfigResponse,
+    GetThreadLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesResponse,
+    ListClisResponse, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
+    MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
+    RegisterAgentRequest, RemoveAgentFromGroupRequest, SendChatMessageRequest, SetMinosIdRequest,
+    UserSummary, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -536,6 +536,30 @@ impl MobileClient {
 
     pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
         auth_http_call!(self, |http, access| http.friends(&access))
+    }
+
+    pub async fn register_agent(
+        &self,
+        name: String,
+        description: String,
+        runtime_agent: String,
+        model: String,
+    ) -> Result<AgentSummary, MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.register_agent(
+                &access,
+                RegisterAgentRequest {
+                    name,
+                    description,
+                    runtime_agent,
+                    model,
+                },
+            )
+        })
+    }
+
+    pub async fn list_agents(&self) -> Result<ListAgentsResponse, MinosError> {
+        auth_http_call!(self, |http, access| http.list_agents(&access))
     }
 
     pub async fn create_friend_request(
@@ -1277,17 +1301,11 @@ impl MobileClient {
         let ticket_resp = http
             .fetch_ws_ticket(access, &self.device_id.to_string())
             .await?;
-        let ticket = ticket_resp.ticket;
-        if let Some(gateway_url) = ticket_resp.gateway_url {
-            // The backend returns a relative gateway URL like "/ws/client?ticket=..."
-            if gateway_url.starts_with('/') {
-                Ok(format!("{}{}", websocket_base(base_url), gateway_url))
-            } else {
-                Ok(gateway_url)
-            }
-        } else {
-            Ok(Self::build_websocket_url(base_url, &ticket))
-        }
+        Ok(websocket_url_from_ticket_response(
+            base_url,
+            &ticket_resp.ticket,
+            ticket_resp.gateway_url,
+        ))
     }
 
     async fn shutdown_outbound(&self) {
@@ -1725,21 +1743,30 @@ async fn fetch_ticket_and_build_ws_url_ctx(
     let ticket_resp = http
         .fetch_ws_ticket(access, &ctx.device_id.to_string())
         .await?;
-    let ticket = ticket_resp.ticket;
-    if let Some(gateway_url) = ticket_resp.gateway_url {
+    Ok(websocket_url_from_ticket_response(
+        base_url,
+        &ticket_resp.ticket,
+        ticket_resp.gateway_url,
+    ))
+}
+
+fn websocket_url_from_ticket_response(
+    base_url: &str,
+    ticket: &str,
+    gateway_url: Option<String>,
+) -> String {
+    if let Some(gateway_url) = gateway_url {
+        // The backend returns a relative gateway URL like
+        // "/ws/client?ticket=...". `base_url` may still be the legacy
+        // `wss://host/devices` compile-time value, so always normalize it to
+        // scheme/host/port before joining.
         if gateway_url.starts_with('/') {
-            Ok(format!(
-                "{}{}",
-                base_url
-                    .replace("https://", "wss://")
-                    .replace("http://", "ws://"),
-                gateway_url
-            ))
+            format!("{}{}", websocket_base(base_url), gateway_url)
         } else {
-            Ok(gateway_url)
+            gateway_url
         }
     } else {
-        Ok(MobileClient::build_websocket_url(base_url, &ticket))
+        MobileClient::build_websocket_url(base_url, ticket)
     }
 }
 
@@ -1859,6 +1886,36 @@ mod tests {
         };
 
         assert!(!access_token_needs_refresh(&session));
+    }
+
+    #[test]
+    fn relative_gateway_url_ignores_legacy_devices_path() {
+        let url = websocket_url_from_ticket_response(
+            "wss://example.com/devices",
+            "ticket-abc",
+            Some("/ws/client?ticket=ticket-abc".into()),
+        );
+
+        assert_eq!(url, "wss://example.com/ws/client?ticket=ticket-abc");
+    }
+
+    #[test]
+    fn missing_gateway_url_fallback_ignores_legacy_devices_path() {
+        let url =
+            websocket_url_from_ticket_response("wss://example.com/devices", "ticket-abc", None);
+
+        assert_eq!(url, "wss://example.com/ws/client?ticket=ticket-abc");
+    }
+
+    #[test]
+    fn absolute_gateway_url_is_preserved() {
+        let url = websocket_url_from_ticket_response(
+            "wss://example.com/devices",
+            "ticket-abc",
+            Some("wss://edge.example/ws/client?ticket=edge-ticket".into()),
+        );
+
+        assert_eq!(url, "wss://edge.example/ws/client?ticket=edge-ticket");
     }
 
     #[tokio::test]

@@ -119,6 +119,28 @@ class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
     await _persist(next);
   }
 
+  Future<AgentProfile> syncServerAgentId({
+    required String profileId,
+    required String agentId,
+  }) async {
+    final current = await future;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    AgentProfile? updated;
+    final nextProfiles = current.profiles
+        .map((profile) {
+          if (profile.id != profileId) return profile;
+          updated = profile.copyWith(agentId: agentId, updatedAtMs: now);
+          return updated!;
+        })
+        .toList(growable: false);
+    if (updated == null) {
+      throw StateError('agent profile not found: $profileId');
+    }
+    final next = current.copyWith(profiles: nextProfiles).normalized();
+    await _persist(next);
+    return updated!;
+  }
+
   Future<void> updateProfileHost({
     required String profileId,
     String? hostDeviceId,
