@@ -36,7 +36,7 @@ final class ProjectListProvider
   ProjectList create() => ProjectList();
 }
 
-String _$projectListHash() => r'428ccef8ed46133cc271ca1dbc3bb9854c8d5be4';
+String _$projectListHash() => r'ee5288d606b69d703648e673e0d8326831aaefbd';
 
 /// Loads and caches the project list. Refresh via invalidation.
 

@@ -21,10 +21,12 @@ class ProjectRepository {
   Future<ProjectSummary> createProject({
     required String name,
     required String workspaceSlug,
+    String? workspacePath,
   }) async {
     final response = await _core.createProject(
       name: name,
       workspaceSlug: workspaceSlug,
+      workspacePath: workspacePath,
     );
     return response.project;
   }

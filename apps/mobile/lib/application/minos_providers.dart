@@ -45,6 +45,16 @@ final hostSkillsProvider =
           .listHostSkills(hostDeviceId: hostDeviceId);
     });
 
+final hostWorkspacesProvider =
+    FutureProvider.family<ListHostWorkspacesResponse, String?>((
+      ref,
+      hostDeviceId,
+    ) async {
+      return ref
+          .watch(runtimeRepositoryProvider)
+          .listHostWorkspaces(hostDeviceId: hostDeviceId);
+    });
+
 /// Paired Macs for the current account. Drives the Partners list. Refresh
 /// happens via `ref.invalidate(pairedMacsProvider)` after a forget /
 /// successful pair — there is no polling stream yet, the user can pull

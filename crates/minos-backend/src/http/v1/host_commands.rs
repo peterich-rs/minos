@@ -13,7 +13,8 @@ use axum::{Json, Router};
 use minos_domain::DeviceId;
 use minos_protocol::{
     ListClisResponse, ListHostClisRequest, ListHostSkillsCommandRequest, ListHostSkillsRequest,
-    ListHostSkillsResponse, WriteHostSkillConfigCommandRequest, WriteHostSkillConfigRequest,
+    ListHostSkillsResponse, ListHostWorkspacesCommandRequest, ListHostWorkspacesRequest,
+    ListHostWorkspacesResponse, WriteHostSkillConfigCommandRequest, WriteHostSkillConfigRequest,
     WriteHostSkillConfigResponse,
 };
 use uuid::Uuid;
@@ -24,6 +25,7 @@ use crate::http::BackendState;
 
 const LIST_CLIS_METHOD: &str = "minos_list_clis";
 const LIST_HOST_SKILLS_METHOD: &str = "minos_list_host_skills";
+const LIST_HOST_WORKSPACES_METHOD: &str = "minos_list_host_workspaces";
 const WRITE_HOST_SKILL_CONFIG_METHOD: &str = "minos_write_host_skill_config";
 const LIST_CLIS_TIMEOUT: Duration = Duration::from_secs(15);
 const HOST_SKILLS_TIMEOUT: Duration = Duration::from_secs(15);
@@ -32,6 +34,7 @@ pub fn router() -> Router<BackendState> {
     Router::new()
         .route("/host-commands/list-clis", post(list_clis))
         .route("/host-commands/list-host-skills", post(list_host_skills))
+        .route("/host-commands/list-workspaces", post(list_host_workspaces))
         .route(
             "/host-commands/write-host-skill-config",
             post(write_host_skill_config),
@@ -96,6 +99,39 @@ async fn list_host_skills(
 
     let body = serde_json::from_value(response)
         .map_err(|error| invalid_host_response(LIST_HOST_SKILLS_METHOD, error))?;
+    Ok(Json(body))
+}
+
+async fn list_host_workspaces(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Json(request): Json<ListHostWorkspacesCommandRequest>,
+) -> Result<Json<ListHostWorkspacesResponse>, (StatusCode, Json<ErrorEnvelope>)> {
+    let (_caller_device_id, account_id) = super::require_authed_session(&state, &headers).await?;
+    let host_device_id =
+        require_paired_host(&state, &account_id, &request.host_installation_id).await?;
+    let params = serde_json::to_value(ListHostWorkspacesRequest {
+        root: request.root,
+        limit: request.limit,
+    })
+    .map_err(|error| invalid_host_response(LIST_HOST_WORKSPACES_METHOD, error))?;
+
+    let response = state
+        .host_commands
+        .dispatch_json(
+            &format!("cmd-http-list-workspaces-{account_id}-{host_device_id}"),
+            host_device_id,
+            None,
+            LIST_HOST_WORKSPACES_METHOD,
+            &params,
+            Some(&account_id),
+            HOST_SKILLS_TIMEOUT,
+        )
+        .await
+        .map_err(map_backend_error)?;
+
+    let body = serde_json::from_value(response)
+        .map_err(|error| invalid_host_response(LIST_HOST_WORKSPACES_METHOD, error))?;
     Ok(Json(body))
 }
 

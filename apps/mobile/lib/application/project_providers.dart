@@ -31,10 +31,15 @@ class ProjectList extends _$ProjectList {
   Future<ProjectSummary> createProject({
     required String name,
     required String workspaceSlug,
+    String? workspacePath,
   }) async {
     final project = await ref
         .read(projectRepositoryProvider)
-        .createProject(name: name, workspaceSlug: workspaceSlug);
+        .createProject(
+          name: name,
+          workspaceSlug: workspaceSlug,
+          workspacePath: workspacePath,
+        );
     await refresh();
     return project;
   }

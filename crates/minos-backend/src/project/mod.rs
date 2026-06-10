@@ -26,6 +26,7 @@ pub trait ProjectRepo: Send + Sync {
         project_id: &str,
         name: &str,
         workspace_slug: &str,
+        workspace_path: Option<&str>,
         now_ms: i64,
     ) -> Result<minos_protocol::ProjectSummary, BackendError>;
 
@@ -66,6 +67,7 @@ impl ProjectRepo for SqlProjectRepo {
         project_id: &str,
         name: &str,
         workspace_slug: &str,
+        workspace_path: Option<&str>,
         now_ms: i64,
     ) -> Result<minos_protocol::ProjectSummary, BackendError> {
         let _db_timer = crate::telemetry::DbTimer::new(PROJECT_REPO_METRIC_LABEL, "create");
@@ -75,6 +77,7 @@ impl ProjectRepo for SqlProjectRepo {
             account_id,
             name,
             workspace_slug,
+            workspace_path,
             now_ms,
         )
         .await
@@ -129,10 +132,18 @@ impl ProjectService {
     ) -> Result<minos_protocol::ProjectSummary, ProjectError> {
         let name = req.name.trim();
         let workspace_slug = req.workspace_slug.trim();
+        let workspace_path = normalize_workspace_path(req.workspace_path.as_deref());
         if name.is_empty() || !valid_workspace_slug(workspace_slug) {
             return Err(ProjectError::InvalidInput(
                 "project name and a valid workspace_slug are required",
             ));
+        }
+        if let Some(path) = workspace_path.as_deref() {
+            if !valid_workspace_path(path) {
+                return Err(ProjectError::InvalidInput(
+                    "workspace_path must be an absolute host path or ~/ path",
+                ));
+            }
         }
 
         self.repo
@@ -141,6 +152,7 @@ impl ProjectService {
                 &uuid::Uuid::new_v4().to_string(),
                 name,
                 workspace_slug,
+                workspace_path.as_deref(),
                 chrono::Utc::now().timestamp_millis(),
             )
             .await
@@ -180,6 +192,19 @@ fn valid_workspace_slug(slug: &str) -> bool {
     !slug.is_empty() && slug != "." && slug != ".." && !slug.contains('/') && !slug.contains('\\')
 }
 
+fn normalize_workspace_path(path: Option<&str>) -> Option<String> {
+    path.map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+}
+
+fn valid_workspace_path(path: &str) -> bool {
+    (path.starts_with('/') || path.starts_with("~/"))
+        && !path.contains('\0')
+        && !path.ends_with("/.")
+        && !path.ends_with("/..")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +222,7 @@ mod tests {
                 minos_protocol::CreateProjectRequest {
                     name: "Workspace".to_string(),
                     workspace_slug: "../bad".to_string(),
+                    workspace_path: None,
                 },
             )
             .await

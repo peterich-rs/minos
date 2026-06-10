@@ -848,6 +848,36 @@ impl MobileClient {
         })
     }
 
+    /// List selectable workspace directories from the selected runtime host.
+    pub async fn list_host_workspaces(
+        &self,
+        host_device_id: Option<String>,
+        root: Option<String>,
+        limit: u32,
+    ) -> Result<minos_protocol::ListHostWorkspacesResponse, MinosError> {
+        let host_installation_id = if let Some(host_device_id) = host_device_id {
+            if Uuid::parse_str(&host_device_id).is_err() {
+                return Err(MinosError::RpcCallFailed {
+                    method: "minos_list_host_workspaces".into(),
+                    message: format!("invalid host_device_id: {host_device_id}"),
+                });
+            }
+            host_device_id
+        } else {
+            self.require_active_host().await?.to_string()
+        };
+        auth_http_call!(self, |http, access| {
+            http.list_host_workspaces_http(
+                &access,
+                minos_protocol::ListHostWorkspacesCommandRequest {
+                    host_installation_id: host_installation_id.clone(),
+                    root: root.clone(),
+                    limit,
+                },
+            )
+        })
+    }
+
     /// Enable or disable one host-side skill by path.
     pub async fn write_host_skill_config(
         &self,

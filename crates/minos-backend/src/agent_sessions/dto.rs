@@ -15,6 +15,7 @@ pub struct StartAgentSessionInput {
     pub project_id: Option<String>,
     pub agent_id: String,
     pub host_installation_id: Option<String>,
+    pub workspace_path: Option<String>,
     pub initial_user_message: Option<String>,
     pub client_request_id: String,
     pub caller_account_id: String,

@@ -305,8 +305,13 @@ class MinosCore implements MinosCoreProtocol {
   Future<CreateProjectResponse> createProject({
     required String name,
     required String workspaceSlug,
+    String? workspacePath,
   }) => _client.createProject(
-    req: CreateProjectRequest(name: name, workspaceSlug: workspaceSlug),
+    req: CreateProjectRequest(
+      name: name,
+      workspaceSlug: workspaceSlug,
+      workspacePath: workspacePath,
+    ),
   );
 
   @override
@@ -436,6 +441,17 @@ class MinosCore implements MinosCoreProtocol {
   }) => _client.listHostSkills(
     hostDeviceId: hostDeviceId,
     forceReload: forceReload,
+  );
+
+  @override
+  Future<ListHostWorkspacesResponse> listHostWorkspaces({
+    String? hostDeviceId,
+    String? root,
+    int limit = 100,
+  }) => _client.listHostWorkspaces(
+    hostDeviceId: hostDeviceId,
+    root: root,
+    limit: limit,
   );
 
   @override

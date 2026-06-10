@@ -232,6 +232,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   HostSummaryDto dco_decode_host_summary_dto(dynamic raw);
 
   @protected
+  HostWorkspaceSummary dco_decode_host_workspace_summary(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -283,6 +286,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<HostSummaryDto> dco_decode_list_host_summary_dto(dynamic raw);
+
+  @protected
+  List<HostWorkspaceSummary> dco_decode_list_host_workspace_summary(
+    dynamic raw,
+  );
+
+  @protected
+  ListHostWorkspacesResponse dco_decode_list_host_workspaces_response(
+    dynamic raw,
+  );
 
   @protected
   List<LogRecord> dco_decode_list_log_record(dynamic raw);
@@ -676,6 +689,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   HostSummaryDto sse_decode_host_summary_dto(SseDeserializer deserializer);
 
   @protected
+  HostWorkspaceSummary sse_decode_host_workspace_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -749,6 +767,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<HostSummaryDto> sse_decode_list_host_summary_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostWorkspaceSummary> sse_decode_list_host_workspace_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListHostWorkspacesResponse sse_decode_list_host_workspaces_response(
     SseDeserializer deserializer,
   );
 
@@ -1261,6 +1289,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_host_workspace_summary(
+    HostWorkspaceSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -1347,6 +1381,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_host_summary_dto(
     List<HostSummaryDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_workspace_summary(
+    List<HostWorkspaceSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_workspaces_response(
+    ListHostWorkspacesResponse self,
     SseSerializer serializer,
   );
 

@@ -10,18 +10,20 @@ pub async fn create(
     account_id: &str,
     name: &str,
     workspace_slug: &str,
+    workspace_path: Option<&str>,
     now_ms: i64,
 ) -> Result<minos_protocol::ProjectSummary, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query(
-                r"INSERT INTO projects (project_id, account_id, name, workspace_slug, created_at_ms, updated_at_ms)
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                r"INSERT INTO projects (project_id, account_id, name, workspace_slug, workspace_path, created_at_ms, updated_at_ms)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
             )
             .bind(project_id)
             .bind(account_id)
             .bind(name)
             .bind(workspace_slug)
+            .bind(workspace_path)
             .bind(now_ms)
             .execute(pool)
             .await
@@ -29,13 +31,14 @@ pub async fn create(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
-                r"INSERT INTO projects (project_id, account_id, name, workspace_slug, created_at_ms, updated_at_ms)
-                  VALUES ($1, $2, $3, $4, $5, $5)",
+                r"INSERT INTO projects (project_id, account_id, name, workspace_root, workspace_path, created_at_ms, updated_at_ms)
+                  VALUES ($1, $2, $3, $4, $5, $6, $6)",
             )
             .bind(project_id)
             .bind(account_id)
             .bind(name)
             .bind(workspace_slug)
+            .bind(workspace_path)
             .bind(now_ms)
             .execute(pool)
             .await
@@ -51,6 +54,7 @@ pub async fn create(
         project_id: project_id.to_string(),
         name: name.to_string(),
         workspace_slug: workspace_slug.to_string(),
+        workspace_path: workspace_path.map(str::to_string),
         created_at_ms: now_ms,
         updated_at_ms: now_ms,
         thread_count: 0,
@@ -63,11 +67,12 @@ pub async fn list(
 ) -> Result<Vec<minos_protocol::ProjectSummary>, BackendError> {
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, (String, String, String, i64, i64, i64)>(
+            sqlx::query_as::<_, (String, String, String, Option<String>, i64, i64, i64)>(
                 r"SELECT
                       p.project_id,
                       p.name,
                       p.workspace_slug,
+                      p.workspace_path,
                       p.created_at_ms,
                       p.updated_at_ms,
                                     COUNT(DISTINCT CASE WHEN cm.account_id IS NOT NULL THEN s.session_id END) AS thread_count
@@ -86,11 +91,12 @@ pub async fn list(
             .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, (String, String, String, i64, i64, i64)>(
+            sqlx::query_as::<_, (String, String, String, Option<String>, i64, i64, i64)>(
                 r"SELECT
                       p.project_id,
                       p.name,
-                      p.workspace_slug,
+                      p.workspace_root,
+                      p.workspace_path,
                       p.created_at_ms,
                       p.updated_at_ms,
                                     COUNT(DISTINCT CASE WHEN cm.account_id IS NOT NULL THEN s.session_id END) AS thread_count
@@ -101,7 +107,7 @@ pub async fn list(
                                 ON cm.conversation_id = s.conversation_id
                              AND cm.account_id = p.account_id
                   WHERE p.account_id = $1
-                  GROUP BY p.project_id
+                  GROUP BY p.project_id, p.name, p.workspace_root, p.workspace_path, p.created_at_ms, p.updated_at_ms
                   ORDER BY p.updated_at_ms DESC",
             )
             .bind(account_id)
@@ -116,11 +122,20 @@ pub async fn list(
 
     rows.into_iter()
         .map(
-            |(project_id, name, workspace_slug, created_at_ms, updated_at_ms, thread_count)| {
+            |(
+                project_id,
+                name,
+                workspace_slug,
+                workspace_path,
+                created_at_ms,
+                updated_at_ms,
+                thread_count,
+            )| {
                 Ok(minos_protocol::ProjectSummary {
                     project_id,
                     name,
                     workspace_slug,
+                    workspace_path,
                     created_at_ms,
                     updated_at_ms,
                     thread_count: u32::try_from(thread_count).unwrap_or(u32::MAX),
@@ -128,6 +143,59 @@ pub async fn list(
             },
         )
         .collect()
+}
+
+pub async fn get_for_account(
+    store: &impl AsStorePool,
+    account_id: &str,
+    project_id: &str,
+) -> Result<Option<minos_protocol::ProjectSummary>, BackendError> {
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query_as::<
+            _,
+            (String, String, String, Option<String>, i64, i64),
+        >(
+            r"SELECT project_id, name, workspace_slug, workspace_path, created_at_ms, updated_at_ms
+                    FROM projects
+                   WHERE account_id = ?1
+                     AND project_id = ?2",
+        )
+        .bind(account_id)
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await,
+        StorePoolRef::Postgres(pool) => sqlx::query_as::<
+            _,
+            (String, String, String, Option<String>, i64, i64),
+        >(
+            r"SELECT project_id, name, workspace_root, workspace_path, created_at_ms, updated_at_ms
+                    FROM projects
+                   WHERE account_id = $1
+                     AND project_id = $2",
+        )
+        .bind(account_id)
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await,
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "projects.get_for_account".into(),
+        message: e.to_string(),
+    })?;
+
+    Ok(row.map(
+        |(project_id, name, workspace_slug, workspace_path, created_at_ms, updated_at_ms)| {
+            minos_protocol::ProjectSummary {
+                project_id,
+                name,
+                workspace_slug,
+                workspace_path,
+                created_at_ms,
+                updated_at_ms,
+                thread_count: 0,
+            }
+        },
+    ))
 }
 
 pub async fn exists(
@@ -261,12 +329,28 @@ mod tests {
         let account_a = insert_account(&pool, "project-a@example.com").await;
         let account_b = insert_account(&pool, "project-b@example.com").await;
 
-        create(&pool, "proj-a", &account_a, "Project A", "proj-a", 1000)
-            .await
-            .unwrap();
-        create(&pool, "proj-b", &account_b, "Project B", "proj-b", 2000)
-            .await
-            .unwrap();
+        create(
+            &pool,
+            "proj-a",
+            &account_a,
+            "Project A",
+            "proj-a",
+            Some("/Users/example/proj-a"),
+            1000,
+        )
+        .await
+        .unwrap();
+        create(
+            &pool,
+            "proj-b",
+            &account_b,
+            "Project B",
+            "proj-b",
+            None,
+            2000,
+        )
+        .await
+        .unwrap();
         let convo_a = crate::store::social::create_group_conversation(
             &pool,
             &account_a,

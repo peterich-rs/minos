@@ -95,15 +95,15 @@ impl DefaultAgentSessionService {
             .ok_or(AgentSessionError::HostUnavailable)
     }
 
-    async fn validate_agent_id(&self, agent_id: &str) -> Result<(), AgentSessionError> {
-        if crate::store::social::get_agent(&self.store, agent_id)
-            .await?
-            .is_some()
-        {
-            return Ok(());
+    async fn resolve_runtime_agent(&self, agent_id: &str) -> Result<String, AgentSessionError> {
+        if let Some(agent) = crate::store::social::get_agent(&self.store, agent_id).await? {
+            return Ok(agent.runtime_agent);
         }
         match agent_id {
-            "agent_codex" | "agent_claude" | "agent_gemini" => Ok(()),
+            "agent_codex" => Ok("codex".into()),
+            "agent_claude" => Ok("claude".into()),
+            "agent_gemini" => Ok("gemini".into()),
+            "agent_opencode" => Ok("opencode".into()),
             _ => Err(AgentSessionError::ValidationFormat("unknown agent_id")),
         }
     }
@@ -112,6 +112,47 @@ impl DefaultAgentSessionService {
         Uuid::parse_str(host_device_id)
             .map(DeviceId)
             .map_err(|_| AgentSessionError::ValidationFormat("invalid host installation id"))
+    }
+}
+
+async fn resolve_session_workspace_path(
+    store: &StoreHandle,
+    input: &StartAgentSessionInput,
+) -> Result<Option<String>, AgentSessionError> {
+    if let Some(path) = normalize_workspace_path(input.workspace_path.as_deref()) {
+        validate_workspace_path(&path)?;
+        return Ok(Some(path));
+    }
+
+    let Some(project_id) = input.project_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(project) =
+        crate::store::projects::get_for_account(store, &input.caller_account_id, project_id)
+            .await?
+    else {
+        return Ok(None);
+    };
+    let path = normalize_workspace_path(project.workspace_path.as_deref());
+    if let Some(path) = path.as_deref() {
+        validate_workspace_path(path)?;
+    }
+    Ok(path)
+}
+
+fn normalize_workspace_path(path: Option<&str>) -> Option<String> {
+    path.map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+}
+
+fn validate_workspace_path(path: &str) -> Result<(), AgentSessionError> {
+    if (path.starts_with('/') || path.starts_with("~/")) && !path.contains('\0') {
+        Ok(())
+    } else {
+        Err(AgentSessionError::ValidationFormat(
+            "workspace_path must be an absolute host path or ~/ path",
+        ))
     }
 }
 
@@ -139,7 +180,7 @@ impl AgentSessionService for DefaultAgentSessionService {
         {
             return Err(AgentSessionError::ConversationForbidden);
         }
-        self.validate_agent_id(&input.agent_id).await?;
+        let runtime_agent = self.resolve_runtime_agent(&input.agent_id).await?;
 
         let session_id = deterministic_uuid(
             "agent-session-start",
@@ -183,6 +224,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             }
         };
 
+        let workspace_path = resolve_session_workspace_path(&self.store, &input).await?;
         let started_at_ms = chrono::Utc::now().timestamp_millis();
         let initial_turn_id = input
             .initial_user_message
@@ -257,8 +299,11 @@ impl AgentSessionService for DefaultAgentSessionService {
                     params_json: serde_json::json!({
                         "session_id": session_id.clone(),
                         "agent_id": input.agent_id.clone(),
+                        "runtime_agent": runtime_agent,
                         "project_id": input.project_id.clone(),
                         "conversation_id": input.conversation_id.clone(),
+                        "workspace": workspace_path.clone().unwrap_or_default(),
+                        "workspace_path": workspace_path,
                         "initial_user_message": input.initial_user_message.clone(),
                     }),
                     requested_by_account_id: Some(input.caller_account_id.clone()),

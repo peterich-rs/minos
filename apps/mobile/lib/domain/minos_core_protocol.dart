@@ -140,6 +140,7 @@ abstract class MinosCoreProtocol {
   Future<CreateProjectResponse> createProject({
     required String name,
     required String workspaceSlug,
+    String? workspacePath,
   });
 
   /// List all projects on the daemon.
@@ -226,6 +227,13 @@ abstract class MinosCoreProtocol {
   Future<ListHostSkillsResponse> listHostSkills({
     String? hostDeviceId,
     bool forceReload = true,
+  });
+
+  /// List selectable workspace directories on the selected runtime host.
+  Future<ListHostWorkspacesResponse> listHostWorkspaces({
+    String? hostDeviceId,
+    String? root,
+    int limit = 100,
   });
 
   /// Enable or disable one host-side skill by path.

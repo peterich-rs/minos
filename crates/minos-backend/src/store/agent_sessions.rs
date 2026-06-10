@@ -485,6 +485,7 @@ mod tests {
             &account,
             "Project Session Scope",
             "project-session-scope",
+            None,
             99,
         )
         .await

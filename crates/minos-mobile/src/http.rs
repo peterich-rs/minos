@@ -24,13 +24,13 @@ use minos_protocol::{
     EnsureDirectConversationRequest, FriendRequestsResponse, FriendsResponse,
     GetThreadLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesRequest,
     ListChatMessagesResponse, ListHostClisRequest, ListHostSkillsCommandRequest,
-    ListHostSkillsResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
-    ListProjectsResponse, ListThreadsParams, ListThreadsResponse, LogoutRequest, MeHostsResponse,
-    MyProfileResponse, ReadThreadParams, ReadThreadResponse, RealtimeWsTicketRequest,
-    RealtimeWsTicketResponse, RefreshRequest, RefreshResponse, RegisterAgentRequest,
-    RemoveAgentFromGroupRequest, RemoveGroupMemberRequest, SearchUsersRequest, SearchUsersResponse,
-    SendChatMessageRequest, SetMinosIdRequest, UpdateProjectRequest,
-    WriteHostSkillConfigCommandRequest, WriteHostSkillConfigResponse,
+    ListHostSkillsResponse, ListHostWorkspacesCommandRequest, ListHostWorkspacesResponse,
+    ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams,
+    ListThreadsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse, ReadThreadParams,
+    ReadThreadResponse, RealtimeWsTicketRequest, RealtimeWsTicketResponse, RefreshRequest,
+    RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
+    SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
+    UpdateProjectRequest, WriteHostSkillConfigCommandRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -1657,6 +1657,44 @@ impl MobileHttpClient {
                 trace_id,
                 Some(status.as_u16()),
                 Some("host skills listed".into()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn list_host_workspaces_http(
+        &self,
+        access_token: &str,
+        request_body: ListHostWorkspacesCommandRequest,
+    ) -> Result<ListHostWorkspacesResponse, MinosError> {
+        let path = "/v1/host-commands/list-workspaces";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            None,
+            Some(format!(
+                "root={} limit={}",
+                request_body.root.as_deref().unwrap_or("~"),
+                request_body.limit
+            )),
+        );
+        let request =
+            self.request_with_json(Method::POST, &url, Some(access_token), &request_body)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ListHostWorkspacesResponse =
+                decode_success_json(resp, "ListHostWorkspacesResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!("workspaces={}", body.workspaces.len())),
                 None,
             );
             Ok(body)

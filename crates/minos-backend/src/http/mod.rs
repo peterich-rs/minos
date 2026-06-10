@@ -284,6 +284,13 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
+        "/v1/host-commands/list-workspaces",
+        "/v1/host-commands/list-workspaces",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
         "/v1/host-commands/write-host-skill-config",
         "/v1/host-commands/write-host-skill-config",
         "account_api",

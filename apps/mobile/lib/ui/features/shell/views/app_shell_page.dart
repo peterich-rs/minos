@@ -390,6 +390,7 @@ class _ProjectGroupHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final projectColor = _projectColor(project.projectId);
+    final workspaceLabel = _projectWorkspaceLabel(project);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -420,7 +421,7 @@ class _ProjectGroupHeader extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${project.threadCount} 个对话 · ${project.workspaceSlug}',
+                      '${project.threadCount} 个对话 · $workspaceLabel',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -791,6 +792,11 @@ String _formatRelativeTimestamp(int ms) {
 }
 
 String _two(int n) => n.toString().padLeft(2, '0');
+
+String _projectWorkspaceLabel(ProjectSummary project) {
+  final path = project.workspacePath?.trim();
+  return path == null || path.isEmpty ? project.workspaceSlug : path;
+}
 
 Color _projectColor(String id) {
   const colors = <Color>[

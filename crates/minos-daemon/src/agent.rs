@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use minos_agent_runtime::{
@@ -11,7 +11,8 @@ use minos_protocol::{
     AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
     ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams,
     GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
-    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
+    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse,
     PauseReason as ProtoPauseReason, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
     ThreadState as ProtoThreadState, ThreadSummary, WriteHostSkillConfigRequest,
     WriteHostSkillConfigResponse,
@@ -221,6 +222,43 @@ impl AgentGlue {
             session_id: outcome.thread_id,
             cwd,
         })
+    }
+
+    pub async fn start_agent_with_session_id(
+        &self,
+        session_id: String,
+        req: StartAgentRequest,
+        initial_user_message: Option<String>,
+    ) -> Result<StartAgentResponse, MinosError> {
+        let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
+        let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
+        let outcome = self
+            .manager
+            .start_agent_with_thread_id(req.agent, workspace, session_id.clone(), None)
+            .await
+            .map_err(map_anyhow)?;
+        let cwd = outcome.cwd.display().to_string();
+        self.persist_thread_parent_rows(
+            &session_id,
+            &cwd,
+            req.agent,
+            outcome.provider_session_id.as_deref(),
+        )
+        .await;
+
+        if let Some(message) = initial_user_message
+            .as_deref()
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            self.manager
+                .send_user_message(&session_id, message.to_string())
+                .await
+                .map_err(map_anyhow)?;
+        }
+
+        let _ = self.state_tx.send(ThreadState::Idle);
+        Ok(StartAgentResponse { session_id, cwd })
     }
 
     pub async fn send_user_message(&self, req: SendUserMessageRequest) -> Result<(), MinosError> {
@@ -472,6 +510,13 @@ impl AgentGlue {
         Ok(map_host_skills_response(response))
     }
 
+    pub fn list_host_workspaces(
+        &self,
+        req: ListHostWorkspacesRequest,
+    ) -> Result<ListHostWorkspacesResponse, MinosError> {
+        list_host_workspaces(req)
+    }
+
     pub async fn write_host_skill_config(
         &self,
         req: WriteHostSkillConfigRequest,
@@ -633,6 +678,11 @@ impl AgentGlue {
             .unwrap_or(&self.default_workspace)
             .join("workspaces")
             .join(&req.workspace_slug);
+        let workspace_path = req
+            .workspace_path
+            .clone()
+            .filter(|path| !path.trim().is_empty())
+            .unwrap_or_else(|| workspace_dir.display().to_string());
         if let Err(e) = std::fs::create_dir_all(&workspace_dir) {
             tracing::warn!(
                 target: "minos_daemon::agent",
@@ -663,6 +713,7 @@ impl AgentGlue {
                 project_id,
                 name: req.name,
                 workspace_slug: req.workspace_slug,
+                workspace_path: Some(workspace_path),
                 created_at_ms: now_ms,
                 updated_at_ms: now_ms,
                 thread_count: 0,
@@ -688,6 +739,10 @@ impl AgentGlue {
             projects.push(minos_protocol::ProjectSummary {
                 project_id: row.project_id,
                 name: row.name,
+                workspace_path: Some(project_workspace_dir(
+                    &self.default_workspace,
+                    &row.workspace_slug,
+                )),
                 workspace_slug: row.workspace_slug,
                 created_at_ms: row.created_at,
                 updated_at_ms: row.updated_at,
@@ -756,12 +811,15 @@ impl AgentGlue {
                 message: format!("project not found: {project_id}"),
             })?;
 
-        let workspace_dir = self
-            .default_workspace
-            .parent()
-            .unwrap_or(&self.default_workspace)
-            .join("workspaces")
-            .join(resolved_workspace_slug);
+        let workspace_dir = if req.workspace.trim().is_empty() {
+            self.default_workspace
+                .parent()
+                .unwrap_or(&self.default_workspace)
+                .join("workspaces")
+                .join(resolved_workspace_slug)
+        } else {
+            PathBuf::from(req.workspace.trim())
+        };
         if let Err(e) = std::fs::create_dir_all(&workspace_dir) {
             tracing::warn!(
                 target: "minos_daemon::agent",
@@ -827,6 +885,108 @@ fn resolve_workspace(default_workspace: &std::path::Path, workspace: &str) -> Pa
     } else {
         PathBuf::from(workspace)
     }
+}
+
+fn list_host_workspaces(
+    req: ListHostWorkspacesRequest,
+) -> Result<ListHostWorkspacesResponse, MinosError> {
+    let home = home_dir().ok_or_else(|| MinosError::CodexProtocolError {
+        method: "list_host_workspaces".into(),
+        message: "HOME is not set".into(),
+    })?;
+    let home = canonicalize_dir(&home, "home")?;
+    let requested_root = req
+        .root
+        .as_deref()
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+        .map(|root| expand_home_path(root, &home))
+        .unwrap_or_else(|| home.clone());
+    let root = canonicalize_dir(&requested_root, "root")?;
+    if !root.starts_with(&home) {
+        return Err(MinosError::CodexProtocolError {
+            method: "list_host_workspaces".into(),
+            message: "root must be under the host user's home directory".into(),
+        });
+    }
+
+    let mut entries = std::fs::read_dir(&root)
+        .map_err(|error| MinosError::CodexProtocolError {
+            method: "list_host_workspaces".into(),
+            message: format!("failed to read {}: {error}", root.display()),
+        })?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_dir() {
+                return None;
+            }
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if file_name.starts_with('.') {
+                return None;
+            }
+            let path = entry.path();
+            Some(minos_protocol::HostWorkspaceSummary {
+                is_git_repo: path.join(".git").is_dir(),
+                path: path.display().to_string(),
+                display_name: file_name,
+            })
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    let limit = if req.limit == 0 {
+        100
+    } else {
+        req.limit.min(500)
+    };
+    entries.truncate(usize::try_from(limit).unwrap_or(500));
+
+    Ok(ListHostWorkspacesResponse {
+        root: root.display().to_string(),
+        workspaces: entries,
+    })
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+fn expand_home_path(raw: &str, home: &Path) -> PathBuf {
+    if raw == "~" {
+        home.to_path_buf()
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        PathBuf::from(raw)
+    }
+}
+
+fn canonicalize_dir(path: &Path, label: &str) -> Result<PathBuf, MinosError> {
+    let canonical =
+        std::fs::canonicalize(path).map_err(|error| MinosError::CodexProtocolError {
+            method: "list_host_workspaces".into(),
+            message: format!("failed to resolve {label} {}: {error}", path.display()),
+        })?;
+    if canonical.is_dir() {
+        Ok(canonical)
+    } else {
+        Err(MinosError::CodexProtocolError {
+            method: "list_host_workspaces".into(),
+            message: format!("{label} is not a directory: {}", canonical.display()),
+        })
+    }
+}
+
+fn project_workspace_dir(default_workspace: &std::path::Path, workspace_slug: &str) -> String {
+    default_workspace
+        .parent()
+        .unwrap_or(default_workspace)
+        .join("workspaces")
+        .join(workspace_slug)
+        .display()
+        .to_string()
 }
 
 fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary, MinosError> {

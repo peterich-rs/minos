@@ -291,9 +291,44 @@ impl AgentManager {
     ) -> anyhow::Result<StartAgentOutcome> {
         match agent {
             AgentName::Codex => self.start_codex_agent(agent, workspace, policies).await,
-            AgentName::Claude => self.start_claude_agent(agent, workspace).await,
-            AgentName::Opencode => self.start_opencode_agent(agent, workspace).await,
-            AgentName::Gemini => self.start_gemini_agent(agent, workspace).await,
+            AgentName::Claude => self.start_claude_agent(agent, workspace, None).await,
+            AgentName::Opencode => self.start_opencode_agent(agent, workspace, None).await,
+            AgentName::Gemini => self.start_gemini_agent(agent, workspace, None).await,
+        }
+    }
+
+    pub async fn start_agent_with_thread_id(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        thread_id: String,
+        policies: Option<SessionPolicies>,
+    ) -> anyhow::Result<StartAgentOutcome> {
+        if let Some(handle) = self.threads.lock().await.get(&thread_id).cloned() {
+            return Ok(StartAgentOutcome {
+                thread_id,
+                cwd: handle.workspace,
+                provider_session_id: handle.codex_session_id,
+            });
+        }
+
+        match agent {
+            AgentName::Codex => {
+                self.start_codex_agent_with_thread_id(agent, workspace, policies, Some(thread_id))
+                    .await
+            }
+            AgentName::Claude => {
+                self.start_claude_agent(agent, workspace, Some(thread_id))
+                    .await
+            }
+            AgentName::Opencode => {
+                self.start_opencode_agent(agent, workspace, Some(thread_id))
+                    .await
+            }
+            AgentName::Gemini => {
+                self.start_gemini_agent(agent, workspace, Some(thread_id))
+                    .await
+            }
         }
     }
 
@@ -303,6 +338,17 @@ impl AgentManager {
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
     ) -> anyhow::Result<StartAgentOutcome> {
+        self.start_codex_agent_with_thread_id(agent, workspace, policies, None)
+            .await
+    }
+
+    async fn start_codex_agent_with_thread_id(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        policies: Option<SessionPolicies>,
+        logical_thread_id: Option<String>,
+    ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let instance = self.ensure_instance(&canon, policies.as_ref()).await?;
 
@@ -310,7 +356,8 @@ impl AgentManager {
         // `thread/started` notification arrives later via the event pump and
         // populates `codex_session_id` + flips state Starting -> Idle.
         let resp = instance.start_thread(&canon).await?;
-        let thread_id = resp.thread_id.clone();
+        let provider_thread_id = resp.thread_id.clone();
+        let thread_id = logical_thread_id.unwrap_or_else(|| provider_thread_id.clone());
         instance.add_thread(thread_id.clone()).await;
         instance.touch().await;
 
@@ -357,9 +404,10 @@ impl AgentManager {
         &self,
         agent: AgentKind,
         workspace: PathBuf,
+        logical_thread_id: Option<String>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
-        let thread_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let provider_session_id = uuid::Uuid::new_v4().to_string();
         let mut handle = ThreadHandle::new(
             thread_id.clone(),
@@ -395,9 +443,10 @@ impl AgentManager {
         &self,
         agent: AgentKind,
         workspace: PathBuf,
+        logical_thread_id: Option<String>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
-        let thread_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let instance = self.ensure_opencode_instance(&canon).await?;
         let oc_session_id = instance.lock().await.create_session().await?;
         self.opencode_session_map
@@ -429,9 +478,10 @@ impl AgentManager {
         &self,
         agent: AgentKind,
         workspace: PathBuf,
+        logical_thread_id: Option<String>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
-        let thread_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let provider_session_id = self
             .ensure_gemini_instance_for_thread(&thread_id, &canon, None)
             .await?;
@@ -928,7 +978,8 @@ impl AgentManager {
                             .cloned()
                             .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
                         inst.touch().await;
-                        let turn_id = inst.send_user_message(thread_id, &text).await?;
+                        let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
+                        let turn_id = inst.send_user_message(&provider_thread_id, &text).await?;
                         handle.set_active_turn_id_if_absent(turn_id);
                     }
                     AgentName::Claude => {
@@ -1264,7 +1315,10 @@ impl AgentManager {
             .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
         inst.touch().await;
         self.synth_user_message_ingest(thread_id, &text, handle.agent);
-        let turn_id = inst.steer_turn(thread_id, &expected_turn_id, &text).await?;
+        let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
+        let turn_id = inst
+            .steer_turn(&provider_thread_id, &expected_turn_id, &text)
+            .await?;
         handle.set_active_turn_id(Some(turn_id));
         Ok(())
     }
@@ -1345,8 +1399,9 @@ impl AgentManager {
 
         let inst = self.ensure_instance(&workspace, None).await?;
         if let Some(sid) = codex_session_id {
+            let provider_thread_id = sid.clone();
             inst.add_thread(thread_id.to_string()).await;
-            inst.start_thread_resume(thread_id, &sid).await?;
+            inst.start_thread_resume(&provider_thread_id, &sid).await?;
         } else {
             let _ = handle.transition(ThreadState::Closed {
                 reason: crate::state_machine::CloseReason::TerminalError,
@@ -1369,7 +1424,8 @@ impl AgentManager {
         // Same synth-then-forward pattern as the Idle path; resume races
         // shouldn't change persistence semantics.
         self.synth_user_message_ingest(thread_id, &text, handle.agent);
-        let turn_id = inst.send_user_message(thread_id, &text).await?;
+        let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
+        let turn_id = inst.send_user_message(&provider_thread_id, &text).await?;
         handle.set_active_turn_id_if_absent(turn_id);
         Ok(())
     }
@@ -1393,7 +1449,8 @@ impl AgentManager {
             AgentName::Codex => {
                 let workspace = handle.workspace.clone();
                 if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
-                    let _ = inst.interrupt_turn(thread_id).await;
+                    let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
+                    let _ = inst.interrupt_turn(&provider_thread_id).await;
                 }
             }
             AgentName::Claude => {
@@ -1732,6 +1789,13 @@ fn provider_resume_session_id<'a>(thread_id: &str, handle: &'a ThreadHandle) -> 
         .filter(|session_id| *session_id != thread_id)
 }
 
+fn codex_provider_thread_id(thread_id: &str, handle: &ThreadHandle) -> String {
+    handle
+        .codex_session_id
+        .clone()
+        .unwrap_or_else(|| thread_id.to_string())
+}
+
 fn mark_thread_idle_with_tx(
     thread_id: &str,
     handle: &ThreadHandle,
@@ -2052,6 +2116,33 @@ fn jsonrpc_id_key(id: &Value) -> String {
     }
 }
 
+async fn logical_thread_id_for_provider(
+    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    provider_thread_id: &str,
+) -> String {
+    let guard = threads.lock().await;
+    if guard.contains_key(provider_thread_id) {
+        return provider_thread_id.to_string();
+    }
+    guard
+        .values()
+        .find_map(|handle| {
+            (handle.codex_session_id.as_deref() == Some(provider_thread_id))
+                .then(|| handle.thread_id.clone())
+        })
+        .unwrap_or_else(|| provider_thread_id.to_string())
+}
+
+fn rewrite_payload_thread_id(params: &mut Value, thread_id: &str) {
+    if let Some(object) = params.as_object_mut() {
+        object.insert("threadId".to_string(), Value::String(thread_id.to_string()));
+        object.insert(
+            "thread_id".to_string(),
+            Value::String(thread_id.to_string()),
+        );
+    }
+}
+
 fn request_thread_id(params: &Value) -> Option<String> {
     params
         .get("threadId")
@@ -2201,14 +2292,16 @@ async fn event_pump_loop(
 ) {
     while let Some(inbound) = client.next_inbound().await {
         match inbound {
-            Inbound::Notification { method, params } => {
-                let thread_id = params
+            Inbound::Notification { method, mut params } => {
+                let provider_thread_id = params
                     .get("threadId")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                let Some(thread_id) = thread_id else {
+                let Some(provider_thread_id) = provider_thread_id else {
                     continue;
                 };
+                let thread_id = logical_thread_id_for_provider(&threads, &provider_thread_id).await;
+                rewrite_payload_thread_id(&mut params, &thread_id);
                 if method == "turn/started" {
                     let turn_id = params
                         .get("turn")
@@ -2262,8 +2355,17 @@ async fn event_pump_loop(
                 };
                 broadcast_ingest(&events_tx, ingest);
             }
-            Inbound::ServerRequest { id, method, params } => {
-                let envelope = serde_json::json!({ "method": method, "params": params });
+            Inbound::ServerRequest {
+                id,
+                method,
+                mut params,
+            } => {
+                if let Some(provider_thread_id) = request_thread_id(&params) {
+                    let thread_id =
+                        logical_thread_id_for_provider(&threads, &provider_thread_id).await;
+                    rewrite_payload_thread_id(&mut params, &thread_id);
+                }
+                let envelope = serde_json::json!({ "method": method, "params": params.clone() });
                 match serde_json::from_value::<minos_codex_protocol::ServerRequest>(envelope) {
                     Ok(req) if crate::approvals::is_approval_request(&req) => {
                         let Some(thread_id) = request_thread_id(&params) else {

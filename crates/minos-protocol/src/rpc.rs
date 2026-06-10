@@ -5,8 +5,9 @@
 use crate::{
     ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams, GetThreadResponse,
     HealthResponse, InterruptThreadRequest, ListClisResponse, ListHostSkillsRequest,
-    ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    ListHostSkillsResponse, ListHostWorkspacesRequest, ListHostWorkspacesResponse,
+    ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
     WriteHostSkillConfigResponse,
 };
 use jsonrpsee::proc_macros::rpc;
@@ -32,6 +33,13 @@ pub trait MinosRpc {
         &self,
         req: ListHostSkillsRequest,
     ) -> jsonrpsee::core::RpcResult<ListHostSkillsResponse>;
+
+    /// Snapshot of host-side workspace directories under the user's home.
+    #[method(name = "list_host_workspaces")]
+    async fn list_host_workspaces(
+        &self,
+        req: ListHostWorkspacesRequest,
+    ) -> jsonrpsee::core::RpcResult<ListHostWorkspacesResponse>;
 
     /// Enable or disable one host-side skill by path.
     #[method(name = "write_host_skill_config")]

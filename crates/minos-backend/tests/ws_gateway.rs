@@ -171,6 +171,7 @@ async fn seed_session(
             project_id: None,
             agent_id: "agent_codex".into(),
             host_installation_id: Some(host_id.to_string()),
+            workspace_path: None,
             initial_user_message: initial_user_message.map(str::to_string),
             client_request_id: client_request_id.to_string(),
             caller_account_id: account_id.to_string(),

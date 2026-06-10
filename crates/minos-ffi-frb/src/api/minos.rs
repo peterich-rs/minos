@@ -44,12 +44,12 @@ pub use minos_protocol::{
     ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
     FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
-    HostSkillSummary, HostSkillsEntry, HostSummary, ListAgentsResponse, ListChatMessagesResponse,
-    ListHostSkillsResponse, ListProjectThreadsParams, ListProjectThreadsResponse,
-    ListProjectsResponse, ListThreadsParams, ListThreadsResponse, MyProfileResponse,
-    ProjectSummary, ReadThreadParams, ReadThreadResponse, SearchUsersResponse, SenderType,
-    StartAgentResponse, ThreadSummary, UpdateProjectRequest, UserSummary,
-    WriteHostSkillConfigResponse,
+    HostSkillSummary, HostSkillsEntry, HostSummary, HostWorkspaceSummary, ListAgentsResponse,
+    ListChatMessagesResponse, ListHostSkillsResponse, ListHostWorkspacesResponse,
+    ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams,
+    ListThreadsResponse, MyProfileResponse, ProjectSummary, ReadThreadParams, ReadThreadResponse,
+    SearchUsersResponse, SenderType, StartAgentResponse, ThreadSummary, UpdateProjectRequest,
+    UserSummary, WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 
@@ -595,6 +595,17 @@ impl MobileClient {
         force_reload: bool,
     ) -> Result<ListHostSkillsResponse, MinosError> {
         self.0.list_host_skills(host_device_id, force_reload).await
+    }
+
+    pub async fn list_host_workspaces(
+        &self,
+        host_device_id: Option<String>,
+        root: Option<String>,
+        limit: u32,
+    ) -> Result<ListHostWorkspacesResponse, MinosError> {
+        self.0
+            .list_host_workspaces(host_device_id, root, limit)
+            .await
     }
 
     /// Enable or disable one host-side skill.
@@ -1441,6 +1452,21 @@ pub struct _ListHostSkillsResponse {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(HostWorkspaceSummary))]
+pub struct _HostWorkspaceSummary {
+    pub path: String,
+    pub display_name: String,
+    pub is_git_repo: bool,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListHostWorkspacesResponse))]
+pub struct _ListHostWorkspacesResponse {
+    pub root: String,
+    pub workspaces: Vec<HostWorkspaceSummary>,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(WriteHostSkillConfigResponse))]
 pub struct _WriteHostSkillConfigResponse {
     pub effective_enabled: bool,
@@ -1454,6 +1480,7 @@ pub struct _ProjectSummary {
     pub project_id: String,
     pub name: String,
     pub workspace_slug: String,
+    pub workspace_path: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub thread_count: u32,
@@ -1464,6 +1491,7 @@ pub struct _ProjectSummary {
 pub struct _CreateProjectRequest {
     pub name: String,
     pub workspace_slug: String,
+    pub workspace_path: Option<String>,
 }
 
 #[allow(dead_code)]

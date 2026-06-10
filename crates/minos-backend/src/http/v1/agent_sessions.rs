@@ -27,6 +27,7 @@ struct StartAgentSessionRequest {
     project_id: Option<String>,
     agent_id: String,
     host_installation_id: Option<String>,
+    workspace_path: Option<String>,
     initial_user_message: Option<String>,
     client_request_id: String,
 }
@@ -152,6 +153,7 @@ async fn start_session(
             project_id: request.project_id,
             agent_id: request.agent_id,
             host_installation_id: request.host_installation_id,
+            workspace_path: request.workspace_path,
             initial_user_message: request.initial_user_message,
             client_request_id: request.client_request_id,
             caller_account_id: account_id,

@@ -144,6 +144,12 @@ abstract class MobileClient implements RustOpaqueInterface {
     required bool forceReload,
   });
 
+  Future<ListHostWorkspacesResponse> listHostWorkspaces({
+    String? hostDeviceId,
+    String? root,
+    required int limit,
+  });
+
   /// List every Mac paired to the caller's account.
   Future<List<HostSummaryDto>> listPairedHosts();
 
@@ -648,11 +654,17 @@ class ConversationsResponse {
 class CreateProjectRequest {
   final String name;
   final String workspaceSlug;
+  final String? workspacePath;
 
-  const CreateProjectRequest({required this.name, required this.workspaceSlug});
+  const CreateProjectRequest({
+    required this.name,
+    required this.workspaceSlug,
+    this.workspacePath,
+  });
 
   @override
-  int get hashCode => name.hashCode ^ workspaceSlug.hashCode;
+  int get hashCode =>
+      name.hashCode ^ workspaceSlug.hashCode ^ workspacePath.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -660,7 +672,8 @@ class CreateProjectRequest {
       other is CreateProjectRequest &&
           runtimeType == other.runtimeType &&
           name == other.name &&
-          workspaceSlug == other.workspaceSlug;
+          workspaceSlug == other.workspaceSlug &&
+          workspacePath == other.workspacePath;
 }
 
 class CreateProjectResponse {
@@ -969,6 +982,30 @@ class HostSummaryDto {
           online == other.online;
 }
 
+class HostWorkspaceSummary {
+  final String path;
+  final String displayName;
+  final bool isGitRepo;
+
+  const HostWorkspaceSummary({
+    required this.path,
+    required this.displayName,
+    required this.isGitRepo,
+  });
+
+  @override
+  int get hashCode => path.hashCode ^ displayName.hashCode ^ isGitRepo.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostWorkspaceSummary &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          displayName == other.displayName &&
+          isGitRepo == other.isGitRepo;
+}
+
 enum Lang { zh, en }
 
 class ListAgentsResponse {
@@ -1019,6 +1056,27 @@ class ListHostSkillsResponse {
       other is ListHostSkillsResponse &&
           runtimeType == other.runtimeType &&
           data == other.data;
+}
+
+class ListHostWorkspacesResponse {
+  final String root;
+  final List<HostWorkspaceSummary> workspaces;
+
+  const ListHostWorkspacesResponse({
+    required this.root,
+    required this.workspaces,
+  });
+
+  @override
+  int get hashCode => root.hashCode ^ workspaces.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListHostWorkspacesResponse &&
+          runtimeType == other.runtimeType &&
+          root == other.root &&
+          workspaces == other.workspaces;
 }
 
 class ListProjectThreadsParams {
@@ -1345,6 +1403,7 @@ class ProjectSummary {
   final String projectId;
   final String name;
   final String workspaceSlug;
+  final String? workspacePath;
   final PlatformInt64 createdAtMs;
   final PlatformInt64 updatedAtMs;
   final int threadCount;
@@ -1353,6 +1412,7 @@ class ProjectSummary {
     required this.projectId,
     required this.name,
     required this.workspaceSlug,
+    this.workspacePath,
     required this.createdAtMs,
     required this.updatedAtMs,
     required this.threadCount,
@@ -1363,6 +1423,7 @@ class ProjectSummary {
       projectId.hashCode ^
       name.hashCode ^
       workspaceSlug.hashCode ^
+      workspacePath.hashCode ^
       createdAtMs.hashCode ^
       updatedAtMs.hashCode ^
       threadCount.hashCode;
@@ -1375,6 +1436,7 @@ class ProjectSummary {
           projectId == other.projectId &&
           name == other.name &&
           workspaceSlug == other.workspaceSlug &&
+          workspacePath == other.workspacePath &&
           createdAtMs == other.createdAtMs &&
           updatedAtMs == other.updatedAtMs &&
           threadCount == other.threadCount;

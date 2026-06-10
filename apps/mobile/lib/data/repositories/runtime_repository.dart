@@ -35,6 +35,18 @@ class RuntimeRepository {
     return response.data;
   }
 
+  Future<ListHostWorkspacesResponse> listHostWorkspaces({
+    String? hostDeviceId,
+    String? root,
+    int limit = 100,
+  }) {
+    return _core.listHostWorkspaces(
+      hostDeviceId: hostDeviceId,
+      root: root,
+      limit: limit,
+    );
+  }
+
   Future<List<HostSummaryDto>> listPairedHosts() {
     return _core.listPairedHosts();
   }

@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/project_providers.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/features/shell/router.dart';
@@ -46,68 +49,10 @@ class ProjectListPage extends ConsumerWidget {
   }
 
   void _showCreateDialog(BuildContext context, WidgetRef ref) {
-    final nameController = TextEditingController();
-    final slugController = TextEditingController();
-
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('新建项目'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(
-                labelText: '项目名称',
-                hintText: '例如: My App',
-              ),
-              autofocus: true,
-              onChanged: (value) {
-                // Auto-generate slug from name
-                if (slugController.text.isEmpty ||
-                    slugController.text ==
-                        _slugify(
-                          nameController.text.substring(
-                            0,
-                            nameController.text.length > 1
-                                ? nameController.text.length - 1
-                                : 0,
-                          ),
-                        )) {
-                  slugController.text = _slugify(value);
-                }
-              },
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: slugController,
-              decoration: const InputDecoration(
-                labelText: 'Workspace 文件夹名',
-                hintText: '例如: my-app',
-                helperText: '存储在 .minos/workspaces/ 下',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final name = nameController.text.trim();
-              final slug = slugController.text.trim();
-              if (name.isEmpty || slug.isEmpty) return;
-              Navigator.pop(ctx);
-              await ref
-                  .read(projectListProvider.notifier)
-                  .createProject(name: name, workspaceSlug: slug);
-            },
-            child: const Text('创建'),
-          ),
-        ],
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (_) => const _CreateProjectDialog(),
       ),
     );
   }
@@ -117,6 +62,234 @@ class ProjectListPage extends ConsumerWidget {
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9\u4e00-\u9fff]+'), '-')
         .replaceAll(RegExp(r'^-+|-+$'), '');
+  }
+}
+
+class _CreateProjectDialog extends ConsumerStatefulWidget {
+  const _CreateProjectDialog();
+
+  @override
+  ConsumerState<_CreateProjectDialog> createState() =>
+      _CreateProjectDialogState();
+}
+
+class _CreateProjectDialogState extends ConsumerState<_CreateProjectDialog> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _slugController = TextEditingController();
+  final TextEditingController _workspacePathController =
+      TextEditingController();
+
+  bool _slugEdited = false;
+  bool _creating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController.addListener(_refresh);
+    _slugController.addListener(_refresh);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _slugController.dispose();
+    _workspacePathController.dispose();
+    super.dispose();
+  }
+
+  void _refresh() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeHostId = ref.watch(activeMacProvider).asData?.value;
+    final workspacesAsync = ref.watch(hostWorkspacesProvider(activeHostId));
+    final canCreate =
+        _nameController.text.trim().isNotEmpty &&
+        _slugController.text.trim().isNotEmpty &&
+        !_creating;
+
+    return AlertDialog(
+      title: const Text('新建项目'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: '项目名称',
+                  hintText: '例如: My App',
+                ),
+                autofocus: true,
+                onChanged: _onNameChanged,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _slugController,
+                decoration: const InputDecoration(
+                  labelText: 'Workspace 标识',
+                  hintText: '例如: my-app',
+                ),
+                onChanged: (_) => _slugEdited = true,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _workspacePathController,
+                decoration: const InputDecoration(
+                  labelText: 'Host 工作区路径',
+                  hintText: '/Users/you/develop/my-app',
+                ),
+              ),
+              const SizedBox(height: 12),
+              _WorkspacePickerList(
+                workspacesAsync: workspacesAsync,
+                onPick: _pickWorkspace,
+                onRefresh: () =>
+                    ref.invalidate(hostWorkspacesProvider(activeHostId)),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _creating ? null : () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: canCreate ? _create : null,
+          child: _creating
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('创建'),
+        ),
+      ],
+    );
+  }
+
+  void _onNameChanged(String value) {
+    if (!_slugEdited) {
+      _slugController.text = ProjectListPage._slugify(value);
+    }
+  }
+
+  void _pickWorkspace(HostWorkspaceSummary workspace) {
+    _workspacePathController.text = workspace.path;
+    if (_nameController.text.trim().isEmpty) {
+      _nameController.text = workspace.displayName;
+    }
+    if (!_slugEdited || _slugController.text.trim().isEmpty) {
+      _slugController.text = ProjectListPage._slugify(workspace.displayName);
+      _slugEdited = false;
+    }
+  }
+
+  Future<void> _create() async {
+    final name = _nameController.text.trim();
+    final slug = _slugController.text.trim();
+    final workspacePath = _workspacePathController.text.trim();
+    if (name.isEmpty || slug.isEmpty) {
+      return;
+    }
+    setState(() => _creating = true);
+    try {
+      await ref
+          .read(projectListProvider.notifier)
+          .createProject(
+            name: name,
+            workspaceSlug: slug,
+            workspacePath: workspacePath.isEmpty ? null : workspacePath,
+          );
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('创建失败: $error')));
+        setState(() => _creating = false);
+      }
+    }
+  }
+}
+
+class _WorkspacePickerList extends StatelessWidget {
+  const _WorkspacePickerList({
+    required this.workspacesAsync,
+    required this.onPick,
+    required this.onRefresh,
+  });
+
+  final AsyncValue<ListHostWorkspacesResponse> workspacesAsync;
+  final ValueChanged<HostWorkspaceSummary> onPick;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    return workspacesAsync.when(
+      loading: () => const LinearProgressIndicator(minHeight: 2),
+      error: (error, _) => Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: onRefresh,
+          icon: const Icon(LucideIcons.refreshCw, size: 16),
+          label: const Text('重新加载 Host 文件夹'),
+        ),
+      ),
+      data: (response) {
+        if (response.workspaces.isEmpty) {
+          return Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: onRefresh,
+              icon: const Icon(LucideIcons.folderOpen, size: 16),
+              label: const Text('Host 文件夹为空'),
+            ),
+          );
+        }
+        return ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 220),
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: response.workspaces.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final workspace = response.workspaces[index];
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  workspace.isGitRepo
+                      ? LucideIcons.gitBranch
+                      : LucideIcons.folder,
+                  size: 18,
+                ),
+                title: Text(
+                  workspace.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  workspace.path,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () => onPick(workspace),
+              );
+            },
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -222,6 +395,7 @@ class _ProjectCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colorScheme = Theme.of(context).colorScheme;
+    final workspaceLabel = _projectWorkspaceLabel(project);
 
     return Card(
       elevation: 0,
@@ -235,9 +409,11 @@ class _ProjectCard extends ConsumerWidget {
         borderRadius: .circular(12),
         onTap: () {
           ref.read(selectedProjectProvider.notifier).select(project.projectId);
-          context.push(
-            '/project/${project.projectId}',
-            extra: ProjectDetailRouteExtra(projectName: project.name),
+          unawaited(
+            context.push(
+              '/project/${project.projectId}',
+              extra: ProjectDetailRouteExtra(projectName: project.name),
+            ),
           );
         },
         onLongPress: () => _showProjectMenu(context, ref),
@@ -282,7 +458,7 @@ class _ProjectCard extends ConsumerWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${project.threadCount} 个会话 · ${project.workspaceSlug}',
+                      '${project.threadCount} 个会话 · $workspaceLabel',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: colorScheme.outline,
                       ),
@@ -305,35 +481,37 @@ class _ProjectCard extends ConsumerWidget {
   }
 
   void _showProjectMenu(BuildContext context, WidgetRef ref) {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(LucideIcons.pencil),
-              title: const Text('重命名'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showRenameDialog(context, ref);
-              },
-            ),
-            ListTile(
-              leading: Icon(
-                LucideIcons.trash2,
-                color: Theme.of(context).colorScheme.error,
+    unawaited(
+      showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(LucideIcons.pencil),
+                title: const Text('重命名'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showRenameDialog(context, ref);
+                },
               ),
-              title: Text(
-                '删除',
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ListTile(
+                leading: Icon(
+                  LucideIcons.trash2,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                title: Text(
+                  '删除',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmDelete(context, ref);
+                },
               ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _confirmDelete(context, ref);
-              },
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -341,60 +519,64 @@ class _ProjectCard extends ConsumerWidget {
 
   void _showRenameDialog(BuildContext context, WidgetRef ref) {
     final controller = TextEditingController(text: project.name);
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('重命名项目'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: '项目名称'),
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('重命名项目'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: '项目名称'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = controller.text.trim();
+                if (name.isEmpty) return;
+                Navigator.pop(ctx);
+                await ref
+                    .read(projectListProvider.notifier)
+                    .updateProject(projectId: project.projectId, name: name);
+              },
+              child: const Text('确定'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final name = controller.text.trim();
-              if (name.isEmpty) return;
-              Navigator.pop(ctx);
-              await ref
-                  .read(projectListProvider.notifier)
-                  .updateProject(projectId: project.projectId, name: name);
-            },
-            child: const Text('确定'),
-          ),
-        ],
       ),
     );
   }
 
   void _confirmDelete(BuildContext context, WidgetRef ref) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('删除项目'),
-        content: Text('确定要删除「${project.name}」吗？项目内的会话不会被删除。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('删除项目'),
+          content: Text('确定要删除「${project.name}」吗？项目内的会话不会被删除。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
             ),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await ref
-                  .read(projectListProvider.notifier)
-                  .deleteProject(project.projectId);
-            },
-            child: const Text('删除'),
-          ),
-        ],
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await ref
+                    .read(projectListProvider.notifier)
+                    .deleteProject(project.projectId);
+              },
+              child: const Text('删除'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -412,6 +594,11 @@ class _ProjectCard extends ConsumerWidget {
     ];
     return colors[id.hashCode.abs() % colors.length];
   }
+}
+
+String _projectWorkspaceLabel(ProjectSummary project) {
+  final path = project.workspacePath?.trim();
+  return path == null || path.isEmpty ? project.workspaceSlug : path;
 }
 
 Color _scaffoldBg(BuildContext context) {

@@ -19,9 +19,10 @@ use minos_domain::MinosError;
 use minos_protocol::{
     AgentDispatchRequest, ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams,
     GetThreadResponse, HealthResponse, InterruptThreadRequest, ListClisResponse,
-    ListHostSkillsRequest, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
-    MinosRpcServer, PairRequest, PairResponse, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
+    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, MinosRpcServer,
+    PairRequest, PairResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -63,6 +64,13 @@ impl MinosRpcServer for RpcServerImpl {
         req: ListHostSkillsRequest,
     ) -> jsonrpsee::core::RpcResult<ListHostSkillsResponse> {
         self.agent.list_host_skills(req).await.map_err(rpc_err)
+    }
+
+    async fn list_host_workspaces(
+        &self,
+        req: ListHostWorkspacesRequest,
+    ) -> jsonrpsee::core::RpcResult<ListHostWorkspacesResponse> {
+        self.agent.list_host_workspaces(req).map_err(rpc_err)
     }
 
     async fn write_host_skill_config(
@@ -156,6 +164,10 @@ pub async fn invoke_host_command(
             let req: ListHostSkillsRequest = parse_params(&params)?;
             into_result(server.list_host_skills(req).await)
         }
+        "minos_list_host_workspaces" => {
+            let req: ListHostWorkspacesRequest = parse_params(&params)?;
+            into_result(server.list_host_workspaces(req).await)
+        }
         "minos_write_host_skill_config" => {
             let req: WriteHostSkillConfigRequest = parse_params(&params)?;
             into_result(server.write_host_skill_config(req).await)
@@ -164,9 +176,52 @@ pub async fn invoke_host_command(
             let req: StartAgentRequest = parse_params(&params)?;
             into_result(server.start_agent(req).await)
         }
+        "agent_session.start" => {
+            #[derive(serde::Deserialize)]
+            struct StartAgentSessionParams {
+                session_id: String,
+                agent_id: String,
+                #[serde(default)]
+                runtime_agent: Option<String>,
+                #[serde(default)]
+                workspace: String,
+                #[serde(default)]
+                initial_user_message: Option<String>,
+            }
+            let req: StartAgentSessionParams = parse_params(&params)?;
+            let agent_label = req.runtime_agent.as_deref().unwrap_or(&req.agent_id);
+            let agent = parse_agent_name(agent_label)?;
+            let start_req = StartAgentRequest {
+                agent,
+                workspace: req.workspace,
+                mode: None,
+            };
+            server
+                .agent
+                .start_agent_with_session_id(req.session_id, start_req, req.initial_user_message)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(rpc_err_value)
+        }
         "minos_send_user_message" => {
             let req: SendUserMessageRequest = parse_params(&params)?;
             into_result(server.send_user_message(req).await)
+        }
+        "agent_session.send_input" => {
+            #[derive(serde::Deserialize)]
+            struct SendAgentSessionInputParams {
+                session_id: String,
+                text: String,
+            }
+            let req: SendAgentSessionInputParams = parse_params(&params)?;
+            into_result(
+                server
+                    .send_user_message(SendUserMessageRequest {
+                        session_id: req.session_id,
+                        text: req.text,
+                    })
+                    .await,
+            )
         }
         "minos_approval_decision" => {
             let req: ApprovalDecisionRequest = parse_params(&params)?;
@@ -188,6 +243,20 @@ pub async fn invoke_host_command(
         "minos_close_thread" => {
             let req: CloseThreadRequest = parse_params(&params)?;
             into_result(server.close_thread(req).await)
+        }
+        "agent_session.stop" => {
+            #[derive(serde::Deserialize)]
+            struct StopAgentSessionParams {
+                session_id: String,
+            }
+            let req: StopAgentSessionParams = parse_params(&params)?;
+            into_result(
+                server
+                    .close_thread(CloseThreadRequest {
+                        thread_id: req.session_id,
+                    })
+                    .await,
+            )
         }
         "minos_list_threads" => {
             let req: ListThreadsParams = parse_params(&params)?;
@@ -287,6 +356,19 @@ fn rpc_err_value(e: MinosError) -> Value {
         "code": e.code(),
         "message": e.message(),
     })
+}
+
+fn parse_agent_name(raw: &str) -> Result<minos_domain::AgentName, Value> {
+    match raw {
+        "codex" | "agent_codex" => Ok(minos_domain::AgentName::Codex),
+        "claude" | "agent_claude" => Ok(minos_domain::AgentName::Claude),
+        "gemini" | "agent_gemini" => Ok(minos_domain::AgentName::Gemini),
+        "opencode" | "agent_opencode" => Ok(minos_domain::AgentName::Opencode),
+        other => Err(json!({
+            "code": -32602,
+            "message": format!("unsupported runtime_agent '{other}'"),
+        })),
+    }
 }
 
 fn parse_params<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, Value> {
@@ -467,6 +549,63 @@ mod tests {
             .as_str()
             .expect("session_id should be present");
         assert!(!session_id.is_empty());
+
+        fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn invoke_host_command_agent_session_start_uses_formal_session_id_and_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("formal-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("test.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let (out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
+        let writer = Arc::new(crate::store::event_writer::EventWriter::spawn(
+            store.clone(),
+            out_tx,
+        ));
+        let server = Arc::new(RpcServerImpl {
+            started_at: Instant::now(),
+            runner: Arc::new(NoopRunner),
+            agent: Arc::new(AgentGlue::wire_with(
+                manager,
+                writer,
+                store.clone(),
+                tmp.path().to_path_buf(),
+            )),
+        });
+
+        let result = invoke_host_command(
+            "agent_session.start",
+            json!({
+                "session_id": "sess-formal-1",
+                "agent_id": "agent_codex",
+                "runtime_agent": "codex",
+                "workspace": workspace.display().to_string()
+            }),
+            &server,
+        )
+        .await;
+
+        let value = result.unwrap();
+        assert_eq!(value["session_id"], "sess-formal-1");
+        assert_eq!(
+            value["cwd"].as_str().unwrap(),
+            std::fs::canonicalize(&workspace)
+                .unwrap()
+                .display()
+                .to_string()
+        );
+        let row = store.get_thread("sess-formal-1").await.unwrap().unwrap();
+        assert_eq!(row.workspace_root, value["cwd"].as_str().unwrap());
 
         fake.stop().await;
     }

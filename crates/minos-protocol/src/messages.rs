@@ -435,6 +435,43 @@ pub struct ListHostSkillsCommandRequest {
     pub force_reload: bool,
 }
 
+/// Parameters for listing host-side workspace directories. `root` is optional;
+/// hosts default it to the current user's home directory and constrain custom
+/// roots to that home tree.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostWorkspacesRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default)]
+    pub limit: u32,
+}
+
+/// Account-side request to inspect workspace directories on one paired host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostWorkspacesCommandRequest {
+    pub host_installation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default)]
+    pub limit: u32,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostWorkspaceSummary {
+    pub path: String,
+    pub display_name: String,
+    pub is_git_repo: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostWorkspacesResponse {
+    pub root: String,
+    pub workspaces: Vec<HostWorkspaceSummary>,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostSkillSummary {
@@ -757,6 +794,8 @@ pub struct ProjectSummary {
     pub project_id: String,
     pub name: String,
     pub workspace_slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub thread_count: u32,
@@ -768,6 +807,8 @@ pub struct ProjectSummary {
 pub struct CreateProjectRequest {
     pub name: String,
     pub workspace_slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
 }
 
 /// Response from creating a project.

@@ -259,6 +259,7 @@ async fn list_sessions_filters_by_conversation_and_project_scope() {
         &account_id,
         "Project Route List",
         "project-route-list",
+        None,
         999,
     )
     .await
@@ -361,6 +362,7 @@ async fn start_session_dispatches_host_command_and_persists_session() {
         serde_json::json!({
             "conversation_id": conversation.conversation_id,
             "agent_id": agent.agent_id,
+            "workspace_path": "/Users/example/my-app",
             "initial_user_message": "hello from route",
             "client_request_id": "route-start-1"
         }),
@@ -414,6 +416,15 @@ async fn start_session_dispatches_host_command_and_persists_session() {
         minos_backend::store::host_commands::HostCommandStatus::Pending
     );
     assert_eq!(host_command.params_json["session_id"], session_id);
+    assert_eq!(host_command.params_json["runtime_agent"], "codex");
+    assert_eq!(
+        host_command.params_json["workspace"],
+        "/Users/example/my-app"
+    );
+    assert_eq!(
+        host_command.params_json["workspace_path"],
+        "/Users/example/my-app"
+    );
     assert_eq!(
         host_command.params_json["conversation_id"],
         conversation.conversation_id
