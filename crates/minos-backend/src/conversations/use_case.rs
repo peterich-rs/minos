@@ -129,6 +129,12 @@ pub trait ConversationService: Send + Sync {
         conversation_id: &str,
         account_id: &str,
     ) -> Result<bool, ConversationError>;
+
+    async fn delete_conversation(
+        &self,
+        account_id: &str,
+        conversation_id: &str,
+    ) -> Result<bool, ConversationError>;
 }
 
 pub struct DefaultConversationService {
@@ -246,8 +252,14 @@ impl ConversationService for DefaultConversationService {
             return Err(ConversationError::NotFound);
         }
         let limit = limit.min(200);
+        let deleted_at_ms =
+            social::conversation_deleted_at_for_account(&self.store, conversation_id, account_id)
+                .await?;
         let mut messages =
             social::list_messages(&self.store, conversation_id, before_ts_ms, limit).await?;
+        if let Some(deleted_at_ms) = deleted_at_ms {
+            messages.retain(|message| message.created_at_ms > deleted_at_ms);
+        }
         let next_before_ts_ms = if messages.len() as u32 == limit {
             messages.last().map(|m| m.created_at_ms)
         } else {
@@ -397,6 +409,23 @@ impl ConversationService for DefaultConversationService {
         account_id: &str,
     ) -> Result<bool, ConversationError> {
         Ok(social::remove_member_from_group(&self.store, conversation_id, account_id).await?)
+    }
+
+    async fn delete_conversation(
+        &self,
+        account_id: &str,
+        conversation_id: &str,
+    ) -> Result<bool, ConversationError> {
+        if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
+            return Err(ConversationError::NotFound);
+        }
+        Ok(social::mark_conversation_deleted_for_account(
+            &self.store,
+            conversation_id,
+            account_id,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?)
     }
 }
 

@@ -68,6 +68,8 @@ abstract class MinosCoreProtocol {
 
   Future<ConversationsResponse> conversations();
 
+  Future<void> deleteConversation({required String conversationId});
+
   Future<ConversationResponse> ensureDirectConversation({
     required String friendAccountId,
   });

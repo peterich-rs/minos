@@ -153,6 +153,25 @@ class SocialCacheStore {
     });
   }
 
+  Future<void> deleteConversation(String conversationId) async {
+    final db = await _database();
+    if (db == null) {
+      return;
+    }
+    await db.transaction((txn) async {
+      await txn.delete(
+        'cached_social_messages',
+        where: 'conversation_id = ?',
+        whereArgs: <Object>[conversationId],
+      );
+      await txn.delete(
+        'cached_social_conversations',
+        where: 'conversation_id = ?',
+        whereArgs: <Object>[conversationId],
+      );
+    });
+  }
+
   Future<List<SocialChatMessage>> loadMessages(String conversationId) async {
     final db = await _database();
     if (db == null) {

@@ -337,6 +337,10 @@ impl MobileClient {
         self.0.conversations().await
     }
 
+    pub async fn delete_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
+        self.0.delete_conversation(conversation_id).await
+    }
+
     pub async fn ensure_direct_conversation(
         &self,
         friend_account_id: String,

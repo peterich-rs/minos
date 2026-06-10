@@ -507,6 +507,13 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "account_bearer",
     ),
     RouteContract::new(
+        "DELETE",
+        "/v1/conversations/:conversation_id",
+        "/v1/conversations/conv_probe",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
         "POST",
         "/v1/conversations/:conversation_id/members/query",
         "/v1/conversations/conv_probe/members/query",

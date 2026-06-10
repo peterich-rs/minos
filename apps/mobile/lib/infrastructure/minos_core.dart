@@ -192,6 +192,10 @@ class MinosCore implements MinosCoreProtocol {
   Future<ConversationsResponse> conversations() => _client.conversations();
 
   @override
+  Future<void> deleteConversation({required String conversationId}) =>
+      _client.deleteConversation(conversationId: conversationId);
+
+  @override
   Future<ConversationResponse> ensureDirectConversation({
     required String friendAccountId,
   }) => _client.ensureDirectConversation(friendAccountId: friendAccountId);

@@ -185,6 +185,11 @@ class SocialRepository {
     return _core.conversations();
   }
 
+  Future<void> deleteConversation({required String conversationId}) async {
+    await _core.deleteConversation(conversationId: conversationId);
+    await _cacheStore.deleteConversation(conversationId);
+  }
+
   Future<ConversationsResponse?> loadConversations() {
     return _cacheStore.loadConversations();
   }

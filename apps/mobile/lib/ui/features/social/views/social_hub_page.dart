@@ -300,6 +300,47 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
     titleController.dispose();
   }
 
+  Future<bool> _confirmDeleteConversation(
+    ConversationSummary conversation,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除会话'),
+        content: Text(
+          '确定要删除「${conversation.title}」吗？聊天记录会被清除；如果 Agent 仍在执行，会先尝试停止任务。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(
+              '删除',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  Future<void> _deleteConversation(ConversationSummary conversation) async {
+    try {
+      await ref
+          .read(conversationsProvider.notifier)
+          .deleteConversation(conversation.conversationId);
+      if (!mounted) return;
+      showSocialInfoToast(context, '会话已删除');
+    } catch (error) {
+      if (!mounted) return;
+      showSocialFeedbackError(context, '删除会话失败', error);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final conversationsAsync = ref.watch(conversationsProvider);
@@ -358,6 +399,8 @@ class _SocialHubPageState extends ConsumerState<SocialHubPage> {
                     ) ...<Widget>[
                       _ConversationTile(
                         conversation: response.conversations[index],
+                        onConfirmDelete: _confirmDeleteConversation,
+                        onDelete: _deleteConversation,
                       ),
                       if (index < response.conversations.length - 1)
                         const Divider(height: 1, indent: 72),
@@ -427,9 +470,15 @@ class _MessagesScrollView extends StatelessWidget {
 }
 
 class _ConversationTile extends StatelessWidget {
-  const _ConversationTile({required this.conversation});
+  const _ConversationTile({
+    required this.conversation,
+    required this.onConfirmDelete,
+    required this.onDelete,
+  });
 
   final ConversationSummary conversation;
+  final Future<bool> Function(ConversationSummary conversation) onConfirmDelete;
+  final Future<void> Function(ConversationSummary conversation) onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -439,91 +488,111 @@ class _ConversationTile extends StatelessWidget {
     final unread = conversation.unreadCount;
     final mentionUnread = conversation.unreadMentionCount;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => context.push(
-          '/social/chat/${conversation.conversationId}',
-          extra: SocialChatRouteExtra(
-            title: conversation.title,
-            kind: conversation.kind,
-          ),
+    return Dismissible(
+      key: ValueKey<String>('conversation-${conversation.conversationId}'),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) async {
+        if (!await onConfirmDelete(conversation)) {
+          return false;
+        }
+        await onDelete(conversation);
+        return false;
+      },
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 22),
+        color: theme.colorScheme.errorContainer,
+        child: Icon(
+          LucideIcons.trash2,
+          color: theme.colorScheme.onErrorContainer,
         ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 11, 16, 11),
-          child: Row(
-            children: <Widget>[
-              CircleAvatar(
-                radius: 22,
-                backgroundColor: isGroup
-                    ? theme.colorScheme.tertiaryContainer
-                    : theme.colorScheme.primaryContainer,
-                child: Icon(
-                  isGroup ? LucideIcons.usersRound : LucideIcons.userRound,
-                  size: 21,
-                  color: isGroup
-                      ? theme.colorScheme.onTertiaryContainer
-                      : theme.colorScheme.onPrimaryContainer,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => context.push(
+            '/social/chat/${conversation.conversationId}',
+            extra: SocialChatRouteExtra(
+              title: conversation.title,
+              kind: conversation.kind,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 11, 16, 11),
+            child: Row(
+              children: <Widget>[
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: isGroup
+                      ? theme.colorScheme.tertiaryContainer
+                      : theme.colorScheme.primaryContainer,
+                  child: Icon(
+                    isGroup ? LucideIcons.usersRound : LucideIcons.userRound,
+                    size: 21,
+                    color: isGroup
+                        ? theme.colorScheme.onTertiaryContainer
+                        : theme.colorScheme.onPrimaryContainer,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            conversation.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              conversation.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _formatConversationTime(
-                            conversation.lastMessageAtMs.toInt(),
-                          ),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            subtitle == null || subtitle.isEmpty
-                                ? isGroup
-                                      ? '${conversation.memberCount} 位成员'
-                                      : '还没有消息'
-                                : subtitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodyMedium?.copyWith(
+                          const SizedBox(width: 8),
+                          Text(
+                            _formatConversationTime(
+                              conversation.lastMessageAtMs.toInt(),
+                            ),
+                            style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
-                        ),
-                        if (unread > 0) ...<Widget>[
-                          const SizedBox(width: 8),
-                          _UnreadBadge(
-                            count: unread,
-                            highlighted: mentionUnread > 0,
-                          ),
                         ],
-                      ],
-                    ),
-                  ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              subtitle == null || subtitle.isEmpty
+                                  ? isGroup
+                                        ? '${conversation.memberCount} 位成员'
+                                        : '还没有消息'
+                                  : subtitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                          if (unread > 0) ...<Widget>[
+                            const SizedBox(width: 8),
+                            _UnreadBadge(
+                              count: unread,
+                              highlighted: mentionUnread > 0,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

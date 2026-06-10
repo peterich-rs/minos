@@ -1140,6 +1140,37 @@ impl MobileHttpClient {
         }
     }
 
+    pub async fn delete_conversation(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+    ) -> Result<(), MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::DELETE.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some("delete_conversation".into()),
+        );
+        let request = self.request_without_body(Method::DELETE, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("conversation deleted".into()),
+                Some(conversation_id.into()),
+            );
+            Ok(())
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
     pub async fn ensure_direct_conversation(
         &self,
         access_token: &str,

@@ -334,6 +334,29 @@ pub async fn insert_agent_message(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
+    insert_agent_message_with_session(
+        store,
+        conversation_id,
+        agent_id,
+        text,
+        now_ms,
+        reply_to_message_id,
+        None,
+        mentioned_account_ids,
+    )
+    .await
+}
+
+pub async fn insert_agent_message_with_session(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    agent_id: &str,
+    text: &str,
+    now_ms: i64,
+    reply_to_message_id: Option<&str>,
+    agent_session_id: Option<&str>,
+    mentioned_account_ids: &[String],
+) -> Result<ChatMessageRow, BackendError> {
     let agent = get_agent(store, agent_id)
         .await?
         .ok_or_else(|| BackendError::StoreQuery {
@@ -358,8 +381,9 @@ pub async fn insert_agent_message(
                     text,
                     created_at_ms,
                     reply_to_message_id,
+                    agent_session_id,
                     sender_type
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'agent')",
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent')",
             )
             .bind(&message_id)
             .bind(conversation_id)
@@ -368,6 +392,7 @@ pub async fn insert_agent_message(
             .bind(text)
             .bind(now_ms)
             .bind(reply_to_message_id)
+            .bind(agent_session_id)
             .execute(&mut *tx)
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
@@ -414,8 +439,9 @@ pub async fn insert_agent_message(
                     text,
                     created_at_ms,
                     reply_to_message_id,
+                    agent_session_id,
                     sender_type
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'agent')",
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'agent')",
             )
             .bind(&message_id)
             .bind(conversation_id)
@@ -424,6 +450,7 @@ pub async fn insert_agent_message(
             .bind(text)
             .bind(now_ms)
             .bind(reply_to_message_id)
+            .bind(agent_session_id)
             .execute(&mut *tx)
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;

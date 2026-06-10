@@ -100,6 +100,8 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// synchronous.
   ConnectionState currentState();
 
+  Future<void> deleteConversation({required String conversationId});
+
   /// Delete a project.
   Future<void> deleteProject({required DeleteProjectRequest req});
 

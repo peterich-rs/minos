@@ -296,6 +296,7 @@ pub async fn list_conversations_for(
                            AND m.sender_account_id <> ?
                            AND m.recalled_at_ms IS NULL
                            AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
                     ), 0) AS unread_count,
                     COALESCE((
                         SELECT COUNT(*)
@@ -305,6 +306,7 @@ pub async fn list_conversations_for(
                            AND m.sender_account_id <> ?
                            AND m.recalled_at_ms IS NULL
                            AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
                            AND mm.mentioned_account_id = ?
                     ), 0) AS unread_mention_count
                   FROM conversations c
@@ -312,9 +314,14 @@ pub async fn list_conversations_for(
              LEFT JOIN conversation_reads cr
                     ON cr.conversation_id = c.conversation_id
                    AND cr.account_id = ?
+             LEFT JOIN conversation_deletions cd
+                    ON cd.conversation_id = c.conversation_id
+                   AND cd.account_id = ?
                  WHERE cm.account_id = ?
+                   AND COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) > COALESCE(cd.deleted_at_ms, 0)
               ORDER BY last_message_at_ms DESC",
             )
+            .bind(account_id)
             .bind(account_id)
             .bind(account_id)
             .bind(account_id)
@@ -344,6 +351,7 @@ pub async fn list_conversations_for(
                            AND m.sender_account_id <> $1
                            AND m.recalled_at_ms IS NULL
                            AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
                     ), 0) AS unread_count,
                     COALESCE((
                         SELECT COUNT(*)
@@ -353,6 +361,7 @@ pub async fn list_conversations_for(
                            AND m.sender_account_id <> $2
                            AND m.recalled_at_ms IS NULL
                            AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
                            AND mm.mentioned_account_id = $3
                     ), 0) AS unread_mention_count
                   FROM conversations c
@@ -360,9 +369,14 @@ pub async fn list_conversations_for(
              LEFT JOIN conversation_reads cr
                     ON cr.conversation_id = c.conversation_id
                    AND cr.account_id = $4
-                 WHERE cm.account_id = $5
+             LEFT JOIN conversation_deletions cd
+                    ON cd.conversation_id = c.conversation_id
+                   AND cd.account_id = $5
+                 WHERE cm.account_id = $6
+                   AND COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) > COALESCE(cd.deleted_at_ms, 0)
               ORDER BY last_message_at_ms DESC",
             )
+            .bind(account_id)
             .bind(account_id)
             .bind(account_id)
             .bind(account_id)
@@ -535,6 +549,77 @@ pub async fn remove_member_from_group(
     .map_err(store_err("social::remove_member_from_group"))?;
 
     Ok(result > 0)
+}
+
+pub async fn mark_conversation_deleted_for_account(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    account_id: &str,
+    deleted_at_ms: i64,
+) -> Result<bool, BackendError> {
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "INSERT INTO conversation_deletions
+                    (conversation_id, account_id, deleted_at_ms)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(conversation_id, account_id) DO UPDATE SET
+                    deleted_at_ms = excluded.deleted_at_ms",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .bind(deleted_at_ms)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "INSERT INTO conversation_deletions
+                    (conversation_id, account_id, deleted_at_ms)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT(conversation_id, account_id) DO UPDATE SET
+                    deleted_at_ms = EXCLUDED.deleted_at_ms",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .bind(deleted_at_ms)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(store_err("social::mark_conversation_deleted_for_account"))?;
+
+    Ok(result > 0)
+}
+
+pub async fn conversation_deleted_at_for_account(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    account_id: &str,
+) -> Result<Option<i64>, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT deleted_at_ms
+               FROM conversation_deletions
+              WHERE conversation_id = ? AND account_id = ?",
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT deleted_at_ms
+               FROM conversation_deletions
+              WHERE conversation_id = $1 AND account_id = $2",
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(store_err("social::conversation_deleted_at_for_account"))
 }
 
 pub async fn mark_conversation_read_to_latest(

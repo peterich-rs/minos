@@ -597,6 +597,12 @@ impl MobileClient {
         auth_http_call!(self, |http, access| http.conversations(&access))
     }
 
+    pub async fn delete_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.delete_conversation(&access, &conversation_id)
+        })
+    }
+
     pub async fn ensure_direct_conversation(
         &self,
         friend_account_id: String,

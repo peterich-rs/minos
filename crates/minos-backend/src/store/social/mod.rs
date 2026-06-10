@@ -162,9 +162,11 @@ pub use friendships::{
 
 // Conversation functions
 pub use conversations::{
-    add_member_to_group, create_group_conversation, ensure_direct_conversation, get_conversation,
-    is_conversation_member, list_conversation_member_profiles, list_conversation_members,
-    list_conversations_for, mark_conversation_read_to_latest, remove_member_from_group,
+    add_member_to_group, conversation_deleted_at_for_account, create_group_conversation,
+    ensure_direct_conversation, get_conversation, is_conversation_member,
+    list_conversation_member_profiles, list_conversation_members, list_conversations_for,
+    mark_conversation_deleted_for_account, mark_conversation_read_to_latest,
+    remove_member_from_group,
 };
 
 // Conversation message functions
@@ -179,8 +181,8 @@ pub use conversation_messages::{
 // Agent functions
 pub use agents::{
     add_agent_to_conversation, agents_by_ids, delete_agent, get_agent, insert_agent_message,
-    is_agent_in_conversation, list_agents_for_owner, list_conversation_agents, register_agent,
-    remove_agent_from_conversation,
+    insert_agent_message_with_session, is_agent_in_conversation, list_agents_for_owner,
+    list_conversation_agents, register_agent, remove_agent_from_conversation,
 };
 
 // ─── Tests ────────────────────────────────────────────────────────────

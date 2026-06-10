@@ -461,6 +461,32 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     state = AsyncValue.data(await _fetchRemoteConversations());
   }
 
+  Future<void> deleteConversation(String conversationId) async {
+    final previous = state;
+    final current = previous.asData?.value;
+    if (current != null) {
+      state = AsyncValue.data(
+        ConversationsResponse(
+          conversations: current.conversations
+              .where(
+                (conversation) => conversation.conversationId != conversationId,
+              )
+              .toList(growable: false),
+        ),
+      );
+    }
+    try {
+      await ref
+          .read(socialRepositoryProvider)
+          .deleteConversation(conversationId: conversationId);
+      ref.invalidate(socialConversationProvider(conversationId));
+      ref.invalidate(conversationMembersProvider(conversationId));
+    } catch (error, stackTrace) {
+      state = previous;
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+
   Future<ConversationsResponse> _fetchRemoteConversations() async {
     final repository = ref.read(socialRepositoryProvider);
     final response = await repository.conversations();

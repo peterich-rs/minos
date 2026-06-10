@@ -7,8 +7,9 @@ use axum::routing::post;
 use serde::Deserialize;
 
 const AGENT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(5);
-const GROUP_COMPLETION_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 const GROUP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const GROUP_COMPLETION_IDLE_LOG_INTERVAL: Duration = Duration::from_mins(5);
+const GROUP_COMPLETION_IDLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const AGENT_DISPATCH_COMMAND_METHOD: &str = "minos_agent_dispatch";
 use crate::auth::bearer;
 use crate::http::error_response::{err_response, ErrorBody, ErrorEnvelope};
@@ -439,31 +440,15 @@ fn spawn_group_completion_watcher(
             }
 
             let now = tokio::time::Instant::now();
-            if cursor.timed_out(now) {
+            if cursor.should_log_idle(now) {
                 tracing::warn!(
                     target: "minos_backend::social",
                     conversation_id = %conversation_id,
                     session_id = %session_id,
                     trigger_seq,
                     last_observed_seq = cursor.last_observed_seq,
-                    "group completion watcher timed out after agent inactivity"
+                    "group completion watcher still waiting after agent inactivity"
                 );
-                let timeout_text = mention_minos_id.as_deref().map_or_else(
-                    || "Sorry, I timed out waiting for a response.".to_string(),
-                    |minos_id| format!("@{minos_id} Sorry, I timed out waiting for a response."),
-                );
-                let mentions = mention_account_id.iter().cloned().collect::<Vec<_>>();
-                let _ = post_agent_social_message(
-                    &state,
-                    &conversation_id,
-                    &agent,
-                    &session_id,
-                    &reply_to_message_id,
-                    &timeout_text,
-                    &mentions,
-                )
-                .await;
-                return;
             }
 
             tokio::time::sleep(cursor.next_poll_delay(now)).await;
@@ -474,14 +459,16 @@ fn spawn_group_completion_watcher(
 #[derive(Debug, Clone, Copy)]
 struct CompletionWatchCursor {
     last_observed_seq: u64,
-    idle_deadline: tokio::time::Instant,
+    last_activity_at: tokio::time::Instant,
+    next_idle_log_at: tokio::time::Instant,
 }
 
 impl CompletionWatchCursor {
     fn new(trigger_seq: u64, now: tokio::time::Instant) -> Self {
         Self {
             last_observed_seq: trigger_seq,
-            idle_deadline: now + GROUP_COMPLETION_IDLE_TIMEOUT,
+            last_activity_at: now,
+            next_idle_log_at: now + GROUP_COMPLETION_IDLE_LOG_INTERVAL,
         }
     }
 
@@ -490,16 +477,25 @@ impl CompletionWatchCursor {
             return;
         }
         self.last_observed_seq = latest_seq;
-        self.idle_deadline = now + GROUP_COMPLETION_IDLE_TIMEOUT;
+        self.last_activity_at = now;
+        self.next_idle_log_at = now + GROUP_COMPLETION_IDLE_LOG_INTERVAL;
     }
 
-    fn timed_out(self, now: tokio::time::Instant) -> bool {
-        now >= self.idle_deadline
+    fn should_log_idle(&mut self, now: tokio::time::Instant) -> bool {
+        if now < self.next_idle_log_at {
+            return false;
+        }
+        self.next_idle_log_at = now + GROUP_COMPLETION_IDLE_LOG_INTERVAL;
+        true
     }
 
     fn next_poll_delay(self, now: tokio::time::Instant) -> Duration {
-        let until_idle = self.idle_deadline.saturating_duration_since(now);
-        GROUP_COMPLETION_POLL_INTERVAL.min(until_idle)
+        if now.saturating_duration_since(self.last_activity_at)
+            >= GROUP_COMPLETION_IDLE_LOG_INTERVAL
+        {
+            return GROUP_COMPLETION_IDLE_POLL_INTERVAL;
+        }
+        GROUP_COMPLETION_POLL_INTERVAL
     }
 }
 
@@ -567,20 +563,18 @@ async fn post_agent_social_message(
     text: &str,
     mentioned_account_ids: &[String],
 ) -> Result<(), (StatusCode, Json<ErrorEnvelope>)> {
-    let row = crate::store::social::insert_agent_message(
+    let row = crate::store::social::insert_agent_message_with_session(
         &state.store,
         conversation_id,
         &agent.agent_id,
         text,
         chrono::Utc::now().timestamp_millis(),
         Some(reply_to_message_id),
+        Some(session_id),
         mentioned_account_ids,
     )
     .await
     .map_err(|e| err("internal", e.to_string()))?;
-    crate::store::social::bind_session_to_message(&state.store, &row.message_id, session_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
     let mut hydrated = crate::conversations::use_case::hydrate_messages(&state.store, vec![row])
         .await
         .map_err(|e| err("internal", e.to_string()))?;
@@ -969,21 +963,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn completion_watch_cursor_extends_idle_deadline_on_agent_activity() {
+    fn completion_watch_cursor_resets_idle_log_on_agent_activity() {
         let start = tokio::time::Instant::now();
         let mut cursor = CompletionWatchCursor::new(10, start);
 
-        let almost_idle = start + GROUP_COMPLETION_IDLE_TIMEOUT - Duration::from_millis(1);
-        assert!(!cursor.timed_out(almost_idle));
+        let almost_idle = start + GROUP_COMPLETION_IDLE_LOG_INTERVAL - Duration::from_millis(1);
+        assert!(!cursor.should_log_idle(almost_idle));
 
         cursor.observe(11, almost_idle);
         assert_eq!(cursor.last_observed_seq, 11);
-        assert!(!cursor.timed_out(start + GROUP_COMPLETION_IDLE_TIMEOUT));
-        assert!(cursor.timed_out(almost_idle + GROUP_COMPLETION_IDLE_TIMEOUT));
+        assert!(!cursor.should_log_idle(start + GROUP_COMPLETION_IDLE_LOG_INTERVAL));
+        assert!(cursor.should_log_idle(almost_idle + GROUP_COMPLETION_IDLE_LOG_INTERVAL));
     }
 
     #[test]
-    fn completion_watch_cursor_ignores_old_or_equal_seq() {
+    fn completion_watch_cursor_logs_but_does_not_timeout_after_idle() {
         let start = tokio::time::Instant::now();
         let mut cursor = CompletionWatchCursor::new(10, start);
 
@@ -991,6 +985,15 @@ mod tests {
         cursor.observe(9, start + Duration::from_secs(2));
 
         assert_eq!(cursor.last_observed_seq, 10);
-        assert!(cursor.timed_out(start + GROUP_COMPLETION_IDLE_TIMEOUT));
+        assert!(!cursor.should_log_idle(
+            start + GROUP_COMPLETION_IDLE_LOG_INTERVAL - Duration::from_millis(1)
+        ));
+        assert!(cursor.should_log_idle(start + GROUP_COMPLETION_IDLE_LOG_INTERVAL));
+        assert!(!cursor.should_log_idle(start + GROUP_COMPLETION_IDLE_LOG_INTERVAL));
+        assert_eq!(
+            cursor.next_poll_delay(start + GROUP_COMPLETION_IDLE_LOG_INTERVAL),
+            GROUP_COMPLETION_IDLE_POLL_INTERVAL
+        );
+        assert!(cursor.should_log_idle(start + GROUP_COMPLETION_IDLE_LOG_INTERVAL * 2));
     }
 }

@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::post;
+use axum::routing::{delete, post};
 use axum::{Json, Router};
 use minos_protocol::{
     ChatMessageSummary, ConversationMembersResponse, ConversationReadResponse,
@@ -19,6 +19,10 @@ pub fn router() -> Router<BackendState> {
         .route("/conversations/list", post(list_conversations))
         .route("/conversations/direct", post(ensure_direct_conversation))
         .route("/conversations/group", post(create_group_conversation))
+        .route(
+            "/conversations/:conversation_id",
+            delete(delete_conversation),
+        )
         .route(
             "/conversations/:conversation_id/members/query",
             post(list_conversation_members),
@@ -112,6 +116,82 @@ async fn create_group_conversation(
         .await
         .map_err(map_conversation_error)?;
     Ok(Json(response))
+}
+
+async fn delete_conversation(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = super::social::require_account_id_from_state(&state, &headers)?;
+    let conversations_svc = DefaultConversationService::new(state.store.clone());
+    if !conversations_svc
+        .is_member(&conversation_id, &account_id)
+        .await
+        .map_err(map_conversation_error)?
+    {
+        return Err(err("not_found", "conversation not found"));
+    }
+
+    stop_active_sessions_for_deleted_conversation(&state, &conversation_id, &account_id).await;
+
+    let deleted = conversations_svc
+        .delete_conversation(&account_id, &conversation_id)
+        .await
+        .map_err(map_conversation_error)?;
+    if !deleted {
+        return Err(err("not_found", "conversation not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn stop_active_sessions_for_deleted_conversation(
+    state: &BackendState,
+    conversation_id: &str,
+    account_id: &str,
+) {
+    let sessions = match crate::store::agent_sessions::list_for_account_conversation(
+        &state.store,
+        conversation_id,
+        account_id,
+        None,
+        200,
+    )
+    .await
+    {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::conversations",
+                conversation_id = %conversation_id,
+                error = %error,
+                "failed to list agent sessions before deleting conversation"
+            );
+            return;
+        }
+    };
+
+    for session in sessions {
+        if !matches!(session.status.as_str(), "pending" | "running") {
+            continue;
+        }
+        if let Err(error) = state
+            .agent_sessions
+            .stop(crate::agent_sessions::StopAgentSessionInput {
+                session_id: session.session_id.clone(),
+                caller_account_id: account_id.to_string(),
+            })
+            .await
+        {
+            tracing::warn!(
+                target: "minos_backend::conversations",
+                conversation_id = %conversation_id,
+                session_id = %session.session_id,
+                error = %error,
+                "failed to stop active agent session before deleting conversation"
+            );
+        }
+    }
 }
 
 async fn list_conversation_members(

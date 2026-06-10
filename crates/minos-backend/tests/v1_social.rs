@@ -4,7 +4,7 @@ use minos_backend::auth::jwt;
 use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
 use minos_backend::session::SessionHandle;
 use minos_backend::store::{
-    account_host_pairings, devices, host_commands, raw_events, social, threads,
+    account_host_pairings, agent_sessions, devices, host_commands, raw_events, social, threads,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::{AgentDispatchRequest, Envelope};
@@ -432,6 +432,182 @@ async fn conversation_command_aliases_list_and_send_message() {
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].text, "hello via command route");
+}
+
+#[tokio::test]
+async fn delete_conversation_stops_running_agent_session_and_hides_for_caller() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+    let host_device_id_string = host_device_id.to_string();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Delete Me", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+    agent_sessions::create(
+        &state.store,
+        "sess-delete-1",
+        &conversation.conversation_id,
+        None,
+        Some(&host_device_id_string),
+        Some(&agent.agent_id),
+        "running",
+        100,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let (status, _) = common::send(
+        &mut app,
+        authed_request(
+            Method::DELETE,
+            &format!("/v1/conversations/{}", conversation.conversation_id),
+            alice_device,
+            &alice.account_id,
+            Body::empty(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let stop_command = host_commands::get(&state.store, "cmd-agent-session-stop-sess-delete-1")
+        .await
+        .unwrap()
+        .expect("delete should enqueue stop for running agent session");
+    assert_eq!(stop_command.host_installation_id, host_device_id);
+    assert_eq!(stop_command.method, "agent_session.stop");
+    assert_eq!(stop_command.params_json["session_id"], "sess-delete-1");
+    assert!(
+        social::get_conversation(&state.store, &conversation.conversation_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let stopped_session = agent_sessions::get(&state.store, "sess-delete-1")
+        .await
+        .unwrap()
+        .expect("session row should remain available for stop tracking");
+    assert_eq!(stopped_session.status, "stopping");
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/query",
+            alice_device,
+            &alice.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["conversations"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn delete_direct_conversation_hides_only_for_requesting_account() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let bob_device = DeviceId::new();
+    let conversation = social::ensure_direct_conversation(
+        &state.store,
+        &alice.account_id,
+        &alice.account_id,
+        &bob.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+    social::insert_message(
+        &state.store,
+        &conversation.conversation_id,
+        &bob.account_id,
+        "hello",
+        101,
+        None,
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let (status, _) = common::send(
+        &mut app,
+        authed_request(
+            Method::DELETE,
+            &format!("/v1/conversations/{}", conversation.conversation_id),
+            alice_device,
+            &alice.account_id,
+            Body::empty(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/query",
+            alice_device,
+            &alice.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["conversations"].as_array().unwrap().is_empty());
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/query",
+            bob_device,
+            &bob.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["conversations"][0]["conversation_id"],
+        conversation.conversation_id
+    );
 }
 
 #[tokio::test]
