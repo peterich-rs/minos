@@ -48,6 +48,16 @@ Future<AgentProfile> ensureServerAgentProfile(
   final remoteAgents = await repository.listAgents();
   for (final agent in remoteAgents.agents) {
     if (agent.agentId == profile.agentId) {
+      if (!_remoteAgentMatchesProfile(agent, profile)) {
+        await repository.updateAgent(
+          agentId: profile.agentId,
+          name: profile.name,
+          description: profile.description,
+          runtimeAgent: profile.runtimeAgent.name,
+          model: profile.model,
+          workspacePath: profile.workspacePath,
+        );
+      }
       return profile;
     }
   }
@@ -57,6 +67,7 @@ Future<AgentProfile> ensureServerAgentProfile(
     description: profile.description,
     runtimeAgent: profile.runtimeAgent.name,
     model: profile.model,
+    workspacePath: profile.workspacePath,
   );
   if (registered.agentId == profile.agentId) {
     return profile;
@@ -65,3 +76,14 @@ Future<AgentProfile> ensureServerAgentProfile(
       .read(agentProfilesControllerProvider.notifier)
       .syncServerAgentId(profileId: profile.id, agentId: registered.agentId);
 }
+
+bool _remoteAgentMatchesProfile(AgentSummary agent, AgentProfile profile) {
+  return agent.name == profile.name &&
+      agent.description == profile.description &&
+      agent.runtimeAgent == profile.runtimeAgent.name &&
+      agent.model == profile.model &&
+      _trimmedOrEmpty(agent.workspacePath) ==
+          _trimmedOrEmpty(profile.workspacePath);
+}
+
+String _trimmedOrEmpty(String? value) => value?.trim() ?? '';

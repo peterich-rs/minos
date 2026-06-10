@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 632113007;
+  int get rustContentHash => -1980747072;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -290,6 +290,7 @@ abstract class RustLibApi extends BaseApi {
     required String description,
     required String runtimeAgent,
     required String model,
+    String? workspacePath,
   });
 
   Future<FriendRequestSummary> crateApiMinosMobileClientRejectFriendRequest({
@@ -362,6 +363,16 @@ abstract class RustLibApi extends BaseApi {
 
   Stream<UiEventFrame> crateApiMinosMobileClientSubscribeUiEvents({
     required MobileClient that,
+  });
+
+  Future<AgentSummary> crateApiMinosMobileClientUpdateAgent({
+    required MobileClient that,
+    required String agentId,
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
   });
 
   Future<void> crateApiMinosMobileClientUpdateProject({
@@ -1983,6 +1994,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String description,
     required String runtimeAgent,
     required String model,
+    String? workspacePath,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1996,6 +2008,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(description, serializer);
           sse_encode_String(runtimeAgent, serializer);
           sse_encode_String(model, serializer);
+          sse_encode_opt_String(workspacePath, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2008,7 +2021,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_minos_error,
         ),
         constMeta: kCrateApiMinosMobileClientRegisterAgentConstMeta,
-        argValues: [that, name, description, runtimeAgent, model],
+        argValues: [
+          that,
+          name,
+          description,
+          runtimeAgent,
+          model,
+          workspacePath,
+        ],
         apiImpl: this,
       ),
     );
@@ -2017,7 +2037,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiMinosMobileClientRegisterAgentConstMeta =>
       const TaskConstMeta(
         debugName: "MobileClient_register_agent",
-        argNames: ["that", "name", "description", "runtimeAgent", "model"],
+        argNames: [
+          "that",
+          "name",
+          "description",
+          "runtimeAgent",
+          "model",
+          "workspacePath",
+        ],
       );
 
   @override
@@ -2579,6 +2606,70 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<AgentSummary> crateApiMinosMobileClientUpdateAgent({
+    required MobileClient that,
+    required String agentId,
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+            that,
+            serializer,
+          );
+          sse_encode_String(agentId, serializer);
+          sse_encode_String(name, serializer);
+          sse_encode_String(description, serializer);
+          sse_encode_String(runtimeAgent, serializer);
+          sse_encode_String(model, serializer);
+          sse_encode_opt_String(workspacePath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 58,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_agent_summary,
+          decodeErrorData: sse_decode_minos_error,
+        ),
+        constMeta: kCrateApiMinosMobileClientUpdateAgentConstMeta,
+        argValues: [
+          that,
+          agentId,
+          name,
+          description,
+          runtimeAgent,
+          model,
+          workspacePath,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosMobileClientUpdateAgentConstMeta =>
+      const TaskConstMeta(
+        debugName: "MobileClient_update_agent",
+        argNames: [
+          "that",
+          "agentId",
+          "name",
+          "description",
+          "runtimeAgent",
+          "model",
+          "workspacePath",
+        ],
+      );
+
+  @override
   Future<void> crateApiMinosMobileClientUpdateProject({
     required MobileClient that,
     required UpdateProjectRequest req,
@@ -2595,7 +2686,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 58,
+            funcId: 59,
             port: port_,
           );
         },
@@ -2638,7 +2729,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 59,
+            funcId: 60,
             port: port_,
           );
         },
@@ -2665,7 +2756,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 60)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 61)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2694,7 +2785,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_log_level(level, serializer);
           sse_encode_String(target, serializer);
           sse_encode_String(message, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 61)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 62)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2722,7 +2813,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 62,
+            funcId: 63,
             port: port_,
           );
         },
@@ -2751,7 +2842,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_error_kind(kind, serializer);
           sse_encode_lang(lang, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 63)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 64)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2775,7 +2866,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 64)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_log_record,
@@ -2797,7 +2888,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_request_trace_record,
@@ -2825,7 +2916,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 66,
+              funcId: 67,
               port: port_,
             );
           },
@@ -2860,7 +2951,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 67,
+              funcId: 68,
               port: port_,
             );
           },
@@ -3014,8 +3105,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AgentSummary dco_decode_agent_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return AgentSummary(
       agentId: dco_decode_String(arr[0]),
       ownerAccountId: dco_decode_String(arr[1]),
@@ -3023,8 +3114,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       description: dco_decode_String(arr[3]),
       runtimeAgent: dco_decode_String(arr[4]),
       model: dco_decode_String(arr[5]),
-      createdAtMs: dco_decode_i_64(arr[6]),
-      updatedAtMs: dco_decode_i_64(arr[7]),
+      workspacePath: dco_decode_opt_String(arr[6]),
+      createdAtMs: dco_decode_i_64(arr[7]),
+      updatedAtMs: dco_decode_i_64(arr[8]),
     );
   }
 
@@ -4430,6 +4522,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_description = sse_decode_String(deserializer);
     var var_runtimeAgent = sse_decode_String(deserializer);
     var var_model = sse_decode_String(deserializer);
+    var var_workspacePath = sse_decode_opt_String(deserializer);
     var var_createdAtMs = sse_decode_i_64(deserializer);
     var var_updatedAtMs = sse_decode_i_64(deserializer);
     return AgentSummary(
@@ -4439,6 +4532,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       description: var_description,
       runtimeAgent: var_runtimeAgent,
       model: var_model,
+      workspacePath: var_workspacePath,
       createdAtMs: var_createdAtMs,
       updatedAtMs: var_updatedAtMs,
     );
@@ -6205,6 +6299,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.description, serializer);
     sse_encode_String(self.runtimeAgent, serializer);
     sse_encode_String(self.model, serializer);
+    sse_encode_opt_String(self.workspacePath, serializer);
     sse_encode_i_64(self.createdAtMs, serializer);
     sse_encode_i_64(self.updatedAtMs, serializer);
   }
@@ -7897,12 +7992,14 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     required String description,
     required String runtimeAgent,
     required String model,
+    String? workspacePath,
   }) => RustLib.instance.api.crateApiMinosMobileClientRegisterAgent(
     that: this,
     name: name,
     description: description,
     runtimeAgent: runtimeAgent,
     model: model,
+    workspacePath: workspacePath,
   );
 
   Future<FriendRequestSummary> rejectFriendRequest({
@@ -8007,6 +8104,23 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   /// subscribers lose old frames rather than blocking the producer.
   Stream<UiEventFrame> subscribeUiEvents() => RustLib.instance.api
       .crateApiMinosMobileClientSubscribeUiEvents(that: this);
+
+  Future<AgentSummary> updateAgent({
+    required String agentId,
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
+  }) => RustLib.instance.api.crateApiMinosMobileClientUpdateAgent(
+    that: this,
+    agentId: agentId,
+    name: name,
+    description: description,
+    runtimeAgent: runtimeAgent,
+    model: model,
+    workspacePath: workspacePath,
+  );
 
   /// Update a project's name.
   Future<void> updateProject({required UpdateProjectRequest req}) => RustLib

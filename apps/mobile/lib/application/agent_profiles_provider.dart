@@ -52,6 +52,7 @@ class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
       environmentVariables: draft.environmentVariables,
       hostDeviceId: draft.hostDeviceId?.trim(),
       hostDisplayName: draft.hostDisplayName?.trim(),
+      workspacePath: draft.workspacePath?.trim(),
       createdAtMs: now,
       updatedAtMs: now,
     ).copyWithDraft(draft, updatedAtMs: now);

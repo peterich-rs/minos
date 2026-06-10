@@ -60,7 +60,7 @@ final class AgentEditorDraftControllerProvider
 }
 
 String _$agentEditorDraftControllerHash() =>
-    r'c0bcf0c162bd9ed23898d94b551e828bb3fd099a';
+    r'ddac0f39fc221ab5996d12c4f98151fce2ca6189';
 
 final class AgentEditorDraftControllerFamily extends $Family
     with

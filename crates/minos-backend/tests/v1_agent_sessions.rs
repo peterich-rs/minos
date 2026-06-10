@@ -347,6 +347,7 @@ async fn start_session_dispatches_host_command_and_persists_session() {
         "assistant",
         "codex",
         "gpt-5.4",
+        None,
         1_001,
     )
     .await
@@ -486,6 +487,7 @@ async fn send_input_dispatches_to_existing_session_and_appends_turn() {
         "assistant",
         "codex",
         "gpt-5.4",
+        None,
         1_001,
     )
     .await

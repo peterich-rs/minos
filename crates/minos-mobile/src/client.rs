@@ -32,7 +32,8 @@ use minos_protocol::{
     ListClisResponse, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
     MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
     RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
-    SendChatMessageRequest, SetMinosIdRequest, UserSummary, WriteHostSkillConfigResponse,
+    SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest, UserSummary,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -544,6 +545,7 @@ impl MobileClient {
         description: String,
         runtime_agent: String,
         model: String,
+        workspace_path: Option<String>,
     ) -> Result<AgentSummary, MinosError> {
         auth_http_call!(self, |http, access| {
             http.register_agent(
@@ -553,6 +555,31 @@ impl MobileClient {
                     description,
                     runtime_agent,
                     model,
+                    workspace_path,
+                },
+            )
+        })
+    }
+
+    pub async fn update_agent(
+        &self,
+        agent_id: String,
+        name: String,
+        description: String,
+        runtime_agent: String,
+        model: String,
+        workspace_path: Option<String>,
+    ) -> Result<AgentSummary, MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.update_agent(
+                &access,
+                &agent_id,
+                UpdateAgentRequest {
+                    name,
+                    description,
+                    runtime_agent,
+                    model,
+                    workspace_path,
                 },
             )
         })

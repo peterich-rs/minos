@@ -37,6 +37,7 @@ class AgentProfileDraft {
     required this.environmentVariables,
     this.hostDeviceId,
     this.hostDisplayName,
+    this.workspacePath,
   });
 
   final String name;
@@ -47,6 +48,7 @@ class AgentProfileDraft {
   final List<AgentEnvironmentVariable> environmentVariables;
   final String? hostDeviceId;
   final String? hostDisplayName;
+  final String? workspacePath;
 
   AgentProfileDraft copyWith({
     String? name,
@@ -57,6 +59,7 @@ class AgentProfileDraft {
     List<AgentEnvironmentVariable>? environmentVariables,
     String? hostDeviceId,
     String? hostDisplayName,
+    String? workspacePath,
   }) {
     return AgentProfileDraft(
       name: name ?? this.name,
@@ -67,6 +70,7 @@ class AgentProfileDraft {
       environmentVariables: environmentVariables ?? this.environmentVariables,
       hostDeviceId: hostDeviceId ?? this.hostDeviceId,
       hostDisplayName: hostDisplayName ?? this.hostDisplayName,
+      workspacePath: workspacePath ?? this.workspacePath,
     );
   }
 
@@ -80,6 +84,7 @@ class AgentProfileDraft {
       environmentVariables: profile.environmentVariables,
       hostDeviceId: profile.hostDeviceId,
       hostDisplayName: profile.hostDisplayName,
+      workspacePath: profile.workspacePath,
     );
   }
 }
@@ -98,6 +103,7 @@ class AgentProfile {
     required this.updatedAtMs,
     this.hostDeviceId,
     this.hostDisplayName,
+    this.workspacePath,
   });
 
   final String id;
@@ -114,6 +120,7 @@ class AgentProfile {
   final List<AgentEnvironmentVariable> environmentVariables;
   final String? hostDeviceId;
   final String? hostDisplayName;
+  final String? workspacePath;
   final int createdAtMs;
   final int updatedAtMs;
 
@@ -128,6 +135,7 @@ class AgentProfile {
     List<AgentEnvironmentVariable>? environmentVariables,
     String? hostDeviceId,
     String? hostDisplayName,
+    String? workspacePath,
     int? createdAtMs,
     int? updatedAtMs,
   }) {
@@ -142,6 +150,7 @@ class AgentProfile {
       environmentVariables: environmentVariables ?? this.environmentVariables,
       hostDeviceId: hostDeviceId ?? this.hostDeviceId,
       hostDisplayName: hostDisplayName ?? this.hostDisplayName,
+      workspacePath: workspacePath ?? this.workspacePath,
       createdAtMs: createdAtMs ?? this.createdAtMs,
       updatedAtMs: updatedAtMs ?? this.updatedAtMs,
     );
@@ -164,6 +173,7 @@ class AgentProfile {
       ),
       hostDeviceId: _trimmedOrNull(draft.hostDeviceId),
       hostDisplayName: _trimmedOrNull(draft.hostDisplayName),
+      workspacePath: _trimmedOrNull(draft.workspacePath),
       createdAtMs: createdAtMs,
       updatedAtMs: updatedAtMs,
     );
@@ -183,6 +193,7 @@ class AgentProfile {
           .toList(),
       'hostDeviceId': hostDeviceId,
       'hostDisplayName': hostDisplayName,
+      'workspacePath': workspacePath,
       'createdAtMs': createdAtMs,
       'updatedAtMs': updatedAtMs,
     };
@@ -212,6 +223,7 @@ class AgentProfile {
               .toList(),
       hostDeviceId: _trimmedOrNull(json['hostDeviceId'] as String?),
       hostDisplayName: _trimmedOrNull(json['hostDisplayName'] as String?),
+      workspacePath: _trimmedOrNull(json['workspacePath'] as String?),
       createdAtMs: (json['createdAtMs'] as num?)?.toInt() ?? 0,
       updatedAtMs: (json['updatedAtMs'] as num?)?.toInt() ?? 0,
     );

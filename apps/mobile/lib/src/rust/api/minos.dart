@@ -235,6 +235,7 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String description,
     required String runtimeAgent,
     required String model,
+    String? workspacePath,
   });
 
   Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
@@ -297,6 +298,15 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// subscribers lose old frames rather than blocking the producer.
   Stream<UiEventFrame> subscribeUiEvents();
 
+  Future<AgentSummary> updateAgent({
+    required String agentId,
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
+  });
+
   /// Update a project's name.
   Future<void> updateProject({required UpdateProjectRequest req});
 
@@ -354,6 +364,7 @@ class AgentSummary {
   final String description;
   final String runtimeAgent;
   final String model;
+  final String? workspacePath;
   final PlatformInt64 createdAtMs;
   final PlatformInt64 updatedAtMs;
 
@@ -364,6 +375,7 @@ class AgentSummary {
     required this.description,
     required this.runtimeAgent,
     required this.model,
+    this.workspacePath,
     required this.createdAtMs,
     required this.updatedAtMs,
   });
@@ -376,6 +388,7 @@ class AgentSummary {
       description.hashCode ^
       runtimeAgent.hashCode ^
       model.hashCode ^
+      workspacePath.hashCode ^
       createdAtMs.hashCode ^
       updatedAtMs.hashCode;
 
@@ -390,6 +403,7 @@ class AgentSummary {
           description == other.description &&
           runtimeAgent == other.runtimeAgent &&
           model == other.model &&
+          workspacePath == other.workspacePath &&
           createdAtMs == other.createdAtMs &&
           updatedAtMs == other.updatedAtMs;
 }

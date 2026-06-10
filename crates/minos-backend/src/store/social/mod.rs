@@ -106,6 +106,7 @@ pub struct AgentRow {
     pub description: String,
     pub runtime_agent: String,
     pub model: String,
+    pub workspace_path: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
@@ -182,7 +183,7 @@ pub use conversation_messages::{
 pub use agents::{
     add_agent_to_conversation, agents_by_ids, delete_agent, get_agent, insert_agent_message,
     insert_agent_message_with_session, is_agent_in_conversation, list_agents_for_owner,
-    list_conversation_agents, register_agent, remove_agent_from_conversation,
+    list_conversation_agents, register_agent, remove_agent_from_conversation, update_agent,
 };
 
 // ─── Tests ────────────────────────────────────────────────────────────

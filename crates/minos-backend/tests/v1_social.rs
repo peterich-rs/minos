@@ -90,6 +90,71 @@ fn seed_live_host_session(
     outbox_rx
 }
 
+#[tokio::test]
+async fn register_and_update_agent_persist_workspace_path() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/agents",
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "name": "Codex",
+                    "description": "Assistant",
+                    "runtime_agent": "codex",
+                    "model": "gpt-5",
+                    "workspace_path": "~/develop/minos"
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["workspace_path"], "~/develop/minos");
+    let agent_id = body["agent_id"].as_str().unwrap().to_string();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!("/v1/agents/{agent_id}/update"),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "name": "Codex Writer",
+                    "description": "Assistant",
+                    "runtime_agent": "codex",
+                    "model": "gpt-5.1",
+                    "workspace_path": "/Users/example/minos"
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["workspace_path"], "/Users/example/minos");
+
+    let row = social::get_agent(&state.store, &agent_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.name, "Codex Writer");
+    assert_eq!(row.workspace_path.as_deref(), Some("/Users/example/minos"));
+}
+
 fn spawn_agent_dispatch_responder(
     registry: Arc<minos_backend::session::SessionRegistry>,
     pool: sqlx::SqlitePool,
@@ -141,6 +206,7 @@ async fn assert_agent_dispatch_host_command(
     expected_response_session_id: &str,
     expected_text: &str,
     expected_conversation_id: &str,
+    expected_workspace: &str,
 ) {
     let row = host_commands::get(pool, &format!("cmd-agent-dispatch-{origin_message_id}"))
         .await
@@ -159,7 +225,10 @@ async fn assert_agent_dispatch_host_command(
     let mut expected_params = serde_json::Map::from_iter([
         ("agent".to_string(), serde_json::json!("codex")),
         ("text".to_string(), serde_json::json!(expected_text)),
-        ("workspace".to_string(), serde_json::json!("")),
+        (
+            "workspace".to_string(),
+            serde_json::json!(expected_workspace),
+        ),
         (
             "conversation_id".to_string(),
             serde_json::json!(expected_conversation_id),
@@ -456,6 +525,7 @@ async fn delete_conversation_stops_running_agent_session_and_hides_for_caller() 
         "Assistant",
         "codex",
         "gpt-5",
+        None,
         100,
     )
     .await
@@ -642,6 +712,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
         "Assistant",
         "codex",
         "gpt-5",
+        Some("/Users/example/minos"),
         100,
     )
     .await
@@ -693,6 +764,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     assert_eq!(dispatch.agent, AgentName::Codex);
     assert_eq!(dispatch.session_id, None);
     assert_eq!(dispatch.text, "please help");
+    assert_eq!(dispatch.workspace, "/Users/example/minos");
     assert_eq!(
         dispatch.conversation_id.as_deref(),
         Some(conversation.conversation_id.as_str())
@@ -716,6 +788,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
         "sess-group-1",
         "please help",
         &conversation.conversation_id,
+        "/Users/example/minos",
     )
     .await;
     assert_eq!(
@@ -844,6 +917,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     let followup_message_id = body["message_id"].as_str().unwrap().to_string();
     assert_eq!(dispatch.session_id.as_deref(), Some("sess-group-1"));
     assert_eq!(dispatch.text, "one more thing");
+    assert_eq!(dispatch.workspace, "/Users/example/minos");
     assert_eq!(
         dispatch.origin_message_id.as_deref(),
         Some(followup_message_id.as_str())
@@ -863,6 +937,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
         "sess-group-1",
         "one more thing",
         &conversation.conversation_id,
+        "/Users/example/minos",
     )
     .await;
 }
@@ -941,6 +1016,7 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
         "Assistant",
         "codex",
         "gpt-5",
+        None,
         100,
     )
     .await
@@ -1074,6 +1150,7 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
         "sess-direct-1",
         "hello agent",
         &conversation.conversation_id,
+        "",
     )
     .await;
     assert_agent_dispatch_host_command(
@@ -1084,6 +1161,7 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
         "sess-direct-1",
         "follow up",
         &conversation.conversation_id,
+        "",
     )
     .await;
 
@@ -1144,6 +1222,7 @@ async fn group_reply_to_agent_message_reuses_session() {
         "Assistant",
         "codex",
         "gpt-5",
+        None,
         100,
     )
     .await

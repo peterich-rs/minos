@@ -62,6 +62,16 @@ abstract class MinosCoreProtocol {
     required String description,
     required String runtimeAgent,
     required String model,
+    String? workspacePath,
+  });
+
+  Future<AgentSummary> updateAgent({
+    required String agentId,
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
   });
 
   Future<ListAgentsResponse> listAgents();

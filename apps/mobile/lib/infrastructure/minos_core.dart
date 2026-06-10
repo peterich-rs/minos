@@ -178,11 +178,30 @@ class MinosCore implements MinosCoreProtocol {
     required String description,
     required String runtimeAgent,
     required String model,
+    String? workspacePath,
   }) => _client.registerAgent(
     name: name,
     description: description,
     runtimeAgent: runtimeAgent,
     model: model,
+    workspacePath: workspacePath,
+  );
+
+  @override
+  Future<AgentSummary> updateAgent({
+    required String agentId,
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
+  }) => _client.updateAgent(
+    agentId: agentId,
+    name: name,
+    description: description,
+    runtimeAgent: runtimeAgent,
+    model: model,
+    workspacePath: workspacePath,
   );
 
   @override

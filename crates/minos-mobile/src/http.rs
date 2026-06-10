@@ -30,7 +30,8 @@ use minos_protocol::{
     ReadThreadResponse, RealtimeWsTicketRequest, RealtimeWsTicketResponse, RefreshRequest,
     RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
     SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
-    UpdateProjectRequest, WriteHostSkillConfigCommandRequest, WriteHostSkillConfigResponse,
+    UpdateAgentRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -956,6 +957,34 @@ impl MobileHttpClient {
         let path = "/v1/agents";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(Method::POST.as_str(), path, None, Some(req.name.clone()));
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: AgentSummary = decode_success_json(resp, "AgentSummary").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(body.agent_id.clone()),
+                None,
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn update_agent(
+        &self,
+        access_token: &str,
+        agent_id: &str,
+        req: UpdateAgentRequest,
+    ) -> Result<AgentSummary, MinosError> {
+        let path = format!("/v1/agents/{agent_id}/update");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(Method::POST.as_str(), &path, None, Some(req.name.clone()));
         let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();

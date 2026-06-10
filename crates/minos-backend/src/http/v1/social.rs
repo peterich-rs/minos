@@ -20,7 +20,7 @@ use minos_protocol::{
     AddAgentToGroupRequest, AgentDispatchRequest, AgentDispatchResponse, AgentSummary,
     ChatMessageSummary, ConversationAgentMembersResponse, Envelope, EventKind, ListAgentsResponse,
     RegisterAgentRequest, RemoveAgentFromGroupRequest, SendAgentMessageRequest, SenderType,
-    UserSummary,
+    UpdateAgentRequest, UserSummary,
 };
 
 pub fn router() -> Router<BackendState> {
@@ -28,6 +28,7 @@ pub fn router() -> Router<BackendState> {
         // ─── Agent routes ───
         .route("/agents", post(register_agent))
         .route("/agents/query", post(list_agents))
+        .route("/agents/:agent_id/update", post(update_agent_handler))
         .route("/agents/:agent_id/delete", post(delete_agent_handler))
         .route(
             "/conversations/:conversation_id/agents",
@@ -249,7 +250,7 @@ async fn forward_agent_dispatch(
         agent: parse_runtime_agent_name(&agent.runtime_agent)?,
         session_id,
         text: text.to_string(),
-        workspace: String::new(),
+        workspace: agent.workspace_path.clone().unwrap_or_default(),
         approval_policy: None,
         sandbox_policy: None,
         conversation_id: Some(conversation_id.to_string()),
@@ -334,6 +335,16 @@ fn strip_agent_mention_once(text: &str, agent_id: &str) -> String {
     } else {
         normalised
     }
+}
+
+fn normalize_workspace_path(path: Option<&str>) -> Option<String> {
+    path.map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn is_valid_workspace_path(path: &str) -> bool {
+    path.starts_with('/') || path.starts_with("~/")
 }
 
 fn agent_error_from_backend_error(error: &crate::error::BackendError) -> (&'static str, String) {
@@ -654,6 +665,15 @@ async fn register_agent(
     if !valid_runtimes.contains(&req.runtime_agent.as_str()) {
         return Err(err("bad_request", "invalid runtime_agent"));
     }
+    let workspace_path = normalize_workspace_path(req.workspace_path.as_deref());
+    if let Some(path) = workspace_path.as_deref() {
+        if !is_valid_workspace_path(path) {
+            return Err(err(
+                "bad_request",
+                "workspace_path must be an absolute host path or ~/ path",
+            ));
+        }
+    }
     let row = crate::store::social::register_agent(
         &state.store,
         &account_id,
@@ -661,6 +681,7 @@ async fn register_agent(
         req.description.trim(),
         &req.runtime_agent,
         req.model.trim(),
+        workspace_path.as_deref(),
         chrono::Utc::now().timestamp_millis(),
     )
     .await
@@ -678,6 +699,47 @@ async fn list_agents(
         .map_err(|e| err("internal", e.to_string()))?;
     let agents = rows.iter().map(agent_row_to_summary).collect();
     Ok(Json(ListAgentsResponse { agents }))
+}
+
+async fn update_agent_handler(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<String>,
+    Json(req): Json<UpdateAgentRequest>,
+) -> Result<Json<AgentSummary>, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = require_account_id(&state, &headers).await?;
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(err("bad_request", "agent name is required"));
+    }
+    let valid_runtimes = ["codex", "claude", "gemini"];
+    if !valid_runtimes.contains(&req.runtime_agent.as_str()) {
+        return Err(err("bad_request", "invalid runtime_agent"));
+    }
+    let workspace_path = normalize_workspace_path(req.workspace_path.as_deref());
+    if let Some(path) = workspace_path.as_deref() {
+        if !is_valid_workspace_path(path) {
+            return Err(err(
+                "bad_request",
+                "workspace_path must be an absolute host path or ~/ path",
+            ));
+        }
+    }
+    let row = crate::store::social::update_agent(
+        &state.store,
+        &agent_id,
+        &account_id,
+        name,
+        req.description.trim(),
+        &req.runtime_agent,
+        req.model.trim(),
+        workspace_path.as_deref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?
+    .ok_or_else(|| err("not_found", "agent not found or not owned by you"))?;
+    Ok(Json(agent_row_to_summary(&row)))
 }
 
 async fn delete_agent_handler(
@@ -953,6 +1015,7 @@ fn agent_row_to_summary(row: &crate::store::social::AgentRow) -> AgentSummary {
         description: row.description.clone(),
         runtime_agent: row.runtime_agent.clone(),
         model: row.model.clone(),
+        workspace_path: row.workspace_path.clone(),
         created_at_ms: row.created_at_ms,
         updated_at_ms: row.updated_at_ms,
     }

@@ -168,12 +168,32 @@ class SocialRepository {
     required String description,
     required String runtimeAgent,
     required String model,
+    String? workspacePath,
   }) {
     return _core.registerAgent(
       name: name,
       description: description,
       runtimeAgent: runtimeAgent,
       model: model,
+      workspacePath: workspacePath,
+    );
+  }
+
+  Future<AgentSummary> updateAgent({
+    required String agentId,
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
+  }) {
+    return _core.updateAgent(
+      agentId: agentId,
+      name: name,
+      description: description,
+      runtimeAgent: runtimeAgent,
+      model: model,
+      workspacePath: workspacePath,
     );
   }
 

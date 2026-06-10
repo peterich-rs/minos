@@ -63,6 +63,7 @@ AgentProfile _resolveProfile(
     description: summary.description,
     runtimeAgent: _runtimeAgentFromString(summary.runtimeAgent),
     model: summary.model,
+    workspacePath: summary.workspacePath,
     reasoningEffort: AgentReasoningEffort.medium,
     environmentVariables: const <AgentEnvironmentVariable>[],
     createdAtMs: summary.createdAtMs.toInt(),

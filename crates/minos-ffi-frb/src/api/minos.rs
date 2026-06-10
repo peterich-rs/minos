@@ -298,9 +298,31 @@ impl MobileClient {
         description: String,
         runtime_agent: String,
         model: String,
+        workspace_path: Option<String>,
     ) -> Result<AgentSummary, MinosError> {
         self.0
-            .register_agent(name, description, runtime_agent, model)
+            .register_agent(name, description, runtime_agent, model, workspace_path)
+            .await
+    }
+
+    pub async fn update_agent(
+        &self,
+        agent_id: String,
+        name: String,
+        description: String,
+        runtime_agent: String,
+        model: String,
+        workspace_path: Option<String>,
+    ) -> Result<AgentSummary, MinosError> {
+        self.0
+            .update_agent(
+                agent_id,
+                name,
+                description,
+                runtime_agent,
+                model,
+                workspace_path,
+            )
             .await
     }
 
@@ -1352,6 +1374,7 @@ pub struct _AgentSummary {
     pub description: String,
     pub runtime_agent: String,
     pub model: String,
+    pub workspace_path: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }

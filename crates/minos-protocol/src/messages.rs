@@ -305,6 +305,22 @@ pub struct RegisterAgentRequest {
     pub runtime_agent: String,
     #[serde(default)]
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+}
+
+/// Request to update an existing agent owned by the caller.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpdateAgentRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub runtime_agent: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
 }
 
 /// Summary of a registered agent.
@@ -317,6 +333,8 @@ pub struct AgentSummary {
     pub description: String,
     pub runtime_agent: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }

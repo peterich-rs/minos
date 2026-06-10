@@ -26,6 +26,9 @@ class AgentEditorDraftController extends _$AgentEditorDraftController {
     required String? hostDisplayName,
   }) {
     final draft = state.draft;
+    final workspacePath = hostDeviceId == draft.hostDeviceId
+        ? draft.workspacePath
+        : null;
     state = state.copyWith(
       draft: AgentProfileDraft(
         name: draft.name,
@@ -36,6 +39,24 @@ class AgentEditorDraftController extends _$AgentEditorDraftController {
         environmentVariables: draft.environmentVariables,
         hostDeviceId: hostDeviceId,
         hostDisplayName: hostDisplayName,
+        workspacePath: workspacePath,
+      ),
+    );
+  }
+
+  void setWorkspacePath(String? workspacePath) {
+    final draft = state.draft;
+    state = state.copyWith(
+      draft: AgentProfileDraft(
+        name: draft.name,
+        description: draft.description,
+        runtimeAgent: draft.runtimeAgent,
+        model: draft.model,
+        reasoningEffort: draft.reasoningEffort,
+        environmentVariables: draft.environmentVariables,
+        hostDeviceId: draft.hostDeviceId,
+        hostDisplayName: draft.hostDisplayName,
+        workspacePath: workspacePath,
       ),
     );
   }

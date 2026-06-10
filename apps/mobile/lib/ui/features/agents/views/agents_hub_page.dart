@@ -515,6 +515,13 @@ class AgentProfilePage extends ConsumerWidget {
                   label: 'Computer',
                   value: profile.hostDisplayName ?? '跟随当前 runtime',
                 ),
+                const Divider(height: 1),
+                _DetailRow(
+                  label: 'Workspace',
+                  value: profile.workspacePath?.trim().isEmpty ?? true
+                      ? '默认工作区'
+                      : profile.workspacePath!,
+                ),
               ],
             ),
           ),
@@ -530,6 +537,8 @@ class AgentProfilePage extends ConsumerWidget {
                   _BadgeChip(label: _runtimeLabel(profile.runtimeAgent)),
                   _BadgeChip(label: profile.model),
                   _BadgeChip(label: _reasoningLabel(profile.reasoningEffort)),
+                  if (profile.workspacePath?.trim().isNotEmpty ?? false)
+                    _BadgeChip(label: profile.workspacePath!.trim()),
                 ],
               ),
             ),
@@ -637,6 +646,7 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
   late final AgentProfileDraft _initialDraft;
   late final TextEditingController _nameController;
   late final TextEditingController _descriptionController;
+  late final TextEditingController _workspacePathController;
 
   @override
   void initState() {
@@ -650,6 +660,10 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
       text: _initialDraft.description,
     );
     _descriptionController.addListener(_handleDescriptionChanged);
+    _workspacePathController = TextEditingController(
+      text: _initialDraft.workspacePath ?? '',
+    );
+    _workspacePathController.addListener(_handleWorkspacePathChanged);
   }
 
   void _handleNameChanged() {
@@ -664,12 +678,21 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
         .updateDescription(_descriptionController.text);
   }
 
+  void _handleWorkspacePathChanged() {
+    final path = _workspacePathController.text.trim();
+    ref
+        .read(agentEditorDraftControllerProvider(_initialDraft).notifier)
+        .setWorkspacePath(path.isEmpty ? null : path);
+  }
+
   @override
   void dispose() {
     _nameController.removeListener(_handleNameChanged);
     _descriptionController.removeListener(_handleDescriptionChanged);
+    _workspacePathController.removeListener(_handleWorkspacePathChanged);
     _nameController.dispose();
     _descriptionController.dispose();
+    _workspacePathController.dispose();
     super.dispose();
   }
 
@@ -692,6 +715,7 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
       environmentVariables: const <AgentEnvironmentVariable>[],
       hostDeviceId: host?.hostDeviceId,
       hostDisplayName: host?.hostDisplayName,
+      workspacePath: null,
     );
   }
 
@@ -800,6 +824,16 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
           hostDeviceId: selected,
           hostDisplayName: selectedHost?.hostDisplayName,
         );
+    final nextDraft = ref
+        .read(agentEditorDraftControllerProvider(_initialDraft))
+        .draft;
+    if (_workspacePathController.text != (nextDraft.workspacePath ?? '')) {
+      _workspacePathController.text = nextDraft.workspacePath ?? '';
+    }
+  }
+
+  void _pickWorkspace(HostWorkspaceSummary workspace) {
+    _workspacePathController.text = workspace.path;
   }
 
   Future<void> _pickRuntime(List<AgentName> runtimeOptions) async {
@@ -896,6 +930,9 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
     final effectiveHostId = draft.hostDeviceId ?? activeHostId;
     final effectiveHostLabel =
         _hostLabelForId(hosts, effectiveHostId) ?? _hostSelectionLabel(draft);
+    final workspacesAsync = effectiveHostId == null
+        ? null
+        : ref.watch(hostWorkspacesProvider(effectiveHostId));
     final runtimeOptions = _runtimeOptions(widget.descriptors);
     final models = _modelOptions(draft.runtimeAgent);
     if (!models.contains(draft.model)) {
@@ -1020,6 +1057,18 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
                             label: 'Model',
                             value: draft.model,
                             onTap: () => _pickModel(models),
+                          ),
+                          const Divider(height: 1),
+                          _EditorWorkspacePathPicker(
+                            controller: _workspacePathController,
+                            workspacesAsync: workspacesAsync,
+                            selectedPath: draft.workspacePath,
+                            onPick: _pickWorkspace,
+                            onRefresh: effectiveHostId == null
+                                ? null
+                                : () => ref.invalidate(
+                                    hostWorkspacesProvider(effectiveHostId),
+                                  ),
                           ),
                         ],
                       ),
@@ -1292,6 +1341,123 @@ class _PickerOption<T> {
   final T value;
   final String title;
   final String? subtitle;
+}
+
+class _EditorWorkspacePathPicker extends StatelessWidget {
+  const _EditorWorkspacePathPicker({
+    required this.controller,
+    required this.workspacesAsync,
+    required this.selectedPath,
+    required this.onPick,
+    required this.onRefresh,
+  });
+
+  final TextEditingController controller;
+  final AsyncValue<ListHostWorkspacesResponse>? workspacesAsync;
+  final String? selectedPath;
+  final ValueChanged<HostWorkspaceSummary> onPick;
+  final VoidCallback? onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final asyncValue = workspacesAsync;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(child: Text('工作路径', style: theme.textTheme.labelLarge)),
+              if (onRefresh != null)
+                IconButton(
+                  tooltip: '刷新文件夹',
+                  onPressed: onRefresh,
+                  icon: const Icon(LucideIcons.refreshCw, size: 18),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ShadInput(
+            controller: controller,
+            placeholder: const Text(
+              '/Users/you/develop/project 或 ~/develop/project',
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          ),
+          const SizedBox(height: 12),
+          if (asyncValue == null)
+            Text(
+              '先选择运行设备。',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            asyncValue.when(
+              loading: () => const LinearProgressIndicator(minHeight: 2),
+              error: (error, _) => Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: onRefresh,
+                  icon: const Icon(LucideIcons.refreshCw, size: 16),
+                  label: const Text('重新加载 Host 文件夹'),
+                ),
+              ),
+              data: (response) {
+                if (response.workspaces.isEmpty) {
+                  return Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: onRefresh,
+                      icon: const Icon(LucideIcons.folderOpen, size: 16),
+                      label: const Text('Host 文件夹为空'),
+                    ),
+                  );
+                }
+                return ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: response.workspaces.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final workspace = response.workspaces[index];
+                      final selected = workspace.path == selectedPath;
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          workspace.isGitRepo
+                              ? LucideIcons.gitBranch
+                              : LucideIcons.folder,
+                          size: 18,
+                        ),
+                        title: Text(
+                          workspace.displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          workspace.path,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: selected
+                            ? const Icon(CupertinoIcons.check_mark, size: 18)
+                            : null,
+                        onTap: () => onPick(workspace),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _EditorHostSkillsPreview extends ConsumerWidget {
@@ -2134,6 +2300,8 @@ class _ProfileHero extends StatelessWidget {
                     _BadgeChip(label: profile.model),
                     if (profile.hostDisplayName != null)
                       _BadgeChip(label: profile.hostDisplayName!),
+                    if (profile.workspacePath?.trim().isNotEmpty ?? false)
+                      _BadgeChip(label: profile.workspacePath!.trim()),
                   ],
                 ),
               ],
@@ -2475,17 +2643,24 @@ class _BadgeChip extends StatelessWidget {
         (isDark
             ? theme.colorScheme.surfaceContainerHighest
             : theme.colorScheme.surfaceContainerHigh);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(6),
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.sizeOf(context).width - 64,
       ),
-      child: Text(
-        label,
-        style: theme.textTheme.labelSmall?.copyWith(
-          fontWeight: FontWeight.w600,
-          color: theme.colorScheme.onSurfaceVariant,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelSmall?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
       ),
     );
