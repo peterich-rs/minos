@@ -27,6 +27,11 @@ class GroupMembersPage extends ConsumerWidget {
     final shadTheme = ShadTheme.of(context);
     final membersAsync = ref.watch(conversationMembersProvider(conversationId));
     final groupAgents = ref.watch(groupAgentsProvider(conversationId));
+    final myAccountId = ref
+        .watch(socialProfileProvider)
+        .asData
+        ?.value
+        .accountId;
 
     return Scaffold(
       backgroundColor: shadTheme.colorScheme.background,
@@ -53,7 +58,11 @@ class GroupMembersPage extends ConsumerWidget {
             ),
             error: (error, _) =>
                 Padding(padding: const .all(16), child: Text('加载失败: $error')),
-            data: (members) => _UserMembersList(members: members),
+            data: (members) => _UserMembersList(
+              conversationId: conversationId,
+              members: members,
+              myAccountId: myAccountId,
+            ),
           ),
           const SizedBox(height: 24),
           // --- Agent members section ---
@@ -278,13 +287,19 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _UserMembersList extends StatelessWidget {
-  const _UserMembersList({required this.members});
+class _UserMembersList extends ConsumerWidget {
+  const _UserMembersList({
+    required this.conversationId,
+    required this.members,
+    required this.myAccountId,
+  });
 
+  final String conversationId;
   final List<UserSummary> members;
+  final String? myAccountId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (members.isEmpty) {
       return const Padding(padding: .all(16), child: Text('暂无成员'));
     }
@@ -302,9 +317,61 @@ class _UserMembersList extends StatelessWidget {
             ),
             title: Text(member.displayName),
             subtitle: Text('@${member.minosId}'),
+            trailing: member.accountId == myAccountId
+                ? null
+                : IconButton(
+                    icon: const Icon(LucideIcons.userMinus, size: 18),
+                    tooltip: '移除成员',
+                    onPressed: () => _removeMember(context, ref, member),
+                  ),
           ),
       ],
     );
+  }
+
+  Future<void> _removeMember(
+    BuildContext context,
+    WidgetRef ref,
+    UserSummary member,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('移除成员？'),
+        content: Text('确定要将 ${member.displayName} 从群聊中移除吗？'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('移除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      await ref
+          .read(socialActionsProvider)
+          .removeGroupMember(
+            conversationId: conversationId,
+            memberAccountId: member.accountId,
+          );
+      ref.invalidate(conversationMembersProvider(conversationId));
+      ref.invalidate(conversationsProvider);
+    } catch (error) {
+      if (!context.mounted) return;
+      showLoggedErrorToast(
+        context,
+        target: 'group_members',
+        title: '移除成员失败',
+        error: error,
+      );
+    }
   }
 }
 

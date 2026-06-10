@@ -215,6 +215,15 @@ class MinosCore implements MinosCoreProtocol {
   );
 
   @override
+  Future<void> removeGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  }) => _client.removeGroupMember(
+    conversationId: conversationId,
+    memberAccountId: memberAccountId,
+  );
+
+  @override
   Future<ConversationMembersResponse> conversationMembers({
     required String conversationId,
   }) => _client.conversationMembers(conversationId: conversationId);

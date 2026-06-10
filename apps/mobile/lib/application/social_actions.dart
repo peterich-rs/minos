@@ -58,6 +58,16 @@ class SocialActions {
     );
   }
 
+  Future<void> removeGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  }) {
+    return _repository.removeGroupMember(
+      conversationId: conversationId,
+      memberAccountId: memberAccountId,
+    );
+  }
+
   Future<void> addAgentToConversation({
     required String conversationId,
     required String agentId,

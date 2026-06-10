@@ -5,12 +5,12 @@ import 'package:go_router/go_router.dart';
 import 'package:minos/application/agent_conversation_actions.dart';
 import 'package:minos/application/agent_editor_state.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
-import 'package:minos/application/auth_provider.dart';
 import 'package:minos/application/flutter_log.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/runtime_actions.dart';
+import 'package:minos/application/social_actions.dart';
+import 'package:minos/application/social_providers.dart';
 import 'package:minos/domain/agent_profile.dart';
-import 'package:minos/domain/auth_state.dart';
 import 'package:minos/src/rust/api/minos.dart'
     as minos_api
     show ConnectionState;
@@ -33,7 +33,6 @@ class AgentsHubTab extends ConsumerWidget {
     final hosts = pairedHosts.asData?.value ?? const <HostSummaryDto>[];
     final activeHostId = ref.watch(activeMacProvider).asData?.value;
     final connection = ref.watch(connectionStateProvider).asData?.value;
-    final authState = ref.watch(authControllerProvider);
 
     return SafeArea(
       bottom: false,
@@ -41,6 +40,7 @@ class AgentsHubTab extends ConsumerWidget {
         onRefresh: () async {
           try {
             await ref.read(pairedMacsProvider.notifier).refresh();
+            await ref.read(friendsProvider.notifier).refresh();
             ref.invalidate(runtimeAgentDescriptorsProvider);
             await ref.read(runtimeAgentDescriptorsProvider.future);
           } catch (error) {
@@ -58,7 +58,7 @@ class AgentsHubTab extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    'Members',
+                    '伙伴',
                     style: Theme.of(context).textTheme.headlineLarge?.copyWith(
                       fontWeight: FontWeight.w800,
                       letterSpacing: 0,
@@ -67,7 +67,7 @@ class AgentsHubTab extends ConsumerWidget {
                   const SizedBox(height: 4),
                   Text(
                     preferredProfile == null
-                        ? '像聊天成员一样管理设备、Agent 和你自己。'
+                        ? '管理设备、Agent 和好友。'
                         : '默认 Agent：${preferredProfile.name}',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -132,7 +132,7 @@ class AgentsHubTab extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
-            _HumansSection(authState: authState),
+            const _HumansSection(),
           ],
         ),
       ),
@@ -427,13 +427,6 @@ String _connectionLabel(minos_api.ConnectionState? state) {
     ConnectionState_Pairing() => '配对中',
     _ => '离线',
   };
-}
-
-String _humanDisplayName(String email) {
-  final trimmed = email.trim();
-  if (trimmed.isEmpty) return 'You';
-  final at = trimmed.indexOf('@');
-  return at <= 0 ? trimmed : trimmed.substring(0, at);
 }
 
 void _showRefreshError(BuildContext context, String title, Object error) {
@@ -784,7 +777,8 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
           title:
               _hostLabelForId(widget.hosts, host.hostDeviceId) ??
               host.hostDeviceId,
-          subtitle: host.hostDeviceId,
+          subtitle:
+              '${host.hostDeviceId} · ${host.online ? 'Runtime 在线' : 'Runtime 离线'}',
         ),
     ];
     final selected = await _showPickerSheet<String?>(
@@ -898,6 +892,10 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
     var draft = editorState.draft;
     final isEditing = widget.profile != null;
     final hosts = widget.hosts;
+    final activeHostId = ref.watch(activeMacProvider).asData?.value;
+    final effectiveHostId = draft.hostDeviceId ?? activeHostId;
+    final effectiveHostLabel =
+        _hostLabelForId(hosts, effectiveHostId) ?? _hostSelectionLabel(draft);
     final runtimeOptions = _runtimeOptions(widget.descriptors);
     final models = _modelOptions(draft.runtimeAgent);
     if (!models.contains(draft.model)) {
@@ -1041,6 +1039,17 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
                         },
                       ),
                     ],
+                    const SizedBox(height: 14),
+                    _EditorSection(
+                      title: 'Skill 预览',
+                      child: _EditorHostSkillsPreview(
+                        hostDeviceId: effectiveHostId,
+                        hostLabel: effectiveHostLabel,
+                        skillsAsync: effectiveHostId == null
+                            ? null
+                            : ref.watch(hostSkillsProvider(effectiveHostId)),
+                      ),
+                    ),
                     const SizedBox(height: 14),
                     _EditorSection(
                       title: '推理强度',
@@ -1283,6 +1292,133 @@ class _PickerOption<T> {
   final T value;
   final String title;
   final String? subtitle;
+}
+
+class _EditorHostSkillsPreview extends ConsumerWidget {
+  const _EditorHostSkillsPreview({
+    required this.hostDeviceId,
+    required this.hostLabel,
+    required this.skillsAsync,
+  });
+
+  final String? hostDeviceId;
+  final String hostLabel;
+  final AsyncValue<List<HostSkillsEntry>>? skillsAsync;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final resolvedHostDeviceId = hostDeviceId;
+    final resolvedSkillsAsync = skillsAsync;
+    if (resolvedHostDeviceId == null || resolvedSkillsAsync == null) {
+      return Padding(
+        padding: const .all(14),
+        child: Text(
+          '选择运行设备后可预览该设备上的 Skills。',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: .start,
+      children: <Widget>[
+        Padding(
+          padding: const .fromLTRB(14, 10, 8, 0),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  hostLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontWeight: .w700,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: '重新扫描',
+                onPressed: () =>
+                    ref.invalidate(hostSkillsProvider(resolvedHostDeviceId)),
+                icon: const Icon(CupertinoIcons.refresh, size: 18),
+              ),
+            ],
+          ),
+        ),
+        resolvedSkillsAsync.when(
+          loading: () => const Padding(
+            padding: .all(18),
+            child: Center(child: CupertinoActivityIndicator()),
+          ),
+          error: (error, _) => Padding(
+            padding: const .fromLTRB(14, 8, 14, 14),
+            child: Column(
+              crossAxisAlignment: .start,
+              children: <Widget>[
+                Text('读取 Skills 失败: $error'),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      ref.invalidate(hostSkillsProvider(resolvedHostDeviceId)),
+                  icon: const Icon(CupertinoIcons.refresh),
+                  label: const Text('重试'),
+                ),
+              ],
+            ),
+          ),
+          data: (entries) {
+            final hasSkills = entries.any((entry) => entry.skills.isNotEmpty);
+            final hasErrors = entries.any((entry) => entry.errors.isNotEmpty);
+            if (!hasSkills && !hasErrors) {
+              return const Padding(
+                padding: .all(14),
+                child: Text('当前设备没有扫描到可用 Skills。'),
+              );
+            }
+            return Column(
+              children: <Widget>[
+                for (var i = 0; i < entries.length; i++) ...<Widget>[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const .fromLTRB(14, 10, 14, 4),
+                    child: Align(
+                      alignment: .centerLeft,
+                      child: Text(
+                        entries[i].cwd,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontWeight: .w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                  for (final error in entries[i].errors)
+                    _HostSkillErrorTile(error: error),
+                  for (
+                    var skillIndex = 0;
+                    skillIndex < entries[i].skills.length;
+                    skillIndex++
+                  ) ...<Widget>[
+                    if (skillIndex > 0) const Divider(height: 1),
+                    _HostSkillTile(
+                      hostDeviceId: resolvedHostDeviceId,
+                      skill: entries[i].skills[skillIndex],
+                    ),
+                  ],
+                ],
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
 }
 
 class _EditorSection extends StatelessWidget {
@@ -1726,7 +1862,10 @@ class _DeviceRosterTile extends StatelessWidget {
     final title = host.hostDisplayName.trim().isEmpty
         ? host.hostDeviceId
         : host.hostDisplayName.trim();
-    final stateLabel = isActive ? _connectionLabel(connection) : '已配对设备';
+    final runtimeLabel = host.online ? 'Runtime 在线' : 'Runtime 离线';
+    final stateLabel = isActive
+        ? '当前路由 · $runtimeLabel · App ${_connectionLabel(connection)}'
+        : '已配对 · $runtimeLabel';
     final subtitle = title == host.hostDeviceId
         ? stateLabel
         : '${host.hostDeviceId} · $stateLabel';
@@ -1796,74 +1935,134 @@ class _DeviceRosterTile extends StatelessWidget {
   }
 }
 
-class _HumansSection extends StatelessWidget {
-  const _HumansSection({required this.authState});
-
-  final AuthState authState;
+class _HumansSection extends ConsumerWidget {
+  const _HumansSection();
 
   @override
-  Widget build(BuildContext context) {
-    return _SectionCard(
-      title: 'HUMANS ${authState is AuthAuthenticated ? 1 : 0}',
-      child: switch (authState) {
-        AuthAuthenticated(:final account) => _HumanMemberTile(account: account),
-        AuthBootstrapping() => const _HumanListSkeleton(),
-        _ => const Padding(
-          padding: EdgeInsets.fromLTRB(16, 8, 16, 18),
-          child: Text('当前未登录，无法展示人类成员。'),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final friendsAsync = ref.watch(friendsProvider);
+    return friendsAsync.when(
+      loading: () =>
+          const _SectionCard(title: 'HUMANS 0', child: _HumanListSkeleton()),
+      error: (error, _) => _SectionCard(
+        title: 'HUMANS 0',
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+          child: _CompactErrorPanel(
+            title: '好友暂时不可用',
+            description: error.toString(),
+            actionLabel: '重试',
+            onAction: () async {
+              try {
+                await ref.read(friendsProvider.notifier).refresh();
+              } catch (error) {
+                if (context.mounted) {
+                  _showRefreshError(context, '好友刷新失败', error);
+                }
+              }
+            },
+          ),
         ),
-      },
+      ),
+      data: (friends) => _SectionCard(
+        title: 'HUMANS ${friends.friends.length}',
+        child: friends.friends.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 18),
+                child: Text('还没有好友。'),
+              )
+            : Column(
+                children: <Widget>[
+                  for (
+                    var index = 0;
+                    index < friends.friends.length;
+                    index++
+                  ) ...<Widget>[
+                    if (index > 0) const Divider(height: 1),
+                    _HumanFriendTile(friend: friends.friends[index]),
+                  ],
+                ],
+              ),
+      ),
     );
   }
 }
 
-class _HumanMemberTile extends StatelessWidget {
-  const _HumanMemberTile({required this.account});
+class _HumanFriendTile extends ConsumerWidget {
+  const _HumanFriendTile({required this.friend});
 
-  final AuthSummary account;
+  final FriendSummary friend;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final title = _humanDisplayName(account.email);
-    final initial = title.isEmpty ? 'Y' : title.substring(0, 1).toUpperCase();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
-        children: <Widget>[
-          _HumanAvatar(label: initial),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  '$title (you)',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  account.email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
+    final title = friend.displayName.trim().isEmpty
+        ? friend.minosId
+        : friend.displayName.trim();
+    final initial = title.isEmpty ? '?' : title.substring(0, 1).toUpperCase();
+    return InkWell(
+      onTap: () async {
+        try {
+          final response = await ref
+              .read(socialActionsProvider)
+              .ensureDirectConversation(friendAccountId: friend.accountId);
+          if (!context.mounted) return;
+          ref.invalidate(conversationsProvider);
+          await context.push(
+            '/social/chat/${response.conversationId}',
+            extra: SocialChatRouteExtra(
+              title: title,
+              kind: ConversationKind.direct,
             ),
-          ),
-          const SizedBox(width: 12),
-          _MemberStatusDot(
-            color: theme.brightness == Brightness.dark
-                ? const Color(0xFF22C55E)
-                : const Color(0xFF16A34A),
-          ),
-        ],
+          );
+        } catch (error) {
+          if (!context.mounted) return;
+          showLoggedErrorToast(
+            context,
+            target: 'agents_hub',
+            title: '打开聊天失败',
+            error: error,
+          );
+        }
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: <Widget>[
+            _HumanAvatar(label: initial),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '@${friend.minosId}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Icon(
+              LucideIcons.messageCircle,
+              size: 18,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ],
+        ),
       ),
     );
   }

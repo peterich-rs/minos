@@ -82,6 +82,11 @@ abstract class MinosCoreProtocol {
     required String memberAccountId,
   });
 
+  Future<void> removeGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  });
+
   Future<ConversationMembersResponse> conversationMembers({
     required String conversationId,
   });

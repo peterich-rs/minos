@@ -19,3 +19,4 @@ export 'package:minos/application/social_providers.dart';
 export 'package:minos/ui/features/social/views/group_members_page.dart';
 export 'package:minos/ui/features/social/views/social_chat_page.dart';
 export 'package:minos/ui/features/social/views/social_hub_page.dart';
+export 'package:minos/ui/features/social/widgets/social_management_sections.dart';

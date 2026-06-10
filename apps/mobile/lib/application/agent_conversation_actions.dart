@@ -18,7 +18,7 @@ Future<ConversationResponse> createAgentConversation(
   }
 
   final repository = ref.read(socialRepositoryProvider);
-  final serverProfile = await _ensureServerAgentProfile(
+  final serverProfile = await ensureServerAgentProfile(
     ref,
     repository,
     profile,
@@ -40,7 +40,7 @@ Future<ConversationResponse> createAgentConversation(
   return conversation;
 }
 
-Future<AgentProfile> _ensureServerAgentProfile(
+Future<AgentProfile> ensureServerAgentProfile(
   WidgetRef ref,
   SocialRepository repository,
   AgentProfile profile,

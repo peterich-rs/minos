@@ -11,6 +11,7 @@ class SocialChatMessage {
     required this.createdAtMs,
     required this.clientSeq,
     required this.deliveryState,
+    this.senderType = SenderType.user,
     this.serverMessageId,
     this.serverOrderKey,
     this.replyTo,
@@ -25,6 +26,7 @@ class SocialChatMessage {
   final int createdAtMs;
   final int clientSeq;
   final SocialMessageDeliveryState deliveryState;
+  final SenderType senderType;
   final String? serverMessageId;
   final int? serverOrderKey;
   final ChatMessageReplySummary? replyTo;
@@ -51,6 +53,7 @@ class SocialChatMessage {
     int? createdAtMs,
     int? clientSeq,
     SocialMessageDeliveryState? deliveryState,
+    SenderType? senderType,
     Object? serverMessageId = _socialMessageUnset,
     Object? serverOrderKey = _socialMessageUnset,
     Object? replyTo = _socialMessageUnset,
@@ -65,6 +68,7 @@ class SocialChatMessage {
       createdAtMs: createdAtMs ?? this.createdAtMs,
       clientSeq: clientSeq ?? this.clientSeq,
       deliveryState: deliveryState ?? this.deliveryState,
+      senderType: senderType ?? this.senderType,
       serverMessageId: identical(serverMessageId, _socialMessageUnset)
           ? this.serverMessageId
           : serverMessageId as String?,

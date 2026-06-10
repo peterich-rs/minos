@@ -11,7 +11,7 @@ class SocialCacheStore {
   SocialCacheStore();
 
   static const _dbName = 'social_cache.db';
-  static const _dbVersion = 2;
+  static const _dbVersion = 3;
 
   Future<Database?>? _databaseFuture;
 
@@ -49,6 +49,7 @@ class SocialCacheStore {
               created_at_ms INTEGER NOT NULL,
               client_seq INTEGER NOT NULL,
               server_order_key INTEGER,
+              sender_type TEXT NOT NULL DEFAULT 'user',
               reply_to_message_id TEXT,
               reply_to_preview_json TEXT,
               recalled_at_ms INTEGER,
@@ -76,6 +77,11 @@ class SocialCacheStore {
             );
             await db.execute(
               'ALTER TABLE cached_social_messages ADD COLUMN recalled_at_ms INTEGER',
+            );
+          }
+          if (oldVersion < 3) {
+            await db.execute(
+              "ALTER TABLE cached_social_messages ADD COLUMN sender_type TEXT NOT NULL DEFAULT 'user'",
             );
           }
         },
@@ -297,6 +303,7 @@ class SocialCacheStore {
           'text': message.text,
           'created_at_ms': platformInt64ToInt(message.createdAtMs),
           'server_order_key': platformInt64ToInt(message.createdAtMs),
+          'sender_type': message.senderType.name,
           'reply_to_message_id': message.replyTo?.messageId,
           'reply_to_preview_json': message.replyTo == null
               ? null
@@ -365,6 +372,7 @@ class SocialCacheStore {
           'text': message.text,
           'created_at_ms': platformInt64ToInt(message.createdAtMs),
           'server_order_key': platformInt64ToInt(message.createdAtMs),
+          'sender_type': message.senderType.name,
           'reply_to_message_id': message.replyTo?.messageId,
           'reply_to_preview_json': message.replyTo == null
               ? null
@@ -390,6 +398,7 @@ class SocialCacheStore {
       'created_at_ms': platformInt64ToInt(message.createdAtMs),
       'client_seq': nextClientSeq,
       'server_order_key': platformInt64ToInt(message.createdAtMs),
+      'sender_type': message.senderType.name,
       'reply_to_message_id': message.replyTo?.messageId,
       'reply_to_preview_json': message.replyTo == null
           ? null
@@ -459,6 +468,9 @@ class SocialCacheStore {
       deliveryState: SocialMessageDeliveryState.values.byName(
         row['delivery_state']! as String,
       ),
+      senderType: SenderType.values.byName(
+        row['sender_type'] as String? ?? SenderType.user.name,
+      ),
       serverMessageId: row['server_message_id'] as String?,
       serverOrderKey: row['server_order_key'] as int?,
       replyTo: _replyPreviewFromJson(row['reply_to_preview_json'] as String?),
@@ -481,6 +493,7 @@ class SocialCacheStore {
       'created_at_ms': message.createdAtMs,
       'client_seq': message.clientSeq,
       'server_order_key': message.serverOrderKey,
+      'sender_type': message.senderType.name,
       'reply_to_message_id': message.replyTo?.messageId,
       'reply_to_preview_json': message.replyTo == null
           ? null

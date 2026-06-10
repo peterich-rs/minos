@@ -63,10 +63,15 @@ class ThreadViewPage extends ConsumerStatefulWidget {
 
 class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   static const double _stickyThreshold = 120;
+  static const Duration _keyboardRevealDelay = Duration(milliseconds: 120);
+  static const Duration _keyboardRevealSettleDelay = Duration(
+    milliseconds: 260,
+  );
 
   final ScrollController _scroll = ScrollController();
   StreamSubscription<UiEventFrame>? _approvalSub;
   late final String _viewStateId;
+  double _lastKeyboardInsetBottom = 0;
 
   @override
   void initState() {
@@ -332,6 +337,25 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     });
   }
 
+  void _syncKeyboardInset(double keyboardInsetBottom, {required bool stick}) {
+    if ((_lastKeyboardInsetBottom - keyboardInsetBottom).abs() < 0.5) return;
+    _lastKeyboardInsetBottom = keyboardInsetBottom;
+    _revealBottomMessages(stick: stick);
+  }
+
+  void _revealBottomMessages({required bool stick}) {
+    if (!stick) return;
+
+    void jumpToBottom() {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => jumpToBottom());
+    unawaited(Future<void>.delayed(_keyboardRevealDelay, jumpToBottom));
+    unawaited(Future<void>.delayed(_keyboardRevealSettleDelay, jumpToBottom));
+  }
+
   Future<void> _dispatchMessage(String text, ActiveSession viewSession) async {
     final controller = ref.read(activeSessionControllerProvider.notifier);
     final targetThreadId = widget.threadId ?? _sessionThreadId(viewSession);
@@ -462,8 +486,14 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
       viewSession,
       selectedProfile: selectedProfile,
     );
+    final keyboardInsetBottom = MediaQuery.of(context).viewInsets.bottom;
+    _syncKeyboardInset(
+      keyboardInsetBottom,
+      stick: threadViewState.stickToBottom,
+    );
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: scaffoldBg,
       appBar: AppBar(
         backgroundColor: shadTheme.colorScheme.background,
@@ -498,11 +528,16 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
         child: Column(
           children: <Widget>[
             Expanded(child: body),
-            InputBar(
-              session: viewSession,
-              onSend: (t) => _onSend(t, viewSession),
-              onStop: () =>
-                  ref.read(activeSessionControllerProvider.notifier).stop(),
+            AnimatedPadding(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.only(bottom: keyboardInsetBottom),
+              child: InputBar(
+                session: viewSession,
+                onSend: (t) => _onSend(t, viewSession),
+                onStop: () =>
+                    ref.read(activeSessionControllerProvider.notifier).stop(),
+              ),
             ),
           ],
         ),

@@ -23,6 +23,8 @@ import 'package:minos/ui/core/widgets/error_feedback.dart';
 import 'package:minos/ui/core/widgets/shimmer_box.dart';
 import 'package:minos/ui/features/agents/views/agents_hub_page.dart';
 import 'package:minos/ui/features/shell/router.dart';
+import 'package:minos/ui/features/social/views/social_hub_page.dart';
+import 'package:minos/ui/features/social/widgets/social_management_sections.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 const String _appVersion = '1.0.0';
@@ -59,27 +61,7 @@ class _MessagesTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final connection = ref.watch(connectionStateProvider).asData?.value;
-    final isConnected = connection is ConnectionState_Connected;
-    final projectsAsync = ref.watch(projectListProvider);
-
-    return SafeArea(
-      bottom: false,
-      child: Column(
-        children: <Widget>[
-          _LargeTitleBar(
-            title: '消息',
-            trailing: _CircleIconButton(
-              icon: LucideIcons.folderPlus,
-              onTap: () => _showCreateProjectDialog(context, ref),
-              tooltip: '新建项目',
-            ),
-          ),
-          if (!isConnected) _OfflineBanner(state: connection),
-          Expanded(child: _DiscordProjectsPane(projectsAsync: projectsAsync)),
-        ],
-      ),
-    );
+    return const SocialHubPage(showAppBar: false);
   }
 
   void _showCreateProjectDialog(BuildContext context, WidgetRef ref) {
@@ -1107,6 +1089,7 @@ class _MacRow extends StatelessWidget {
     final name = mac.hostDisplayName.trim().isEmpty
         ? 'Agent Runtime'
         : mac.hostDisplayName.trim();
+    final runtimeLabel = mac.online ? 'Runtime 在线' : 'Runtime 离线';
     return InkWell(
       onTap: onTap,
       onLongPress: onForget,
@@ -1127,15 +1110,16 @@ class _MacRow extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 3),
-                  // Only show the live connection indicator on the active
-                  // Mac — the WS only carries one upstream session at a
-                  // time, so the indicator on inactive rows would be
-                  // misleading.
                   if (isActive)
-                    _ConnectionLine(state: connection)
+                    Text(
+                      '$runtimeLabel · 当前路由 · App ${_connectionStatusText(connection)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    )
                   else
                     Text(
-                      '点击切换为当前路由目标',
+                      '$runtimeLabel · 点击切换为当前路由目标',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -1424,49 +1408,65 @@ class _ProfileTab extends ConsumerWidget {
         children: <Widget>[
           const _LargeTitleBar(title: '我的'),
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
-              children: <Widget>[
-                _AccountHeader(email: email, connection: connection),
-                const SizedBox(height: 16),
-                _GroupedCard(
-                  children: <Widget>[
-                    _SettingsRow(
-                      icon: CupertinoIcons.ant,
-                      title: 'Devtool',
-                      subtitle: '日志与请求追踪',
-                      onTap: () => context.push(AppRoutes.logViewer),
-                    ),
-                    const _RowDivider(indent: 56),
-                    _SettingsRow(
-                      icon: CupertinoIcons.qrcode_viewfinder,
-                      title: '添加伙伴',
-                      subtitle: '扫描二维码添加 runtime 设备',
-                      onTap: () => context.push(AppRoutes.pairing),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                _GroupedCard(
-                  children: <Widget>[
-                    _SettingsRow(
-                      icon: CupertinoIcons.square_arrow_right,
-                      title: '退出登录',
-                      destructive: true,
-                      onTap: () => _confirmLogout(context, ref),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                Center(
-                  child: Text(
-                    'Minos · v$_appVersion',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+            child: RefreshIndicator(
+              onRefresh: () async {
+                ref.invalidate(socialProfileProvider);
+                await Future.wait<void>(<Future<void>>[
+                  ref.read(socialProfileProvider.future).then<void>((_) {}),
+                  ref.read(friendRequestsProvider.notifier).refresh(),
+                  ref.read(friendsProvider.notifier).refresh(),
+                ]);
+              },
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+                children: <Widget>[
+                  _AccountHeader(email: email, connection: connection),
+                  const SizedBox(height: 16),
+                  const SocialProfileSection(),
+                  const SizedBox(height: 16),
+                  const FriendSearchSection(),
+                  const SizedBox(height: 16),
+                  const FriendRequestsSection(),
+                  const SizedBox(height: 16),
+                  _GroupedCard(
+                    children: <Widget>[
+                      _SettingsRow(
+                        icon: CupertinoIcons.ant,
+                        title: 'Devtool',
+                        subtitle: '日志与请求追踪',
+                        onTap: () => context.push(AppRoutes.logViewer),
+                      ),
+                      const _RowDivider(indent: 56),
+                      _SettingsRow(
+                        icon: CupertinoIcons.qrcode_viewfinder,
+                        title: '添加伙伴',
+                        subtitle: '扫描二维码添加 runtime 设备',
+                        onTap: () => context.push(AppRoutes.pairing),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _GroupedCard(
+                    children: <Widget>[
+                      _SettingsRow(
+                        icon: CupertinoIcons.square_arrow_right,
+                        title: '退出登录',
+                        destructive: true,
+                        onTap: () => _confirmLogout(context, ref),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  Center(
+                    child: Text(
+                      'Minos · v$_appVersion',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
@@ -1606,6 +1606,15 @@ class _ConnectionLine extends StatelessWidget {
       ],
     );
   }
+}
+
+String _connectionStatusText(ConnectionState? state) {
+  return switch (state) {
+    ConnectionState_Connected() => '在线',
+    ConnectionState_Reconnecting(:final attempt) => '重连中 #$attempt',
+    ConnectionState_Pairing() => '初始化中',
+    _ => '离线',
+  };
 }
 
 class _SettingsRow extends StatelessWidget {
@@ -2148,7 +2157,7 @@ class _BottomNav extends StatelessWidget {
               _NavItem(
                 icon: LucideIcons.bot,
                 activeIcon: LucideIcons.botMessageSquare,
-                label: 'Agent',
+                label: '伙伴',
                 selected: index == 1,
                 onTap: () => onChanged(1),
               ),

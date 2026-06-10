@@ -1,8 +1,11 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+
+import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_list_view/flutter_list_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:minos/application/group_agent_provider.dart';
+import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/social_message.dart';
@@ -28,10 +31,17 @@ class SocialChatPage extends ConsumerStatefulWidget {
 }
 
 class _SocialChatPageState extends ConsumerState<SocialChatPage> {
+  static const double _bottomStickThreshold = 120;
+  static const Duration _keyboardRevealDelay = Duration(milliseconds: 120);
+  static const Duration _keyboardRevealSettleDelay = Duration(
+    milliseconds: 260,
+  );
+
   final TextEditingController _controller = TextEditingController();
   final FocusNode _composerFocusNode = FocusNode();
   final FlutterListViewController _scrollController =
       FlutterListViewController();
+  double _lastKeyboardInsetBottom = 0;
 
   @override
   void dispose() {
@@ -172,9 +182,29 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     });
   }
 
+  bool _isNearBottom() {
+    if (!_scrollController.hasClients) return true;
+    final position = _scrollController.position;
+    return position.maxScrollExtent - position.pixels <= _bottomStickThreshold;
+  }
+
+  void _syncKeyboardInset(double keyboardInsetBottom) {
+    if ((_lastKeyboardInsetBottom - keyboardInsetBottom).abs() < 0.5) return;
+    final shouldStick = _composerFocusNode.hasFocus || _isNearBottom();
+    _lastKeyboardInsetBottom = keyboardInsetBottom;
+    if (!shouldStick) return;
+
+    _jumpToBottom();
+    unawaited(Future<void>.delayed(_keyboardRevealDelay, _jumpToBottom));
+    unawaited(Future<void>.delayed(_keyboardRevealSettleDelay, _jumpToBottom));
+  }
+
   @override
   Widget build(BuildContext context) {
     final shadTheme = ShadTheme.of(context);
+    final keyboardInsetBottom = MediaQuery.of(context).viewInsets.bottom;
+    _syncKeyboardInset(keyboardInsetBottom);
+
     ref.listen<SocialConversationState>(
       socialConversationProvider(widget.conversationId),
       (previous, next) {
@@ -186,9 +216,15 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     );
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: shadTheme.colorScheme.background,
       appBar: AppBar(
-        title: Text(widget.title),
+        toolbarHeight: 64,
+        title: _ConversationTitle(
+          conversationId: widget.conversationId,
+          title: widget.title,
+          kind: widget.kind,
+        ),
         surfaceTintColor: Colors.transparent,
         actions: <Widget>[
           if (widget.kind == ConversationKind.group)
@@ -217,19 +253,185 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                 ),
               ),
             ),
-            _ConversationComposer(
-              conversationId: widget.conversationId,
-              kind: widget.kind,
-              controller: _controller,
-              focusNode: _composerFocusNode,
-              onSend: _send,
-              onShowMentionPicker: _showMentionPicker,
+            AnimatedPadding(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.only(bottom: keyboardInsetBottom),
+              child: SafeArea(
+                top: false,
+                child: _ConversationComposer(
+                  conversationId: widget.conversationId,
+                  kind: widget.kind,
+                  controller: _controller,
+                  focusNode: _composerFocusNode,
+                  onSend: _send,
+                  onShowMentionPicker: _showMentionPicker,
+                ),
+              ),
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _ConversationTitle extends ConsumerWidget {
+  const _ConversationTitle({
+    required this.conversationId,
+    required this.title,
+    required this.kind,
+  });
+
+  final String conversationId;
+  final String title;
+  final ConversationKind kind;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final shadTheme = ShadTheme.of(context);
+    final conversation = ref.watch(socialConversationProvider(conversationId));
+    final conversationSummary = _findConversationSummary(
+      ref.watch(conversationsProvider).asData?.value,
+      conversationId,
+    );
+    final agents = kind == ConversationKind.group
+        ? ref.watch(groupAgentsProvider(conversationId))
+        : const <AgentProfile>[];
+    final hosts =
+        ref.watch(pairedMacsProvider).asData?.value ?? const <HostSummaryDto>[];
+    final activeHostId = ref.watch(activeMacProvider).asData?.value;
+    final connectionState = ref.watch(connectionStateProvider).asData?.value;
+    final status = _resolveConversationStatus(
+      conversation: conversation,
+      agents: agents,
+      hosts: hosts,
+      activeHostId: activeHostId,
+      connectionState: connectionState,
+    );
+    final resolvedTitle = _resolveConversationTitle(
+      routeTitle: title,
+      kind: kind,
+      summary: conversationSummary,
+      conversation: conversation,
+    );
+    final color = _conversationStatusColor(context, status);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          resolvedTitle,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+            color: Theme.of(context).colorScheme.onSurface,
+            fontWeight: FontWeight.w700,
+            fontSize: 18,
+            height: 1.1,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            DecoratedBox(
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              child: const SizedBox(width: 7, height: 7),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              status.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: shadTheme.textTheme.small.copyWith(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                height: 1.05,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+ConversationSummary? _findConversationSummary(
+  ConversationsResponse? response,
+  String conversationId,
+) {
+  if (response == null) return null;
+  for (final conversation in response.conversations) {
+    if (conversation.conversationId == conversationId) {
+      return conversation;
+    }
+  }
+  return null;
+}
+
+String _resolveConversationTitle({
+  required String routeTitle,
+  required ConversationKind kind,
+  required ConversationSummary? summary,
+  required SocialConversationState conversation,
+}) {
+  final route = routeTitle.trim();
+  final summaryTitle = summary?.title.trim();
+
+  if (kind == ConversationKind.direct) {
+    return _firstNonEmpty(<String?>[
+      _userTitle(summary?.counterpart),
+      route,
+      summaryTitle,
+      _counterpartTitleFromMessages(conversation),
+      '私聊',
+    ]);
+  }
+
+  return _firstNonEmpty(<String?>[
+    route,
+    summaryTitle,
+    _counterpartTitleFromMessages(conversation),
+    '群聊',
+  ]);
+}
+
+String? _counterpartTitleFromMessages(SocialConversationState conversation) {
+  for (final message in conversation.messages.reversed) {
+    if (conversation.myAccountId != null &&
+        message.sender.accountId == conversation.myAccountId) {
+      continue;
+    }
+    if (conversation.myAccountId == null &&
+        (message.sender.minosId == 'me' ||
+            message.sender.displayName.trim() == '我')) {
+      continue;
+    }
+    return _userTitle(message.sender);
+  }
+  return null;
+}
+
+String? _userTitle(UserSummary? user) {
+  if (user == null) return null;
+  return _firstNonEmpty(<String?>[
+    user.displayName.trim(),
+    user.minosId.trim(),
+    user.accountId.trim(),
+  ]);
+}
+
+String _firstNonEmpty(List<String?> candidates) {
+  for (final candidate in candidates) {
+    final value = candidate?.trim();
+    if (value != null && value.isNotEmpty) {
+      return value;
+    }
+  }
+  return '';
 }
 
 class _ConversationMessagePane extends ConsumerWidget {
@@ -368,6 +570,7 @@ class _ConversationMessagePane extends ConsumerWidget {
                     message.createdAtMs,
                   );
                   final isMine = message.sender.accountId == state.myAccountId;
+                  final isAgent = message.senderType == SenderType.agent;
                   final mentionsMe =
                       !isMine &&
                       state.myAccountId != null &&
@@ -406,12 +609,13 @@ class _ConversationMessagePane extends ConsumerWidget {
                             label: _formatTimelineLabel(message.createdAtMs),
                           ),
                         _ChatBubble(
-                          title: kind == ConversationKind.group
+                          title: kind == ConversationKind.group || isAgent
                               ? message.sender.displayName
                               : null,
                           senderName: message.sender.displayName,
                           text: message.text,
                           isMine: isMine,
+                          isAgent: isAgent,
                           mentionsMe: mentionsMe,
                           replyTo: message.replyTo,
                           recalledAtMs: message.recalledAtMs,
@@ -613,10 +817,72 @@ class _ChatInlineError extends StatelessWidget {
   }
 }
 
+class _SenderHeader extends StatelessWidget {
+  const _SenderHeader({
+    required this.title,
+    required this.isAgent,
+    required this.color,
+  });
+
+  final String title;
+  final bool isAgent;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    if (!isAgent) {
+      return Text(
+        title,
+        style: shadTheme.textTheme.small.copyWith(color: color),
+      );
+    }
+
+    return Row(
+      mainAxisSize: .min,
+      children: <Widget>[
+        Icon(LucideIcons.bot, size: 14, color: color),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: shadTheme.textTheme.small.copyWith(
+              color: color,
+              fontWeight: .w700,
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: Theme.of(
+              context,
+            ).colorScheme.tertiary.withValues(alpha: 0.14),
+            borderRadius: .circular(999),
+          ),
+          child: Padding(
+            padding: const .symmetric(horizontal: 6, vertical: 2),
+            child: Text(
+              'Agent',
+              style: shadTheme.textTheme.small.copyWith(
+                color: Theme.of(context).colorScheme.tertiary,
+                fontWeight: .w700,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _ChatBubble extends StatelessWidget {
   const _ChatBubble({
     required this.text,
     required this.isMine,
+    required this.isAgent,
     required this.senderName,
     this.title,
     this.mentionsMe = false,
@@ -631,6 +897,7 @@ class _ChatBubble extends StatelessWidget {
   final String senderName;
   final String text;
   final bool isMine;
+  final bool isAgent;
   final bool mentionsMe;
   final ChatMessageReplySummary? replyTo;
   final int? recalledAtMs;
@@ -641,15 +908,22 @@ class _ChatBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final shadTheme = ShadTheme.of(context);
+    final theme = Theme.of(context);
     final isRecalled = recalledAtMs != null;
-    final bubbleColor = isMine
+    final bubbleColor = isAgent
+        ? theme.colorScheme.surfaceContainerHigh
+        : isMine
         ? shadTheme.colorScheme.primary
         : shadTheme.colorScheme.secondary;
-    final foreground = isMine
+    final foreground = isAgent
+        ? theme.colorScheme.onSurface
+        : isMine
         ? shadTheme.colorScheme.primaryForeground
         : shadTheme.colorScheme.secondaryForeground;
     final mentionAccent = isMine
         ? foreground.withValues(alpha: 0.88)
+        : isAgent
+        ? theme.colorScheme.tertiary
         : shadTheme.colorScheme.primary;
 
     return Padding(
@@ -669,6 +943,8 @@ class _ChatBubble extends StatelessWidget {
                 border: Border.all(
                   color: mentionsMe
                       ? const Color(0xFFF59E0B)
+                      : isAgent
+                      ? theme.colorScheme.tertiary.withValues(alpha: 0.42)
                       : isMine
                       ? bubbleColor
                       : shadTheme.colorScheme.border.withValues(alpha: 0.9),
@@ -704,11 +980,10 @@ class _ChatBubble extends StatelessWidget {
                       const SizedBox(height: 6),
                     ],
                     if (title != null) ...<Widget>[
-                      Text(
-                        title!,
-                        style: shadTheme.textTheme.small.copyWith(
-                          color: foreground.withValues(alpha: 0.8),
-                        ),
+                      _SenderHeader(
+                        title: title!,
+                        isAgent: isAgent,
+                        color: foreground.withValues(alpha: 0.82),
                       ),
                       const SizedBox(height: 4),
                     ],
@@ -907,6 +1182,124 @@ class _ChatTimeSeparator extends StatelessWidget {
       ),
     );
   }
+}
+
+enum _ConversationStatus { online, offline, busy, executing }
+
+extension _ConversationStatusLabel on _ConversationStatus {
+  String get label => switch (this) {
+    _ConversationStatus.online => '在线',
+    _ConversationStatus.offline => '离线',
+    _ConversationStatus.busy => '繁忙',
+    _ConversationStatus.executing => '执行中',
+  };
+}
+
+_ConversationStatus _resolveConversationStatus({
+  required SocialConversationState conversation,
+  required List<AgentProfile> agents,
+  required List<HostSummaryDto> hosts,
+  required String? activeHostId,
+  required ConnectionState? connectionState,
+}) {
+  final hasAgent = agents.isNotEmpty;
+  final isOnline = hasAgent
+      ? _isAgentHostOnline(
+          agent: agents.first,
+          hosts: hosts,
+          activeHostId: activeHostId,
+          connectionState: connectionState,
+        )
+      : connectionState is ConnectionState_Connected;
+
+  if (hasAgent &&
+      isOnline &&
+      _isWaitingForAgentReply(
+        conversation.messages,
+        conversation.myAccountId,
+      )) {
+    return _ConversationStatus.executing;
+  }
+
+  if (conversation.messages.any(
+    (message) => message.deliveryState == SocialMessageDeliveryState.sending,
+  )) {
+    return _ConversationStatus.busy;
+  }
+
+  return isOnline ? _ConversationStatus.online : _ConversationStatus.offline;
+}
+
+bool _isAgentHostOnline({
+  required AgentProfile agent,
+  required List<HostSummaryDto> hosts,
+  required String? activeHostId,
+  required ConnectionState? connectionState,
+}) {
+  final agentHostId = agent.hostDeviceId;
+  if (agentHostId != null) {
+    for (final host in hosts) {
+      if (host.hostDeviceId == agentHostId) {
+        return host.online;
+      }
+    }
+  }
+
+  if (activeHostId != null) {
+    for (final host in hosts) {
+      if (host.hostDeviceId == activeHostId) {
+        return host.online;
+      }
+    }
+  }
+
+  if (hosts.length == 1) {
+    return hosts.first.online;
+  }
+
+  if (hosts.any((host) => host.online)) {
+    return true;
+  }
+
+  return connectionState is ConnectionState_Connected;
+}
+
+bool _isWaitingForAgentReply(
+  List<SocialChatMessage> messages,
+  String? myAccountId,
+) {
+  if (myAccountId == null) {
+    return false;
+  }
+
+  for (final message in messages.reversed) {
+    if (message.isRecalled) {
+      continue;
+    }
+    if (message.senderType == SenderType.agent) {
+      return false;
+    }
+    if (message.sender.accountId == myAccountId) {
+      return message.deliveryState == SocialMessageDeliveryState.sent;
+    }
+    return false;
+  }
+  return false;
+}
+
+Color _conversationStatusColor(
+  BuildContext context,
+  _ConversationStatus status,
+) {
+  final scheme = Theme.of(context).colorScheme;
+  return switch (status) {
+    _ConversationStatus.online => const Color(0xFF16A34A),
+    _ConversationStatus.offline => scheme.onSurfaceVariant.withValues(
+      alpha: 0.76,
+    ),
+    _ConversationStatus.busy => const Color(0xFFD97706),
+    _ConversationStatus.executing => const Color(0xFF2563EB),
+  };
 }
 
 bool _shouldShowTimeSeparator(int? previousTsMs, int currentTsMs) {
