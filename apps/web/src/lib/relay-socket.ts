@@ -66,7 +66,7 @@ export class RelaySocket {
 
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(
-        `${this.options.wsBaseUrl}/devices?ws_ticket=${encodeURIComponent(ticket)}`,
+        `${this.options.wsBaseUrl}/ws/client?ticket=${encodeURIComponent(ticket)}`,
       )
       this.socket = ws
 

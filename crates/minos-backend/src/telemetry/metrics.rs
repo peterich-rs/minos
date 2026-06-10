@@ -51,7 +51,6 @@ const PAIRING_CONSUME_TOTAL: &str = "minos_backend_pairing_consume_total";
 const PAIRING_FORGET_TOTAL: &str = "minos_backend_pairing_forget_total";
 const APPROVAL_DECISION_TOTAL: &str = "minos_backend_approval_decision_total";
 const DB_QUERY_DURATION_SECONDS: &str = "minos_backend_db_query_duration_seconds";
-const DEPRECATED_ROUTE_TOTAL: &str = "minos_backend_deprecated_route_total";
 
 // ── P7: notification + job metrics ────────────────────────────────────
 
@@ -176,10 +175,6 @@ fn prometheus_handle() -> &'static PrometheusHandle {
         metrics::describe_counter!(
             APPROVAL_DECISION_TOTAL,
             "Approval-decision dispatches, labeled by outcome."
-        );
-        metrics::describe_counter!(
-            DEPRECATED_ROUTE_TOTAL,
-            "Hits to deprecated HTTP routes, labeled by route path."
         );
         metrics::describe_counter!(
             PUSH_SEND_TOTAL,
@@ -398,11 +393,6 @@ pub fn record_pairing_forget(outcome: &str) {
 pub fn record_approval_decision(outcome: &str) {
     init();
     metrics::counter!(APPROVAL_DECISION_TOTAL, "outcome" => outcome.to_string()).increment(1);
-}
-
-pub fn record_deprecated_route_hit(route: &str) {
-    init();
-    metrics::counter!(DEPRECATED_ROUTE_TOTAL, "route" => route.to_string()).increment(1);
 }
 
 /// Record a push notification send attempt.

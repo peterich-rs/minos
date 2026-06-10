@@ -163,6 +163,7 @@ pub struct HostSummaryDto {
     pub host_display_name: String,
     pub paired_at_ms: i64,
     pub paired_via_device_id: String,
+    pub online: bool,
 }
 
 impl From<HostSummary> for HostSummaryDto {
@@ -172,6 +173,7 @@ impl From<HostSummary> for HostSummaryDto {
             host_display_name: s.host_display_name,
             paired_at_ms: s.paired_at_ms,
             paired_via_device_id: s.paired_via_device_id.to_string(),
+            online: s.online,
         }
     }
 }
@@ -359,6 +361,16 @@ impl MobileClient {
     ) -> Result<(), MinosError> {
         self.0
             .add_group_member(conversation_id, member_account_id)
+            .await
+    }
+
+    pub async fn remove_group_member(
+        &self,
+        conversation_id: String,
+        member_account_id: String,
+    ) -> Result<(), MinosError> {
+        self.0
+            .remove_group_member(conversation_id, member_account_id)
             .await
     }
 

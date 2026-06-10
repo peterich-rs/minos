@@ -17,10 +17,6 @@ pub fn router() -> Router<BackendState> {
         .route("/profiles/minos-id", post(set_minos_id))
         .route("/profiles/display-name", post(set_display_name))
         .route("/profiles/search", post(search_users_query))
-        .route("/me/profile/query", post(get_my_profile))
-        .route("/me/profile/minos-id", post(set_minos_id))
-        .route("/me/profile/display-name", post(set_display_name))
-        .route("/users/search/query", post(search_users_query))
 }
 
 pub fn external_sql_router() -> Router<BackendState> {

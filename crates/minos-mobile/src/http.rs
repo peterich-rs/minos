@@ -28,9 +28,9 @@ use minos_protocol::{
     ListProjectsResponse, ListThreadsParams, ListThreadsResponse, LogoutRequest, MeHostsResponse,
     MyProfileResponse, ReadThreadParams, ReadThreadResponse, RealtimeWsTicketRequest,
     RealtimeWsTicketResponse, RefreshRequest, RefreshResponse, RegisterAgentRequest,
-    RemoveAgentFromGroupRequest, SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest,
-    SetMinosIdRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
-    WriteHostSkillConfigResponse,
+    RemoveAgentFromGroupRequest, RemoveGroupMemberRequest, SearchUsersRequest, SearchUsersResponse,
+    SendChatMessageRequest, SetMinosIdRequest, UpdateProjectRequest,
+    WriteHostSkillConfigCommandRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -100,6 +100,8 @@ struct FormalHostSummary {
     host_display_name: String,
     paired_at_ms: i64,
     linked_via_installation_id: String,
+    #[serde(default)]
+    online: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -834,7 +836,7 @@ impl MobileHttpClient {
     }
 
     pub async fn my_profile(&self, access_token: &str) -> Result<MyProfileResponse, MinosError> {
-        let path = "/v1/me/profile/query";
+        let path = "/v1/profiles/self";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
         let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
@@ -861,7 +863,7 @@ impl MobileHttpClient {
         access_token: &str,
         req: SetMinosIdRequest,
     ) -> Result<MyProfileResponse, MinosError> {
-        let path = "/v1/me/profile/minos-id";
+        let path = "/v1/profiles/minos-id";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
@@ -893,7 +895,7 @@ impl MobileHttpClient {
         access_token: &str,
         minos_id: &str,
     ) -> Result<SearchUsersResponse, MinosError> {
-        let path = "/v1/users/search/query";
+        let path = "/v1/profiles/search";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(Method::POST.as_str(), path, None, Some(minos_id.into()));
         let request = self.request_with_json(
@@ -1221,6 +1223,38 @@ impl MobileHttpClient {
                 trace_id,
                 Some(status.as_u16()),
                 Some("member added".into()),
+                Some(conversation_id.into()),
+            );
+            Ok(())
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    pub async fn remove_group_member(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+        req: RemoveGroupMemberRequest,
+    ) -> Result<(), MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/members/remove");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some(req.member_account_id.clone()),
+        );
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("member removed".into()),
                 Some(conversation_id.into()),
             );
             Ok(())
@@ -1918,6 +1952,7 @@ fn formal_hosts_to_me_hosts(data: ListHostsData) -> Result<MeHostsResponse, Mino
                 "linked_via_installation_id",
                 &host.linked_via_installation_id,
             )?,
+            online: host.online,
         });
     }
     Ok(MeHostsResponse { hosts })
@@ -2494,6 +2529,7 @@ mod tests {
                 host_display_name: "Mac Studio".into(),
                 paired_at_ms: 123,
                 linked_via_installation_id: mobile_id.to_string(),
+                online: true,
             }],
         })
         .unwrap();
@@ -2503,6 +2539,7 @@ mod tests {
         assert_eq!(response.hosts[0].host_display_name, "Mac Studio");
         assert_eq!(response.hosts[0].paired_at_ms, 123);
         assert_eq!(response.hosts[0].paired_via_device_id, mobile_id);
+        assert!(response.hosts[0].online);
     }
 
     #[test]
@@ -2513,6 +2550,7 @@ mod tests {
                 host_display_name: "Mac Studio".into(),
                 paired_at_ms: 123,
                 linked_via_installation_id: DeviceId::new().to_string(),
+                online: false,
             }],
         })
         .expect_err("invalid host id must not be silently accepted");

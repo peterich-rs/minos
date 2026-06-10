@@ -227,17 +227,6 @@ pub struct Config {
     )]
     pub cluster_channel: String,
 
-    /// When `false`, deprecated routes (`/v1/threads/*`) are not mounted.
-    /// Default `true` for backward compatibility during the transition period.
-    /// Will become `false` in a future release.
-    #[arg(
-        long,
-        env = "MINOS_ENABLE_DEPRECATED_ROUTES",
-        default_value_t = true,
-        action = clap::ArgAction::Set,
-    )]
-    pub enable_deprecated_routes: bool,
-
     /// Graceful shutdown timeout in seconds. After receiving SIGTERM/SIGINT,
     /// the server waits up to this duration for in-flight requests to complete
     /// before forcibly terminating.
@@ -371,23 +360,6 @@ impl Config {
         }
         Ok(())
     }
-}
-
-/// Returns `true` if deprecated routes should be mounted.
-///
-/// Reads `MINOS_ENABLE_DEPRECATED_ROUTES` (default `true`). This is a
-/// standalone helper so router-building code doesn't need a `Config`
-/// reference; the env var is the source of truth at runtime.
-#[must_use]
-pub fn deprecated_routes_enabled() -> bool {
-    std::env::var("MINOS_ENABLE_DEPRECATED_ROUTES")
-        .ok()
-        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Some(true),
-            "false" | "0" | "no" => Some(false),
-            _ => None,
-        })
-        .unwrap_or(true)
 }
 
 /// Platform-specific fallback for the xlog directory.

@@ -28,7 +28,7 @@
 - host 与 account 的多链接关系已经在 `account_host_pairings` 中落地，不再是单 peer 假设。
 - 当前 `/devices` 同时承担 host 与 account client 的升级入口，确实把不同鉴权语义揉在了一起。
 - 旧 `forward_rpc.rs` 已被删除；当前 host 同步响应完全由 `host_commands` + in-process notifier 辅助唤醒承担，权威状态在持久化表而不在进程内 `DashMap`。
-- 当前 caller-scoped `/v1/me/*` 仍同时服务 account 与 host 两种视图，说明正式开发必须在 API surface 上把两条 rail 切开。
+- caller-scoped `/v1/me/*` 已退役；正式 API surface 已把 account 与 host rail 切开。
 
 这意味着产品范围已经被代码验证，只是运行时骨架、身份边界、实时模型和契约层仍带有 MVP 阶段的耦合与兼容面。正式开发保留业务范围、重写骨架和契约层，不存在需求层面的阻塞。Fully feasible.
 
@@ -36,9 +36,9 @@
 
 - `crates/minos-backend/src/http/mod.rs` — Axum 入口、`BackendState` 组装、HTTP middleware 与路由挂载。
 - `crates/minos-backend/src/http/v1/auth.rs` — 账号注册、登录、刷新、注销、ws-ticket 等身份接口；当前仍混用 device rail 与 bearer rail。
-- `crates/minos-backend/src/http/v1/me.rs` — 当前 caller-scoped host / peer 视图；正式开发将并入 pairing 与 host installation 自查询接口。
+- `crates/minos-backend/src/http/v1/pairing.rs` / `host.rs` — caller-scoped host / peer 视图已拆入 pairing 与 host installation 自查询接口。
 - `crates/minos-backend/src/http/v1/pairing.rs` — 当前 host 配对码申请、移动端确认、解绑入口。
-- `crates/minos-backend/src/http/v1/threads.rs` — 当前 thread 查询、事件读取、审批决策入口；正式开发将被 agent session / conversation 边界吸收。
+- `crates/minos-backend/src/http/v1/agent_sessions.rs` — agent session 查询、事件读取与命令入口；旧 thread HTTP surface 已删除。
 - `crates/minos-backend/src/http/v1/social.rs` — profile、好友、会话与消息相关 HTTP 面；当前也包含部分 host call path。
 - `crates/minos-backend/src/http/v1/projects.rs` — 当前项目列表、创建，以及 canonical `conversations/link`、`agent-sessions/query|link` 入口。
 - `crates/minos-backend/src/http/ws_devices.rs` — 当前混合 `/devices` WebSocket 升级与 live session 激活。
@@ -699,8 +699,8 @@ Redis bucket 限流默认作用于以下路径，阈值由 `config.rs` 配置：
 **File: `crates/minos-backend/src/http/v1/host.rs`**
 - 新增 host rail：bootstrap 子面负责 `pairing/request-code`, `pairing/redeem`；steady-state 子面负责 `realtime/ws-ticket`, `installations/self`。
 
-**File: `crates/minos-backend/src/http/v1/me.rs`**
-- 取消正式开发合同中的 `/v1/me/*`；现有 caller-scoped 视图分别并入 pairing 和 host self 接口。
+**Files: `crates/minos-backend/src/http/v1/pairing.rs`, `crates/minos-backend/src/http/v1/host.rs`**
+- 正式开发合同中不包含 `/v1/me/*`；caller-scoped 视图分别并入 pairing 和 host self 接口。
 
 **File: `crates/minos-backend/src/http/ws_devices.rs`**
 - 在同一模块中承载 `/ws/client` 与 `/ws/host` 的共享 upgrade / activation 实现。
@@ -869,7 +869,7 @@ Redis bucket 限流默认作用于以下路径，阈值由 `config.rs` 配置：
 - `crates/minos-backend/src/http/v1/approvals.rs` -- 新增 approval respond 专属入口。
 - `crates/minos-backend/src/http/v1/auth.rs` -- 收敛为 account bearer-first 身份接口。
 - `crates/minos-backend/src/http/v1/host.rs` -- 新增 host rail 接口。
-- `crates/minos-backend/src/http/v1/me.rs` -- 退役并拆入 pairing / host self surface。
+- `crates/minos-backend/src/http/v1/pairing.rs`, `crates/minos-backend/src/http/v1/host.rs` -- 承接已退役 `/v1/me/*` 的 pairing / host self surface。
 - `crates/minos-backend/src/http/v1/pairing.rs` -- 重写为 account-host link 领域接口。
 - `crates/minos-backend/src/http/v1/projects.rs` -- 扩展项目领域接口并移除 `thread` 旧词。
 - `crates/minos-backend/src/http/v1/social.rs` -- 按 profile / friendship / conversation 子域拆分。

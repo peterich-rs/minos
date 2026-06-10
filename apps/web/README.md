@@ -14,11 +14,11 @@ The web client is intentionally separate from the Flutter/mobile codepath. It
 talks to the same backend contract:
 
 - `POST /v1/auth/{register,login,refresh,logout}`
-- `POST /v1/auth/ws-ticket`
-- `POST /v1/me/hosts/query`
-- `POST /v1/threads/query`
-- `POST /v1/threads/read`
-- `GET /devices?ws_ticket=...`
+- `POST /v1/realtime/ws-ticket`
+- `POST /v1/pairing/list-hosts`
+- `POST /v1/agent-sessions/list`
+- `POST /v1/agent-sessions/read-turns`
+- `GET /ws/client?ticket=...`
 
 ## Local development
 
@@ -52,8 +52,8 @@ pnpm build
 ## Notes
 
 - Browser websocket upgrades cannot send the mobile app's custom auth headers.
-  The backend therefore exposes `POST /v1/auth/ws-ticket`, and the client
-  upgrades `/devices` with `?ws_ticket=...`.
+  The backend therefore exposes `POST /v1/realtime/ws-ticket`, and the client
+  upgrades `/ws/client` with `?ticket=...`.
 - Query surfaces now prefer POST-first `.../query` endpoints so host/mobile/web
   clients avoid pushing account-scoped filters and identifiers into URLs.
 - This app currently keeps session state in `localStorage` for speed while the

@@ -327,6 +327,43 @@ pub async fn bind_session_to_message(
     Ok(())
 }
 
+pub async fn bind_session_to_message_for_agent(
+    store: &impl AsStorePool,
+    message_id: &str,
+    agent_id: &str,
+    session_id: &str,
+) -> Result<(), BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE chat_messages
+                    SET agent_session_id = ?,
+                        sender_agent_id = COALESCE(sender_agent_id, ?)
+                  WHERE message_id = ?",
+        )
+        .bind(session_id)
+        .bind(agent_id)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE chat_messages
+                    SET agent_session_id = $1,
+                        sender_agent_id = COALESCE(sender_agent_id, $2)
+                  WHERE message_id = $3",
+        )
+        .bind(session_id)
+        .bind(agent_id)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+    }
+    .map_err(store_err("social::bind_session_to_message_for_agent"))?;
+
+    Ok(())
+}
+
 pub async fn lookup_session_id_for_message(
     store: &impl AsStorePool,
     message_id: &str,
@@ -392,6 +429,49 @@ pub async fn lookup_latest_session_id_for_conversation(
     .map(Option::flatten)
     .map_err(store_err(
         "social::lookup_latest_session_id_for_conversation",
+    ))
+}
+
+pub async fn lookup_latest_session_id_for_conversation_agent(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    agent_id: &str,
+) -> Result<Option<String>, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT agent_session_id
+                   FROM chat_messages
+                  WHERE conversation_id = ?
+                    AND sender_agent_id = ?
+                    AND agent_session_id IS NOT NULL
+                  ORDER BY created_at_ms DESC
+                  LIMIT 1",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT agent_session_id
+                   FROM chat_messages
+                  WHERE conversation_id = $1
+                    AND sender_agent_id = $2
+                    AND agent_session_id IS NOT NULL
+                  ORDER BY created_at_ms DESC
+                  LIMIT 1",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map(Option::flatten)
+    .map_err(store_err(
+        "social::lookup_latest_session_id_for_conversation_agent",
     ))
 }
 

@@ -139,7 +139,6 @@ pub async fn rate_limit_middleware(
     match limiter.check(&key).await {
         Ok(()) => next.run(req).await,
         Err(retry_after) => {
-            crate::telemetry::record_deprecated_route_hit(&path);
             let mut resp = Response::new(axum::body::Body::from(
                 r#"{"error":{"code":"rate_limited","message":"too many requests"}}"#,
             ));

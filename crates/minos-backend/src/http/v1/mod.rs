@@ -1,9 +1,9 @@
 //! Versioned `/v1` HTTP routes.
 //!
 //! Public `/v1` only exposes the formal account and host rails plus the
-//! retained pairing teardown endpoint. The legacy caller-scoped `/v1/me/*`
-//! surface and the legacy `/v1/pairing/tokens` and `/v1/pairing/consume`
-//! routes are retired.
+//! retained pairing teardown endpoint. Legacy caller-scoped `/v1/me/*`,
+//! `/v1/threads/*`, `/v1/pairing/tokens`, and `/v1/pairing/consume` routes are
+//! retired.
 
 use axum::http::{HeaderMap, StatusCode};
 use axum::{Json, Router};
@@ -28,7 +28,6 @@ pub mod profiles;
 pub mod projects;
 pub mod realtime;
 pub mod social;
-pub mod threads;
 
 pub fn router() -> Router<BackendState> {
     router_with_social(social::router())
@@ -39,7 +38,7 @@ pub fn external_sql_router() -> Router<BackendState> {
 }
 
 fn router_with_social(social_router: Router<BackendState>) -> Router<BackendState> {
-    let r = Router::new()
+    Router::new()
         .merge(approvals::router())
         .merge(agent_sessions::router())
         .merge(auth::router())
@@ -52,16 +51,7 @@ fn router_with_social(social_router: Router<BackendState>) -> Router<BackendStat
         .merge(profiles::router())
         .merge(projects::router())
         .merge(realtime::router())
-        .merge(social_router);
-
-    // Conditionally mount deprecated /v1/threads/* routes.
-    // The env var MINOS_ENABLE_DEPRECATED_ROUTES (default: true) controls
-    // this. When false, the routes are not registered and return 404.
-    if crate::config::deprecated_routes_enabled() {
-        r.merge(threads::router())
-    } else {
-        r
-    }
+        .merge(social_router)
 }
 
 /// Build a rate-limited auth router for sensitive endpoints.

@@ -44,6 +44,10 @@ pub fn router() -> Router<BackendState> {
             "/conversations/:conversation_id/members/add",
             post(add_group_member),
         )
+        .route(
+            "/conversations/:conversation_id/members/remove",
+            post(remove_group_member),
+        )
 }
 
 pub fn external_sql_router() -> Router<BackendState> {
@@ -296,6 +300,48 @@ async fn add_group_member(
         .add_member(&conversation_id, &req.member_account_id)
         .await
         .map_err(map_conversation_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_group_member(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+    Json(req): Json<minos_protocol::RemoveGroupMemberRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = super::social::require_account_id_from_state(&state, &headers)?;
+    if req.member_account_id == account_id {
+        return Err(err("bad_request", "leaving a group is not supported yet"));
+    }
+
+    let conversations_svc = DefaultConversationService::new(state.store.clone());
+    if !conversations_svc
+        .is_member(&conversation_id, &account_id)
+        .await
+        .map_err(map_conversation_error)?
+    {
+        return Err(err("not_found", "conversation not found"));
+    }
+
+    let conversation = conversations_svc
+        .get_conversation(&conversation_id)
+        .await
+        .map_err(map_conversation_error)?
+        .ok_or_else(|| err("not_found", "conversation not found"))?;
+    if conversation.kind != "group" {
+        return Err(err(
+            "bad_request",
+            "can only remove members from group conversations",
+        ));
+    }
+
+    let removed = conversations_svc
+        .remove_member(&conversation_id, &req.member_account_id)
+        .await
+        .map_err(map_conversation_error)?;
+    if !removed {
+        return Err(err("not_found", "member not in this conversation"));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

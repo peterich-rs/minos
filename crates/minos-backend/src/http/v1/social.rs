@@ -7,7 +7,7 @@ use axum::routing::post;
 use serde::Deserialize;
 
 const AGENT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(5);
-const GROUP_COMPLETION_TIMEOUT: Duration = Duration::from_mins(5);
+const GROUP_COMPLETION_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 const GROUP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const AGENT_DISPATCH_COMMAND_METHOD: &str = "minos_agent_dispatch";
 use crate::auth::bearer;
@@ -208,11 +208,25 @@ async fn build_agent_dispatch_plan(
 
     if conversation.kind == "group" {
         if let Some(agent) = first_mentioned_agent(text, &agents) {
+            let session_id = crate::store::social::lookup_latest_session_id_for_conversation_agent(
+                &state.store,
+                conversation_id,
+                &agent.agent_id,
+            )
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+            let watcher_from_seq = if let Some(ref session_id) = session_id {
+                crate::store::raw_events::last_seq(&state.store, session_id)
+                    .await
+                    .map_err(|e| err("internal", e.to_string()))?
+            } else {
+                0
+            };
             return Ok(Some(AgentDispatchPlan {
                 agent: agent.clone(),
-                session_id: None,
+                session_id,
                 forwarded_text: strip_agent_mention_once(text, &agent.agent_id),
-                watcher_from_seq: 0,
+                watcher_from_seq,
                 mention_sender: true,
             }));
         }
@@ -370,25 +384,21 @@ fn spawn_group_completion_watcher(
     mention_minos_id: Option<String>,
 ) {
     tokio::spawn(async move {
-        let deadline = tokio::time::Instant::now() + GROUP_COMPLETION_TIMEOUT;
+        let mut cursor = CompletionWatchCursor::new(trigger_seq, tokio::time::Instant::now());
         loop {
-            if tokio::time::Instant::now() >= deadline {
-                let timeout_text = mention_minos_id.as_deref().map_or_else(
-                    || "Sorry, I timed out waiting for a response.".to_string(),
-                    |minos_id| format!("@{minos_id} Sorry, I timed out waiting for a response."),
-                );
-                let mentions = mention_account_id.iter().cloned().collect::<Vec<_>>();
-                let _ = post_agent_social_message(
-                    &state,
-                    &conversation_id,
-                    &agent,
-                    &session_id,
-                    &reply_to_message_id,
-                    &timeout_text,
-                    &mentions,
-                )
-                .await;
-                return;
+            match crate::store::raw_events::last_seq(&state.store, &session_id).await {
+                Ok(latest_seq) => {
+                    cursor.observe(latest_seq, tokio::time::Instant::now());
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::social",
+                        error = %error,
+                        conversation_id = %conversation_id,
+                        session_id = %session_id,
+                        "group completion watcher failed to inspect latest raw event seq"
+                    );
+                }
             }
 
             match find_completed_agent_reply(
@@ -428,9 +438,69 @@ fn spawn_group_completion_watcher(
                 }
             }
 
-            tokio::time::sleep(GROUP_COMPLETION_POLL_INTERVAL).await;
+            let now = tokio::time::Instant::now();
+            if cursor.timed_out(now) {
+                tracing::warn!(
+                    target: "minos_backend::social",
+                    conversation_id = %conversation_id,
+                    session_id = %session_id,
+                    trigger_seq,
+                    last_observed_seq = cursor.last_observed_seq,
+                    "group completion watcher timed out after agent inactivity"
+                );
+                let timeout_text = mention_minos_id.as_deref().map_or_else(
+                    || "Sorry, I timed out waiting for a response.".to_string(),
+                    |minos_id| format!("@{minos_id} Sorry, I timed out waiting for a response."),
+                );
+                let mentions = mention_account_id.iter().cloned().collect::<Vec<_>>();
+                let _ = post_agent_social_message(
+                    &state,
+                    &conversation_id,
+                    &agent,
+                    &session_id,
+                    &reply_to_message_id,
+                    &timeout_text,
+                    &mentions,
+                )
+                .await;
+                return;
+            }
+
+            tokio::time::sleep(cursor.next_poll_delay(now)).await;
         }
     });
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompletionWatchCursor {
+    last_observed_seq: u64,
+    idle_deadline: tokio::time::Instant,
+}
+
+impl CompletionWatchCursor {
+    fn new(trigger_seq: u64, now: tokio::time::Instant) -> Self {
+        Self {
+            last_observed_seq: trigger_seq,
+            idle_deadline: now + GROUP_COMPLETION_IDLE_TIMEOUT,
+        }
+    }
+
+    fn observe(&mut self, latest_seq: u64, now: tokio::time::Instant) {
+        if latest_seq <= self.last_observed_seq {
+            return;
+        }
+        self.last_observed_seq = latest_seq;
+        self.idle_deadline = now + GROUP_COMPLETION_IDLE_TIMEOUT;
+    }
+
+    fn timed_out(self, now: tokio::time::Instant) -> bool {
+        now >= self.idle_deadline
+    }
+
+    fn next_poll_delay(self, now: tokio::time::Instant) -> Duration {
+        let until_idle = self.idle_deadline.saturating_duration_since(now);
+        GROUP_COMPLETION_POLL_INTERVAL.min(until_idle)
+    }
 }
 
 async fn find_completed_agent_reply(
@@ -845,9 +915,10 @@ pub async fn try_agent_dispatch(
     .await
     {
         Ok(response) => {
-            crate::store::social::bind_session_to_message(
+            crate::store::social::bind_session_to_message_for_agent(
                 &state.store,
                 &message.message_id,
+                &plan.agent.agent_id,
                 &response.session_id,
             )
             .await?;
@@ -890,5 +961,36 @@ fn agent_row_to_summary(row: &crate::store::social::AgentRow) -> AgentSummary {
         model: row.model.clone(),
         created_at_ms: row.created_at_ms,
         updated_at_ms: row.updated_at_ms,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completion_watch_cursor_extends_idle_deadline_on_agent_activity() {
+        let start = tokio::time::Instant::now();
+        let mut cursor = CompletionWatchCursor::new(10, start);
+
+        let almost_idle = start + GROUP_COMPLETION_IDLE_TIMEOUT - Duration::from_millis(1);
+        assert!(!cursor.timed_out(almost_idle));
+
+        cursor.observe(11, almost_idle);
+        assert_eq!(cursor.last_observed_seq, 11);
+        assert!(!cursor.timed_out(start + GROUP_COMPLETION_IDLE_TIMEOUT));
+        assert!(cursor.timed_out(almost_idle + GROUP_COMPLETION_IDLE_TIMEOUT));
+    }
+
+    #[test]
+    fn completion_watch_cursor_ignores_old_or_equal_seq() {
+        let start = tokio::time::Instant::now();
+        let mut cursor = CompletionWatchCursor::new(10, start);
+
+        cursor.observe(10, start + Duration::from_secs(1));
+        cursor.observe(9, start + Duration::from_secs(2));
+
+        assert_eq!(cursor.last_observed_seq, 10);
+        assert!(cursor.timed_out(start + GROUP_COMPLETION_IDLE_TIMEOUT));
     }
 }

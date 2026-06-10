@@ -6,7 +6,8 @@
 //! `ThreadTitleUpdated`, `increment_message_count` when a new message is
 //! placed, `mark_ended` when the backend sees `ThreadClosed`.
 //!
-//! List backs the HTTP `GET /v1/threads` route (see `http::v1::threads`).
+//! The formal agent-session and project APIs still use these summaries while
+//! the ingest path is being folded into room-first storage.
 
 use std::collections::HashMap;
 
@@ -206,7 +207,7 @@ pub async fn exists_for_account(
     })
 }
 
-/// List thread summaries for the `GET /v1/threads` HTTP response.
+/// List thread summaries for formal agent-session/project query responses.
 ///
 /// Filters (all optional):
 /// - `owner_device_id`  — restrict to threads owned by this device.

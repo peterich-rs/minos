@@ -215,7 +215,7 @@ async fn social_friend_and_chat_flow_round_trips() {
         &mut app,
         authed_request(
             Method::POST,
-            "/v1/me/profile/query",
+            "/v1/profiles/self",
             alice_device,
             &alice.account_id,
             Body::from("{}"),
@@ -230,7 +230,7 @@ async fn social_friend_and_chat_flow_round_trips() {
         &mut app,
         authed_request(
             Method::POST,
-            "/v1/users/search/query",
+            "/v1/profiles/search",
             alice_device,
             &alice.account_id,
             Body::from(serde_json::json!({ "minos_id": &bob.minos_id[..4] }).to_string()),
@@ -542,6 +542,17 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
         &conversation.conversation_id,
     )
     .await;
+    assert_eq!(
+        social::lookup_latest_session_id_for_conversation_agent(
+            &state.store,
+            &conversation.conversation_id,
+            &agent.agent_id
+        )
+        .await
+        .unwrap()
+        .as_deref(),
+        Some("sess-group-1")
+    );
 
     threads::upsert(
         &state.store,
@@ -619,6 +630,115 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
             .as_deref(),
         Some("sess-group-1")
     );
+
+    let host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
+    let dispatch = spawn_agent_dispatch_responder(
+        Arc::clone(&state.registry),
+        state
+            .store
+            .sqlite_pool_cloned()
+            .expect("social dispatch tests run only against sqlite test state"),
+        host_device_id,
+        host_rx,
+        "sess-group-1",
+    );
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": format!("@{} one more thing", agent.agent_id)
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let dispatch = dispatch.await.unwrap();
+    let followup_message_id = body["message_id"].as_str().unwrap().to_string();
+    assert_eq!(dispatch.session_id.as_deref(), Some("sess-group-1"));
+    assert_eq!(dispatch.text, "one more thing");
+    assert_eq!(
+        dispatch.origin_message_id.as_deref(),
+        Some(followup_message_id.as_str())
+    );
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &followup_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("sess-group-1")
+    );
+    assert_agent_dispatch_host_command(
+        &state.store,
+        host_device_id,
+        &followup_message_id,
+        Some("sess-group-1"),
+        "sess-group-1",
+        "one more thing",
+        &conversation.conversation_id,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn group_member_can_be_removed_by_existing_member() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Group",
+        &[bob.account_id.clone()],
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, _) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/members/remove",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "member_account_id": bob.account_id
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let members = social::list_conversation_members(&state.store, &conversation.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0], alice.account_id);
 }
 
 #[tokio::test]

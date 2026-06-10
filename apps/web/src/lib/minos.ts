@@ -35,9 +35,12 @@ export interface StoredSession {
 
 export interface WsTicketResponse {
   ticket: string
-  expires_in: number
-  device_id: string
-  device_role: DeviceRole
+  gateway_url?: string | null
+  expires_at_ms?: number | null
+}
+
+interface ResponseEnvelope<T> {
+  data: T
 }
 
 export interface PairingQrPayload {
@@ -61,6 +64,22 @@ export interface HostSummary {
 
 export interface MeHostsResponse {
   hosts: HostSummary[]
+}
+
+interface FormalHostSummary {
+  host_installation_id: string
+  host_display_name: string
+  paired_at_ms: number
+  linked_via_installation_id: string
+}
+
+interface ListHostsData {
+  hosts: FormalHostSummary[]
+}
+
+interface ConfirmPairingData {
+  host_installation_id: string
+  status: string
 }
 
 export interface MyProfileResponse {
@@ -250,7 +269,17 @@ export type UiEventMessage =
       text: string
     }
   | {
+      kind: 'text_replace'
+      message_id: string
+      text: string
+    }
+  | {
       kind: 'reasoning_delta'
+      message_id: string
+      text: string
+    }
+  | {
+      kind: 'reasoning_replace'
       message_id: string
       text: string
     }
@@ -283,6 +312,48 @@ export interface ReadThreadResponse {
   ui_events: UiEventMessage[]
   next_seq?: number | null
   thread_end_reason?: ThreadEndReason | null
+}
+
+interface FormalAgentSessionSummary {
+  session_id: string
+  conversation_id: string
+  project_id?: string | null
+  agent_id?: string | null
+  agent?: AgentName | null
+  status: string
+  started_at_ms: number
+  ended_at_ms?: number | null
+  title?: string | null
+  last_activity_at_ms: number
+  message_count: number
+  end_reason?: ThreadEndReason | null
+}
+
+interface AgentSessionsResponse {
+  sessions: FormalAgentSessionSummary[]
+  next_before_started_at_ms?: number | null
+}
+
+interface AgentTurnMetadata {
+  turn_id: string
+  turn_seq: number
+  role: string
+  status: string
+  started_at_ms: number
+  finished_at_ms?: number | null
+  summary_text?: string | null
+}
+
+interface AgentTurnEvent {
+  turn_id: string
+  kind: string
+  payload: Record<string, unknown>
+  created_at_ms: number
+}
+
+interface ReadAgentSessionTurnsResponse {
+  turns: AgentTurnMetadata[]
+  events: AgentTurnEvent[]
 }
 
 export interface StartAgentResponse {
@@ -519,11 +590,20 @@ export async function createWsTicket(
   deviceId: string,
   accessToken: string,
 ): Promise<WsTicketResponse> {
-  return requestJson<WsTicketResponse>('/v1/auth/ws-ticket', {
+  const envelope = await requestJson<ResponseEnvelope<{
+    ticket: string
+    gateway_url: string
+    expires_at_ms: number
+  }>>('/v1/realtime/ws-ticket', {
     method: 'POST',
     headers: deviceHeaders(deviceId, accessToken),
-    body: JSON.stringify({}),
+    body: JSON.stringify({ installation_id: deviceId }),
   })
+  return {
+    ticket: envelope.data.ticket,
+    gateway_url: envelope.data.gateway_url,
+    expires_at_ms: envelope.data.expires_at_ms,
+  }
 }
 
 function requestAuthedQuery<T>(
@@ -543,11 +623,19 @@ export async function listHosts(
   deviceId: string,
   accessToken: string,
 ): Promise<MeHostsResponse> {
-  return requestAuthedQuery<MeHostsResponse>(
-    '/v1/me/hosts/query',
+  const envelope = await requestAuthedQuery<ResponseEnvelope<ListHostsData>>(
+    '/v1/pairing/list-hosts',
     deviceId,
     accessToken,
   )
+  return {
+    hosts: envelope.data.hosts.map((host) => ({
+      host_device_id: host.host_installation_id,
+      host_display_name: host.host_display_name,
+      paired_at_ms: host.paired_at_ms,
+      paired_via_device_id: host.linked_via_installation_id,
+    })),
+  }
 }
 
 export async function pairHost(
@@ -556,14 +644,19 @@ export async function pairHost(
   pairingToken: string,
   deviceName = 'Browser admin',
 ): Promise<PairResponse> {
-  return requestJson<PairResponse>('/v1/pairing/consume', {
+  void deviceName
+  const envelope = await requestJson<ResponseEnvelope<ConfirmPairingData>>('/v1/pairing/confirm', {
     method: 'POST',
     headers: deviceHeaders(deviceId, accessToken),
     body: JSON.stringify({
-      token: pairingToken,
-      device_name: deviceName,
+      pairing_code: pairingToken,
+      client_request_id: crypto.randomUUID(),
     }),
   })
+  return {
+    peer_device_id: envelope.data.host_installation_id,
+    peer_name: envelope.data.status,
+  }
 }
 
 export async function getMyProfile(
@@ -571,7 +664,7 @@ export async function getMyProfile(
   accessToken: string,
 ): Promise<MyProfileResponse> {
   return requestAuthedQuery<MyProfileResponse>(
-    '/v1/me/profile/query',
+    '/v1/profiles/self',
     deviceId,
     accessToken,
   )
@@ -582,7 +675,7 @@ export async function setMyMinosId(
   accessToken: string,
   minosId: string,
 ): Promise<MyProfileResponse> {
-  return requestJson<MyProfileResponse>('/v1/me/profile/minos-id', {
+  return requestJson<MyProfileResponse>('/v1/profiles/minos-id', {
     method: 'POST',
     headers: deviceHeaders(deviceId, accessToken),
     body: JSON.stringify({ minos_id: minosId }),
@@ -594,7 +687,7 @@ export async function setMyDisplayName(
   accessToken: string,
   displayName: string | null,
 ): Promise<MyProfileResponse> {
-  return requestJson<MyProfileResponse>('/v1/me/profile/display-name', {
+  return requestJson<MyProfileResponse>('/v1/profiles/display-name', {
     method: 'POST',
     headers: deviceHeaders(deviceId, accessToken),
     body: JSON.stringify({ display_name: displayName ?? null }),
@@ -627,7 +720,7 @@ export async function searchUsers(
   minosId: string,
 ): Promise<SearchUsersResponse> {
   return requestAuthedQuery<SearchUsersResponse>(
-    '/v1/users/search/query',
+    '/v1/profiles/search',
     deviceId,
     accessToken,
     { minos_id: minosId },
@@ -822,16 +915,20 @@ export async function listThreads(
   accessToken: string,
   options: { limit?: number; beforeTsMs?: number | null; agent?: AgentName | null } = {},
 ): Promise<ListThreadsResponse> {
-  return requestAuthedQuery<ListThreadsResponse>(
-    '/v1/threads/query',
+  const body = await requestAuthedQuery<AgentSessionsResponse>(
+    '/v1/agent-sessions/list',
     deviceId,
     accessToken,
     {
       limit: options.limit ?? 50,
-      before_ts_ms: options.beforeTsMs ?? undefined,
-      agent: options.agent ?? undefined,
+      before_started_at_ms: options.beforeTsMs ?? undefined,
     },
   )
+  const threads = body.sessions.map(threadSummaryFromFormalSession)
+  return {
+    threads: options.agent ? threads.filter((thread) => thread.agent === options.agent) : threads,
+    next_before_ts_ms: body.next_before_started_at_ms,
+  }
 }
 
 export async function readThread(
@@ -839,15 +936,213 @@ export async function readThread(
   accessToken: string,
   threadId: string,
 ): Promise<ReadThreadResponse> {
-  return requestAuthedQuery<ReadThreadResponse>(
-    '/v1/threads/read',
+  const turnsPage = await requestAuthedQuery<ReadAgentSessionTurnsResponse>(
+    '/v1/agent-sessions/read-turns',
     deviceId,
     accessToken,
     {
-      thread_id: threadId,
+      session_id: threadId,
       limit: 200,
     },
   )
+  const uiEvents: UiEventMessage[] = []
+  for (const turn of turnsPage.turns) {
+    const eventPage = await requestAuthedQuery<ReadAgentSessionTurnsResponse>(
+      '/v1/agent-sessions/read-turns',
+      deviceId,
+      accessToken,
+      {
+        turn_id: turn.turn_id,
+        limit: 200,
+      },
+    )
+    appendTurnUiEvents(uiEvents, turn, eventPage.events)
+  }
+  return {
+    ui_events: uiEvents,
+    next_seq: turnsPage.turns.length >= 200
+      ? turnsPage.turns[turnsPage.turns.length - 1]?.turn_seq
+      : null,
+    thread_end_reason: null,
+  }
+}
+
+function threadSummaryFromFormalSession(session: FormalAgentSessionSummary): ThreadSummary {
+  return {
+    thread_id: session.session_id,
+    agent: session.agent ?? agentNameFromSessionAgentId(session.agent_id) ?? 'codex',
+    title: session.title ?? null,
+    first_ts_ms: session.started_at_ms,
+    last_ts_ms: session.last_activity_at_ms,
+    message_count: session.message_count,
+    ended_at_ms: session.ended_at_ms ?? null,
+    end_reason: session.end_reason ?? null,
+  }
+}
+
+function agentNameFromSessionAgentId(agentId?: string | null): AgentName | null {
+  if (!agentId) return null
+  if (agentId === 'codex' || agentId.startsWith('codex-')) return 'codex'
+  if (agentId === 'claude' || agentId.startsWith('claude-')) return 'claude'
+  if (agentId === 'gemini' || agentId.startsWith('gemini-')) return 'gemini'
+  return null
+}
+
+function appendTurnUiEvents(
+  uiEvents: UiEventMessage[],
+  turn: AgentTurnMetadata,
+  events: AgentTurnEvent[],
+): void {
+  if (events.length === 0) {
+    appendTurnSummaryUiEvents(uiEvents, turn)
+    return
+  }
+
+  const role = messageRoleFromTurnRole(turn.role)
+  const startedMessageIds = new Set<string>()
+  for (const event of events) {
+    const messageId = messageIdForTurnEvent(turn, event)
+    if (!startedMessageIds.has(messageId)) {
+      startedMessageIds.add(messageId)
+      uiEvents.push({
+        kind: 'message_started',
+        message_id: messageId,
+        role,
+        started_at_ms: turn.started_at_ms,
+      })
+    }
+    uiEvents.push(...uiEventsForTurnEvent(messageId, event))
+  }
+
+  if (turnIsComplete(turn)) {
+    const finishedAtMs = turn.finished_at_ms ?? turn.started_at_ms
+    for (const messageId of startedMessageIds) {
+      uiEvents.push({
+        kind: 'message_completed',
+        message_id: messageId,
+        finished_at_ms: finishedAtMs,
+      })
+    }
+  }
+}
+
+function appendTurnSummaryUiEvents(uiEvents: UiEventMessage[], turn: AgentTurnMetadata): void {
+  if (!turn.summary_text) return
+  uiEvents.push({
+    kind: 'message_started',
+    message_id: turn.turn_id,
+    role: messageRoleFromTurnRole(turn.role),
+    started_at_ms: turn.started_at_ms,
+  })
+  uiEvents.push({
+    kind: 'text_delta',
+    message_id: turn.turn_id,
+    text: turn.summary_text,
+  })
+  if (turnIsComplete(turn)) {
+    uiEvents.push({
+      kind: 'message_completed',
+      message_id: turn.turn_id,
+      finished_at_ms: turn.finished_at_ms ?? turn.started_at_ms,
+    })
+  }
+}
+
+function uiEventsForTurnEvent(messageId: string, event: AgentTurnEvent): UiEventMessage[] {
+  switch (event.kind) {
+    case 'agent_text_delta':
+      return textFromPayload(event.payload).map((text) => ({
+        kind: 'text_delta' as const,
+        message_id: messageId,
+        text,
+      }))
+    case 'agent_text_replace':
+      return textFromPayload(event.payload).map((text) => ({
+        kind: 'text_replace' as const,
+        message_id: messageId,
+        text,
+      }))
+    case 'agent_reasoning_delta':
+      return textFromPayload(event.payload).map((text) => ({
+        kind: 'reasoning_delta' as const,
+        message_id: messageId,
+        text,
+      }))
+    case 'agent_reasoning_replace':
+      return textFromPayload(event.payload).map((text) => ({
+        kind: 'reasoning_replace' as const,
+        message_id: messageId,
+        text,
+      }))
+    case 'agent_tool_call':
+      return [{
+        kind: 'tool_call_placed',
+        message_id: messageId,
+        tool_call_id: stringPayload(event.payload, ['tool_call_id', 'id']) ?? 'tool_call',
+        name: stringPayload(event.payload, ['name', 'tool_name']) ?? 'tool',
+        args_json: argsJsonFromPayload(event.payload),
+      }]
+    case 'agent_tool_result':
+    case 'agent_tool_completed':
+      return [{
+        kind: 'tool_call_completed',
+        tool_call_id: stringPayload(event.payload, ['tool_call_id', 'id']) ?? 'tool_call',
+        output: outputFromPayload(event.payload),
+        is_error: Boolean(event.payload.is_error ?? event.payload.error ?? false),
+      }]
+    case 'agent_error':
+      return [{
+        kind: 'error',
+        code: stringPayload(event.payload, ['code']) ?? 'agent_error',
+        message: stringPayload(event.payload, ['message', 'detail']) ?? 'agent error',
+        message_id: messageId,
+      }]
+    default:
+      return [{
+        kind: 'raw',
+        raw_kind: event.kind,
+        payload_json: JSON.stringify(event.payload),
+      }]
+  }
+}
+
+function messageIdForTurnEvent(turn: AgentTurnMetadata, event: AgentTurnEvent): string {
+  return stringPayload(event.payload, ['message_id', 'msg_id']) || event.turn_id || turn.turn_id
+}
+
+function textFromPayload(payload: Record<string, unknown>): string[] {
+  const value = stringPayload(payload, ['text', 'delta', 'content'])
+  return value ? [value] : []
+}
+
+function stringPayload(payload: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = payload[key]
+    if (typeof value === 'string') return value
+  }
+  return null
+}
+
+function argsJsonFromPayload(payload: Record<string, unknown>): string {
+  const argsJson = stringPayload(payload, ['args_json'])
+  if (argsJson) return argsJson
+  const args = payload.args
+  return args === undefined ? '{}' : JSON.stringify(args)
+}
+
+function outputFromPayload(payload: Record<string, unknown>): string {
+  const value = payload.output ?? payload.result
+  if (value === undefined || value === null) return ''
+  return typeof value === 'string' ? value : JSON.stringify(value)
+}
+
+function messageRoleFromTurnRole(role: string): MessageRole {
+  return role === 'user' || role === 'system' ? role : 'assistant'
+}
+
+function turnIsComplete(turn: AgentTurnMetadata): boolean {
+  return ['completed', 'failed', 'cancelled', 'canceled'].includes(turn.status)
+    || turn.finished_at_ms != null
 }
 
 export async function logoutBrowserSession(

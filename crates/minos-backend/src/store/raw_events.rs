@@ -307,7 +307,7 @@ pub async fn last_seq_per_owner(
 
 /// Return the largest `seq` ever persisted for `thread_id`, or `0` if no
 /// rows exist. Used by the agent-host to decide whether to re-ingest on
-/// startup (`GET /v1/threads/{id}/last_seq`).
+/// startup/resume cursors.
 pub async fn last_seq(store: &impl AsStorePool, thread_id: &str) -> Result<u64, BackendError> {
     let v: Option<i64> = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {

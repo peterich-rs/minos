@@ -507,6 +507,36 @@ pub async fn add_member_to_group(
     Ok(())
 }
 
+pub async fn remove_member_from_group(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    account_id: &str,
+) -> Result<bool, BackendError> {
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "DELETE FROM conversation_members
+                  WHERE conversation_id = ? AND account_id = ?",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "DELETE FROM conversation_members
+                  WHERE conversation_id = $1 AND account_id = $2",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(store_err("social::remove_member_from_group"))?;
+
+    Ok(result > 0)
+}
+
 pub async fn mark_conversation_read_to_latest(
     store: &impl AsStorePool,
     conversation_id: &str,

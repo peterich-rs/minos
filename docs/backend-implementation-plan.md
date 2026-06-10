@@ -2181,7 +2181,7 @@ DROP TABLE pending_approvals;
 - [ ] `host_commands` 是后端 → host 同步请求唯一权威；in-memory 仅缓存等待
 - [ ] `ApprovalService` 把 respond / timeout / disconnect 三路统一通过 `host_commands`
 - [ ] `approval_relay.rs` / `host_command_runtime.rs` 删除（或改为薄 deprecated wrapper，发 lint warning）
-- [ ] 现有 `/v1/me/peers` / `/v1/threads/*` / `/devices` 流量没回升（监控指标）
+- [ ] 已退役 `/v1/me/*` / `/v1/threads/*` / `/devices` 调用点没有回归
 
 ### P3 回退总结
 
@@ -3497,4 +3497,3 @@ labels = ["result"]
 - 若 OTLP 在 prod 高 QPS 下出现导出延迟：把 `Sampler` 切到 `TraceIdRatioBased(0.01)` + `parent_based(always_off)`
 - 若 metrics drift gate 误报：先把 lint 设为 warning，开 issue 跟踪规则修复
 - 若 W3C trace 在 WS 帧中扩大 payload：仅在 `Hello`、`DurableEvent` 帧中带；其余 ephemeral 帧不带
-

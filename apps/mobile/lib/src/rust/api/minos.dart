@@ -236,6 +236,11 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String agentId,
   });
 
+  Future<void> removeGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  });
+
   /// Reconnect using the durable pairing snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession();
@@ -932,12 +937,14 @@ class HostSummaryDto {
   final String hostDisplayName;
   final PlatformInt64 pairedAtMs;
   final String pairedViaDeviceId;
+  final bool online;
 
   const HostSummaryDto({
     required this.hostDeviceId,
     required this.hostDisplayName,
     required this.pairedAtMs,
     required this.pairedViaDeviceId,
+    required this.online,
   });
 
   @override
@@ -945,7 +952,8 @@ class HostSummaryDto {
       hostDeviceId.hashCode ^
       hostDisplayName.hashCode ^
       pairedAtMs.hashCode ^
-      pairedViaDeviceId.hashCode;
+      pairedViaDeviceId.hashCode ^
+      online.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -955,7 +963,8 @@ class HostSummaryDto {
           hostDeviceId == other.hostDeviceId &&
           hostDisplayName == other.hostDisplayName &&
           pairedAtMs == other.pairedAtMs &&
-          pairedViaDeviceId == other.pairedViaDeviceId;
+          pairedViaDeviceId == other.pairedViaDeviceId &&
+          online == other.online;
 }
 
 enum Lang { zh, en }

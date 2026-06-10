@@ -120,6 +120,27 @@
     },
     {
       "method": "POST",
+      "path": "/v1/agent-sessions/start",
+      "probe_path": "/v1/agent-sessions/start",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agent-sessions/send-input",
+      "probe_path": "/v1/agent-sessions/send-input",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agent-sessions/stop",
+      "probe_path": "/v1/agent-sessions/stop",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
       "path": "/v1/agent-sessions/list",
       "probe_path": "/v1/agent-sessions/list",
       "surface": "account_api",
@@ -344,29 +365,29 @@
     },
     {
       "method": "POST",
-      "path": "/v1/me/profile/query",
-      "probe_path": "/v1/me/profile/query",
+      "path": "/v1/profiles/self",
+      "probe_path": "/v1/profiles/self",
       "surface": "account_api",
       "auth": "account_bearer"
     },
     {
       "method": "POST",
-      "path": "/v1/me/profile/minos-id",
-      "probe_path": "/v1/me/profile/minos-id",
+      "path": "/v1/profiles/minos-id",
+      "probe_path": "/v1/profiles/minos-id",
       "surface": "account_api",
       "auth": "account_bearer"
     },
     {
       "method": "POST",
-      "path": "/v1/me/profile/display-name",
-      "probe_path": "/v1/me/profile/display-name",
+      "path": "/v1/profiles/display-name",
+      "probe_path": "/v1/profiles/display-name",
       "surface": "account_api",
       "auth": "account_bearer"
     },
     {
       "method": "POST",
-      "path": "/v1/users/search/query",
-      "probe_path": "/v1/users/search/query",
+      "path": "/v1/profiles/search",
+      "probe_path": "/v1/profiles/search",
       "surface": "account_api",
       "auth": "account_bearer"
     },
@@ -528,48 +549,6 @@
       "method": "POST",
       "path": "/v1/conversations/:conversation_id/agents/message",
       "probe_path": "/v1/conversations/conv_probe/agents/message",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/threads",
-      "probe_path": "/v1/threads",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/threads/query",
-      "probe_path": "/v1/threads/query",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/threads/:thread_id/events",
-      "probe_path": "/v1/threads/thread_probe/events",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/threads/read",
-      "probe_path": "/v1/threads/read",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/threads/:thread_id/last_seq",
-      "probe_path": "/v1/threads/thread_probe/last_seq",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/threads/last-seq",
-      "probe_path": "/v1/threads/last-seq",
       "surface": "account_api",
       "auth": "account_bearer"
     },

@@ -417,29 +417,29 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
-        "/v1/me/profile/query",
-        "/v1/me/profile/query",
+        "/v1/profiles/self",
+        "/v1/profiles/self",
         "account_api",
         "account_bearer",
     ),
     RouteContract::new(
         "POST",
-        "/v1/me/profile/minos-id",
-        "/v1/me/profile/minos-id",
+        "/v1/profiles/minos-id",
+        "/v1/profiles/minos-id",
         "account_api",
         "account_bearer",
     ),
     RouteContract::new(
         "POST",
-        "/v1/me/profile/display-name",
-        "/v1/me/profile/display-name",
+        "/v1/profiles/display-name",
+        "/v1/profiles/display-name",
         "account_api",
         "account_bearer",
     ),
     RouteContract::new(
         "POST",
-        "/v1/users/search/query",
-        "/v1/users/search/query",
+        "/v1/profiles/search",
+        "/v1/profiles/search",
         "account_api",
         "account_bearer",
     ),
@@ -606,48 +606,6 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
-        "/v1/threads",
-        "/v1/threads",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/threads/query",
-        "/v1/threads/query",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/threads/:thread_id/events",
-        "/v1/threads/thread_probe/events",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/threads/read",
-        "/v1/threads/read",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/threads/:thread_id/last_seq",
-        "/v1/threads/thread_probe/last_seq",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/threads/last-seq",
-        "/v1/threads/last-seq",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
         "/v1/notifications/tokens/register",
         "/v1/notifications/tokens/register",
         "account_api",
@@ -799,17 +757,6 @@ pub fn router(state: BackendState) -> Router {
     crate::telemetry::init();
     crate::telemetry::set_session_registry_size(state.registry.len());
 
-    // Log deprecation warnings at startup for deprecated routes still enabled.
-    if crate::config::deprecated_routes_enabled() {
-        for route in v1::threads::DEPRECATED_THREAD_ROUTES {
-            tracing::warn!(
-                target: "minos_backend::startup",
-                route,
-                "deprecated route is mounted; set MINOS_ENABLE_DEPRECATED_ROUTES=false to disable"
-            );
-        }
-    }
-
     // Initialize rate limiter for sensitive endpoints.
     let _rate_limiter = rate_limit::RateLimiter::from_env();
     tracing::info!(
@@ -889,11 +836,6 @@ async fn record_http_metrics(request: Request<axum::body::Body>, next: Next) -> 
         response.status().as_u16(),
         started_at.elapsed().as_secs_f64(),
     );
-
-    // Record hits to deprecated routes for operator visibility.
-    if route.starts_with("/v1/threads") {
-        crate::telemetry::record_deprecated_route_hit(&route);
-    }
 
     response
 }

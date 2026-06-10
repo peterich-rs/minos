@@ -51,7 +51,6 @@ use utoipa::OpenApi;
         (name = "pairing", description = "Account-host pairing management"),
         (name = "projects", description = "Project CRUD and agent-session linking"),
         (name = "social", description = "Conversations, friends, and messaging"),
-        (name = "threads", description = "Thread listing and reading (DEPRECATED)"),
     )
 )]
 pub struct ApiDoc;

@@ -164,14 +164,15 @@ pub use friendships::{
 pub use conversations::{
     add_member_to_group, create_group_conversation, ensure_direct_conversation, get_conversation,
     is_conversation_member, list_conversation_member_profiles, list_conversation_members,
-    list_conversations_for, mark_conversation_read_to_latest,
+    list_conversations_for, mark_conversation_read_to_latest, remove_member_from_group,
 };
 
 // Conversation message functions
 pub use conversation_messages::{
-    bind_session_to_message, get_message, has_bound_message_for_session, insert_message,
-    list_message_mentions, list_messages, list_messages_by_ids,
-    lookup_latest_session_id_for_conversation, lookup_session_id_for_message, recall_message,
+    bind_session_to_message, bind_session_to_message_for_agent, get_message,
+    has_bound_message_for_session, insert_message, list_message_mentions, list_messages,
+    list_messages_by_ids, lookup_latest_session_id_for_conversation,
+    lookup_latest_session_id_for_conversation_agent, lookup_session_id_for_message, recall_message,
     suppress_live_ui_fanout_for_session,
 };
 

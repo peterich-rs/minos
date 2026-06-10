@@ -123,6 +123,12 @@ pub trait ConversationService: Send + Sync {
         conversation_id: &str,
         account_id: &str,
     ) -> Result<(), ConversationError>;
+
+    async fn remove_member(
+        &self,
+        conversation_id: &str,
+        account_id: &str,
+    ) -> Result<bool, ConversationError>;
 }
 
 pub struct DefaultConversationService {
@@ -383,6 +389,14 @@ impl ConversationService for DefaultConversationService {
         )
         .await?;
         Ok(())
+    }
+
+    async fn remove_member(
+        &self,
+        conversation_id: &str,
+        account_id: &str,
+    ) -> Result<bool, ConversationError> {
+        Ok(social::remove_member_from_group(&self.store, conversation_id, account_id).await?)
     }
 }
 

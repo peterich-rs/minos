@@ -62,17 +62,19 @@ export function transcriptFromEvents(events: UiEventMessage[]) {
       }
       continue
     }
-    if (event.kind === 'text_delta') {
+    if (event.kind === 'text_delta' || event.kind === 'text_replace') {
       const message = messages.get(event.message_id)
       if (message) {
-        message.text += event.text
+        message.text = event.kind === 'text_replace' ? event.text : message.text + event.text
       }
       continue
     }
-    if (event.kind === 'reasoning_delta') {
+    if (event.kind === 'reasoning_delta' || event.kind === 'reasoning_replace') {
       const message = messages.get(event.message_id)
       if (message) {
-        message.reasoning += event.text
+        message.reasoning = event.kind === 'reasoning_replace'
+          ? event.text
+          : message.reasoning + event.text
       }
       continue
     }

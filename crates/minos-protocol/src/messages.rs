@@ -38,6 +38,8 @@ pub struct HostSummary {
     pub host_display_name: String,
     pub paired_at_ms: i64,
     pub paired_via_device_id: DeviceId,
+    #[serde(default)]
+    pub online: bool,
 }
 
 /// Response body for `GET /v1/me/peers`. Host callers receive every
@@ -344,6 +346,13 @@ pub struct RemoveAgentFromGroupRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AddGroupMemberRequest {
+    pub member_account_id: String,
+}
+
+/// Request to remove a user member from an existing group conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RemoveGroupMemberRequest {
     pub member_account_id: String,
 }
 
@@ -872,6 +881,7 @@ mod tests {
                 host_display_name: "Mac-mini".into(),
                 paired_at_ms: 1_714_000_000_000,
                 paired_via_device_id: DeviceId::new(),
+                online: true,
             }],
         };
         let json = serde_json::to_string(&hosts).unwrap();

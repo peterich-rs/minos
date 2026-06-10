@@ -213,7 +213,7 @@ mod tests {
         let id = start(
             RequestTransport::Http,
             "GET",
-            "/v1/threads",
+            "/v1/agent-sessions/list",
             None,
             Some("limit=50".into()),
         );

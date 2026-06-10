@@ -33,6 +33,7 @@ struct FormalHostSummary {
     host_display_name: String,
     paired_at_ms: i64,
     linked_via_installation_id: String,
+    online: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -213,6 +214,7 @@ async fn post_list_hosts(
             host_display_name: row.map_or_else(|| "unknown".to_string(), |row| row.display_name),
             paired_at_ms: pair.paired_at_ms,
             linked_via_installation_id: pair.paired_via_device_id.to_string(),
+            online: state.registry.get(pair.host_device_id).is_some(),
         });
     }
 

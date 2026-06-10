@@ -126,4 +126,5 @@ async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() 
     assert_eq!(hosts[0]["host_display_name"], "Mac Studio");
     assert_eq!(hosts[0]["paired_at_ms"], 123);
     assert_eq!(hosts[0]["linked_via_installation_id"], mobile.to_string());
+    assert_eq!(hosts[0]["online"], false);
 }

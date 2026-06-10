@@ -31,8 +31,8 @@ use minos_protocol::{
     GetThreadLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesResponse,
     ListClisResponse, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
     MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
-    RegisterAgentRequest, RemoveAgentFromGroupRequest, SendChatMessageRequest, SetMinosIdRequest,
-    UserSummary, WriteHostSkillConfigResponse,
+    RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
+    SendChatMessageRequest, SetMinosIdRequest, UserSummary, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -635,6 +635,20 @@ impl MobileClient {
                 &access,
                 &conversation_id,
                 AddGroupMemberRequest { member_account_id },
+            )
+        })
+    }
+
+    pub async fn remove_group_member(
+        &self,
+        conversation_id: String,
+        member_account_id: String,
+    ) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.remove_group_member(
+                &access,
+                &conversation_id,
+                RemoveGroupMemberRequest { member_account_id },
             )
         })
     }

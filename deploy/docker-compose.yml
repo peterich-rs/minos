@@ -55,7 +55,6 @@ services:
       MINOS_ENV: "dev"
       MINOS_CORS_ORIGINS: "*"
       RUST_LOG: "info,minos_backend=debug"
-      MINOS_ENABLE_DEPRECATED_ROUTES: "true"
       MINOS_SHUTDOWN_TIMEOUT_SECS: "30"
     depends_on:
       postgres:
