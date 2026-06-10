@@ -185,6 +185,53 @@ pub async fn latest_for_account_conversation(
     .map_err(store_err("agent_sessions.latest_for_account_conversation"))
 }
 
+pub async fn list_for_account(
+    store: &impl AsStorePool,
+    account_id: &str,
+    before_started_at_ms: Option<i64>,
+    limit: u32,
+) -> Result<Vec<AgentSessionRow>, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AgentSessionRow>(
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                   FROM agent_sessions s
+                   JOIN conversation_members cm
+                     ON cm.conversation_id = s.conversation_id
+                  WHERE cm.account_id = ?
+                    AND (? IS NULL OR s.started_at_ms < ?)
+                  ORDER BY s.started_at_ms DESC, s.session_id DESC
+                  LIMIT ?",
+            )
+            .bind(account_id)
+            .bind(before_started_at_ms)
+            .bind(before_started_at_ms)
+            .bind(i64::from(limit))
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AgentSessionRow>(
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                   FROM agent_sessions s
+                   JOIN conversation_members cm
+                     ON cm.conversation_id = s.conversation_id
+                  WHERE cm.account_id = $1
+                    AND ($2::BIGINT IS NULL OR s.started_at_ms < $3)
+                  ORDER BY s.started_at_ms DESC, s.session_id DESC
+                  LIMIT $4",
+            )
+            .bind(account_id)
+            .bind(before_started_at_ms)
+            .bind(before_started_at_ms)
+            .bind(i64::from(limit))
+            .fetch_all(pool)
+            .await
+        }
+    }
+    .map_err(store_err("agent_sessions.list_for_account"))
+}
+
 pub async fn list_for_account_conversation(
     store: &impl AsStorePool,
     conversation_id: &str,

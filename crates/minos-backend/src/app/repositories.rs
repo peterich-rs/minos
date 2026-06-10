@@ -216,6 +216,13 @@ pub trait AgentSessionsRepository: Send + Sync {
         account_id: &str,
     ) -> Result<Option<store::agent_sessions::AgentSessionRow>, BackendError>;
 
+    async fn list_for_account(
+        &self,
+        account_id: &str,
+        before_started_at_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<store::agent_sessions::AgentSessionRow>, BackendError>;
+
     async fn list_for_account_conversation(
         &self,
         conversation_id: &str,
@@ -743,6 +750,21 @@ impl AgentSessionsRepository for StoreBackedAgentSessionsRepository {
         account_id: &str,
     ) -> Result<Option<store::agent_sessions::AgentSessionRow>, BackendError> {
         store::agent_sessions::get_for_account(&self.store, session_id, account_id).await
+    }
+
+    async fn list_for_account(
+        &self,
+        account_id: &str,
+        before_started_at_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<store::agent_sessions::AgentSessionRow>, BackendError> {
+        store::agent_sessions::list_for_account(
+            &self.store,
+            account_id,
+            before_started_at_ms,
+            limit,
+        )
+        .await
     }
 
     async fn list_for_account_conversation(

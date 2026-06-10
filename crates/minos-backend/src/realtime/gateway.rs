@@ -24,8 +24,7 @@ use crate::realtime::auth::{self, SubscriptionAuthError, SubscriptionDenied};
 use crate::realtime::subscription::ConnectionState;
 use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
 use crate::store::{
-    account_host_pairings, agent_sessions, agent_turn_events, agent_turns, durable_event_log,
-    host_commands, outbox_events, social,
+    agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands, outbox_events,
 };
 use minos_protocol::realtime::{ClientFrame, ConnectionPrincipal, RealtimeTopic, ServerFrame};
 
@@ -964,7 +963,26 @@ async fn handle_raw_ingest_host_stream_event(
         .and_then(Value::as_i64)
         .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
-    ensure_raw_agent_session(state, upgrade.device_id, session_id, agent, ts_ms).await?;
+    let Some(session) = agent_sessions::get(&state.store, session_id).await? else {
+        tracing::warn!(
+            target: "minos_backend::realtime::gateway",
+            session_id,
+            host_device_id = %upgrade.device_id,
+            "dropping raw host stream event for unknown formal session"
+        );
+        return Ok(());
+    };
+    let expected_host_id = upgrade.device_id.to_string();
+    if session.host_device_id.as_deref() != Some(expected_host_id.as_str()) {
+        tracing::warn!(
+            target: "minos_backend::realtime::gateway",
+            session_id,
+            host_device_id = %upgrade.device_id,
+            "dropping raw host stream event for mismatched host"
+        );
+        return Ok(());
+    }
+
     ensure_raw_approval_turn(state, session_id, &payload, ts_ms).await?;
 
     state
@@ -1024,49 +1042,6 @@ fn raw_approval_turn_id(payload: &Value) -> Option<&str> {
         .and_then(|params| params.get("turn_id"))
         .and_then(Value::as_str)
         .filter(|turn_id| !turn_id.is_empty())
-}
-
-async fn ensure_raw_agent_session(
-    state: &BackendState,
-    host_device_id: DeviceId,
-    session_id: &str,
-    agent: AgentName,
-    now_ms: i64,
-) -> Result<(), BackendError> {
-    if agent_sessions::get(&state.store, session_id)
-        .await?
-        .is_some()
-    {
-        return Ok(());
-    }
-    let Some(pair) = account_host_pairings::list_accounts_for_host(&state.store, host_device_id)
-        .await?
-        .into_iter()
-        .next()
-    else {
-        return Ok(());
-    };
-    let conversation = social::create_group_conversation(
-        &state.store,
-        &pair.mobile_account_id,
-        "Legacy agent session",
-        std::slice::from_ref(&pair.mobile_account_id),
-        now_ms,
-    )
-    .await?;
-    let _ = agent_sessions::create(
-        &state.store,
-        session_id,
-        &conversation.conversation_id,
-        None,
-        Some(&host_device_id.to_string()),
-        Some(agent.bin_name()),
-        "running",
-        now_ms,
-        None,
-    )
-    .await?;
-    Ok(())
 }
 
 fn durable_event_kind_payload(value: &Value) -> (String, Value) {

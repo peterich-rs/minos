@@ -716,6 +716,48 @@ async fn host_stream_event_persists_slice_and_fanouts_to_subscribed_client() -> 
 }
 
 #[tokio::test]
+async fn orphan_raw_host_stream_event_does_not_create_legacy_conversation() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) = seed_client_account(&relay, "ws-raw-orphan@example.com").await?;
+    let host_id = seed_host(&relay).await?;
+    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
+        .await?;
+
+    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
+    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostStreamEvent {
+            topic: "agent_session:sess_raw_orphan".into(),
+            kind: "legacy_raw_event".into(),
+            payload: serde_json::json!({
+                "seq": 1,
+                "method": "session/update",
+                "params": {"role": "assistant", "text": "orphan"}
+            }),
+        },
+    )
+    .await?;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(store::agent_sessions::get(&relay.pool, "sess_raw_orphan")
+        .await?
+        .is_none());
+    assert!(
+        store::social::list_conversations_for(&relay.pool, &account_id)
+            .await?
+            .is_empty()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() -> anyhow::Result<()>
 {
     let relay = spawn_relay().await?;

@@ -298,6 +298,20 @@ async fn list_sessions_filters_by_conversation_and_project_scope() {
         &secret,
         &auth_hdr,
         serde_json::json!({
+            "limit": 10
+        }),
+    );
+    let (status, body) = common::send(&mut app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(body["sessions"][0]["session_id"], "sess_route_list");
+
+    let req = authed_post(
+        "/v1/agent-sessions/list",
+        ios_id,
+        &secret,
+        &auth_hdr,
+        serde_json::json!({
             "project_id": "proj-route-list",
             "limit": 10
         }),

@@ -481,9 +481,14 @@ impl AgentSessionService for DefaultAgentSessionService {
                     .await?
             }
             (None, None) => {
-                return Err(AgentSessionError::ValidationMissing(
-                    "conversation_id or project_id",
-                ));
+                self.repos
+                    .agent_sessions
+                    .list_for_account(
+                        &input.caller_account_id,
+                        input.before_started_at_ms,
+                        input.limit,
+                    )
+                    .await?
             }
         };
 
