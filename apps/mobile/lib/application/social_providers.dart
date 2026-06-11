@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -131,7 +132,7 @@ class SocialConversation extends _$SocialConversation {
   SocialConversationState build(String conversationId) {
     const initialState = SocialConversationState.initial();
     _conversationId = conversationId;
-    _eventsSub?.cancel();
+    unawaited(_eventsSub?.cancel() ?? Future<void>.value());
     _eventsSub = ref
         .read(socialRepositoryProvider)
         .socialEvents
@@ -194,6 +195,7 @@ class SocialConversation extends _$SocialConversation {
       state = state.copyWith(
         messages: await repository.loadMessages(_conversationId),
       );
+      ref.invalidate(conversationAgentSessionsProvider(_conversationId));
       ref.invalidate(conversationsProvider);
     } catch (error) {
       await repository.markMessageFailed(pending.localId);
@@ -241,6 +243,7 @@ class SocialConversation extends _$SocialConversation {
       state = state.copyWith(
         messages: await repository.loadMessages(_conversationId),
       );
+      ref.invalidate(conversationAgentSessionsProvider(_conversationId));
       ref.invalidate(conversationsProvider);
     } catch (error) {
       await repository.markMessageFailed(localId);
@@ -313,6 +316,7 @@ class SocialConversation extends _$SocialConversation {
         isLoading: false,
         error: null,
       );
+      ref.invalidate(conversationAgentSessionsProvider(_conversationId));
       ref.invalidate(conversationsProvider);
     } catch (error) {
       state = SocialConversationState(
@@ -344,6 +348,7 @@ class SocialConversation extends _$SocialConversation {
       error: null,
     );
     unawaited(_markConversationRead());
+    ref.invalidate(conversationAgentSessionsProvider(_conversationId));
     ref.invalidate(conversationsProvider);
   }
 

@@ -315,6 +315,16 @@ class MinosCore implements MinosCoreProtocol {
       _client.listThreads(req: params);
 
   @override
+  Future<List<AgentSessionSummaryDto>> listAgentSessions({
+    String? conversationId,
+    int limit = 20,
+  }) => _client.listAgentSessions(conversationId: conversationId, limit: limit);
+
+  @override
+  Future<void> subscribeAgentSession({required String sessionId}) =>
+      _client.subscribeAgentSession(sessionId: sessionId);
+
+  @override
   Future<ReadThreadResponse> readThread(ReadThreadParams params) =>
       _client.readThread(req: params);
 

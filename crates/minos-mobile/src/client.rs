@@ -23,15 +23,15 @@ use std::time::{Duration, Instant};
 use http::{Method, Request};
 use minos_domain::{ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
-    AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, ApprovalDecisionRequest,
-    AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse, ConversationMembersResponse,
-    ConversationReadResponse, ConversationResponse, ConversationsResponse,
-    CreateFriendRequestRequest, CreateGroupConversationRequest, EnsureDirectConversationRequest,
-    FriendRequestSummary, FriendRequestsResponse, FriendsResponse, GetThreadLastSeqParams,
-    GetThreadLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesResponse,
-    ListClisResponse, ListHostSkillsResponse, ListThreadsParams, ListThreadsResponse,
-    MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse, RefreshResponse,
-    RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
+    realtime::ClientFrame, AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary,
+    ApprovalDecisionRequest, AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse,
+    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
+    ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
+    EnsureDirectConversationRequest, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
+    GetThreadLastSeqParams, GetThreadLastSeqResponse, HostSummary, ListAgentsResponse,
+    ListChatMessagesResponse, ListClisResponse, ListHostSkillsResponse, ListThreadsParams,
+    ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
+    RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
     SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest, UserSummary,
     WriteHostSkillConfigResponse,
 };
@@ -98,6 +98,9 @@ pub struct MobileClient {
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     /// Tracks subscribed topics and durable seq cursors across reconnects.
     subscription_mgr: Arc<SubscriptionManager>,
+    /// Sender into the live realtime task. Stored so app code can request
+    /// additional topic subscriptions after the WebSocket is already open.
+    outbound_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ClientFrame>>>>,
     /// Watch channel publishing the latest [`AuthStateFrame`] to UI /
     /// reconnect-loop subscribers.
     auth_state_tx: watch::Sender<AuthStateFrame>,
@@ -139,6 +142,7 @@ impl MobileClient {
             self_name,
             tasks: Arc::new(Mutex::new(Vec::new())),
             subscription_mgr: SubscriptionManager::new(),
+            outbound_tx: Arc::new(Mutex::new(None)),
             auth_state_tx,
             auth_state_rx,
             auth_session: Arc::new(RwLock::new(None)),
@@ -214,6 +218,7 @@ impl MobileClient {
             self_name,
             tasks: Arc::new(Mutex::new(Vec::new())),
             subscription_mgr: SubscriptionManager::new(),
+            outbound_tx: Arc::new(Mutex::new(None)),
             auth_state_tx,
             auth_state_rx,
             auth_session: Arc::new(RwLock::new(live_auth)),
@@ -492,6 +497,41 @@ impl MobileClient {
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
         auth_http_call!(self, |http, access| http.list_threads(&access, req))
+    }
+
+    pub async fn list_agent_sessions(
+        &self,
+        conversation_id: Option<String>,
+        limit: u32,
+    ) -> Result<Vec<crate::http::AgentSessionSummary>, MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.list_agent_sessions(&access, conversation_id, limit)
+        })
+    }
+
+    pub async fn subscribe_agent_session(&self, session_id: String) -> Result<(), MinosError> {
+        let topic = format!("agent_session:{session_id}");
+        let added = self.subscription_mgr.add_topic(&topic, 0).await;
+        if !added || !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
+            return Ok(());
+        }
+
+        let frame = ClientFrame::Subscribe {
+            topics: vec![topic],
+            resume_after: Some(self.subscription_mgr.resume_after_map().await),
+            client_request_id: None,
+        };
+        let sender = self.outbound_tx.lock().await.clone();
+        if let Some(sender) = sender {
+            if let Err(error) = sender.send(frame).await {
+                tracing::warn!(
+                    target: "minos_mobile::client",
+                    error = %error,
+                    "failed to send realtime subscribe frame",
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Read a window of translated UI events from one thread.
@@ -1171,6 +1211,7 @@ impl MobileClient {
             ui_events_tx: self.ui_events_tx.clone(),
             social_events_tx: self.social_events_tx.clone(),
             subscription_mgr: self.subscription_mgr.clone(),
+            outbound_tx: self.outbound_tx.clone(),
             tasks: self.tasks.clone(),
             device_id: self.device_id,
             self_name: self.self_name.clone(),
@@ -1348,7 +1389,8 @@ impl MobileClient {
             .map(|s| s.account.account_id.clone())
             .unwrap_or_default();
 
-        let (_frame_tx, frame_rx) = tokio::sync::mpsc::channel(1);
+        let (frame_tx, frame_rx) = tokio::sync::mpsc::channel(32);
+        *self.outbound_tx.lock().await = Some(frame_tx);
         let session_handle = tokio::spawn(RealtimeSession::run(
             websocket,
             account_id,
@@ -1386,6 +1428,7 @@ impl MobileClient {
     }
 
     async fn shutdown_outbound(&self) {
+        *self.outbound_tx.lock().await = None;
         let mut tasks = self.tasks.lock().await;
         for h in tasks.drain(..) {
             h.abort();
@@ -1600,6 +1643,7 @@ struct ReconnectContext {
     ui_events_tx: broadcast::Sender<UiEventFrame>,
     social_events_tx: broadcast::Sender<SocialEventFrame>,
     subscription_mgr: Arc<SubscriptionManager>,
+    outbound_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ClientFrame>>>>,
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     device_id: DeviceId,
     self_name: String,
@@ -1804,6 +1848,7 @@ async fn clear_auth_session_and_disconnect_ctx(ctx: &ReconnectContext) {
     for handle in tasks.drain(..) {
         handle.abort();
     }
+    *ctx.outbound_tx.lock().await = None;
     let _ = ctx.state_tx.send(ConnectionState::Disconnected);
 }
 
@@ -1870,7 +1915,8 @@ async fn connect_with_handles(
         .map(|s| s.account.account_id.clone())
         .unwrap_or_default();
 
-    let (_frame_tx, frame_rx) = tokio::sync::mpsc::channel(1);
+    let (frame_tx, frame_rx) = tokio::sync::mpsc::channel(32);
+    *ctx.outbound_tx.lock().await = Some(frame_tx);
     let session_handle = tokio::spawn(RealtimeSession::run(
         websocket,
         account_id,

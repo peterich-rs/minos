@@ -141,6 +141,15 @@ abstract class MinosCoreProtocol {
   /// Paged thread summaries for the paired agent-host.
   Future<ListThreadsResponse> listThreads(ListThreadsParams params);
 
+  /// Recent agent sessions, optionally scoped to one social conversation.
+  Future<List<AgentSessionSummaryDto>> listAgentSessions({
+    String? conversationId,
+    int limit = 20,
+  });
+
+  /// Subscribe the live WebSocket to one agent session topic.
+  Future<void> subscribeAgentSession({required String sessionId});
+
   /// Translated UI event history for one thread.
   Future<ReadThreadResponse> readThread(ReadThreadParams params);
 

@@ -33,11 +33,16 @@ impl RealtimeSession {
             return;
         }
 
-        // Auto-subscribe to account topic
+        // Auto-subscribe to account topic plus any topic the app requested
+        // before this WebSocket was established.
         let account_topic = format!("account:{account_id}");
+        subscription_mgr.add_topic(&account_topic, 0).await;
+        let mut topics = subscription_mgr.subscribed_topics().await;
+        topics.sort();
+        topics.dedup();
         let resume_after = subscription_mgr.resume_after_map().await;
         let subscribe = ClientFrame::Subscribe {
-            topics: vec![account_topic.clone()],
+            topics,
             resume_after: Some(resume_after),
             client_request_id: None,
         };
@@ -52,7 +57,6 @@ impl RealtimeSession {
             let _ = state_tx.send(ConnectionState::Disconnected);
             return;
         }
-        subscription_mgr.add_topic(&account_topic, 0).await;
 
         // Main loop. The optional app-to-WS command channel may be absent for
         // read-only clients; closing it must not tear down the socket.
@@ -149,7 +153,10 @@ fn dispatch_event(
                     .await;
             });
             match kind.as_str() {
-                "conversation_message_appended" => {
+                "conversation_message_appended"
+                | "conversation_message_recalled"
+                | "account_conversation_message_appended"
+                | "account_conversation_message_recalled" => {
                     if let Some(conv_id) = payload.get("conversation_id").and_then(|v| v.as_str()) {
                         let _ = social_events_tx.send(SocialEventFrame {
                             conversation_id: conv_id.to_string(),
@@ -191,7 +198,8 @@ fn dispatch_event(
             | "agent_tool_call"
             | "agent_tool_result"
             | "agent_tool_completed"
-            | "agent_error" => {
+            | "agent_error"
+            | "ui_event" => {
                 let _ = ui_events_tx.send(UiEventFrame {
                     thread_id: topic
                         .strip_prefix("agent_session:")
@@ -219,7 +227,8 @@ fn dispatch_event(
 }
 
 fn parse_chat_message(payload: &serde_json::Value) -> ChatMessageSummary {
-    serde_json::from_value(payload.clone()).unwrap_or_else(|_| ChatMessageSummary {
+    let message_payload = payload.get("message").unwrap_or(payload);
+    serde_json::from_value(message_payload.clone()).unwrap_or_else(|_| ChatMessageSummary {
         message_id: String::new(),
         conversation_id: String::new(),
         sender: UserSummary {
@@ -245,6 +254,14 @@ fn stream_event_to_ui(kind: &str, payload: &serde_json::Value) -> UiEventMessage
         .unwrap_or("agent_message")
         .to_string();
     match kind {
+        "ui_event" => {
+            serde_json::from_value::<UiEventMessage>(payload.clone()).unwrap_or_else(|_| {
+                UiEventMessage::Raw {
+                    kind: kind.to_string(),
+                    payload_json: payload.to_string(),
+                }
+            })
+        }
         "agent_text_delta" => event_text(payload)
             .map(|text| UiEventMessage::TextDelta { message_id, text })
             .unwrap_or_else(|| UiEventMessage::Raw {
@@ -362,6 +379,30 @@ mod tests {
             ui,
             UiEventMessage::TextDelta { message_id, text }
                 if message_id == "msg-1" && text == "hello"
+        ));
+    }
+
+    #[test]
+    fn stream_event_to_ui_maps_formal_ui_event() {
+        let ui = stream_event_to_ui(
+            "ui_event",
+            &serde_json::json!({
+                "kind": "tool_call_placed",
+                "message_id": "msg-1",
+                "tool_call_id": "tool-1",
+                "name": "shell",
+                "args_json": "{}"
+            }),
+        );
+
+        assert!(matches!(
+            ui,
+            UiEventMessage::ToolCallPlaced {
+                message_id,
+                tool_call_id,
+                name,
+                ..
+            } if message_id == "msg-1" && tool_call_id == "tool-1" && name == "shell"
         ));
     }
 }

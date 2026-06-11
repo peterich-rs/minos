@@ -18,12 +18,14 @@ impl SubscriptionManager {
         Arc::new(Self::default())
     }
 
-    pub async fn add_topic(&self, topic: &str, resume_after: i64) {
+    pub async fn add_topic(&self, topic: &str, resume_after: i64) -> bool {
         let mut state = self.inner.write().await;
-        state
-            .topics
-            .entry(topic.to_string())
-            .or_insert(resume_after);
+        if state.topics.contains_key(topic) {
+            false
+        } else {
+            state.topics.insert(topic.to_string(), resume_after);
+            true
+        }
     }
 
     pub async fn remove_topic(&self, topic: &str) {

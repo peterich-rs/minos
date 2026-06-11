@@ -4,6 +4,7 @@ import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_list_view/flutter_list_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/social_providers.dart';
@@ -24,7 +25,7 @@ class SocialChatPage extends ConsumerStatefulWidget {
 
   final String conversationId;
   final String title;
-  final ConversationKind kind;
+  final ConversationKind? kind;
 
   @override
   ConsumerState<SocialChatPage> createState() => _SocialChatPageState();
@@ -36,12 +37,17 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   static const Duration _keyboardRevealSettleDelay = Duration(
     milliseconds: 260,
   );
+  static const Duration _initialBottomSettleDelay = Duration(milliseconds: 80);
+  static const Duration _initialBottomFinalSettleDelay = Duration(
+    milliseconds: 240,
+  );
 
   final TextEditingController _controller = TextEditingController();
   final FocusNode _composerFocusNode = FocusNode();
   final FlutterListViewController _scrollController =
       FlutterListViewController();
   double _lastKeyboardInsetBottom = 0;
+  int _bottomAnchorGeneration = 0;
 
   @override
   void dispose() {
@@ -175,11 +181,38 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     }
   }
 
-  void _jumpToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+  void _jumpToBottom({int? messageCount, bool settle = false}) {
+    final generation = ++_bottomAnchorGeneration;
+
+    void jump() {
       if (!mounted || !_scrollController.hasClients) return;
+      if (messageCount != null && messageCount > 0) {
+        _scrollController.sliverController.jumpToIndex(
+          messageCount - 1,
+          offsetBasedOnBottom: true,
+        );
+        return;
+      }
       _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (generation != _bottomAnchorGeneration) return;
+      jump();
     });
+    if (!settle) return;
+    unawaited(
+      Future<void>.delayed(_initialBottomSettleDelay, () {
+        if (generation != _bottomAnchorGeneration) return;
+        jump();
+      }),
+    );
+    unawaited(
+      Future<void>.delayed(_initialBottomFinalSettleDelay, () {
+        if (generation != _bottomAnchorGeneration) return;
+        jump();
+      }),
+    );
   }
 
   bool _isNearBottom() {
@@ -203,6 +236,15 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   Widget build(BuildContext context) {
     final shadTheme = ShadTheme.of(context);
     final keyboardInsetBottom = MediaQuery.of(context).viewInsets.bottom;
+    final conversationSummary = _findConversationSummary(
+      ref.watch(conversationsProvider).asData?.value,
+      widget.conversationId,
+    );
+    final effectiveKind = conversationSummary?.kind ?? widget.kind;
+    final effectiveTitle = _firstNonEmpty(<String?>[
+      conversationSummary?.title,
+      widget.title,
+    ]);
     _syncKeyboardInset(keyboardInsetBottom);
 
     ref.listen<SocialConversationState>(
@@ -210,7 +252,10 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       (previous, next) {
         final previousCount = previous?.messages.length ?? 0;
         if (next.messages.length > previousCount) {
-          _jumpToBottom();
+          _jumpToBottom(
+            messageCount: next.messages.length,
+            settle: previousCount == 0,
+          );
         }
       },
     );
@@ -220,22 +265,31 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       backgroundColor: shadTheme.colorScheme.background,
       appBar: AppBar(
         toolbarHeight: 64,
-        title: _ConversationTitle(
-          conversationId: widget.conversationId,
-          title: widget.title,
-          kind: widget.kind,
+        centerTitle: true,
+        titleSpacing: 0,
+        title: SizedBox(
+          width: double.infinity,
+          child: _ConversationTitle(
+            conversationId: widget.conversationId,
+            title: effectiveTitle,
+            kind: effectiveKind,
+          ),
         ),
         surfaceTintColor: Colors.transparent,
         actions: <Widget>[
-          if (widget.kind == ConversationKind.group)
-            IconButton(
-              icon: const Icon(LucideIcons.users),
-              tooltip: '群成员',
-              onPressed: () => context.push(
-                '/social/chat/${widget.conversationId}/members',
-                extra: GroupMembersRouteExtra(title: widget.title),
-              ),
-            ),
+          SizedBox(
+            width: kToolbarHeight,
+            child: effectiveKind == ConversationKind.group
+                ? IconButton(
+                    icon: const Icon(LucideIcons.users),
+                    tooltip: '群成员',
+                    onPressed: () => context.push(
+                      '/social/chat/${widget.conversationId}/members',
+                      extra: GroupMembersRouteExtra(title: effectiveTitle),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
         ],
       ),
       body: SafeArea(
@@ -248,7 +302,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                 onTap: _composerFocusNode.unfocus,
                 child: _ConversationMessagePane(
                   conversationId: widget.conversationId,
-                  kind: widget.kind,
+                  kind: effectiveKind,
                   scrollController: _scrollController,
                 ),
               ),
@@ -261,7 +315,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                 top: false,
                 child: _ConversationComposer(
                   conversationId: widget.conversationId,
-                  kind: widget.kind,
+                  kind: effectiveKind,
                   controller: _controller,
                   focusNode: _composerFocusNode,
                   onSend: _send,
@@ -285,7 +339,7 @@ class _ConversationTitle extends ConsumerWidget {
 
   final String conversationId;
   final String title;
-  final ConversationKind kind;
+  final ConversationKind? kind;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -295,7 +349,8 @@ class _ConversationTitle extends ConsumerWidget {
       ref.watch(conversationsProvider).asData?.value,
       conversationId,
     );
-    final agents = kind == ConversationKind.group
+    final effectiveKind = conversationSummary?.kind ?? kind;
+    final agents = effectiveKind == ConversationKind.group
         ? ref.watch(groupAgentsProvider(conversationId))
         : const <AgentProfile>[];
     final hosts =
@@ -311,7 +366,7 @@ class _ConversationTitle extends ConsumerWidget {
     );
     final resolvedTitle = _resolveConversationTitle(
       routeTitle: title,
-      kind: kind,
+      kind: effectiveKind,
       summary: conversationSummary,
       conversation: conversation,
     );
@@ -319,12 +374,13 @@ class _ConversationTitle extends ConsumerWidget {
 
     return Column(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
         Text(
           resolvedTitle,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
             color: Theme.of(context).colorScheme.onSurface,
             fontWeight: FontWeight.w700,
@@ -345,6 +401,7 @@ class _ConversationTitle extends ConsumerWidget {
               status.label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
               style: shadTheme.textTheme.small.copyWith(
                 color: color,
                 fontSize: 11,
@@ -374,7 +431,7 @@ ConversationSummary? _findConversationSummary(
 
 String _resolveConversationTitle({
   required String routeTitle,
-  required ConversationKind kind,
+  required ConversationKind? kind,
   required ConversationSummary? summary,
   required SocialConversationState conversation,
 }) {
@@ -442,7 +499,7 @@ class _ConversationMessagePane extends ConsumerWidget {
   });
 
   final String conversationId;
-  final ConversationKind kind;
+  final ConversationKind? kind;
   final FlutterListViewController scrollController;
 
   Future<void> _showMessageActions(
@@ -648,7 +705,7 @@ class _ConversationComposer extends ConsumerWidget {
   });
 
   final String conversationId;
-  final ConversationKind kind;
+  final ConversationKind? kind;
   final TextEditingController controller;
   final FocusNode focusNode;
   final VoidCallback onSend;
@@ -677,6 +734,10 @@ class _ConversationComposer extends ConsumerWidget {
         ? ref.watch(groupAgentsProvider(conversationId))
         : const <AgentProfile>[];
     final hasMentionable = mentionable.isNotEmpty || groupAgents.isNotEmpty;
+    final activity = ref
+        .watch(conversationAgentActivityProvider(conversationId))
+        .asData
+        ?.value;
 
     return Container(
       decoration: BoxDecoration(
@@ -697,6 +758,10 @@ class _ConversationComposer extends ConsumerWidget {
                   .clear(),
             ),
             const SizedBox(height: 10),
+          ],
+          if (activity != null) ...<Widget>[
+            _AgentActivityTicker(activity: activity),
+            const SizedBox(height: 8),
           ],
           Row(
             children: <Widget>[
@@ -725,6 +790,158 @@ class _ConversationComposer extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _AgentActivityTicker extends StatelessWidget {
+  const _AgentActivityTicker({required this.activity});
+
+  final AgentActivitySnapshot activity;
+
+  @override
+  Widget build(BuildContext context) {
+    final shadTheme = ShadTheme.of(context);
+    final toneColor = _activityToneColor(context, activity.tone);
+    final textStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
+      color: shadTheme.colorScheme.foreground,
+      fontWeight: FontWeight.w600,
+      height: 1.1,
+    );
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 180),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      child: SizedBox(
+        key: ValueKey('${activity.sessionId}:${activity.label}'),
+        height: 34,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: shadTheme.colorScheme.secondary.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: toneColor.withValues(alpha: 0.28)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              children: <Widget>[
+                Icon(_activityIcon(activity.kind), size: 15, color: toneColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DefaultTextStyle.merge(
+                    style: textStyle,
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    child: _MarqueeText(text: activity.label),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+IconData _activityIcon(AgentActivityKind kind) {
+  return switch (kind) {
+    AgentActivityKind.reasoning => LucideIcons.sparkles,
+    AgentActivityKind.tool => LucideIcons.terminal,
+    AgentActivityKind.success => LucideIcons.bot,
+    AgentActivityKind.error => LucideIcons.circleAlert,
+    AgentActivityKind.running => LucideIcons.bot,
+  };
+}
+
+Color _activityToneColor(BuildContext context, AgentActivityTone tone) {
+  final shadTheme = ShadTheme.of(context);
+  return switch (tone) {
+    AgentActivityTone.info => shadTheme.colorScheme.primary,
+    AgentActivityTone.success => shadTheme.colorScheme.primary,
+    AgentActivityTone.error => shadTheme.colorScheme.destructive,
+  };
+}
+
+class _MarqueeText extends StatefulWidget {
+  const _MarqueeText({required this.text});
+
+  final String text;
+
+  @override
+  State<_MarqueeText> createState() => _MarqueeTextState();
+}
+
+class _MarqueeTextState extends State<_MarqueeText>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 6200),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_controller.repeat());
+  }
+
+  @override
+  void didUpdateWidget(_MarqueeText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) {
+      _controller.reset();
+      unawaited(_controller.repeat());
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = DefaultTextStyle.of(context).style;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: widget.text, style: style),
+          maxLines: 1,
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: double.infinity);
+        final textWidth = painter.width;
+        if (textWidth <= constraints.maxWidth) {
+          return Text(
+            widget.text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+          );
+        }
+
+        const gap = 42.0;
+        final distance = textWidth + gap;
+        return ClipRect(
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, child) {
+              return Transform.translate(
+                offset: Offset(-distance * _controller.value, 0),
+                child: child,
+              );
+            },
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(widget.text, maxLines: 1, softWrap: false),
+                const SizedBox(width: gap),
+                Text(widget.text, maxLines: 1, softWrap: false),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

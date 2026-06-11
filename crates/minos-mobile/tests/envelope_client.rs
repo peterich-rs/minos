@@ -200,11 +200,11 @@ async fn ui_events_stream_delivers_backend_fanout() {
     };
 
     assert_eq!(frame.thread_id, "thr_1");
-    assert_eq!(frame.seq, 0);
+    assert_eq!(frame.seq, 7);
     match frame.ui {
-        UiEventMessage::Raw { kind, payload_json } => {
-            assert_eq!(kind, "agent_text_delta");
-            assert!(payload_json.contains("Hi"));
+        UiEventMessage::TextDelta { message_id, text } => {
+            assert_eq!(message_id, "msg_1");
+            assert_eq!(text, "Hi");
         }
         other => panic!("unexpected ui variant: {other:?}"),
     }

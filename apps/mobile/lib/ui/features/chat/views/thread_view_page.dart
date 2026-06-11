@@ -83,7 +83,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
 
   @override
   void dispose() {
-    _approvalSub?.cancel();
+    unawaited(_approvalSub?.cancel());
     _scroll
       ..removeListener(_onScroll)
       ..dispose();
@@ -110,7 +110,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
 
   void _handleRawApprovalEvent(UiEventMessage_Raw event, String threadId) {
     if (event.kind == 'approval_request') {
-      _onApprovalRequest(event.payloadJson, threadId);
+      unawaited(_onApprovalRequest(event.payloadJson, threadId));
     } else if (event.kind == 'approval_timeout') {
       _onApprovalTimeout(event.payloadJson);
     }
@@ -464,10 +464,12 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
             unreadBelow: threadViewState.unreadBelow,
             onJumpToBottom: () {
               if (!_scroll.hasClients) return;
-              _scroll.animateTo(
-                _scroll.position.maxScrollExtent,
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOut,
+              unawaited(
+                _scroll.animateTo(
+                  _scroll.position.maxScrollExtent,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                ),
               );
               ref
                   .read(
@@ -503,24 +505,39 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
         shape: Border(
           bottom: BorderSide(color: shadTheme.colorScheme.border, width: 1),
         ),
+        centerTitle: true,
         titleSpacing: 0,
-        title: Column(
-          crossAxisAlignment: .start,
-          mainAxisSize: .min,
-          children: <Widget>[
-            Text(
-              threadId == null
-                  ? (selectedProfile?.name ?? '新对话')
-                  : (selectedProfile?.name ??
-                        (titleAgent == null ? '会话' : _agentLabel(titleAgent))),
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: shadTheme.colorScheme.foreground,
+        title: SizedBox(
+          width: double.infinity,
+          child: Column(
+            crossAxisAlignment: .center,
+            mainAxisSize: .min,
+            children: <Widget>[
+              Text(
+                threadId == null
+                    ? (selectedProfile?.name ?? '新对话')
+                    : (selectedProfile?.name ??
+                          (titleAgent == null
+                              ? '会话'
+                              : _agentLabel(titleAgent))),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: shadTheme.colorScheme.foreground,
+                ),
               ),
-            ),
-            if (subtitle != null)
-              Text(subtitle, style: shadTheme.textTheme.muted),
-          ],
+              if (subtitle != null)
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: shadTheme.textTheme.muted,
+                ),
+            ],
+          ),
         ),
       ),
       body: SafeArea(
@@ -902,11 +919,7 @@ class _GroupedEvents {
     // order ever diverges from anchor monotonicity.
     final pendingOptimistic =
         optimistic
-            .where(
-              (message) =>
-                  message.status != ThreadOptimisticMessageStatus.confirmed ||
-                  !threadOptimisticHasEcho(message, userEchoes),
-            )
+            .where((message) => !threadOptimisticHasEcho(message, userEchoes))
             .toList()
           ..sort((a, b) => a.anchorEventCount.compareTo(b.anchorEventCount));
 
@@ -966,12 +979,7 @@ class _GroupedEvents {
           // Live fan-out can transiently deliver MessageStarted{user}
           // before the matching TextDelta. Skip that empty interim row so
           // the optimistic bubble doesn't collapse into an air bubble.
-          final echo = ThreadUserMessageEcho(
-            eventIndex: messageStartIndex[msgId] ?? i,
-            text: text,
-          );
-          if (text.trim().isNotEmpty &&
-              !_optimisticSuppressesUserEcho(echo, optimistic)) {
+          if (text.trim().isNotEmpty) {
             ordered.add(
               MessageBubble(
                 isUser: true,
@@ -1076,18 +1084,6 @@ List<ThreadUserMessageEcho> _extractUserMessageEchoes(
   }
   echoes.sort((a, b) => a.eventIndex.compareTo(b.eventIndex));
   return echoes;
-}
-
-bool _optimisticSuppressesUserEcho(
-  ThreadUserMessageEcho echo,
-  List<ThreadOptimisticUserMessage> optimistic,
-) {
-  return optimistic.any(
-    (message) =>
-        message.status != ThreadOptimisticMessageStatus.confirmed &&
-        echo.eventIndex >= message.anchorEventCount &&
-        normalizeThreadMessageText(message.text) == echo.normalizedText,
-  );
 }
 
 class _ToolCallEntry {

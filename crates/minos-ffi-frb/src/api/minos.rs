@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use flutter_rust_bridge::frb;
+use minos_mobile::http::AgentSessionSummary as CoreAgentSessionSummary;
 use minos_mobile::log_capture::{LogLevel as CoreLogLevel, LogRecord as CoreLogRecord};
 use minos_mobile::request_trace::{
     RequestTraceRecord as CoreRequestTraceRecord, RequestTraceStatus as CoreRequestTraceStatus,
@@ -491,6 +492,21 @@ impl MobileClient {
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
         self.0.list_threads(req).await
+    }
+
+    pub async fn list_agent_sessions(
+        &self,
+        conversation_id: Option<String>,
+        limit: u32,
+    ) -> Result<Vec<AgentSessionSummaryDto>, MinosError> {
+        self.0
+            .list_agent_sessions(conversation_id, limit)
+            .await
+            .map(|sessions| sessions.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn subscribe_agent_session(&self, session_id: String) -> Result<(), MinosError> {
+        self.0.subscribe_agent_session(session_id).await
     }
 
     /// Read a window of translated UI events for one thread.
@@ -1173,6 +1189,38 @@ pub struct _ThreadSummary {
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
     pub end_reason: Option<ThreadEndReason>,
+}
+
+pub struct AgentSessionSummaryDto {
+    pub session_id: String,
+    pub conversation_id: String,
+    pub agent_id: Option<String>,
+    pub agent: Option<AgentName>,
+    pub status: String,
+    pub started_at_ms: i64,
+    pub ended_at_ms: Option<i64>,
+    pub title: Option<String>,
+    pub last_activity_at_ms: i64,
+    pub message_count: u32,
+    pub end_reason: Option<ThreadEndReason>,
+}
+
+impl From<CoreAgentSessionSummary> for AgentSessionSummaryDto {
+    fn from(value: CoreAgentSessionSummary) -> Self {
+        Self {
+            session_id: value.session_id,
+            conversation_id: value.conversation_id,
+            agent_id: value.agent_id,
+            agent: value.agent,
+            status: value.status,
+            started_at_ms: value.started_at_ms,
+            ended_at_ms: value.ended_at_ms,
+            title: value.title,
+            last_activity_at_ms: value.last_activity_at_ms,
+            message_count: value.message_count,
+            end_reason: value.end_reason,
+        }
+    }
 }
 
 #[allow(dead_code)]

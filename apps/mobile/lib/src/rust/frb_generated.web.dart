@@ -82,6 +82,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentName dco_decode_agent_name(dynamic raw);
 
   @protected
+  AgentSessionSummaryDto dco_decode_agent_session_summary_dto(dynamic raw);
+
+  @protected
   AgentStatus dco_decode_agent_status(dynamic raw);
 
   @protected
@@ -248,6 +251,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AgentDescriptor> dco_decode_list_agent_descriptor(dynamic raw);
+
+  @protected
+  List<AgentSessionSummaryDto> dco_decode_list_agent_session_summary_dto(
+    dynamic raw,
+  );
 
   @protected
   List<AgentSummary> dco_decode_list_agent_summary(dynamic raw);
@@ -509,6 +517,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentName sse_decode_agent_name(SseDeserializer deserializer);
 
   @protected
+  AgentSessionSummaryDto sse_decode_agent_session_summary_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   AgentStatus sse_decode_agent_status(SseDeserializer deserializer);
 
   @protected
@@ -707,6 +720,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AgentDescriptor> sse_decode_list_agent_descriptor(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<AgentSessionSummaryDto> sse_decode_list_agent_session_summary_dto(
     SseDeserializer deserializer,
   );
 
@@ -1046,6 +1064,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_agent_name(AgentName self, SseSerializer serializer);
 
   @protected
+  void sse_encode_agent_session_summary_dto(
+    AgentSessionSummaryDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_agent_status(AgentStatus self, SseSerializer serializer);
 
   @protected
@@ -1309,6 +1333,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_agent_descriptor(
     List<AgentDescriptor> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agent_session_summary_dto(
+    List<AgentSessionSummaryDto> self,
     SseSerializer serializer,
   );
 

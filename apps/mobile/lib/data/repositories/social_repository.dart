@@ -105,6 +105,20 @@ class SocialRepository {
     );
   }
 
+  Future<List<AgentSessionSummaryDto>> listAgentSessions({
+    required String conversationId,
+    int limit = 5,
+  }) {
+    return _core.listAgentSessions(
+      conversationId: conversationId,
+      limit: limit,
+    );
+  }
+
+  Future<void> subscribeAgentSession({required String sessionId}) {
+    return _core.subscribeAgentSession(sessionId: sessionId);
+  }
+
   Future<SocialChatMessage?> markMessageSent({
     required String localId,
     required ChatMessageSummary message,

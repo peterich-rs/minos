@@ -10,7 +10,7 @@ part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `parse_device_id`, `spawn_state_forwarder`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `StartAgentResponse`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -122,6 +122,11 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// transitions to `Suspended { UserInterrupt }` regardless of whether the
   /// codex side acknowledges in time.
   Future<void> interruptThread({required String threadId});
+
+  Future<List<AgentSessionSummaryDto>> listAgentSessions({
+    String? conversationId,
+    required int limit,
+  });
 
   Future<ListAgentsResponse> listAgents();
 
@@ -280,6 +285,8 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   Future<MyProfileResponse> setMinosId({required String minosId});
 
+  Future<void> subscribeAgentSession({required String sessionId});
+
   /// Subscribe to auth-state transitions. Emits the current cached frame
   /// immediately, then every subsequent change. The spawned task exits
   /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
@@ -347,6 +354,65 @@ class AgentDescriptor {
 }
 
 enum AgentName { codex, claude, gemini }
+
+class AgentSessionSummaryDto {
+  final String sessionId;
+  final String conversationId;
+  final String? agentId;
+  final AgentName? agent;
+  final String status;
+  final PlatformInt64 startedAtMs;
+  final PlatformInt64? endedAtMs;
+  final String? title;
+  final PlatformInt64 lastActivityAtMs;
+  final int messageCount;
+  final ThreadEndReason? endReason;
+
+  const AgentSessionSummaryDto({
+    required this.sessionId,
+    required this.conversationId,
+    this.agentId,
+    this.agent,
+    required this.status,
+    required this.startedAtMs,
+    this.endedAtMs,
+    this.title,
+    required this.lastActivityAtMs,
+    required this.messageCount,
+    this.endReason,
+  });
+
+  @override
+  int get hashCode =>
+      sessionId.hashCode ^
+      conversationId.hashCode ^
+      agentId.hashCode ^
+      agent.hashCode ^
+      status.hashCode ^
+      startedAtMs.hashCode ^
+      endedAtMs.hashCode ^
+      title.hashCode ^
+      lastActivityAtMs.hashCode ^
+      messageCount.hashCode ^
+      endReason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AgentSessionSummaryDto &&
+          runtimeType == other.runtimeType &&
+          sessionId == other.sessionId &&
+          conversationId == other.conversationId &&
+          agentId == other.agentId &&
+          agent == other.agent &&
+          status == other.status &&
+          startedAtMs == other.startedAtMs &&
+          endedAtMs == other.endedAtMs &&
+          title == other.title &&
+          lastActivityAtMs == other.lastActivityAtMs &&
+          messageCount == other.messageCount &&
+          endReason == other.endReason;
+}
 
 @freezed
 sealed class AgentStatus with _$AgentStatus {

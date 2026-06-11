@@ -147,7 +147,7 @@ GoRouter createAppRouter(Ref ref) {
           return SocialChatPage(
             conversationId: conversationId,
             title: extra?.title ?? '',
-            kind: extra?.kind ?? ConversationKind.direct,
+            kind: extra?.kind,
           );
         },
       ),
