@@ -69,7 +69,7 @@ class _QrScannerViewState extends State<QrScannerView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_stopScanner());
-    _controller.dispose();
+    unawaited(_controller.dispose());
     super.dispose();
   }
 

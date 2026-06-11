@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -84,32 +86,34 @@ class AgentStartPage extends ConsumerWidget {
                             descriptors: descriptors,
                           ),
                         )
-                      : Column(
-                          children: <Widget>[
-                            for (final profile in orderedProfiles)
-                              RadioListTile<String>(
-                                value: profile.id,
-                                groupValue: selectedProfile?.id,
-                                onChanged: (value) {
-                                  if (value == null) return;
-                                  ref
-                                      .read(
-                                        agentStartPageStateControllerProvider
-                                            .notifier,
-                                      )
-                                      .selectProfile(value);
-                                },
-                                title: Text(profile.name),
-                                subtitle: Text(
-                                  _profileSubtitle(profile, hosts),
-                                  maxLines: 2,
-                                  overflow: .ellipsis,
+                      : RadioGroup<String>(
+                          groupValue: selectedProfile?.id,
+                          onChanged: (value) {
+                            if (value == null) return;
+                            ref
+                                .read(
+                                  agentStartPageStateControllerProvider
+                                      .notifier,
+                                )
+                                .selectProfile(value);
+                          },
+                          child: Column(
+                            children: <Widget>[
+                              for (final profile in orderedProfiles)
+                                RadioListTile<String>(
+                                  value: profile.id,
+                                  title: Text(profile.name),
+                                  subtitle: Text(
+                                    _profileSubtitle(profile, hosts),
+                                    maxLines: 2,
+                                    overflow: .ellipsis,
+                                  ),
+                                  contentPadding: const .symmetric(
+                                    horizontal: 12,
+                                  ),
                                 ),
-                                contentPadding: const .symmetric(
-                                  horizontal: 12,
-                                ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                 ),
                 const SizedBox(height: 20),
@@ -184,11 +188,13 @@ class AgentStartPage extends ConsumerWidget {
         'create conversation succeeded profileId=${profile.id} conversationId=${conversation.conversationId}',
       );
       if (!context.mounted) return;
-      context.push(
-        '/social/chat/${conversation.conversationId}',
-        extra: SocialChatRouteExtra(
-          title: profile.name,
-          kind: ConversationKind.group,
+      unawaited(
+        context.push(
+          '/social/chat/${conversation.conversationId}',
+          extra: SocialChatRouteExtra(
+            title: profile.name,
+            kind: ConversationKind.group,
+          ),
         ),
       );
     } catch (error) {

@@ -66,7 +66,7 @@ class RequestTraceRecords extends Notifier<List<RequestTraceRecord>> {
   }
 
   void _disposeSubscription() {
-    _subscription?.cancel();
+    unawaited(_subscription?.cancel() ?? Future<void>.value());
     _subscription = null;
   }
 }

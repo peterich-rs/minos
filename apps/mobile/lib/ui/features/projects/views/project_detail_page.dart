@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -77,7 +79,7 @@ class ProjectDetailPage extends ConsumerWidget {
           ref
               .read(selectedProjectThreadProvider(projectId).notifier)
               .select(id);
-          context.push('/thread/$id');
+          unawaited(context.push('/thread/$id'));
         },
         onNewThread: () => _startNewThread(context, ref),
         onDeleteThread: (id) => _deleteThread(context, ref, id),
@@ -144,7 +146,7 @@ class ProjectDetailPage extends ConsumerWidget {
       if (!context.mounted) return;
 
       // Navigate to the new thread view (thread ID will arrive via events)
-      context.push(AppRoutes.newThread);
+      unawaited(context.push(AppRoutes.newThread));
     } catch (error) {
       if (!context.mounted) return;
       showLoggedErrorToast(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart' hide ConnectionState;
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -586,11 +588,13 @@ class AgentProfilePage extends ConsumerWidget {
                     profile: profile,
                   );
                   if (!context.mounted) return;
-                  context.push(
-                    '/social/chat/${conversation.conversationId}',
-                    extra: SocialChatRouteExtra(
-                      title: profile.name,
-                      kind: ConversationKind.group,
+                  unawaited(
+                    context.push(
+                      '/social/chat/${conversation.conversationId}',
+                      extra: SocialChatRouteExtra(
+                        title: profile.name,
+                        kind: ConversationKind.group,
+                      ),
                     ),
                   );
                 } catch (error) {
@@ -1080,9 +1084,11 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
                         actionLabel: '去扫码连接',
                         onPressed: () {
                           navigator.pop();
-                          navigator.push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const PairingPage(),
+                          unawaited(
+                            navigator.push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const PairingPage(),
+                              ),
                             ),
                           );
                         },
@@ -1734,36 +1740,40 @@ class _ProfilesSection extends ConsumerWidget {
                     profile: ordered[index],
                     hostLabel: _resolvedProfileHostLabel(ordered[index], hosts),
                     isPreferred: ordered[index].id == preferredProfileId,
-                    onTap: () =>
-                        context.push('/agent-profile/${ordered[index].id}'),
+                    onTap: () => unawaited(
+                      context.push('/agent-profile/${ordered[index].id}'),
+                    ),
                     onMakeDefault: () => ref
                         .read(agentProfilesControllerProvider.notifier)
                         .setPreferredProfile(ordered[index].id),
                     onDelete: () {
-                      showShadDialog<void>(
-                        context: context,
-                        builder: (context) => ShadDialog.alert(
-                          title: const Text('删除 Agent'),
-                          description: const Text('确定要删除这个 Agent 吗？此操作无法撤销。'),
-                          actions: [
-                            ShadButton.outline(
-                              child: const Text('取消'),
-                              onPressed: () => Navigator.of(context).pop(),
-                            ),
-                            ShadButton.destructive(
-                              child: const Text('删除'),
-                              onPressed: () async {
-                                await ref
-                                    .read(
-                                      agentProfilesControllerProvider.notifier,
-                                    )
-                                    .deleteProfile(ordered[index].id);
-                                if (context.mounted) {
-                                  Navigator.of(context).pop();
-                                }
-                              },
-                            ),
-                          ],
+                      unawaited(
+                        showShadDialog<void>(
+                          context: context,
+                          builder: (context) => ShadDialog.alert(
+                            title: const Text('删除 Agent'),
+                            description: const Text('确定要删除这个 Agent 吗？此操作无法撤销。'),
+                            actions: [
+                              ShadButton.outline(
+                                child: const Text('取消'),
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
+                              ShadButton.destructive(
+                                child: const Text('删除'),
+                                onPressed: () async {
+                                  await ref
+                                      .read(
+                                        agentProfilesControllerProvider
+                                            .notifier,
+                                      )
+                                      .deleteProfile(ordered[index].id);
+                                  if (context.mounted) {
+                                    Navigator.of(context).pop();
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
                         ),
                       );
                     },
@@ -1856,36 +1866,38 @@ class _HostRuntimeCard extends ConsumerWidget {
                       .read(activeMacProvider.notifier)
                       .setActive(hosts[index].hostDeviceId),
                   onDelete: () {
-                    showShadDialog<void>(
-                      context: context,
-                      builder: (context) => ShadDialog.alert(
-                        title: const Text('移除设备'),
-                        description: const Text('确定要移除此设备吗？此操作无法撤销。'),
-                        actions: [
-                          ShadButton.outline(
-                            child: const Text('取消'),
-                            onPressed: () => Navigator.of(context).pop(),
-                          ),
-                          ShadButton.destructive(
-                            child: const Text('移除'),
-                            onPressed: () async {
-                              await ref
-                                  .read(runtimeActionsProvider)
-                                  .forgetHost(hosts[index].hostDeviceId);
-                              try {
+                    unawaited(
+                      showShadDialog<void>(
+                        context: context,
+                        builder: (context) => ShadDialog.alert(
+                          title: const Text('移除设备'),
+                          description: const Text('确定要移除此设备吗？此操作无法撤销。'),
+                          actions: [
+                            ShadButton.outline(
+                              child: const Text('取消'),
+                              onPressed: () => Navigator.of(context).pop(),
+                            ),
+                            ShadButton.destructive(
+                              child: const Text('移除'),
+                              onPressed: () async {
                                 await ref
-                                    .read(pairedMacsProvider.notifier)
+                                    .read(runtimeActionsProvider)
+                                    .forgetHost(hosts[index].hostDeviceId);
+                                try {
+                                  await ref
+                                      .read(pairedMacsProvider.notifier)
+                                      .refresh();
+                                } catch (_) {}
+                                await ref
+                                    .read(activeMacProvider.notifier)
                                     .refresh();
-                              } catch (_) {}
-                              await ref
-                                  .read(activeMacProvider.notifier)
-                                  .refresh();
-                              if (context.mounted) {
-                                Navigator.of(context).pop();
-                              }
-                            },
-                          ),
-                        ],
+                                if (context.mounted) {
+                                  Navigator.of(context).pop();
+                                }
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   },
