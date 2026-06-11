@@ -19,31 +19,39 @@ impl EmbeddedBackend {
         workspace_root: PathBuf,
         max_instances: usize,
         idle_timeout: std::time::Duration,
-        chat_mcp_permissions: minos_chat_store::mcp::ChatMcpToolPermissions,
+        mcp_permissions: minos_chat_store::mcp_server::McpToolPermissions,
     ) -> Result<Self> {
         let shell_env = capture_user_shell_env().await;
         let mut config = minos_agent_runtime::AgentRuntimeConfig::new(workspace_root);
-        let chat_mcp_result = match std::env::current_exe() {
+        let db_path = minos_chat_store::default_db_path()?;
+        let minos_home = db_path.parent().expect("db_path parent").to_path_buf();
+        let socket_path = {
+            let id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            minos_home.join("run").join(format!("mcp-{id}.sock"))
+        };
+        let mcp_result = match std::env::current_exe() {
             Ok(current_exe) => {
-                config.enable_chat_mcp_with_command(current_exe, vec!["chat-mcp".into()])
+                config.enable_mcp_with_command(current_exe, vec!["minos-mcp".into()], socket_path)
             }
             Err(error) => {
                 tracing::warn!(
                     target: "minos_tui::backend::embedded",
                     error = %error,
-                    "failed to resolve current executable for chat MCP; falling back to PATH"
+                    "failed to resolve current executable for MCP; falling back to PATH"
                 );
-                config.enable_default_chat_mcp()
+                config.enable_default_mcp()
             }
         };
-        if let Some(chat_mcp) = config.chat_mcp.as_mut() {
-            chat_mcp.permissions = chat_mcp_permissions;
+        if let Some(mcp) = config.mcp.as_mut() {
+            mcp.permissions = mcp_permissions;
         }
-        if let Err(error) = chat_mcp_result {
+        if let Err(error) = mcp_result {
             tracing::warn!(
                 target: "minos_tui::backend::embedded",
                 error = %error,
-                "failed to enable default chat MCP"
+                "failed to enable default MCP"
             );
         }
         config.subprocess_env = Arc::new(shell_env);

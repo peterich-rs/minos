@@ -25,17 +25,18 @@ pub struct AgentRuntimeConfig {
     pub handshake_call_timeout: Duration,
     pub approval_request_timeout: Duration,
     pub subprocess_env: Arc<std::collections::HashMap<String, String>>,
-    pub chat_mcp: Option<ChatMcpConfig>,
+    pub mcp: Option<McpConfig>,
     #[cfg(feature = "test-support")]
     pub test_ws_url: Option<Url>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChatMcpConfig {
+pub struct McpConfig {
     pub server_bin: PathBuf,
     pub server_args: Vec<String>,
+    pub socket_path: PathBuf,
     pub db_path: PathBuf,
-    pub permissions: minos_chat_store::mcp::ChatMcpToolPermissions,
+    pub permissions: minos_chat_store::mcp_server::McpToolPermissions,
 }
 
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -59,32 +60,38 @@ impl AgentRuntimeConfig {
             handshake_call_timeout: DEFAULT_HANDSHAKE_CALL_TIMEOUT,
             approval_request_timeout: DEFAULT_APPROVAL_REQUEST_TIMEOUT,
             subprocess_env: Arc::new(std::collections::HashMap::new()),
-            chat_mcp: None,
+            mcp: None,
             #[cfg(feature = "test-support")]
             test_ws_url: None,
         }
     }
 
-    pub fn enable_default_chat_mcp(&mut self) -> anyhow::Result<()> {
-        self.chat_mcp = Some(ChatMcpConfig {
-            server_bin: PathBuf::from("minos-chat-mcp"),
+    pub fn enable_default_mcp(&mut self) -> anyhow::Result<()> {
+        let db_path = minos_chat_store::default_db_path()?;
+        let minos_home = db_path.parent().expect("db_path parent").to_path_buf();
+        let socket_path = minos_home.join("run").join(format!("mcp-daemon-{}.sock", uuid::Uuid::new_v4()));
+        self.mcp = Some(McpConfig {
+            server_bin: PathBuf::from("minos-mcp"),
             server_args: Vec::new(),
-            db_path: minos_chat_store::default_db_path()?,
-            permissions: minos_chat_store::mcp::ChatMcpToolPermissions::default(),
+            socket_path,
+            db_path,
+            permissions: minos_chat_store::mcp_server::McpToolPermissions::default(),
         });
         Ok(())
     }
 
-    pub fn enable_chat_mcp_with_command(
+    pub fn enable_mcp_with_command(
         &mut self,
         server_bin: PathBuf,
         server_args: Vec<String>,
+        socket_path: PathBuf,
     ) -> anyhow::Result<()> {
-        self.chat_mcp = Some(ChatMcpConfig {
+        self.mcp = Some(McpConfig {
             server_bin,
             server_args,
+            socket_path,
             db_path: minos_chat_store::default_db_path()?,
-            permissions: minos_chat_store::mcp::ChatMcpToolPermissions::default(),
+            permissions: minos_chat_store::mcp_server::McpToolPermissions::default(),
         });
         Ok(())
     }

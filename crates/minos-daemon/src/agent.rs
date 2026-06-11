@@ -74,11 +74,11 @@ impl AgentGlue {
         relay_out_tx: mpsc::Sender<minos_protocol::realtime::ClientFrame>,
     ) -> Self {
         let mut cfg = AgentRuntimeConfig::new(workspace_root.clone());
-        if let Err(error) = cfg.enable_default_chat_mcp() {
+        if let Err(error) = cfg.enable_default_mcp() {
             tracing::warn!(
                 target: "minos_daemon::agent",
                 error = %error,
-                "failed to enable default chat MCP"
+                "failed to enable default MCP"
             );
         }
         cfg.subprocess_env = subprocess_env;

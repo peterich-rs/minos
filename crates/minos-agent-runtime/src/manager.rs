@@ -5,7 +5,7 @@
 
 use crate::approvals::NonApprovalContext;
 use crate::codex_client::{CodexClient, Inbound};
-use crate::config::ChatMcpConfig;
+use crate::config::McpConfig;
 use crate::instance::AppServerInstance;
 use crate::manager_event::ManagerEvent;
 use crate::process::CodexProcess;
@@ -547,7 +547,7 @@ impl AgentManager {
         let mut resumed = false;
         let mut provider_session_id = None;
         let chat_mcp =
-            resolve_chat_mcp_server(self.config.chat_mcp.as_ref(), workspace, AgentName::Gemini);
+            resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Gemini);
         if let Some(session_id) = resume_session_id {
             match instance
                 .resume_session(
@@ -608,8 +608,8 @@ impl AgentManager {
             .unwrap_or_else(|| PathBuf::from(AgentName::Opencode.bin_name()));
         let port = pick_free_port(self.config.opencode_port_range.clone())?;
         let password = uuid::Uuid::new_v4().to_string();
-        let chat_mcp = resolve_chat_mcp_server(
-            self.config.chat_mcp.as_ref(),
+        let chat_mcp = resolve_mcp_server(
+            self.config.mcp.as_ref(),
             workspace,
             AgentName::Opencode,
         );
@@ -734,7 +734,7 @@ impl AgentManager {
         let listen_arg = format!("ws://127.0.0.1:{port}");
         let spawn_policies = resolve_session_policies(policies, &self.config.subprocess_env);
         let chat_mcp =
-            resolve_chat_mcp_server(self.config.chat_mcp.as_ref(), workspace, AgentName::Codex);
+            resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Codex);
         let args = build_codex_spawn_args(
             &listen_arg,
             &workspace_display,
@@ -1092,8 +1092,8 @@ impl AgentManager {
         let resume_sid =
             (has_runtime_session || has_persisted_history).then_some(provider_session_id.as_str());
         let session_id = resume_sid.is_none().then_some(provider_session_id.as_str());
-        let chat_mcp = resolve_chat_mcp_server(
-            self.config.chat_mcp.as_ref(),
+        let chat_mcp = resolve_mcp_server(
+            self.config.mcp.as_ref(),
             &handle.workspace,
             AgentName::Claude,
         );
@@ -1956,37 +1956,39 @@ fn resolve_session_policies(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ResolvedChatMcpServer {
+struct ResolvedMcpServer {
     name: String,
     command: String,
     args: Vec<String>,
 }
 
-fn resolve_chat_mcp_server(
-    config: Option<&ChatMcpConfig>,
+fn resolve_mcp_server(
+    config: Option<&McpConfig>,
     workspace: &Path,
     source_agent: AgentName,
-) -> Option<ResolvedChatMcpServer> {
+) -> Option<ResolvedMcpServer> {
     let config = config?;
     let mut args = config.server_args.clone();
     args.extend([
         "--db-path".into(),
         config.db_path.display().to_string(),
-        "--default-room-id".into(),
+        "--room-id".into(),
         minos_chat_store::room_id_for_workspace(workspace),
         "--source-agent".into(),
         source_agent.bin_name().into(),
+        "--socket-path".into(),
+        config.socket_path.display().to_string(),
     ]);
-    args.extend(chat_mcp_permission_args(config.permissions));
-    Some(ResolvedChatMcpServer {
+    args.extend(mcp_permission_args(config.permissions));
+    Some(ResolvedMcpServer {
         name: "minos_chat".into(),
         command: config.server_bin.display().to_string(),
         args,
     })
 }
 
-fn chat_mcp_permission_args(
-    permissions: minos_chat_store::mcp::ChatMcpToolPermissions,
+fn mcp_permission_args(
+    permissions: minos_chat_store::mcp_server::McpToolPermissions,
 ) -> Vec<String> {
     let mut args = Vec::new();
     if !permissions.read_chat {
@@ -1998,13 +2000,10 @@ fn chat_mcp_permission_args(
     if !permissions.mention_user {
         args.push("--disable-mention-user".into());
     }
-    if permissions.allow_any_room {
-        args.push("--allow-any-room".into());
-    }
     args
 }
 
-fn codex_mcp_config_args(server: &ResolvedChatMcpServer) -> Vec<String> {
+fn codex_mcp_config_args(server: &ResolvedMcpServer) -> Vec<String> {
     let args_value = serde_json::Value::Array(
         server
             .args
@@ -2027,7 +2026,7 @@ fn codex_mcp_config_args(server: &ResolvedChatMcpServer) -> Vec<String> {
     ]
 }
 
-fn claude_mcp_config_json(server: &ResolvedChatMcpServer) -> String {
+fn claude_mcp_config_json(server: &ResolvedMcpServer) -> String {
     let mut servers = serde_json::Map::new();
     servers.insert(
         server.name.clone(),
@@ -2039,7 +2038,7 @@ fn claude_mcp_config_json(server: &ResolvedChatMcpServer) -> String {
     serde_json::json!({ "mcpServers": servers }).to_string()
 }
 
-fn opencode_config_content(server: &ResolvedChatMcpServer) -> String {
+fn opencode_config_content(server: &ResolvedMcpServer) -> String {
     let mut command = Vec::with_capacity(server.args.len() + 1);
     command.push(server.command.clone());
     command.extend(server.args.clone());
@@ -2059,7 +2058,7 @@ fn opencode_config_content(server: &ResolvedChatMcpServer) -> String {
     .to_string()
 }
 
-fn gemini_mcp_server(server: &ResolvedChatMcpServer) -> minos_acp_protocol::McpServer {
+fn gemini_mcp_server(server: &ResolvedMcpServer) -> minos_acp_protocol::McpServer {
     minos_acp_protocol::McpServer {
         name: server.name.clone(),
         transport: minos_acp_protocol::McpTransport::Stdio {
@@ -2078,7 +2077,7 @@ fn build_codex_spawn_args(
     listen_arg: &str,
     workspace_display: &str,
     policies: &ResolvedSessionPolicies,
-    chat_mcp: Option<&ResolvedChatMcpServer>,
+    chat_mcp: Option<&ResolvedMcpServer>,
 ) -> Vec<String> {
     let mut args = vec![
         "app-server".to_string(),
@@ -2575,7 +2574,7 @@ pub(crate) struct StartThreadResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AgentRuntimeConfig, ChatMcpConfig};
+    use crate::config::{AgentRuntimeConfig, McpConfig};
     use crate::state_machine::PauseReason;
     use crate::test_support::{FakeCodexBackend, FakeCodexServer, Step};
     use serde_json::json;
@@ -2702,16 +2701,18 @@ mod tests {
     #[test]
     fn codex_spawn_args_include_chat_mcp_config_when_enabled() {
         let resolved = ResolvedSessionPolicies::default();
-        let server = ResolvedChatMcpServer {
+        let server = ResolvedMcpServer {
             name: "minos_chat".into(),
-            command: "/tmp/minos-chat-mcp".into(),
+            command: "/tmp/minos-mcp".into(),
             args: vec![
                 "--db-path".into(),
                 "/tmp/daemon.sqlite".into(),
-                "--default-room-id".into(),
+                "--room-id".into(),
                 "room-main".into(),
                 "--source-agent".into(),
                 "codex".into(),
+                "--socket-path".into(),
+                "/tmp/mcp-daemon.sock".into(),
             ],
         };
 
@@ -2720,25 +2721,26 @@ mod tests {
 
         assert!(has_arg(
             &args,
-            "mcp_servers.minos_chat.command=\"/tmp/minos-chat-mcp\""
+            "mcp_servers.minos_chat.command=\"/tmp/minos-mcp\""
         ));
         assert!(has_arg(
             &args,
-            "mcp_servers.minos_chat.args=[\"--db-path\",\"/tmp/daemon.sqlite\",\"--default-room-id\",\"room-main\",\"--source-agent\",\"codex\"]"
+            "mcp_servers.minos_chat.args=[\"--db-path\",\"/tmp/daemon.sqlite\",\"--room-id\",\"room-main\",\"--source-agent\",\"codex\",\"--socket-path\",\"/tmp/mcp-daemon.sock\"]"
         ));
         assert!(has_arg(&args, "mcp_servers.minos_chat.enabled=true"));
     }
 
     #[test]
-    fn resolve_chat_mcp_server_preserves_command_prefix_args() {
-        let config = ChatMcpConfig {
+    fn resolve_mcp_server_preserves_command_prefix_args() {
+        let config = McpConfig {
             server_bin: "/tmp/minos-tui".into(),
-            server_args: vec!["chat-mcp".into()],
+            server_args: vec!["minos-mcp".into()],
+            socket_path: "/tmp/mcp-test.sock".into(),
             db_path: "/tmp/minos.sqlite".into(),
-            permissions: minos_chat_store::mcp::ChatMcpToolPermissions::default(),
+            permissions: minos_chat_store::mcp_server::McpToolPermissions::default(),
         };
 
-        let server = resolve_chat_mcp_server(
+        let server = resolve_mcp_server(
             Some(&config),
             std::path::Path::new("/tmp/minos"),
             AgentName::Gemini,
@@ -2749,30 +2751,34 @@ mod tests {
         assert_eq!(
             server.args,
             vec![
-                "chat-mcp",
+                "minos-mcp",
                 "--db-path",
                 "/tmp/minos.sqlite",
-                "--default-room-id",
+                "--room-id",
                 "room-minos",
                 "--source-agent",
-                "gemini"
+                "gemini",
+                "--socket-path",
+                "/tmp/mcp-test.sock"
             ]
         );
     }
 
     #[test]
     fn claude_mcp_config_json_includes_bound_room_and_source_agent() {
-        let server = ResolvedChatMcpServer {
+        let server = ResolvedMcpServer {
             name: "minos_chat".into(),
             command: "/tmp/minos-tui".into(),
             args: vec![
-                "chat-mcp".into(),
+                "minos-mcp".into(),
                 "--db-path".into(),
                 "/tmp/minos.sqlite".into(),
-                "--default-room-id".into(),
+                "--room-id".into(),
                 "room-minos".into(),
                 "--source-agent".into(),
                 "claude".into(),
+                "--socket-path".into(),
+                "/tmp/mcp-test.sock".into(),
             ],
         };
 
@@ -2783,32 +2789,39 @@ mod tests {
             config["mcpServers"]["minos_chat"]["command"],
             "/tmp/minos-tui"
         );
-        assert_eq!(config["mcpServers"]["minos_chat"]["args"][0], "chat-mcp");
+        assert_eq!(config["mcpServers"]["minos_chat"]["args"][0], "minos-mcp");
         assert!(config["mcpServers"]["minos_chat"]["args"]
             .as_array()
             .unwrap()
             .windows(2)
-            .any(|pair| pair[0] == "--default-room-id" && pair[1] == "room-minos"));
+            .any(|pair| pair[0] == "--room-id" && pair[1] == "room-minos"));
         assert!(config["mcpServers"]["minos_chat"]["args"]
             .as_array()
             .unwrap()
             .windows(2)
             .any(|pair| pair[0] == "--source-agent" && pair[1] == "claude"));
+        assert!(config["mcpServers"]["minos_chat"]["args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--socket-path" && pair[1] == "/tmp/mcp-test.sock"));
     }
 
     #[test]
     fn opencode_config_content_includes_local_minos_chat_server() {
-        let server = ResolvedChatMcpServer {
+        let server = ResolvedMcpServer {
             name: "minos_chat".into(),
             command: "/tmp/minos-tui".into(),
             args: vec![
-                "chat-mcp".into(),
+                "minos-mcp".into(),
                 "--db-path".into(),
                 "/tmp/minos.sqlite".into(),
-                "--default-room-id".into(),
+                "--room-id".into(),
                 "room-minos".into(),
                 "--source-agent".into(),
                 "opencode".into(),
+                "--socket-path".into(),
+                "/tmp/mcp-test.sock".into(),
             ],
         };
 
@@ -2818,7 +2831,7 @@ mod tests {
         assert_eq!(config["mcp"]["minos_chat"]["type"], "local");
         assert_eq!(config["mcp"]["minos_chat"]["enabled"], true);
         assert_eq!(config["mcp"]["minos_chat"]["command"][0], "/tmp/minos-tui");
-        assert_eq!(config["mcp"]["minos_chat"]["command"][1], "chat-mcp");
+        assert_eq!(config["mcp"]["minos_chat"]["command"][1], "minos-mcp");
         assert!(config["mcp"]["minos_chat"]["command"]
             .as_array()
             .unwrap()
@@ -2828,17 +2841,19 @@ mod tests {
 
     #[test]
     fn gemini_mcp_server_includes_bound_room_and_source_agent() {
-        let server = ResolvedChatMcpServer {
+        let server = ResolvedMcpServer {
             name: "minos_chat".into(),
             command: "/tmp/minos-tui".into(),
             args: vec![
-                "chat-mcp".into(),
+                "minos-mcp".into(),
                 "--db-path".into(),
                 "/tmp/minos.sqlite".into(),
-                "--default-room-id".into(),
+                "--room-id".into(),
                 "room-minos".into(),
                 "--source-agent".into(),
                 "gemini".into(),
+                "--socket-path".into(),
+                "/tmp/mcp-test.sock".into(),
             ],
         };
 
@@ -2846,12 +2861,12 @@ mod tests {
 
         assert_eq!(config["name"], "minos_chat");
         assert_eq!(config["command"], "/tmp/minos-tui");
-        assert_eq!(config["args"][0], "chat-mcp");
+        assert_eq!(config["args"][0], "minos-mcp");
         assert!(config["args"]
             .as_array()
             .unwrap()
             .windows(2)
-            .any(|pair| pair[0] == "--default-room-id" && pair[1] == "room-minos"));
+            .any(|pair| pair[0] == "--room-id" && pair[1] == "room-minos"));
         assert!(config["args"]
             .as_array()
             .unwrap()
@@ -3056,11 +3071,12 @@ done
 
         let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
         cfg.gemini_bin = Some(script_path);
-        cfg.chat_mcp = Some(ChatMcpConfig {
+        cfg.mcp = Some(McpConfig {
             server_bin: "/tmp/minos-tui".into(),
-            server_args: vec!["chat-mcp".into()],
+            server_args: vec!["minos-mcp".into()],
+            socket_path: "/tmp/mcp-test.sock".into(),
             db_path: "/tmp/minos-chat.sqlite".into(),
-            permissions: minos_chat_store::mcp::ChatMcpToolPermissions::default(),
+            permissions: minos_chat_store::mcp_server::McpToolPermissions::default(),
         });
         cfg.subprocess_env = Arc::new(HashMap::from([(
             "FAKE_GEMINI_SESSION_NEW".to_string(),
@@ -3077,7 +3093,7 @@ done
         let mcp_server = &request["params"]["mcpServers"][0];
         assert_eq!(mcp_server["name"], "minos_chat");
         assert_eq!(mcp_server["command"], "/tmp/minos-tui");
-        assert_eq!(mcp_server["args"][0], "chat-mcp");
+        assert_eq!(mcp_server["args"][0], "minos-mcp");
         assert_eq!(mcp_server["args"][1], "--db-path");
         assert_eq!(mcp_server["args"][2], "/tmp/minos-chat.sqlite");
         assert!(mcp_server["args"]
@@ -3085,6 +3101,11 @@ done
             .unwrap()
             .windows(2)
             .any(|pair| pair[0] == "--source-agent" && pair[1] == "gemini"));
+        assert!(mcp_server["args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--socket-path" && pair[1] == "/tmp/mcp-test.sock"));
         assert!(mcp_server.get("transportType").is_none());
         assert!(mcp_server.get("type").is_none());
         assert_eq!(mcp_server["env"], json!([]));

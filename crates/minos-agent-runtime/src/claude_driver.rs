@@ -292,7 +292,7 @@ mod tests {
             "hello",
             Some("session-1"),
             None,
-            Some(r#"{"mcpServers":{"minos_chat":{"command":"minos-chat-mcp"}}}"#),
+            Some(r#"{"mcpServers":{"minos_chat":{"command":"minos-mcp"}}}"#),
         );
 
         assert!(args.windows(2).any(|pair| pair == ["-p", "hello"]));
