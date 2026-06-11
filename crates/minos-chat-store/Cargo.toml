@@ -20,6 +20,10 @@ sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
+[[bin]]
+name = "minos-mcp"
+path = "src/bin/minos-mcp.rs"
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

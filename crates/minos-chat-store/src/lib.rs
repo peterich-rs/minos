@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-pub mod mcp;
+pub mod mcp_handler;
+pub mod mcp_server;
+pub mod mcp_socket;
 
 const DEFAULT_LIMIT: u32 = 100;
 const MAX_LIMIT: u32 = 500;
@@ -75,45 +77,6 @@ pub struct ChatMessagePage {
     pub messages: Vec<ChatMessage>,
     pub next_before_seq: Option<u64>,
     pub has_more: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatMcpCommand {
-    pub seq: u64,
-    pub room_id: String,
-    pub created_at_ms: i64,
-    pub claimed_at_ms: Option<i64>,
-    pub completed_at_ms: Option<i64>,
-    pub status: ChatMcpCommandStatus,
-    pub kind: ChatMcpCommandKind,
-    pub source_agent: Option<AgentName>,
-    pub target_agent: Option<AgentName>,
-    pub body: String,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewChatMcpCommand {
-    pub kind: ChatMcpCommandKind,
-    pub source_agent: Option<AgentName>,
-    pub target_agent: Option<AgentName>,
-    pub body: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChatMcpCommandKind {
-    MentionAgent,
-    MentionUser,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChatMcpCommandStatus {
-    Pending,
-    Claimed,
-    Completed,
-    Failed,
 }
 
 impl ChatStore {
@@ -372,111 +335,6 @@ impl ChatStore {
         rows.into_iter().map(agent_session_from_row).collect()
     }
 
-    pub async fn enqueue_mcp_command(
-        &self,
-        room_id: &str,
-        input: NewChatMcpCommand,
-    ) -> Result<ChatMcpCommand> {
-        let now = chrono::Utc::now().timestamp_millis();
-        let result = sqlx::query(
-            "INSERT INTO chat_mcp_commands( \
-                room_id, created_at_ms, status, command_type, source_agent, target_agent, body \
-             ) VALUES (?, ?, 'pending', ?, ?, ?, ?)",
-        )
-        .bind(room_id)
-        .bind(now)
-        .bind(input.kind.as_db())
-        .bind(input.source_agent.map(|agent| agent.bin_name().to_owned()))
-        .bind(input.target_agent.map(|agent| agent.bin_name().to_owned()))
-        .bind(input.body)
-        .execute(&self.pool)
-        .await?;
-
-        let seq = u64::try_from(result.last_insert_rowid()).context("mcp command seq overflow")?;
-        self.get_mcp_command(seq)
-            .await?
-            .context("inserted MCP command is missing")
-    }
-
-    pub async fn claim_pending_mcp_commands(
-        &self,
-        room_id: &str,
-        limit: Option<u32>,
-    ) -> Result<Vec<ChatMcpCommand>> {
-        let limit = i64::from(normalize_limit(limit));
-        let now = chrono::Utc::now().timestamp_millis();
-        let mut tx = self.pool.begin().await?;
-        let rows = sqlx::query(
-            "SELECT * FROM chat_mcp_commands \
-             WHERE room_id = ? AND status = 'pending' \
-             ORDER BY command_seq ASC LIMIT ?",
-        )
-        .bind(room_id)
-        .bind(limit)
-        .fetch_all(&mut *tx)
-        .await?;
-
-        let mut commands = Vec::with_capacity(rows.len());
-        for row in rows {
-            let seq_i64: i64 = row.try_get("command_seq")?;
-            let updated = sqlx::query(
-                "UPDATE chat_mcp_commands \
-                 SET status = 'claimed', claimed_at_ms = ? \
-                 WHERE command_seq = ? AND status = 'pending'",
-            )
-            .bind(now)
-            .bind(seq_i64)
-            .execute(&mut *tx)
-            .await?;
-            if updated.rows_affected() == 0 {
-                continue;
-            }
-            let mut command = chat_mcp_command_from_row(row)?;
-            command.status = ChatMcpCommandStatus::Claimed;
-            command.claimed_at_ms = Some(now);
-            commands.push(command);
-        }
-        tx.commit().await?;
-        Ok(commands)
-    }
-
-    pub async fn complete_mcp_command(&self, seq: u64) -> Result<()> {
-        let now = chrono::Utc::now().timestamp_millis();
-        sqlx::query(
-            "UPDATE chat_mcp_commands \
-             SET status = 'completed', completed_at_ms = ?, error = NULL \
-             WHERE command_seq = ?",
-        )
-        .bind(now)
-        .bind(seq as i64)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn fail_mcp_command(&self, seq: u64, error: &str) -> Result<()> {
-        let now = chrono::Utc::now().timestamp_millis();
-        sqlx::query(
-            "UPDATE chat_mcp_commands \
-             SET status = 'failed', completed_at_ms = ?, error = ? \
-             WHERE command_seq = ?",
-        )
-        .bind(now)
-        .bind(error)
-        .bind(seq as i64)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn get_mcp_command(&self, seq: u64) -> Result<Option<ChatMcpCommand>> {
-        let row = sqlx::query("SELECT * FROM chat_mcp_commands WHERE command_seq = ?")
-            .bind(seq as i64)
-            .fetch_optional(&self.pool)
-            .await?;
-        row.map(chat_mcp_command_from_row).transpose()
-    }
-
     async fn migrate(pool: &SqlitePool) -> Result<()> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS chat_rooms ( \
@@ -543,31 +401,6 @@ impl ChatStore {
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS chat_agent_sessions_by_room_last \
              ON chat_agent_sessions(room_id, last_message_seq DESC)",
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS chat_mcp_commands ( \
-                command_seq INTEGER PRIMARY KEY, \
-                room_id TEXT NOT NULL REFERENCES chat_rooms(room_id), \
-                created_at_ms INTEGER NOT NULL, \
-                claimed_at_ms INTEGER, \
-                completed_at_ms INTEGER, \
-                status TEXT NOT NULL CHECK(status IN ('pending', 'claimed', 'completed', 'failed')), \
-                command_type TEXT NOT NULL CHECK(command_type IN ('mention_agent', 'mention_user')), \
-                source_agent TEXT, \
-                target_agent TEXT, \
-                body TEXT NOT NULL, \
-                error TEXT \
-             )",
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS chat_mcp_commands_by_room_status_seq \
-             ON chat_mcp_commands(room_id, status, command_seq ASC)",
         )
         .execute(pool)
         .await?;
@@ -678,35 +511,6 @@ impl ChatSenderRole {
     }
 }
 
-impl ChatMcpCommandKind {
-    const fn as_db(self) -> &'static str {
-        match self {
-            Self::MentionAgent => "mention_agent",
-            Self::MentionUser => "mention_user",
-        }
-    }
-
-    fn from_db(value: &str) -> Result<Self> {
-        match value {
-            "mention_agent" => Ok(Self::MentionAgent),
-            "mention_user" => Ok(Self::MentionUser),
-            other => anyhow::bail!("unknown MCP command type: {other}"),
-        }
-    }
-}
-
-impl ChatMcpCommandStatus {
-    fn from_db(value: &str) -> Result<Self> {
-        match value {
-            "pending" => Ok(Self::Pending),
-            "claimed" => Ok(Self::Claimed),
-            "completed" => Ok(Self::Completed),
-            "failed" => Ok(Self::Failed),
-            other => anyhow::bail!("unknown MCP command status: {other}"),
-        }
-    }
-}
-
 pub fn default_db_path() -> Result<PathBuf> {
     Ok(resolve_minos_home()?.join("daemon.sqlite"))
 }
@@ -789,25 +593,6 @@ fn agent_session_from_row(row: sqlx::sqlite::SqliteRow) -> Result<ChatAgentSessi
         last_seen_at_ms: row.try_get("last_seen_at_ms")?,
         first_message_seq: u64::try_from(first_seq).context("negative first_message_seq")?,
         last_message_seq: u64::try_from(last_seq).context("negative last_message_seq")?,
-    })
-}
-
-fn chat_mcp_command_from_row(row: sqlx::sqlite::SqliteRow) -> Result<ChatMcpCommand> {
-    let seq: i64 = row.try_get("command_seq")?;
-    let status: String = row.try_get("status")?;
-    let kind: String = row.try_get("command_type")?;
-    Ok(ChatMcpCommand {
-        seq: u64::try_from(seq).context("negative MCP command seq")?,
-        room_id: row.try_get("room_id")?,
-        created_at_ms: row.try_get("created_at_ms")?,
-        claimed_at_ms: row.try_get("claimed_at_ms")?,
-        completed_at_ms: row.try_get("completed_at_ms")?,
-        status: ChatMcpCommandStatus::from_db(&status)?,
-        kind: ChatMcpCommandKind::from_db(&kind)?,
-        source_agent: parse_agent(row.try_get::<Option<String>, _>("source_agent")?)?,
-        target_agent: parse_agent(row.try_get::<Option<String>, _>("target_agent")?)?,
-        body: row.try_get("body")?,
-        error: row.try_get("error")?,
     })
 }
 
@@ -958,53 +743,6 @@ mod tests {
             store.most_recent_non_empty_room_id().await.unwrap(),
             Some("room-main".into())
         );
-    }
-
-    #[tokio::test]
-    async fn mcp_commands_can_be_claimed_and_completed() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = ChatStore::open(&tmp.path().join("chat.sqlite"))
-            .await
-            .unwrap();
-        store
-            .ensure_room("room-main", "main", "/tmp/ws")
-            .await
-            .unwrap();
-
-        let queued = store
-            .enqueue_mcp_command(
-                "room-main",
-                NewChatMcpCommand {
-                    kind: ChatMcpCommandKind::MentionAgent,
-                    source_agent: Some(AgentName::Codex),
-                    target_agent: Some(AgentName::Gemini),
-                    body: "review this".into(),
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(queued.status, ChatMcpCommandStatus::Pending);
-
-        let claimed = store
-            .claim_pending_mcp_commands("room-main", Some(10))
-            .await
-            .unwrap();
-        assert_eq!(claimed.len(), 1);
-        assert_eq!(claimed[0].seq, queued.seq);
-        assert_eq!(claimed[0].status, ChatMcpCommandStatus::Claimed);
-        assert_eq!(claimed[0].source_agent, Some(AgentName::Codex));
-        assert_eq!(claimed[0].target_agent, Some(AgentName::Gemini));
-
-        assert!(store
-            .claim_pending_mcp_commands("room-main", Some(10))
-            .await
-            .unwrap()
-            .is_empty());
-
-        store.complete_mcp_command(queued.seq).await.unwrap();
-        let command = store.get_mcp_command(queued.seq).await.unwrap().unwrap();
-        assert_eq!(command.status, ChatMcpCommandStatus::Completed);
-        assert!(command.completed_at_ms.is_some());
     }
 
     #[test]

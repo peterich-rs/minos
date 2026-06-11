@@ -5,15 +5,18 @@ use clap::Parser;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "minos-chat-mcp",
-    about = "Expose Minos chat room history over MCP stdio"
+    name = "minos-mcp",
+    about = "Expose Minos features over MCP stdio, proxied to the Minos main process via Unix socket"
 )]
 struct Args {
     #[arg(long)]
-    db_path: Option<PathBuf>,
+    socket_path: PathBuf,
 
     #[arg(long)]
-    default_room_id: Option<String>,
+    db_path: PathBuf,
+
+    #[arg(long)]
+    room_id: String,
 
     #[arg(long)]
     source_agent: Option<String>,
@@ -26,9 +29,6 @@ struct Args {
 
     #[arg(long)]
     disable_mention_user: bool,
-
-    #[arg(long)]
-    allow_any_room: bool,
 }
 
 #[tokio::main]
@@ -39,19 +39,17 @@ async fn main() -> Result<()> {
         .as_deref()
         .map(parse_agent_name)
         .transpose()?;
-    minos_chat_store::mcp::serve_stdio_with_config(
-        args.db_path,
-        minos_chat_store::mcp::ChatMcpServerConfig {
-            default_room_id: args.default_room_id,
-            source_agent,
-            permissions: minos_chat_store::mcp::ChatMcpToolPermissions {
-                read_chat: !args.disable_read_chat,
-                mention_agent: !args.disable_mention_agent,
-                mention_user: !args.disable_mention_user,
-                allow_any_room: args.allow_any_room,
-            },
+    minos_chat_store::mcp_server::serve_stdio(minos_chat_store::mcp_server::McpServerConfig {
+        socket_path: args.socket_path,
+        db_path: args.db_path,
+        room_id: args.room_id,
+        source_agent,
+        permissions: minos_chat_store::mcp_server::McpToolPermissions {
+            read_chat: !args.disable_read_chat,
+            mention_agent: !args.disable_mention_agent,
+            mention_user: !args.disable_mention_user,
         },
-    )
+    })
     .await
 }
 
