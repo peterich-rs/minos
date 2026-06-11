@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::messages::ChatMessageSummary;
+
 // ─── Topic model ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -318,6 +320,21 @@ pub enum DurableEvent {
         message_id: String,
         at_ms: i64,
     },
+    AccountConversationMessageAppended {
+        account_id: String,
+        conversation_id: String,
+        message_id: String,
+        sender: SenderRef,
+        at_ms: i64,
+        message: ChatMessageSummary,
+    },
+    AccountConversationMessageRecalled {
+        account_id: String,
+        conversation_id: String,
+        message_id: String,
+        at_ms: i64,
+        message: ChatMessageSummary,
+    },
     ProjectConversationLinked {
         project_id: String,
         conversation_id: String,
@@ -374,6 +391,12 @@ impl DurableEvent {
             Self::ApprovalResolved { .. } => "approval_resolved",
             Self::ConversationMessageAppended { .. } => "conversation_message_appended",
             Self::ConversationMessageRecalled { .. } => "conversation_message_recalled",
+            Self::AccountConversationMessageAppended { .. } => {
+                "account_conversation_message_appended"
+            }
+            Self::AccountConversationMessageRecalled { .. } => {
+                "account_conversation_message_recalled"
+            }
             Self::ProjectConversationLinked { .. } => "project_conversation_linked",
             Self::ProjectArchived { .. } => "project_archived",
             Self::HostForceClose { .. } => "host_force_close",
@@ -401,6 +424,10 @@ impl DurableEvent {
             | Self::ConversationMessageRecalled {
                 conversation_id, ..
             } => RealtimeTopic::Conversation(conversation_id.clone()),
+            Self::AccountConversationMessageAppended { account_id, .. }
+            | Self::AccountConversationMessageRecalled { account_id, .. } => {
+                RealtimeTopic::Account(account_id.clone())
+            }
             Self::ProjectConversationLinked { project_id, .. }
             | Self::ProjectArchived { project_id, .. } => {
                 RealtimeTopic::Project(project_id.clone())

@@ -257,15 +257,34 @@ async fn post_installations_self(
                 (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
             })?;
 
+        let latest_mobile =
+            crate::store::devices::latest_mobile_for_account(&state.store, &pair.mobile_account_id)
+                .await
+                .map_err(|error| {
+                    tracing::warn!(
+                        target: "minos_backend::v1::host",
+                        error = %error,
+                        mobile_account_id = %pair.mobile_account_id,
+                        "latest_mobile_for_account failed",
+                    );
+                    (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
+                })?;
+
         let (display_name, last_active_at_ms) = if let Some(row) = mobile {
-            (row.display_name, row.last_seen_at)
+            let last_active_at_ms = latest_mobile
+                .as_ref()
+                .map_or(row.last_seen_at, |latest| latest.last_seen_at);
+            (row.display_name, last_active_at_ms)
         } else {
             tracing::warn!(
                 target: "minos_backend::v1::host",
                 linked_via_installation_id = %pair.paired_via_device_id,
                 "host link references mobile device with no devices row; using placeholder name",
             );
-            ("unknown".to_string(), pair.paired_at_ms)
+            latest_mobile.map_or_else(
+                || ("unknown".to_string(), pair.paired_at_ms),
+                |latest| (latest.display_name, latest.last_seen_at),
+            )
         };
 
         links.push(HostSelfLinkSummary {

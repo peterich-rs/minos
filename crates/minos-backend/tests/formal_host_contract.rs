@@ -461,6 +461,9 @@ async fn formally_paired_host(
             .await
             .unwrap()
     );
+    devices::touch_last_seen(&state.store, &mobile, 100)
+        .await
+        .unwrap();
 
     HostFixture {
         host,
@@ -561,6 +564,7 @@ async fn host_installations_self_uses_account_presence_not_paired_via_device_pre
         fixture.mobile.to_string()
     );
     assert_eq!(body["data"]["links"][0]["online"], true);
+    assert_eq!(body["data"]["links"][0]["last_active_at_ms"], 200);
 }
 
 #[tokio::test]

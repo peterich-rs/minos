@@ -22,6 +22,11 @@ const SEND_INPUT_COMMAND_METHOD: &str = "agent_session.send_input";
 const STOP_COMMAND_METHOD: &str = "agent_session.stop";
 const DEFAULT_HOST_COMMAND_DEADLINE_MS: i64 = 5_000;
 
+struct ResolvedAgent {
+    runtime_agent: String,
+    owner_account_id: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentSessionError {
     #[error("agent_session_not_found")]
@@ -95,17 +100,51 @@ impl DefaultAgentSessionService {
             .ok_or(AgentSessionError::HostUnavailable)
     }
 
-    async fn resolve_runtime_agent(&self, agent_id: &str) -> Result<String, AgentSessionError> {
+    async fn resolve_agent(&self, agent_id: &str) -> Result<ResolvedAgent, AgentSessionError> {
         if let Some(agent) = crate::store::social::get_agent(&self.store, agent_id).await? {
-            return Ok(agent.runtime_agent);
+            return Ok(ResolvedAgent {
+                runtime_agent: agent.runtime_agent,
+                owner_account_id: Some(agent.owner_account_id),
+            });
         }
-        match agent_id {
-            "agent_codex" => Ok("codex".into()),
-            "agent_claude" => Ok("claude".into()),
-            "agent_gemini" => Ok("gemini".into()),
-            "agent_opencode" => Ok("opencode".into()),
-            _ => Err(AgentSessionError::ValidationFormat("unknown agent_id")),
+        let runtime_agent = match agent_id {
+            "agent_codex" => "codex",
+            "agent_claude" => "claude",
+            "agent_gemini" => "gemini",
+            "agent_opencode" => "opencode",
+            _ => return Err(AgentSessionError::ValidationFormat("unknown agent_id")),
+        };
+        Ok(ResolvedAgent {
+            runtime_agent: runtime_agent.into(),
+            owner_account_id: None,
+        })
+    }
+
+    async fn host_is_authorized_for_session(
+        &self,
+        host_device_id: DeviceId,
+        caller_account_id: &str,
+        agent_owner_account_id: Option<&str>,
+    ) -> Result<bool, AgentSessionError> {
+        if self
+            .repos
+            .account_host_pairings
+            .exists(host_device_id, caller_account_id)
+            .await?
+        {
+            return Ok(true);
         }
+        let Some(owner_account_id) = agent_owner_account_id else {
+            return Ok(false);
+        };
+        if owner_account_id == caller_account_id {
+            return Ok(false);
+        }
+        Ok(self
+            .repos
+            .account_host_pairings
+            .exists(host_device_id, owner_account_id)
+            .await?)
     }
 
     fn parse_host_device_id(host_device_id: &str) -> Result<DeviceId, AgentSessionError> {
@@ -180,7 +219,8 @@ impl AgentSessionService for DefaultAgentSessionService {
         {
             return Err(AgentSessionError::ConversationForbidden);
         }
-        let runtime_agent = self.resolve_runtime_agent(&input.agent_id).await?;
+        let resolved_agent = self.resolve_agent(&input.agent_id).await?;
+        let runtime_agent = resolved_agent.runtime_agent;
 
         let session_id = deterministic_uuid(
             "agent-session-start",
@@ -209,9 +249,11 @@ impl AgentSessionService for DefaultAgentSessionService {
             Some(host_id) => {
                 let host_device_id = Self::parse_host_device_id(host_id)?;
                 if !self
-                    .repos
-                    .account_host_pairings
-                    .exists(host_device_id, &input.caller_account_id)
+                    .host_is_authorized_for_session(
+                        host_device_id,
+                        &input.caller_account_id,
+                        resolved_agent.owner_account_id.as_deref(),
+                    )
                     .await?
                 {
                     return Err(AgentSessionError::HostUnavailable);

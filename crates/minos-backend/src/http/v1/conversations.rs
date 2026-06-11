@@ -5,8 +5,8 @@ use axum::{Json, Router};
 use minos_protocol::{
     ChatMessageSummary, ConversationMembersResponse, ConversationReadResponse,
     ConversationResponse, ConversationsResponse, CreateGroupConversationRequest,
-    EnsureDirectConversationRequest, Envelope, EventKind, ListChatMessagesRequest,
-    ListChatMessagesResponse, SendChatMessageRequest,
+    EnsureDirectConversationRequest, ListChatMessagesRequest, ListChatMessagesResponse,
+    SendChatMessageRequest,
 };
 
 use crate::conversations::{ConversationError, ConversationService, DefaultConversationService};
@@ -300,7 +300,7 @@ async fn send_message_inner(
         .await
         .map_err(map_conversation_error)?;
 
-    fan_out_social_message(&state, &message).await;
+    super::social::fan_out_social_message(&state, &message).await;
 
     // Agent dispatch logic (delegated to the social handler)
     if let Err(e) = super::social::try_agent_dispatch(
@@ -335,7 +335,7 @@ async fn recall_message(
         .recall_message(&account_id, &conversation_id, &message_id)
         .await
         .map_err(map_conversation_error)?;
-    fan_out_social_message(&state, &message).await;
+    super::social::fan_out_social_message(&state, &message).await;
     Ok(Json(message))
 }
 
@@ -423,33 +423,4 @@ async fn remove_group_member(
         return Err(err("not_found", "member not in this conversation"));
     }
     Ok(StatusCode::NO_CONTENT)
-}
-
-async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSummary) {
-    let members = match crate::store::social::list_conversation_members(
-        &state.store,
-        &message.conversation_id,
-    )
-    .await
-    {
-        Ok(members) => members,
-        Err(error) => {
-            tracing::warn!(
-                target: "minos_backend::conversations",
-                conversation_id = %message.conversation_id,
-                error = %error,
-                "failed to list conversation members for social fan-out"
-            );
-            return;
-        }
-    };
-
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::SocialMessage {
-            conversation_id: message.conversation_id.clone(),
-            message: message.clone(),
-        },
-    };
-    state.realtime.fanout_social_message(&members, &frame).await;
 }

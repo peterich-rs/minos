@@ -11,7 +11,7 @@ use tokio::sync::Notify;
 
 use crate::app::tx::{DbTx, Storage};
 use crate::error::BackendError;
-use crate::realtime::DurableEvent;
+use crate::realtime::{DurableEvent, RealtimeFanout};
 use crate::session::SessionRegistry;
 use crate::store::{durable_event_log, host_commands, outbox_events, AsStorePool, StoreHandle};
 
@@ -144,6 +144,7 @@ pub trait HostCommandService: Send + Sync {
 pub struct RuntimeHostCommandService {
     store: StoreHandle,
     registry: Option<Arc<SessionRegistry>>,
+    realtime: Option<Arc<RealtimeFanout>>,
     notify: Notify,
 }
 
@@ -158,9 +159,19 @@ impl RuntimeHostCommandService {
         registry: Option<Arc<SessionRegistry>>,
         enable_timeout_worker: bool,
     ) -> Arc<Self> {
+        Self::new_with_timeout_worker_and_realtime(store, registry, enable_timeout_worker, None)
+    }
+
+    pub fn new_with_timeout_worker_and_realtime(
+        store: StoreHandle,
+        registry: Option<Arc<SessionRegistry>>,
+        enable_timeout_worker: bool,
+        realtime: Option<Arc<RealtimeFanout>>,
+    ) -> Arc<Self> {
         let service = Arc::new(Self {
             store,
             registry,
+            realtime,
             notify: Notify::new(),
         });
         if enable_timeout_worker {
@@ -226,6 +237,7 @@ impl RuntimeHostCommandService {
             .await?;
             tx.commit().await?;
             self.notify.notify_one();
+            self.dispatch_outbox_once();
         }
         Ok(())
     }
@@ -258,6 +270,7 @@ impl RuntimeHostCommandService {
         .await?;
         tx.commit().await?;
         self.notify.notify_one();
+        self.dispatch_outbox_once();
         Ok(())
     }
 
@@ -454,6 +467,21 @@ impl RuntimeHostCommandService {
         }
         clear_expired_pending_host_commands(now_ms);
         Ok(())
+    }
+
+    fn dispatch_outbox_once(&self) {
+        let Some(realtime) = self.realtime.clone() else {
+            return;
+        };
+        tokio::spawn(async move {
+            if let Err(error) = realtime.dispatch_outbox_batch().await {
+                tracing::warn!(
+                    target: "minos_backend::host_commands",
+                    error = %error,
+                    "host command outbox wake failed"
+                );
+            }
+        });
     }
 }
 

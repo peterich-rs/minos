@@ -360,13 +360,21 @@ impl NotificationService for DefaultNotificationService {
 /// the given event. Returns empty for events that don't trigger push.
 fn resolve_target_accounts(event: &DurableEvent) -> Vec<String> {
     match event {
-        DurableEvent::ConversationMessageAppended { sender, .. } => {
-            // The sender should NOT receive a push for their own message.
-            match sender {
-                SenderRef::User { account_id } => vec![account_id.clone()],
-                _ => Vec::new(),
+        DurableEvent::AccountConversationMessageAppended {
+            account_id, sender, ..
+        } => {
+            if matches!(sender, SenderRef::User { account_id: sender_id } if sender_id == account_id)
+            {
+                Vec::new()
+            } else {
+                vec![account_id.clone()]
             }
         }
+        DurableEvent::AccountConversationMessageRecalled { account_id, .. } => {
+            vec![account_id.clone()]
+        }
+        DurableEvent::ConversationMessageAppended { .. }
+        | DurableEvent::ConversationMessageRecalled { .. } => Vec::new(),
         DurableEvent::ApprovalRequested { .. } => {
             // The target account is the session owner; resolved externally
             // by the fanout job via the agent session lookup.
@@ -378,5 +386,76 @@ fn resolve_target_accounts(event: &DurableEvent) -> Vec<String> {
             Vec::new()
         }
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minos_protocol::{ChatMessageSummary, SenderType, UserSummary};
+
+    fn message(sender_account_id: &str) -> ChatMessageSummary {
+        ChatMessageSummary {
+            message_id: "msg-1".into(),
+            conversation_id: "conv-1".into(),
+            sender: UserSummary {
+                account_id: sender_account_id.into(),
+                minos_id: "minos-user".into(),
+                display_name: "Test User".into(),
+            },
+            text: "hello".into(),
+            created_at_ms: 1_700_000_000_000,
+            reply_to: None,
+            recalled_at_ms: None,
+            mentioned_account_ids: Vec::new(),
+            sender_type: SenderType::User,
+        }
+    }
+
+    #[test]
+    fn account_conversation_event_targets_account_topic_owner() {
+        let event = DurableEvent::AccountConversationMessageAppended {
+            account_id: "target-account".into(),
+            conversation_id: "conv-1".into(),
+            message_id: "msg-1".into(),
+            sender: SenderRef::Agent {
+                agent_id: "agent-1".into(),
+                session_id: None,
+            },
+            at_ms: 1_700_000_000_000,
+            message: message("agent-account"),
+        };
+
+        assert_eq!(resolve_target_accounts(&event), vec!["target-account"]);
+    }
+
+    #[test]
+    fn account_conversation_event_skips_self_sender() {
+        let event = DurableEvent::AccountConversationMessageAppended {
+            account_id: "target-account".into(),
+            conversation_id: "conv-1".into(),
+            message_id: "msg-1".into(),
+            sender: SenderRef::User {
+                account_id: "target-account".into(),
+            },
+            at_ms: 1_700_000_000_000,
+            message: message("target-account"),
+        };
+
+        assert!(resolve_target_accounts(&event).is_empty());
+    }
+
+    #[test]
+    fn unscoped_conversation_event_has_no_push_target() {
+        let event = DurableEvent::ConversationMessageAppended {
+            conversation_id: "conv-1".into(),
+            message_id: "msg-1".into(),
+            sender: SenderRef::User {
+                account_id: "sender-account".into(),
+            },
+            at_ms: 1_700_000_000_000,
+        };
+
+        assert!(resolve_target_accounts(&event).is_empty());
     }
 }

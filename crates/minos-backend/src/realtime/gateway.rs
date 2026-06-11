@@ -309,6 +309,8 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
     }
     let mut revocation_rx = legacy_handle.subscribe_revocation();
 
+    touch_connection_last_seen(&state, &upgrade.device_id, "ws.open").await;
+
     let close_reason = run_session_inner(
         &mut ws,
         &state,
@@ -402,6 +404,7 @@ async fn run_session_inner(
                         let _ = send_error_frame(ws, conn, "validation_format", "binary frames are not supported").await;
                     }
                     Some(Ok(Message::Ping(payload))) => {
+                        touch_connection_last_seen(state, &upgrade.device_id, "ws.ping").await;
                         if ws.send(Message::Pong(payload)).await.is_err() {
                             return "write_failed";
                         }
@@ -409,6 +412,15 @@ async fn run_session_inner(
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Close(_))) => return "client_close",
                     Some(Err(error)) => {
+                        if websocket_read_error_is_client_reset(&error) {
+                            tracing::debug!(
+                                target: "minos_backend::realtime",
+                                error = %error,
+                                device_id = %upgrade.device_id,
+                                "formal gateway websocket reset by peer"
+                            );
+                            return "client_reset";
+                        }
                         tracing::warn!(
                             target: "minos_backend::realtime",
                             error = %error,
@@ -459,6 +471,28 @@ async fn run_session_inner(
                 }
             }
         }
+    }
+}
+
+async fn touch_connection_last_seen(
+    state: &BackendState,
+    device_id: &DeviceId,
+    operation: &'static str,
+) {
+    if let Err(error) = crate::store::devices::touch_last_seen(
+        &state.store,
+        device_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    {
+        tracing::debug!(
+            target: "minos_backend::realtime",
+            error = %error,
+            device_id = %device_id,
+            operation,
+            "failed to touch device last_seen_at",
+        );
     }
 }
 
@@ -522,6 +556,7 @@ async fn handle_formal_frame(
             Ok(None)
         }
         ClientFrame::Ping { ts } => {
+            touch_connection_last_seen(state, &upgrade.device_id, "ws.client_ping").await;
             let _ = send_server_frame(
                 ws,
                 &ServerFrame::Pong {
@@ -546,35 +581,32 @@ async fn handle_formal_frame(
                 .await;
                 return Ok(None);
             }
-            let store = state.store.clone();
-            tokio::spawn(async move {
-                match host_commands::ack(&store, &command_id, ack_at_ms).await {
-                    Ok(_) => {
-                        if let Err(error) = outbox_events::ack_pending_host_command_events(
-                            &store,
-                            &command_id,
-                            ack_at_ms,
-                        )
-                        .await
-                        {
-                            tracing::warn!(
-                                target: "minos_backend::realtime::gateway",
-                                error = %error,
-                                command_id,
-                                "failed to ack pending host command outbox events"
-                            );
-                        }
-                    }
-                    Err(error) => {
+            match host_commands::ack(&state.store, &command_id, ack_at_ms).await {
+                Ok(_) => {
+                    if let Err(error) = outbox_events::ack_pending_host_command_events(
+                        &state.store,
+                        &command_id,
+                        ack_at_ms,
+                    )
+                    .await
+                    {
                         tracing::warn!(
                             target: "minos_backend::realtime::gateway",
                             error = %error,
                             command_id,
-                            "failed to persist host command ack"
+                            "failed to ack pending host command outbox events"
                         );
                     }
                 }
-            });
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::realtime::gateway",
+                        error = %error,
+                        command_id,
+                        "failed to persist host command ack"
+                    );
+                }
+            }
             Ok(None)
         }
         ClientFrame::HostCommandResult {
@@ -605,48 +637,45 @@ async fn handle_formal_frame(
             } else {
                 Some(error.unwrap_or_else(|| serde_json::json!({ "status": status })))
             };
-            let store = state.store.clone();
-            tokio::spawn(async move {
-                let finish_result = host_commands::finish(
-                    &store,
-                    &command_id,
-                    if succeeded {
-                        host_commands::HostCommandTerminalStatus::Succeeded
-                    } else {
-                        host_commands::HostCommandTerminalStatus::Failed
-                    },
-                    response_value.as_ref(),
-                    error_value.as_ref(),
-                    finished_at_ms,
-                )
-                .await;
-                match finish_result {
-                    Ok(_) => {
-                        if let Err(error) = outbox_events::ack_pending_host_command_events(
-                            &store,
-                            &command_id,
-                            finished_at_ms,
-                        )
-                        .await
-                        {
-                            tracing::warn!(
-                                target: "minos_backend::realtime::gateway",
-                                error = %error,
-                                command_id,
-                                "failed to ack pending host command outbox events"
-                            );
-                        }
-                    }
-                    Err(error) => {
+            let finish_result = host_commands::finish(
+                &state.store,
+                &command_id,
+                if succeeded {
+                    host_commands::HostCommandTerminalStatus::Succeeded
+                } else {
+                    host_commands::HostCommandTerminalStatus::Failed
+                },
+                response_value.as_ref(),
+                error_value.as_ref(),
+                finished_at_ms,
+            )
+            .await;
+            match finish_result {
+                Ok(_) => {
+                    if let Err(error) = outbox_events::ack_pending_host_command_events(
+                        &state.store,
+                        &command_id,
+                        finished_at_ms,
+                    )
+                    .await
+                    {
                         tracing::warn!(
                             target: "minos_backend::realtime::gateway",
                             error = %error,
                             command_id,
-                            "failed to persist host command result"
+                            "failed to ack pending host command outbox events"
                         );
                     }
                 }
-            });
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::realtime::gateway",
+                        error = %error,
+                        command_id,
+                        "failed to persist host command result"
+                    );
+                }
+            }
             Ok(None)
         }
         ClientFrame::HostStreamEvent {
@@ -1057,6 +1086,13 @@ fn durable_event_kind_payload(value: &Value) -> (String, Value) {
     (kind, payload)
 }
 
+fn websocket_read_error_is_client_reset(error: &impl std::fmt::Display) -> bool {
+    let message = error.to_string();
+    message.contains("Connection reset without closing handshake")
+        || message.contains("connection reset by peer")
+        || message.contains("Broken pipe")
+}
+
 async fn send_server_frame(ws: &mut WebSocket, frame: &ServerFrame) -> Result<(), axum::Error> {
     let json = serde_json::to_string(frame).map_err(|error| axum::Error::new(error))?;
     ws.send(Message::Text(json.into())).await
@@ -1097,4 +1133,22 @@ async fn close_with_directive(ws: &mut WebSocket, role: DeviceRole, directive: C
             reason: directive.reason.into(),
         })))
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::websocket_read_error_is_client_reset;
+
+    #[test]
+    fn websocket_read_error_classifies_client_reset() {
+        assert!(websocket_read_error_is_client_reset(
+            &"WebSocket protocol error: Connection reset without closing handshake"
+        ));
+        assert!(websocket_read_error_is_client_reset(
+            &"io error: connection reset by peer"
+        ));
+        assert!(!websocket_read_error_is_client_reset(
+            &"WebSocket protocol error: invalid opcode"
+        ));
+    }
 }

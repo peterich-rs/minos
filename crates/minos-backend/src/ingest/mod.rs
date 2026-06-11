@@ -23,14 +23,17 @@
 pub mod translate;
 pub mod use_case;
 
+use std::collections::HashMap;
+
 use crate::approvals::{ApprovalService, RecordApprovalRequestInput};
 use minos_domain::AgentName;
 use minos_protocol::{Envelope, EventKind};
+use minos_ui_protocol::{MessageRole, UiEventMessage};
 use serde_json::Value;
 
 use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
-use crate::realtime::{peer_target_cache_backend, RealtimeFanout};
+use crate::realtime::{peer_target_cache_backend, RealtimeFanout, RealtimeTopic};
 use crate::session::SessionRegistry;
 use crate::store::{raw_events, threads, AsStorePool, StorePoolRef};
 
@@ -157,6 +160,8 @@ pub async fn dispatch(
         }
     }
 
+    sync_formal_agent_session_from_ui_events(store, thread_id, &translated, ts_ms).await?;
+
     // 4. Fan out each UI event to every live peer paired with owner_device_id.
     let suppress_social_fanout =
         match crate::store::social::suppress_live_ui_fanout_for_session(store, thread_id).await {
@@ -188,6 +193,24 @@ pub async fn dispatch(
         }
 
         if suppress_social_fanout {
+            let payload = match serde_json::to_value(&ui) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::ingest",
+                        error = %error,
+                        thread_id,
+                        "failed to encode suppressed social ui event for formal stream"
+                    );
+                    continue;
+                }
+            };
+            realtime.fanout_stream_event(
+                &RealtimeTopic::AgentSession(thread_id.to_string()),
+                "ui_event",
+                i64::try_from(persisted_seq).ok(),
+                payload,
+            );
             continue;
         }
 
@@ -203,6 +226,206 @@ pub async fn dispatch(
         broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
     }
 
+    Ok(())
+}
+
+async fn sync_formal_agent_session_from_ui_events(
+    store: &impl AsStorePool,
+    session_id: &str,
+    events: &[UiEventMessage],
+    default_ts_ms: i64,
+) -> Result<(), BackendError> {
+    let Some(_) = crate::store::agent_sessions::get(store, session_id).await? else {
+        return Ok(());
+    };
+
+    let mut role_by_message = HashMap::<String, MessageRole>::new();
+    for event in events {
+        if let UiEventMessage::MessageStarted {
+            message_id, role, ..
+        } = event
+        {
+            role_by_message.insert(message_id.clone(), *role);
+        }
+    }
+
+    for event in events {
+        match event {
+            UiEventMessage::MessageStarted {
+                message_id,
+                role: MessageRole::Assistant,
+                started_at_ms,
+            } => {
+                mark_formal_session_running_if_open(store, session_id).await?;
+                ensure_assistant_turn(store, session_id, message_id, *started_at_ms).await?;
+            }
+            UiEventMessage::TextDelta { message_id, text } => {
+                if assistant_message_known(store, session_id, message_id, &role_by_message).await? {
+                    append_assistant_turn_summary(
+                        store,
+                        session_id,
+                        message_id,
+                        text,
+                        default_ts_ms,
+                    )
+                    .await?;
+                }
+            }
+            UiEventMessage::TextReplace { message_id, text } => {
+                if assistant_message_known(store, session_id, message_id, &role_by_message).await? {
+                    replace_assistant_turn_summary(
+                        store,
+                        session_id,
+                        message_id,
+                        text,
+                        default_ts_ms,
+                    )
+                    .await?;
+                }
+            }
+            UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms,
+            } => {
+                if let Some(turn) = crate::store::agent_turns::get(store, message_id).await? {
+                    if turn.agent_session_id == session_id && turn.role == "assistant" {
+                        let _ = crate::store::agent_turns::update_status(
+                            store,
+                            message_id,
+                            "completed",
+                            Some(*finished_at_ms),
+                        )
+                        .await?;
+                    }
+                }
+            }
+            UiEventMessage::Error { message_id, .. } => {
+                let _ = crate::store::agent_sessions::update_status(
+                    store,
+                    session_id,
+                    "failed",
+                    Some(default_ts_ms),
+                )
+                .await?;
+                if let Some(message_id) = message_id {
+                    if let Some(turn) = crate::store::agent_turns::get(store, message_id).await? {
+                        if turn.agent_session_id == session_id && turn.role == "assistant" {
+                            let _ = crate::store::agent_turns::update_status(
+                                store,
+                                message_id,
+                                "failed",
+                                Some(default_ts_ms),
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+            UiEventMessage::ThreadClosed { closed_at_ms, .. } => {
+                let _ = crate::store::agent_sessions::update_status(
+                    store,
+                    session_id,
+                    "ended",
+                    Some(*closed_at_ms),
+                )
+                .await?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+async fn assistant_message_known(
+    store: &impl AsStorePool,
+    session_id: &str,
+    message_id: &str,
+    role_by_message: &HashMap<String, MessageRole>,
+) -> Result<bool, BackendError> {
+    match role_by_message.get(message_id) {
+        Some(MessageRole::User | MessageRole::System) => Ok(false),
+        Some(MessageRole::Assistant) => Ok(true),
+        None => Ok(crate::store::agent_turns::get(store, message_id)
+            .await?
+            .is_some_and(|turn| turn.agent_session_id == session_id && turn.role == "assistant")),
+    }
+}
+
+async fn mark_formal_session_running_if_open(
+    store: &impl AsStorePool,
+    session_id: &str,
+) -> Result<(), BackendError> {
+    let Some(session) = crate::store::agent_sessions::get(store, session_id).await? else {
+        return Ok(());
+    };
+    if matches!(session.status.as_str(), "pending" | "running") && session.status != "running" {
+        let _ =
+            crate::store::agent_sessions::update_status(store, session_id, "running", None).await?;
+    }
+    Ok(())
+}
+
+async fn ensure_assistant_turn(
+    store: &impl AsStorePool,
+    session_id: &str,
+    message_id: &str,
+    started_at_ms: i64,
+) -> Result<(), BackendError> {
+    if crate::store::agent_turns::get(store, message_id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let existing_turns =
+        crate::store::agent_turns::list_for_session(store, session_id, None, u32::MAX).await?;
+    let turn_seq = existing_turns.last().map_or(1, |turn| turn.turn_seq + 1);
+    let _ = crate::store::agent_turns::create(
+        store,
+        message_id,
+        session_id,
+        turn_seq,
+        "assistant",
+        "streaming",
+        started_at_ms,
+        None,
+        None,
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn append_assistant_turn_summary(
+    store: &impl AsStorePool,
+    session_id: &str,
+    message_id: &str,
+    text: &str,
+    started_at_ms: i64,
+) -> Result<(), BackendError> {
+    ensure_assistant_turn(store, session_id, message_id, started_at_ms).await?;
+    let Some(turn) = crate::store::agent_turns::get(store, message_id).await? else {
+        return Ok(());
+    };
+    if turn.agent_session_id != session_id || turn.role != "assistant" {
+        return Ok(());
+    }
+    let mut next = turn.summary_text.unwrap_or_default();
+    next.push_str(text);
+    let _ = crate::store::agent_turns::update_summary_text(store, message_id, Some(&next)).await?;
+    Ok(())
+}
+
+async fn replace_assistant_turn_summary(
+    store: &impl AsStorePool,
+    session_id: &str,
+    message_id: &str,
+    text: &str,
+    started_at_ms: i64,
+) -> Result<(), BackendError> {
+    ensure_assistant_turn(store, session_id, message_id, started_at_ms).await?;
+    let _ = crate::store::agent_turns::update_summary_text(store, message_id, Some(text)).await?;
     Ok(())
 }
 

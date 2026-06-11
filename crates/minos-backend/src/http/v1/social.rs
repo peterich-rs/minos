@@ -6,22 +6,22 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use serde::Deserialize;
 
-const AGENT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(5);
 const GROUP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const GROUP_COMPLETION_IDLE_LOG_INTERVAL: Duration = Duration::from_mins(5);
 const GROUP_COMPLETION_IDLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const AGENT_DISPATCH_COMMAND_METHOD: &str = "minos_agent_dispatch";
+use crate::app::tx::Storage;
 use crate::auth::bearer;
 use crate::http::error_response::{err_response, ErrorBody, ErrorEnvelope};
 use crate::http::BackendState;
 use axum::{Json, Router};
 use minos_domain::AgentName;
 use minos_protocol::{
-    AddAgentToGroupRequest, AgentDispatchRequest, AgentDispatchResponse, AgentSummary,
-    ChatMessageSummary, ConversationAgentMembersResponse, Envelope, EventKind, ListAgentsResponse,
-    RegisterAgentRequest, RemoveAgentFromGroupRequest, SendAgentMessageRequest, SenderType,
+    AddAgentToGroupRequest, AgentSummary, ChatMessageSummary, ConversationAgentMembersResponse,
+    DurableEvent, Envelope, EventKind, ListAgentsResponse, RegisterAgentRequest,
+    RemoveAgentFromGroupRequest, SendAgentMessageRequest, SenderRef, SenderType,
     UpdateAgentRequest, UserSummary,
 };
+use uuid::Uuid;
 
 pub fn router() -> Router<BackendState> {
     Router::new()
@@ -92,7 +92,7 @@ pub fn require_account_id_from_state(
     Ok(bearer.account_id)
 }
 
-async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSummary) {
+pub async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSummary) {
     let members = match crate::store::social::list_conversation_members(
         &state.store,
         &message.conversation_id,
@@ -119,6 +119,98 @@ async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSumma
         },
     };
     state.realtime.fanout_social_message(&members, &frame).await;
+    if let Err(error) = fan_out_account_conversation_event(state, &members, message).await {
+        tracing::warn!(
+            target: "minos_backend::social",
+            conversation_id = %message.conversation_id,
+            message_id = %message.message_id,
+            error = %error,
+            "failed to publish formal social message event"
+        );
+    }
+}
+
+async fn fan_out_account_conversation_event(
+    state: &BackendState,
+    target_account_ids: &[String],
+    message: &ChatMessageSummary,
+) -> Result<(), crate::error::BackendError> {
+    let at_ms = message.recalled_at_ms.unwrap_or(message.created_at_ms);
+    let mut tx = Storage::begin(&state.store).await?;
+    let mut pending_events = Vec::<(String, String, String)>::new();
+    for account_id in target_account_ids {
+        let event = if message.recalled_at_ms.is_some() {
+            DurableEvent::AccountConversationMessageRecalled {
+                account_id: account_id.clone(),
+                conversation_id: message.conversation_id.clone(),
+                message_id: message.message_id.clone(),
+                at_ms,
+                message: message.clone(),
+            }
+        } else {
+            DurableEvent::AccountConversationMessageAppended {
+                account_id: account_id.clone(),
+                conversation_id: message.conversation_id.clone(),
+                message_id: message.message_id.clone(),
+                sender: sender_ref_for_message(message),
+                at_ms,
+                message: message.clone(),
+            }
+        };
+        let event_id = account_conversation_event_id(account_id, message);
+        let cursor =
+            crate::store::durable_event_log::record_in_tx(&mut tx, &event_id, &event, at_ms)
+                .await?;
+        let outbox_id = Uuid::new_v4().to_string();
+        crate::store::outbox_events::enqueue_in_tx(
+            &mut tx,
+            &outbox_id,
+            cursor.topic.kind().as_str(),
+            &cursor.event_id,
+            at_ms,
+        )
+        .await?;
+        pending_events.push((
+            cursor.topic.kind().as_str().to_string(),
+            cursor.event_id,
+            outbox_id,
+        ));
+    }
+    tx.commit().await?;
+    for (topic_kind, event_id, outbox_id) in pending_events {
+        state
+            .realtime
+            .publish_durable_event_by_id(&topic_kind, &event_id)
+            .await?;
+        crate::store::outbox_events::ack(
+            &state.store,
+            &outbox_id,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn sender_ref_for_message(message: &ChatMessageSummary) -> SenderRef {
+    match message.sender_type {
+        SenderType::Agent => SenderRef::Agent {
+            agent_id: message.sender.account_id.clone(),
+            session_id: None,
+        },
+        SenderType::User => SenderRef::User {
+            account_id: message.sender.account_id.clone(),
+        },
+    }
+}
+
+fn account_conversation_event_id(account_id: &str, message: &ChatMessageSummary) -> String {
+    let action = if message.recalled_at_ms.is_some() {
+        "recalled"
+    } else {
+        "appended"
+    };
+    format!("social-{action}-{account_id}-{}", message.message_id)
 }
 
 #[derive(Clone)]
@@ -126,8 +218,12 @@ struct AgentDispatchPlan {
     agent: crate::store::social::AgentRow,
     session_id: Option<String>,
     forwarded_text: String,
-    watcher_from_seq: u64,
     mention_sender: bool,
+}
+
+struct ForwardedAgentDispatch {
+    session_id: String,
+    watcher_from_seq: u64,
 }
 
 async fn build_agent_dispatch_plan(
@@ -169,15 +265,10 @@ async fn build_agent_dispatch_plan(
                     .await
                     .map_err(|e| err("internal", e.to_string()))?
                 {
-                    let watcher_from_seq =
-                        crate::store::raw_events::last_seq(&state.store, &session_id)
-                            .await
-                            .map_err(|e| err("internal", e.to_string()))?;
                     return Ok(Some(AgentDispatchPlan {
                         agent,
                         session_id: Some(session_id),
                         forwarded_text: text.to_string(),
-                        watcher_from_seq,
                         mention_sender,
                     }));
                 }
@@ -192,18 +283,10 @@ async fn build_agent_dispatch_plan(
         )
         .await
         .map_err(|e| err("internal", e.to_string()))?;
-        let watcher_from_seq = if let Some(ref session_id) = session_id {
-            crate::store::raw_events::last_seq(&state.store, session_id)
-                .await
-                .map_err(|e| err("internal", e.to_string()))?
-        } else {
-            0
-        };
         return Ok(Some(AgentDispatchPlan {
             agent: agents[0].clone(),
             session_id,
             forwarded_text: text.to_string(),
-            watcher_from_seq,
             mention_sender: false,
         }));
     }
@@ -217,18 +300,10 @@ async fn build_agent_dispatch_plan(
             )
             .await
             .map_err(|e| err("internal", e.to_string()))?;
-            let watcher_from_seq = if let Some(ref session_id) = session_id {
-                crate::store::raw_events::last_seq(&state.store, session_id)
-                    .await
-                    .map_err(|e| err("internal", e.to_string()))?
-            } else {
-                0
-            };
             return Ok(Some(AgentDispatchPlan {
                 agent: agent.clone(),
                 session_id,
                 forwarded_text: strip_agent_mention_once(text, &agent.agent_id),
-                watcher_from_seq,
                 mention_sender: true,
             }));
         }
@@ -239,49 +314,65 @@ async fn build_agent_dispatch_plan(
 
 async fn forward_agent_dispatch(
     state: &BackendState,
+    account_id: &str,
     agent: &crate::store::social::AgentRow,
     session_id: Option<String>,
     text: &str,
     conversation_id: &str,
     origin_message_id: &str,
-) -> Result<AgentDispatchResponse, crate::error::BackendError> {
+) -> Result<ForwardedAgentDispatch, crate::error::BackendError> {
+    if let Some(session_id) = session_id {
+        let watcher_from_seq =
+            crate::store::raw_events::last_seq(&state.store, &session_id).await?;
+        state
+            .agent_sessions
+            .send_input(crate::agent_sessions::SendInputInput {
+                session_id: session_id.clone(),
+                text: text.to_string(),
+                mentions: Vec::new(),
+                client_request_id: format!("social-send-{origin_message_id}"),
+                caller_account_id: account_id.to_string(),
+            })
+            .await
+            .map_err(|error| map_agent_session_dispatch_error("agent_session.send_input", error))?;
+        return Ok(ForwardedAgentDispatch {
+            session_id,
+            watcher_from_seq,
+        });
+    }
+
     let host_device_id = select_live_host_for_account(state, &agent.owner_account_id).await?;
-    let request = AgentDispatchRequest {
-        agent: parse_runtime_agent_name(&agent.runtime_agent)?,
-        session_id,
-        text: text.to_string(),
-        workspace: agent.workspace_path.clone().unwrap_or_default(),
-        approval_policy: None,
-        sandbox_policy: None,
-        conversation_id: Some(conversation_id.to_string()),
-        origin_message_id: Some(origin_message_id.to_string()),
-    };
-    let command_id = agent_dispatch_command_id(origin_message_id);
-    let params_json =
-        serde_json::to_value(&request).map_err(|error| crate::error::BackendError::StoreQuery {
-            operation: "social::forward_agent_dispatch.serialize".into(),
-            message: error.to_string(),
-        })?;
-    let response = state
-        .host_commands
-        .dispatch_json(
-            &command_id,
-            host_device_id,
-            request.session_id.as_deref(),
-            AGENT_DISPATCH_COMMAND_METHOD,
-            &params_json,
-            Some(&agent.owner_account_id),
-            AGENT_DISPATCH_TIMEOUT,
-        )
-        .await?;
-    serde_json::from_value(response).map_err(|error| crate::error::BackendError::ForwardRpc {
-        method: AGENT_DISPATCH_COMMAND_METHOD.into(),
-        message: format!("invalid host command response: {error}"),
+    let output = state
+        .agent_sessions
+        .start(crate::agent_sessions::StartAgentSessionInput {
+            conversation_id: conversation_id.to_string(),
+            project_id: None,
+            agent_id: agent.agent_id.clone(),
+            host_installation_id: Some(host_device_id.to_string()),
+            workspace_path: agent.workspace_path.clone(),
+            initial_user_message: Some(text.to_string()),
+            client_request_id: format!("social-start-{origin_message_id}"),
+            caller_account_id: account_id.to_string(),
+        })
+        .await
+        .map_err(|error| map_agent_session_dispatch_error("agent_session.start", error))?;
+    Ok(ForwardedAgentDispatch {
+        session_id: output.session_id,
+        watcher_from_seq: 0,
     })
 }
 
-fn agent_dispatch_command_id(origin_message_id: &str) -> String {
-    format!("cmd-agent-dispatch-{origin_message_id}")
+fn map_agent_session_dispatch_error(
+    method: &'static str,
+    error: crate::agent_sessions::AgentSessionError,
+) -> crate::error::BackendError {
+    match error {
+        crate::agent_sessions::AgentSessionError::Internal(error) => error,
+        other => crate::error::BackendError::ForwardRpc {
+            method: method.into(),
+            message: other.to_string(),
+        },
+    }
 }
 
 async fn select_live_host_for_account(
@@ -297,21 +388,9 @@ async fn select_live_host_for_account(
         }
     }
     Err(crate::error::BackendError::ForwardRpc {
-        method: "minos_agent_dispatch".into(),
+        method: "agent_session.start".into(),
         message: format!("no live host paired to account {account_id}"),
     })
-}
-
-fn parse_runtime_agent_name(runtime_agent: &str) -> Result<AgentName, crate::error::BackendError> {
-    match runtime_agent {
-        "codex" => Ok(AgentName::Codex),
-        "claude" => Ok(AgentName::Claude),
-        "gemini" => Ok(AgentName::Gemini),
-        other => Err(crate::error::BackendError::ForwardRpc {
-            method: "minos_agent_dispatch".into(),
-            message: format!("unsupported runtime agent `{other}`"),
-        }),
-    }
 }
 
 fn first_mentioned_agent(
@@ -962,6 +1041,7 @@ pub async fn try_agent_dispatch(
 
     match forward_agent_dispatch(
         state,
+        account_id,
         &plan.agent,
         plan.session_id.clone(),
         &plan.forwarded_text,
@@ -970,12 +1050,12 @@ pub async fn try_agent_dispatch(
     )
     .await
     {
-        Ok(response) => {
+        Ok(dispatch) => {
             crate::store::social::bind_session_to_message_for_agent(
                 &state.store,
                 &message.message_id,
                 &plan.agent.agent_id,
-                &response.session_id,
+                &dispatch.session_id,
             )
             .await?;
 
@@ -983,9 +1063,9 @@ pub async fn try_agent_dispatch(
                 state.clone(),
                 conversation_id.to_string(),
                 message.message_id.clone(),
-                response.session_id,
+                dispatch.session_id,
                 plan.agent,
-                plan.watcher_from_seq,
+                dispatch.watcher_from_seq,
                 if mention_sender {
                     Some(account_id.to_string())
                 } else {

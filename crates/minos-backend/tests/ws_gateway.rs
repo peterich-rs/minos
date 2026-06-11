@@ -4,6 +4,7 @@ use futures::{SinkExt, StreamExt};
 use minos_backend::{
     agent_sessions::{SendInputInput, StartAgentSessionInput},
     auth::use_case::AuthUseCase,
+    conversations::{ConversationService, DefaultConversationService},
     http::{router, BackendState},
     pairing::PairingService,
     realtime::wire::{ClientFrame, ServerFrame},
@@ -11,6 +12,7 @@ use minos_backend::{
     store,
 };
 use minos_domain::{DeviceId, DeviceRole};
+use minos_ui_protocol::UiEventMessage;
 use sqlx::SqlitePool;
 use tempfile::NamedTempFile;
 use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
@@ -409,6 +411,73 @@ async fn host_handshake_stays_quiet_after_hello_without_legacy_checkpoint_frames
 }
 
 #[tokio::test]
+async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) = seed_client_account(&relay, "ws-social@example.com").await?;
+    let members = vec![account_id.clone()];
+    let conversation = store::social::create_group_conversation(
+        &relay.pool,
+        &account_id,
+        "Realtime Social",
+        &members,
+        100,
+    )
+    .await?;
+
+    let ticket =
+        issue_client_ws_ticket(&relay, &account_id, phone_id, DeviceRole::MobileClient).await?;
+    let mut ws = connect_client(&relay, "/ws/client", &ticket).await?;
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    send_client_frame(
+        &mut ws,
+        &ClientFrame::Subscribe {
+            topics: vec![format!("account:{account_id}")],
+            resume_after: None,
+            client_request_id: Some("social-account-subscribe".into()),
+        },
+    )
+    .await?;
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::SubscribeAck { topics, .. } => {
+            assert_eq!(topics, vec![format!("account:{account_id}")]);
+        }
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    }
+
+    let service = DefaultConversationService::new(relay.state.store.clone());
+    let (message, _) = service
+        .send_message(
+            &account_id,
+            &conversation.conversation_id,
+            "hello while chat is open",
+            None,
+        )
+        .await?;
+    minos_backend::http::v1::social::fan_out_social_message(&relay.state, &message).await;
+
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::DurableEvent {
+            topic,
+            kind,
+            payload,
+            ..
+        } => {
+            assert_eq!(topic, format!("account:{account_id}"));
+            assert_eq!(kind, "account_conversation_message_appended");
+            assert_eq!(payload["conversation_id"], conversation.conversation_id);
+            assert_eq!(payload["message"]["message_id"], message.message_id);
+            assert_eq!(payload["message"]["text"], "hello while chat is open");
+        }
+        other => panic!("expected social DurableEvent, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn host_replays_durable_command_and_accepts_ack_result() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let (account_id, phone_id) = seed_client_account(&relay, "ws-host-replay@example.com").await?;
@@ -759,6 +828,171 @@ async fn orphan_raw_host_stream_event_does_not_create_legacy_conversation() -> a
 }
 
 #[tokio::test]
+async fn raw_host_stream_event_updates_formal_turn_cold_replay() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-raw-formal-replay@example.com").await?;
+    let bob = store::accounts::create(&relay.pool, "ws-raw-formal-replay-bob@example.com", "phc")
+        .await?
+        .account_id;
+    let host_id = seed_host(&relay).await?;
+    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
+        .await?;
+    let members = vec![bob];
+    let conversation = store::social::create_group_conversation(
+        &relay.pool,
+        &account_id,
+        "Raw Formal Replay",
+        &members,
+        100,
+    )
+    .await?;
+    let output = seed_session(
+        &relay,
+        &account_id,
+        host_id,
+        &conversation.conversation_id,
+        "raw-formal-replay-start",
+        Some("hello"),
+    )
+    .await?;
+    let user_message = store::social::insert_message(
+        &relay.pool,
+        &conversation.conversation_id,
+        &account_id,
+        "hello",
+        100,
+        None,
+        &[],
+    )
+    .await?;
+    store::social::bind_session_to_message(
+        &relay.pool,
+        &user_message.message_id,
+        &output.session_id,
+    )
+    .await?;
+
+    let client_ticket =
+        issue_client_ws_ticket(&relay, &account_id, phone_id, DeviceRole::MobileClient).await?;
+    let mut client_ws = connect_client(&relay, "/ws/client", &client_ticket).await?;
+    match recv_server_frame(&mut client_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    send_client_frame(
+        &mut client_ws,
+        &ClientFrame::Subscribe {
+            topics: vec![format!("agent_session:{}", output.session_id)],
+            resume_after: None,
+            client_request_id: Some("raw-formal-replay-subscribe".into()),
+        },
+    )
+    .await?;
+    match recv_server_frame(&mut client_ws).await? {
+        ServerFrame::SubscribeAck { .. } => {}
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    }
+
+    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
+    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+
+    let topic = format!("agent_session:{}", output.session_id);
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostStreamEvent {
+            topic: topic.clone(),
+            kind: "legacy_raw_event".into(),
+            payload: serde_json::json!({
+                "seq": 1,
+                "agent": "codex",
+                "method": "item/started",
+                "params": {
+                    "item": { "type": "agentMessage", "id": "agent-msg-raw" },
+                    "threadId": output.session_id,
+                    "turnId": "turn-raw"
+                }
+            }),
+        },
+    )
+    .await?;
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostStreamEvent {
+            topic: topic.clone(),
+            kind: "legacy_raw_event".into(),
+            payload: serde_json::json!({
+                "seq": 2,
+                "agent": "codex",
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "itemId": "agent-msg-raw",
+                    "delta": "Done"
+                }
+            }),
+        },
+    )
+    .await?;
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostStreamEvent {
+            topic,
+            kind: "legacy_raw_event".into(),
+            payload: serde_json::json!({
+                "seq": 3,
+                "agent": "codex",
+                "method": "turn/completed",
+                "params": {
+                    "finishedAtMs": 300
+                }
+            }),
+        },
+    )
+    .await?;
+
+    let mut saw_completed = false;
+    for _ in 0..8 {
+        let frame = recv_server_frame(&mut client_ws).await?;
+        let ServerFrame::StreamEvent { kind, payload, .. } = frame else {
+            continue;
+        };
+        if kind != "ui_event" {
+            continue;
+        }
+        if matches!(
+            serde_json::from_value::<UiEventMessage>(payload)?,
+            UiEventMessage::MessageCompleted { message_id, .. } if message_id == "agent-msg-raw"
+        ) {
+            saw_completed = true;
+            break;
+        }
+    }
+    assert!(
+        saw_completed,
+        "client should receive completed assistant ui_event"
+    );
+
+    let turn = store::agent_turns::get(&relay.pool, "agent-msg-raw")
+        .await?
+        .expect("raw assistant message should be persisted as a formal turn");
+    assert_eq!(turn.agent_session_id, output.session_id);
+    assert_eq!(turn.role, "assistant");
+    assert_eq!(turn.status, "completed");
+    assert_eq!(turn.summary_text.as_deref(), Some("Done"));
+
+    let session = store::agent_sessions::get(&relay.pool, &output.session_id)
+        .await?
+        .expect("session should still exist");
+    assert_eq!(session.status, "running");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() -> anyhow::Result<()>
 {
     let relay = spawn_relay().await?;
@@ -856,6 +1090,7 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
         "follow-up text",
     )
     .await?;
+    relay.state.realtime.dispatch_outbox_batch().await?;
 
     match recv_server_frame(&mut client_ws).await? {
         ServerFrame::DurableEvent {

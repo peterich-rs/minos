@@ -252,6 +252,45 @@ pub async fn set_display_name(
     Ok(())
 }
 
+/// Update a device's `last_seen_at` timestamp.
+///
+/// Returns [`BackendError::DeviceNotFound`] if no row matches `device_id`.
+pub async fn touch_last_seen(
+    store: &impl AsStorePool,
+    device_id: &DeviceId,
+    at_ms: i64,
+) -> Result<(), BackendError> {
+    let id_str = device_id.to_string();
+    let rows_affected = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE devices SET last_seen_at = ? WHERE device_id = ?")
+                .bind(at_ms)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|result| result.rows_affected())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE devices SET last_seen_at = $1 WHERE device_id = $2")
+                .bind(at_ms)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|result| result.rows_affected())
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "touch_last_seen".to_string(),
+        message: e.to_string(),
+    })?;
+
+    if rows_affected == 0 {
+        return Err(BackendError::DeviceNotFound { device_id: id_str });
+    }
+
+    Ok(())
+}
+
 /// Look up a device by id.
 ///
 /// Returns `Ok(None)` if the row does not exist.
@@ -304,25 +343,88 @@ where
 /// caller filters by `role` so order between roles doesn't matter, but
 /// stability still helps tests.
 pub async fn list_by_account(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     account_id: &str,
 ) -> Result<Vec<DeviceRow>, BackendError> {
-    let rows = sqlx::query_as::<_, DeviceRowTuple>(
-        r#"
-        SELECT device_id, display_name, role, secret_hash, public_key, created_at, last_seen_at, account_id
-        FROM devices
-        WHERE account_id = ?
-        ORDER BY created_at ASC
-        "#,
-    )
-    .bind(account_id)
-    .fetch_all(pool)
-    .await
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, DeviceRowTuple>(
+                r#"
+                SELECT device_id, display_name, role, secret_hash, public_key, created_at, last_seen_at, account_id
+                FROM devices
+                WHERE account_id = ?
+                ORDER BY created_at ASC
+                "#,
+            )
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, DeviceRowTuple>(
+                r#"
+                SELECT device_id, display_name, role, secret_hash, public_key, created_at, last_seen_at, account_id
+                FROM devices
+                WHERE account_id = $1
+                ORDER BY created_at ASC
+                "#,
+            )
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "list_by_account".to_string(),
         message: e.to_string(),
     })?;
     rows.into_iter().map(decode_device_row).collect()
+}
+
+/// Return the latest mobile-client installation for an account.
+pub async fn latest_mobile_for_account(
+    store: &impl AsStorePool,
+    account_id: &str,
+) -> Result<Option<DeviceRow>, BackendError> {
+    let role = DeviceRole::MobileClient.to_string();
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, DeviceRowTuple>(
+                r#"
+                SELECT device_id, display_name, role, secret_hash, public_key, created_at, last_seen_at, account_id
+                FROM devices
+                WHERE account_id = ? AND role = ?
+                ORDER BY last_seen_at DESC, created_at DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(account_id)
+            .bind(&role)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, DeviceRowTuple>(
+                r#"
+                SELECT device_id, display_name, role, secret_hash, public_key, created_at, last_seen_at, account_id
+                FROM devices
+                WHERE account_id = $1 AND role = $2
+                ORDER BY last_seen_at DESC, created_at DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(account_id)
+            .bind(&role)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "latest_mobile_for_account".to_string(),
+        message: e.to_string(),
+    })?;
+
+    row.map(decode_device_row).transpose()
 }
 
 /// Return the argon2id `secret_hash` for a device, or `None` if the device
@@ -579,6 +681,69 @@ mod tests {
 
         let got = get_device(&pool, id).await.unwrap().unwrap();
         assert_eq!(got.display_name, "Fan's iPhone");
+    }
+
+    #[tokio::test]
+    async fn touch_last_seen_updates_timestamp() {
+        let pool = memory_pool().await;
+        let id = DeviceId::new();
+        insert_device(&pool, id, "iphone", DeviceRole::MobileClient, T0)
+            .await
+            .unwrap();
+
+        touch_last_seen(&pool, &id, T0 + 500).await.unwrap();
+
+        let got = get_device(&pool, id).await.unwrap().unwrap();
+        assert_eq!(got.last_seen_at, T0 + 500);
+    }
+
+    #[tokio::test]
+    async fn latest_mobile_for_account_ignores_browser_admin() {
+        let pool = memory_pool().await;
+        let account = crate::store::accounts::create(&pool, "mobile-latest@example.com", "phc")
+            .await
+            .unwrap();
+        let older_mobile = DeviceId::new();
+        let latest_mobile = DeviceId::new();
+        let browser = DeviceId::new();
+        insert_device(
+            &pool,
+            older_mobile,
+            "old phone",
+            DeviceRole::MobileClient,
+            100,
+        )
+        .await
+        .unwrap();
+        insert_device(
+            &pool,
+            latest_mobile,
+            "current phone",
+            DeviceRole::MobileClient,
+            200,
+        )
+        .await
+        .unwrap();
+        insert_device(&pool, browser, "web", DeviceRole::BrowserAdmin, 300)
+            .await
+            .unwrap();
+        set_account_id(&pool, &older_mobile, &account.account_id)
+            .await
+            .unwrap();
+        set_account_id(&pool, &latest_mobile, &account.account_id)
+            .await
+            .unwrap();
+        set_account_id(&pool, &browser, &account.account_id)
+            .await
+            .unwrap();
+
+        let got = latest_mobile_for_account(&pool, &account.account_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(got.device_id, latest_mobile);
+        assert_eq!(got.display_name, "current phone");
     }
 
     #[tokio::test]

@@ -192,6 +192,81 @@ pub async fn list_for_session(
     .map_err(store_err("agent_turns.list_for_session"))
 }
 
+pub async fn update_status(
+    store: &impl AsStorePool,
+    turn_id: &str,
+    status: &str,
+    finished_at_ms: Option<i64>,
+) -> Result<Option<AgentTurnRow>, BackendError> {
+    let rows_affected = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE agent_turns
+                    SET status = ?, finished_at_ms = ?
+                  WHERE turn_id = ?",
+        )
+        .bind(status)
+        .bind(finished_at_ms)
+        .bind(turn_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE agent_turns
+                    SET status = $1, finished_at_ms = $2
+                  WHERE turn_id = $3",
+        )
+        .bind(status)
+        .bind(finished_at_ms)
+        .bind(turn_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(store_err("agent_turns.update_status"))?;
+
+    if rows_affected == 0 {
+        return Ok(None);
+    }
+
+    get(store, turn_id).await
+}
+
+pub async fn update_summary_text(
+    store: &impl AsStorePool,
+    turn_id: &str,
+    summary_text: Option<&str>,
+) -> Result<Option<AgentTurnRow>, BackendError> {
+    let rows_affected = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE agent_turns
+                    SET summary_text = ?
+                  WHERE turn_id = ?",
+        )
+        .bind(summary_text)
+        .bind(turn_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE agent_turns
+                    SET summary_text = $1
+                  WHERE turn_id = $2",
+        )
+        .bind(summary_text)
+        .bind(turn_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(store_err("agent_turns.update_summary_text"))?;
+
+    if rows_affected == 0 {
+        return Ok(None);
+    }
+
+    get(store, turn_id).await
+}
+
 fn store_err(operation: &'static str) -> impl Fn(sqlx::Error) -> BackendError {
     move |e| BackendError::StoreQuery {
         operation: operation.into(),

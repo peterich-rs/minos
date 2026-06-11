@@ -33,7 +33,7 @@ async fn post_json(
 #[tokio::test]
 async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() {
     let state = backend_state().await;
-    let mut app = http::router(state);
+    let mut app = http::router(state.clone());
     let installation_id = uuid::Uuid::new_v4().to_string();
 
     let (status, body) = post_json(
@@ -49,6 +49,12 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     assert_eq!(status, StatusCode::OK, "body={body}");
     let access = body["access_token"].as_str().unwrap().to_string();
     let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
+    let device_id = uuid::Uuid::parse_str(&installation_id)
+        .map(DeviceId)
+        .unwrap();
+    devices::touch_last_seen(&state.store, &device_id, 100)
+        .await
+        .unwrap();
 
     let auth_header = format!("Bearer {access}");
     let (status, body) = post_json(
@@ -70,6 +76,11 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     let claims = jwt::verify_ws_ticket(TEST_JWT_SECRET.as_bytes(), ticket).unwrap();
     assert_eq!(claims.sub, account_id);
     assert_eq!(claims.did, installation_id);
+    let row = devices::get_device(&state.store, device_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.last_seen_at > 100);
 }
 
 #[tokio::test]

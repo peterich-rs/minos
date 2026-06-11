@@ -289,6 +289,7 @@ pub async fn ack(
                      WHERE d.topic_kind = outbox_events.topic_kind
                        AND d.event_id = outbox_events.event_id
                        AND json_extract(d.payload_json, '$.kind') = 'host_command_issued'
+                       AND COALESCE(json_extract(d.payload_json, '$.deadline_at_ms'), 0) > ?
                        AND NOT EXISTS (
                            SELECT 1
                              FROM host_commands h
@@ -299,6 +300,7 @@ pub async fn ack(
         )
         .bind(ack_at_ms)
         .bind(outbox_id)
+        .bind(ack_at_ms)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -315,6 +317,7 @@ pub async fn ack(
                      WHERE d.topic_kind = outbox_events.topic_kind
                        AND d.event_id = outbox_events.event_id
                        AND d.payload_json ->> 'kind' = 'host_command_issued'
+                       AND COALESCE((d.payload_json ->> 'deadline_at_ms')::BIGINT, 0) > $3
                        AND NOT EXISTS (
                            SELECT 1
                              FROM host_commands h
@@ -325,12 +328,47 @@ pub async fn ack(
         )
         .bind(ack_at_ms)
         .bind(outbox_id)
+        .bind(ack_at_ms)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
     }
     .map_err(store_err("outbox_events::ack"))?;
-    Ok(result == 1)
+    if result == 1 {
+        return Ok(true);
+    }
+
+    let already_acked = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+               FROM outbox_events
+              WHERE outbox_id = ?
+                AND status = 'acked'
+                AND ack_at_ms IS NOT NULL
+                AND dead_at_ms IS NULL",
+        )
+        .bind(outbox_id)
+        .fetch_one(pool)
+        .await
+        .map(|count| count > 0),
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                 SELECT 1
+                   FROM outbox_events
+                  WHERE outbox_id = $1
+                    AND status = 'acked'
+                    AND ack_at_ms IS NOT NULL
+                    AND dead_at_ms IS NULL
+             )",
+            )
+            .bind(outbox_id)
+            .fetch_one(pool)
+            .await
+        }
+    }
+    .map_err(store_err("outbox_events::ack.check_acked"))?;
+    Ok(already_acked)
 }
 
 pub async fn ack_pending_host_command_events(
@@ -342,7 +380,7 @@ pub async fn ack_pending_host_command_events(
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE outbox_events
                 SET status = 'acked', ack_at_ms = ?
-              WHERE status = 'pending'
+              WHERE status IN ('pending', 'claimed')
                 AND ack_at_ms IS NULL
                 AND dead_at_ms IS NULL
                 AND EXISTS (
@@ -369,7 +407,7 @@ pub async fn ack_pending_host_command_events(
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE outbox_events
                 SET status = 'acked', ack_at_ms = $1
-              WHERE status = 'pending'
+              WHERE status IN ('pending', 'claimed')
                 AND ack_at_ms IS NULL
                 AND dead_at_ms IS NULL
                 AND EXISTS (
@@ -395,6 +433,60 @@ pub async fn ack_pending_host_command_events(
         .map(|result| result.rows_affected()),
     }
     .map_err(store_err("outbox_events::ack_pending_host_command_events"))?;
+    Ok(result)
+}
+
+pub async fn requeue_stale_claims(
+    store: &impl AsStorePool,
+    claimed_before_ms: i64,
+    available_at_ms: i64,
+    last_error_json: &Value,
+) -> Result<u64, BackendError> {
+    let last_error_json = serialize_json(
+        last_error_json,
+        "outbox_events::requeue_stale_claims.last_error_json",
+    )?;
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE outbox_events
+                SET status = 'pending',
+                    available_at_ms = ?,
+                    claimed_by = NULL,
+                    claimed_at_ms = NULL,
+                    last_error_json = ?
+              WHERE status = 'claimed'
+                AND ack_at_ms IS NULL
+                AND dead_at_ms IS NULL
+                AND claimed_at_ms IS NOT NULL
+                AND claimed_at_ms <= ?",
+        )
+        .bind(available_at_ms)
+        .bind(last_error_json.as_str())
+        .bind(claimed_before_ms)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE outbox_events
+                SET status = 'pending',
+                    available_at_ms = $1,
+                    claimed_by = NULL,
+                    claimed_at_ms = NULL,
+                    last_error_json = CAST($2 AS JSONB)
+              WHERE status = 'claimed'
+                AND ack_at_ms IS NULL
+                AND dead_at_ms IS NULL
+                AND claimed_at_ms IS NOT NULL
+                AND claimed_at_ms <= $3",
+        )
+        .bind(available_at_ms)
+        .bind(last_error_json.as_str())
+        .bind(claimed_before_ms)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(store_err("outbox_events::requeue_stale_claims"))?;
     Ok(result)
 }
 
@@ -628,7 +720,7 @@ mod tests {
         assert_eq!(claimed[0].claimed_by.as_deref(), Some("worker-2"));
 
         assert!(ack(&pool, "out-1", T0 + 301).await.unwrap());
-        assert!(!ack(&pool, "out-1", T0 + 302).await.unwrap());
+        assert!(ack(&pool, "out-1", T0 + 302).await.unwrap());
         assert!(claim_available(&pool, "worker-3", T0 + 1_000, 10)
             .await
             .unwrap()
@@ -705,6 +797,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ack_allows_expired_host_command_to_clear_outbox() {
+        let pool = memory_pool().await;
+        let host_id = DeviceId::new();
+        devices::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        durable_event_log::append(
+            &pool,
+            "evt-host-command-expired",
+            &format!("host:{host_id}"),
+            "host",
+            1,
+            &host_id.to_string(),
+            &serde_json::json!({
+                "kind": "host_command_issued",
+                "command_id": "cmd-expired",
+                "host_installation_id": host_id.to_string(),
+                "method": "minos_health",
+                "params": null,
+                "deadline_at_ms": T0 + 10,
+                "at_ms": T0
+            }),
+            T0,
+        )
+        .await
+        .unwrap();
+        enqueue(
+            &pool,
+            "out-host-command-expired",
+            "host",
+            "evt-host-command-expired",
+            T0,
+        )
+        .await
+        .unwrap();
+
+        let claimed = claim_available(&pool, "worker-1", T0, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(ack(&pool, "out-host-command-expired", T0 + 11)
+            .await
+            .unwrap());
+
+        let row = get(&pool, "out-host-command-expired")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, OutboxStatus::Acked);
+        assert_eq!(row.ack_at_ms, Some(T0 + 11));
+    }
+
+    #[tokio::test]
     async fn ack_pending_host_command_events_marks_observed_command_outbox() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
@@ -776,6 +919,123 @@ mod tests {
             .unwrap();
         assert_eq!(row.status, OutboxStatus::Acked);
         assert_eq!(row.ack_at_ms, Some(T0 + 3));
+    }
+
+    #[tokio::test]
+    async fn ack_pending_host_command_events_marks_claimed_observed_command_outbox() {
+        let pool = memory_pool().await;
+        let host_id = DeviceId::new();
+        devices::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        durable_event_log::append(
+            &pool,
+            "evt-host-command-claimed",
+            &format!("host:{host_id}"),
+            "host",
+            1,
+            &host_id.to_string(),
+            &serde_json::json!({
+                "kind": "host_command_issued",
+                "command_id": "cmd-claimed",
+                "host_installation_id": host_id.to_string(),
+                "method": "minos_health",
+                "params": null,
+                "deadline_at_ms": T0 + 1_000,
+                "at_ms": T0
+            }),
+            T0,
+        )
+        .await
+        .unwrap();
+        host_commands::enqueue(
+            &pool,
+            "cmd-claimed",
+            host_id,
+            None,
+            "minos_health",
+            &serde_json::Value::Null,
+            None,
+            T0 + 1_000,
+            T0,
+        )
+        .await
+        .unwrap();
+        enqueue(
+            &pool,
+            "out-host-command-claimed",
+            "host",
+            "evt-host-command-claimed",
+            T0,
+        )
+        .await
+        .unwrap();
+        let claimed = claim_available(&pool, "worker-1", T0, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(host_commands::ack(&pool, "cmd-claimed", T0 + 2)
+            .await
+            .unwrap());
+
+        assert_eq!(
+            ack_pending_host_command_events(&pool, "cmd-claimed", T0 + 3)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let row = get(&pool, "out-host-command-claimed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, OutboxStatus::Acked);
+        assert_eq!(row.ack_at_ms, Some(T0 + 3));
+        assert!(ack(&pool, "out-host-command-claimed", T0 + 4)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn requeue_stale_claims_restores_abandoned_claims() {
+        let pool = memory_pool().await;
+        durable_event_log::append(
+            &pool,
+            "evt-stale-claim",
+            "account:acc1",
+            "account",
+            1,
+            "acc1",
+            &serde_json::json!({ "kind": "account_registered", "account_id": "acc1", "at_ms": T0 }),
+            T0,
+        )
+        .await
+        .unwrap();
+        enqueue(&pool, "out-stale-claim", "account", "evt-stale-claim", T0)
+            .await
+            .unwrap();
+        let claimed = claim_available(&pool, "bad-worker", T0, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        assert_eq!(
+            requeue_stale_claims(
+                &pool,
+                T0 + 30_000,
+                T0 + 30_001,
+                &serde_json::json!({ "kind": "claim_recovered" })
+            )
+            .await
+            .unwrap(),
+            1
+        );
+        let row = get(&pool, "out-stale-claim").await.unwrap().unwrap();
+        assert_eq!(row.status, OutboxStatus::Pending);
+        assert_eq!(row.claimed_by, None);
+        assert_eq!(row.claimed_at_ms, None);
+
+        let claimed = claim_available(&pool, "realtime-worker", T0 + 30_001, 10)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].claimed_by.as_deref(), Some("realtime-worker"));
     }
 
     #[tokio::test]

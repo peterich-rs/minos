@@ -5,6 +5,7 @@ pub mod subscription;
 pub mod topic;
 pub mod wire;
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::error::BackendError;
+use crate::notifications::NotificationService;
 use crate::session::SessionRegistry;
 use crate::store::{durable_event_log, host_commands, outbox_events, StoreHandle};
 
@@ -31,7 +33,8 @@ const DEFAULT_PEER_TARGET_CACHE_TTL: Duration = Duration::from_secs(5);
 const CLUSTER_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const REALTIME_WORKER_CAPACITY: usize = 1024;
 const OUTBOX_DISPATCH_BATCH_SIZE: u32 = 64;
-const OUTBOX_IDLE_DELAY: Duration = Duration::from_millis(100);
+const OUTBOX_CLAIM_LEASE: Duration = Duration::from_secs(30);
+const OUTBOX_CLAIM_RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
 const OUTBOX_RETRY_DELAY: Duration = Duration::from_millis(250);
 const OUTBOX_MAX_ATTEMPTS: u32 = 8;
 const HOST_COMMAND_ACK_WAIT: Duration = Duration::from_millis(250);
@@ -345,7 +348,6 @@ impl MessageBusBackend {
     }
 }
 
-#[derive(Clone)]
 pub struct RealtimeFanout {
     registry: Arc<SessionRegistry>,
     subscription_mgr: Arc<SubscriptionManager>,
@@ -353,6 +355,8 @@ pub struct RealtimeFanout {
     bus: MessageBusBackend,
     instance_id: String,
     outbox_worker_id: String,
+    notification_service: Option<Arc<dyn NotificationService>>,
+    last_claim_recovery_at_ms: AtomicI64,
     jobs: mpsc::Sender<RealtimeJob>,
 }
 
@@ -364,7 +368,7 @@ impl RealtimeFanout {
         store: StoreHandle,
         bus: MessageBusBackend,
         instance_id: String,
-        enable_outbox_worker: bool,
+        notification_service: Option<Arc<dyn NotificationService>>,
     ) -> Arc<Self> {
         let (jobs, rx) = mpsc::channel(REALTIME_WORKER_CAPACITY);
         let outbox_worker_id = format!("realtime-outbox-{instance_id}");
@@ -375,12 +379,11 @@ impl RealtimeFanout {
             bus,
             instance_id,
             outbox_worker_id,
+            notification_service,
+            last_claim_recovery_at_ms: AtomicI64::new(0),
             jobs,
         });
         Self::spawn_worker(Arc::clone(&realtime), rx);
-        if enable_outbox_worker {
-            Self::spawn_outbox_dispatcher(Arc::clone(&realtime));
-        }
         realtime
     }
 
@@ -424,25 +427,6 @@ impl RealtimeFanout {
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
                 realtime.process_job(job).await;
-            }
-        });
-    }
-
-    fn spawn_outbox_dispatcher(realtime: Arc<Self>) {
-        tokio::spawn(async move {
-            loop {
-                match realtime.dispatch_outbox_batch().await {
-                    Ok(0) => tokio::time::sleep(OUTBOX_IDLE_DELAY).await,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(
-                            target: "minos_backend::realtime",
-                            error = %error,
-                            "realtime outbox dispatcher iteration failed"
-                        );
-                        tokio::time::sleep(OUTBOX_IDLE_DELAY).await;
-                    }
-                }
             }
         });
     }
@@ -496,6 +480,7 @@ impl RealtimeFanout {
 
     pub async fn dispatch_outbox_batch(&self) -> Result<usize, BackendError> {
         let now_ms = chrono::Utc::now().timestamp_millis();
+        self.recover_stale_outbox_claims(now_ms).await;
         let claimed = outbox_events::claim_available(
             &self.store,
             &self.outbox_worker_id,
@@ -508,6 +493,95 @@ impl RealtimeFanout {
             self.dispatch_outbox_row(row).await;
         }
         Ok(count)
+    }
+
+    pub async fn publish_durable_event_by_id(
+        &self,
+        topic_kind: &str,
+        event_id: &str,
+    ) -> Result<(), BackendError> {
+        let row = durable_event_log::get(&self.store, topic_kind, event_id)
+            .await?
+            .ok_or_else(|| BackendError::StoreQuery {
+                operation: "realtime.publish_durable_event_by_id".into(),
+                message: format!("missing durable event {topic_kind}/{event_id}"),
+            })?;
+        self.publish_durable_row(&row).await
+    }
+
+    async fn recover_stale_outbox_claims(&self, now_ms: i64) {
+        let interval_ms =
+            i64::try_from(OUTBOX_CLAIM_RECOVERY_INTERVAL.as_millis()).unwrap_or(i64::MAX);
+        let last_run = self.last_claim_recovery_at_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last_run) < interval_ms {
+            return;
+        }
+        if self
+            .last_claim_recovery_at_ms
+            .compare_exchange(last_run, now_ms, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+
+        let lease_ms = i64::try_from(OUTBOX_CLAIM_LEASE.as_millis()).unwrap_or(i64::MAX);
+        let cutoff_ms = now_ms.saturating_sub(lease_ms);
+        match outbox_events::requeue_stale_claims(
+            &self.store,
+            cutoff_ms,
+            now_ms,
+            &serde_json::json!({
+                "kind": "claim_recovered",
+                "worker": self.outbox_worker_id,
+                "cutoff_ms": cutoff_ms
+            }),
+        )
+        .await
+        {
+            Ok(0) => {}
+            Ok(count) => {
+                tracing::warn!(
+                    target: "minos_backend::realtime",
+                    count,
+                    cutoff_ms,
+                    "requeued stale outbox claims"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::realtime",
+                    error = %error,
+                    cutoff_ms,
+                    "failed to requeue stale outbox claims"
+                );
+            }
+        }
+    }
+
+    pub fn fanout_stream_event(
+        &self,
+        topic: &RealtimeTopic,
+        kind: impl Into<String>,
+        seq: Option<i64>,
+        payload: Value,
+    ) {
+        let frame = wire::ServerFrame::StreamEvent {
+            topic: topic.topic_string(),
+            kind: kind.into(),
+            seq,
+            payload,
+        };
+        for target in self.subscription_mgr.fanout_targets(topic) {
+            if let Err(error) = target.send(frame.clone()) {
+                tracing::warn!(
+                    target: "minos_backend::realtime",
+                    conn_id = %target.conn_id,
+                    topic = %topic.topic_string(),
+                    error = ?error,
+                    "formal gateway stream fanout dropped frame"
+                );
+            }
+        }
     }
 
     async fn dispatch_outbox_row(&self, row: outbox_events::OutboxEventRow) {
@@ -623,7 +697,52 @@ impl RealtimeFanout {
                 ),
             });
         }
+        self.spawn_push_dispatch(row);
         Ok(())
+    }
+
+    fn spawn_push_dispatch(&self, row: &durable_event_log::DurableEventRow) {
+        let Some(notification_service) = self.notification_service.clone() else {
+            return;
+        };
+        let payload = match serde_json::from_value::<DurableEvent>(row.payload_json.clone()) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::notifications",
+                    event_id = %row.event_id,
+                    error = %error,
+                    "skipping push dispatch for undecodable durable event"
+                );
+                return;
+            }
+        };
+        let envelope = DurableEventEnvelope {
+            topic: row.topic.clone(),
+            topic_seq: row.topic_seq,
+            event_id: row.event_id.clone(),
+            payload,
+        };
+        tokio::spawn(async move {
+            match notification_service.dispatch_for_event(&envelope).await {
+                Ok(outcome) => {
+                    tracing::debug!(
+                        target: "minos_backend::notifications",
+                        event_id = %envelope.event_id,
+                        ?outcome,
+                        "push dispatch completed for durable event"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::notifications",
+                        event_id = %envelope.event_id,
+                        error = %error,
+                        "push dispatch failed for durable event"
+                    );
+                }
+            }
+        });
     }
 
     async fn wait_for_host_command_ack(

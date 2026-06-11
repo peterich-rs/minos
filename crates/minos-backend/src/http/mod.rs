@@ -28,12 +28,12 @@
 
 use std::{ops::Deref, sync::Arc, time::Duration};
 
-use axum::extract::MatchedPath;
+use axum::extract::{MatchedPath, State};
 use axum::http::{
     header::{AUTHORIZATION, CONTENT_TYPE},
-    HeaderName, HeaderValue, Method, Request,
+    HeaderMap, HeaderName, HeaderValue, Method, Request,
 };
-use axum::middleware::{from_fn, Next};
+use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::Response;
 use axum::Router;
 use sqlx::SqlitePool;
@@ -798,11 +798,13 @@ pub fn router(state: BackendState) -> Router {
             "/ws/host",
             axum::routing::get(crate::realtime::gateway::upgrade_host),
         );
-    let router = if is_sqlite {
-        router.nest("/v1", v1::router())
+    let v1_router = if is_sqlite {
+        v1::router()
     } else {
-        router.nest("/v1", v1::external_sql_router())
-    };
+        v1::external_sql_router()
+    }
+    .layer(from_fn_with_state(state.clone(), touch_account_last_seen));
+    let router = router.nest("/v1", v1_router);
     router
         .layer(cors)
         .layer(from_fn(record_http_metrics))
@@ -852,6 +854,56 @@ async fn record_http_metrics(request: Request<axum::body::Body>, next: Next) -> 
     );
 
     response
+}
+
+async fn touch_account_last_seen(
+    State(state): State<BackendState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if let Some(device_id) = account_device_id_from_headers(&state, request.headers()) {
+        touch_device_last_seen(&state, device_id, "http.account_request").await;
+    }
+    next.run(request).await
+}
+
+fn account_device_id_from_headers(
+    state: &BackendState,
+    headers: &HeaderMap,
+) -> Option<minos_domain::DeviceId> {
+    let token = bearer_token(headers)?;
+    let claims = crate::auth::jwt::verify(state.auth.jwt_secret(), token).ok()?;
+    uuid::Uuid::parse_str(&claims.did)
+        .map(minos_domain::DeviceId)
+        .ok()
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let raw = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    raw.strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))
+}
+
+async fn touch_device_last_seen(
+    state: &BackendState,
+    device_id: minos_domain::DeviceId,
+    operation: &'static str,
+) {
+    if let Err(error) = crate::store::devices::touch_last_seen(
+        &state.store,
+        &device_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    {
+        tracing::debug!(
+            target: "minos_backend::http",
+            error = %error,
+            device_id = %device_id,
+            operation,
+            "failed to touch device last_seen_at",
+        );
+    }
 }
 
 fn cors_layer(origins: Option<Vec<HeaderValue>>) -> CorsLayer {

@@ -131,19 +131,26 @@ impl AppContext {
         configure_peer_target_cache(peer_target_cache);
         let subscription_mgr = Arc::new(SubscriptionManager::default());
         let run_workers = runtime_config.runtime_mode.runs_supervised_workers();
+        // Build notification service before realtime so durable fanout can
+        // trigger push as a secondary side effect without owning the outbox.
+        let composite_channel = CompositeChannel::from_env();
+        let notifications: Arc<dyn NotificationService> = Arc::new(
+            DefaultNotificationService::new(store.clone(), vec![Arc::new(composite_channel)]),
+        );
         let realtime = RealtimeFanout::new(
             Arc::clone(&registry),
             Arc::clone(&subscription_mgr),
             store.clone(),
             message_bus,
             instance_id.clone(),
-            run_workers,
+            Some(Arc::clone(&notifications)),
         );
         let host_commands: Arc<dyn HostCommandService> =
-            RuntimeHostCommandService::new_with_timeout_worker(
+            RuntimeHostCommandService::new_with_timeout_worker_and_realtime(
                 store.clone(),
                 Some(Arc::clone(&registry)),
                 run_workers,
+                Some(Arc::clone(&realtime)),
             );
         let approvals: Arc<dyn ApprovalService> = DefaultApprovalService::new(
             Arc::clone(&data.repos),
@@ -168,15 +175,6 @@ impl AppContext {
             store.clone(),
             Arc::clone(&host_commands),
         );
-        // Build notification service with channels from environment.
-        let composite_channel = CompositeChannel::from_env();
-        let notifications: Arc<dyn NotificationService> = Arc::new(
-            DefaultNotificationService::new(store.clone(), vec![Arc::new(composite_channel)]),
-        );
-        // Spawn push fanout job if runtime supports workers.
-        if run_workers {
-            crate::jobs::push_fanout::spawn(store.clone(), Arc::clone(&notifications), true);
-        }
         Arc::new(Self {
             config: Arc::new(runtime_config),
             data,

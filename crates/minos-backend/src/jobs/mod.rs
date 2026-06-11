@@ -10,7 +10,6 @@ pub mod health;
 pub mod host_command_timeout;
 pub mod job_trait;
 pub mod outbox_dispatcher;
-pub mod push_fanout;
 pub mod refresh_token_gc;
 pub mod retention_cleaner;
 pub mod stale_session_sweeper;
