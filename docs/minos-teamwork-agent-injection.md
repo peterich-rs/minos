@@ -22,8 +22,9 @@ wired in several places:
 - `crates/minos-daemon/src/agent.rs` enables the default `minos-chat-mcp`
   configuration for daemon-managed agents.
 - `crates/minos-agent-runtime/src/manager.rs` binds the MCP server to
-  `room_id_for_workspace(workspace)` and passes `--source-agent` so room
-  commands are attributed to Codex, Claude, Gemini, or OpenCode.
+  `room_id_for_workspace(workspace)` with `--room-id` and passes
+  `--source-agent` so room commands are attributed to Codex, Claude, Gemini,
+  or OpenCode.
 
 The likely gap was discoverability, not just transport injection: an agent can
 have the MCP server available and still fail to inspect the room if no skill,

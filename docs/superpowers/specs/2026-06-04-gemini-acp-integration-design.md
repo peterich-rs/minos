@@ -93,7 +93,7 @@ Gemini CLI 0.45.0 ACP stdio MCP servers are serialized without a transport tag. 
 {
   "name": "minos_chat",
   "command": "/path/to/minos-tui",
-  "args": ["chat-mcp", "--db-path", "...", "--default-room-id", "..."],
+  "args": ["chat-mcp", "--db-path", "...", "--room-id", "..."],
   "env": []
 }
 ```

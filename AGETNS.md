@@ -1,5 +1,21 @@
 # AGENTS.md
 
+# Project Architecture Reference
+
+Minos 是一个远程 AI 编码控制系统：Mac 运行 host 端，通过手机或浏览器远程驱动 codex/claude/gemini/opencode CLI agent。各子系统的详细架构文档如下：
+
+| 文档 | 覆盖范围 |
+|------|---------|
+| [docs/architecture-overview.md](docs/architecture-overview.md) | 项目总览、顶层架构、仓库结构、crate 依赖图、技术栈 |
+| [docs/architecture-backend.md](docs/architecture-backend.md) | 后端服务 (minos-backend)：HTTP API、WebSocket 网关、认证、配对、实时扇出、数据库层、Agent 会话、后台 Worker |
+| [docs/architecture-daemon.md](docs/architecture-daemon.md) | Host 守护进程 (minos-daemon)：relay 连接、agent 管理、本地 SQLite 持久化、配对 QR、JSON-RPC 服务器、UniFFI 暴露 |
+| [docs/architecture-tui.md](docs/architecture-tui.md) | 终端 UI (minos-tui)：Ratatui 布局、事件系统、嵌入式/daemon 后端、群聊协调、MCP agent 间协作 |
+| [docs/architecture-mobile.md](docs/architecture-mobile.md) | 移动端 (Flutter + minos-mobile)：四层架构、Riverpod 状态管理、FRB 桥接、认证/配对/会话流程、WebSocket 重连 |
+| [docs/architecture-macos.md](docs/architecture-macos.md) | macOS 应用 (SwiftUI + UniFFI)：状态栏应用、DaemonDriving 协议、bootstrap、QR 渲染 |
+| [docs/architecture-web.md](docs/architecture-web.md) | Web 管理控制台 (React + Vite)：Zustand 状态、WebSocket 实时、工作区页面 |
+| [docs/architecture-shared-crates.md](docs/architecture-shared-crates.md) | 12 个共享 crate：domain、protocol、transport、pairing、cli-detect、agent-runtime、chat-store、acp-protocol、codex-protocol、ui-protocol、ffi-uniffi、ffi-frb |
+| [docs/architecture-business-flow.md](docs/architecture-business-flow.md) | 完整业务流程：注册 → 配对 → 实时连接 → Agent 会话 → 流式交互 → 审批 → 重连恢复 |
+
 # Workflow Orchestration
 
 ## 1. Plan Mode Default

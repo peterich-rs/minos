@@ -1,0 +1,245 @@
+# 后端服务 (minos-backend) 架构文档
+
+> 本文档详细描述 `minos-backend` crate 的架构、模块划分和关键逻辑。
+
+## 概述
+
+`minos-backend` 是 Minos 的核心服务端，提供 HTTP REST API、WebSocket 实时网关、后台 Worker 和持久化层。支持单机模式（monolith）或拆分模式（HTTP-only / Worker-only）。
+
+**源码路径**: `crates/minos-backend/`
+
+## 启动流程 (`src/main.rs`)
+
+1. 解析 CLI 配置（`Config::parse()`，基于 clap）
+2. 校验配置（JWT secret 长度、CORS、存储模式）
+3. 初始化 tracing（mars-xlog 文件日志 + stdout）
+4. 连接数据库（SQLite 或 Postgres），运行 migrations
+5. 构建 `RuntimeShell` → `AppContext`（所有服务的组合根）
+6. 绑定 TCP 监听器，构建 Axum Router，启动 HTTP 服务
+7. 优雅停机：广播 `ServerShutdown`，drain 500ms，关闭数据库
+
+## 配置 (`src/config.rs`)
+
+`Config` struct（clap derive，所有字段支持环境变量覆盖）：
+
+| 字段 | 环境变量 | 默认值 |
+|------|---------|--------|
+| `listen` | `MINOS_BACKEND_LISTEN` | `127.0.0.1:8787` |
+| `storage_mode` | `MINOS_STORAGE_MODE` | `sqlite` |
+| `database_url` | `MINOS_DATABASE_URL` | (无) |
+| `jwt_secret` | `MINOS_JWT_SECRET` | (必填) |
+| `runtime_mode` | `MINOS_RUNTIME_MODE` | `monolith` |
+| `cache_backend` | `MINOS_CACHE_BACKEND` | `in-memory` |
+| `message_bus_backend` | `MINOS_MESSAGE_BUS_BACKEND` | `inline` |
+| `cors_origins` | `MINOS_CORS_ORIGINS` | `*` |
+
+**运行模式**：`Monolith`（HTTP + Worker 一体）、`HttpOnly`（仅 API）、`WorkerOnly`（仅后台任务）
+
+## HTTP 路由 (`src/http/`)
+
+### 路由表
+
+```
+/health/live          GET    存活探针
+/health/ready         GET    就绪探针
+/health/info          GET    版本信息
+/health/jobs          GET    后台任务健康
+/metrics              GET    Prometheus 指标
+/openapi.json         GET    OpenAPI 规范
+/ws/client            GET    WebSocket 升级（移动端/Web）
+/ws/host              GET    WebSocket 升级（Host 守护进程）
+/v1/auth/*            POST   认证（注册/登录/刷新/登出/改密）
+/v1/pairing/*         POST   配对确认/撤销/列表
+/v1/host/*            POST   Host 引导/配对码/安装令牌
+/v1/agent-sessions/*  POST   Agent 会话管理
+/v1/approvals/*       POST   审批请求
+/v1/conversations/*   POST   对话/消息
+/v1/friends/*         POST   好友/好友请求
+/v1/profiles/*        POST   个人资料
+/v1/projects/*        POST   项目 CRUD
+/v1/realtime/*        POST   WS 票据签发
+/v1/notifications/*   POST   推送令牌/偏好
+/v1/social/*          POST   Agent 注册/对话成员
+```
+
+### 中间件栈（自底向上）
+
+1. `SetRequestIdLayer` — 分配 `x-request-id`
+2. `TraceLayer` — 每请求 tracing span
+3. `PropagateRequestIdLayer` — 响应中传播请求 ID
+4. `record_http_metrics` — Prometheus HTTP 指标
+5. CORS layer
+6. `touch_account_last_seen` — 更新设备 `last_seen_at`
+
+### Handler 状态
+
+`BackendState` 包裹 `Arc<AppContext>`，实现 `Deref<Target = AppContext>`，所有 handler 可直接访问全部服务。
+
+## 认证模块 (`src/auth/`)
+
+### 子模块
+
+| 文件 | 职责 | 关键类型 |
+|------|------|---------|
+| `jwt.rs` | JWT 签发/验证 | `Claims`, `sign()`, `verify()`, `sign_ws_ticket()`, `verify_ws_ticket()` |
+| `bearer.rs` | Bearer token 提取 | `require()`, `require_account()` |
+| `passwords.rs` | Argon2id 密码哈希 | hash/verify |
+| `use_case.rs` | 认证业务逻辑 | `AuthUseCase` — register, login, refresh, logout, change_password |
+| `host_bootstrap.rs` | Host 初始认证 | `BootstrapNonceStore` |
+| `host_installation.rs` | Host 安装令牌 | `hit_*` 令牌验证 |
+| `realtime_ticket.rs` | WS 票据存储 | `RealtimeTicketStore` — 一次性票据 |
+| `rate_limit.rs` | 速率限制 | `RateLimiter` — 固定窗口 |
+
+### 认证流程
+
+1. **注册** (`POST /v1/auth/register`): Argon2id 哈希密码 → 插入 account → 返回 JWT + refresh token
+2. **登录** (`POST /v1/auth/login`): 验证密码 → 签发 JWT
+3. **刷新** (`POST /v1/auth/refresh`): 验证 refresh token → 轮转签发新 JWT + refresh token
+4. **Bearer 认证**: `Authorization: Bearer <jwt>` → `jwt::verify()` → 提取 account_id/device_id
+5. **WS 票据**: Bearer 认证后签发 60s 一次性 JWT → WS 升级时消费
+
+### 速率限制
+
+- 注册: 3次/小时/IP
+- 登录: 10次/分钟/email, 5次/分钟/IP
+- 刷新: 60次/小时/account
+
+## 配对模块 (`src/pairing/`)
+
+### 核心类型: `PairingService`
+
+### 配对流程（正式/代码模式）
+
+1. **Mac 请求配对码**: `POST /v1/host/pairing/request-code` → 返回配对码
+2. **手机确认**: `POST /v1/pairing/confirm` 带配对码 → 创建 `account_host_pairings` 关联
+3. **Mac 赎回**: `POST /v1/host/pairing/redeem` → 获得 `hit_*` host 安装令牌
+4. **Mac 连接**: 用安装令牌签发 WS ticket → 连接 `/ws/host`
+
+### 安全措施
+
+- 配对码/令牌存储前 SHA-256 哈希
+- Device secret 使用 Argon2id 哈希（PHC 字符串格式）
+- 禁止自我配对
+- 所有变更使用 `BEGIN IMMEDIATE`（SQLite）或 `SERIALIZABLE`（Postgres）事务
+
+## 实时网关 (`src/realtime/`)
+
+### WebSocket 升级流程
+
+1. 客户端发送 `GET /ws/client?ticket=...` 或 `GET /ws/host?ticket=...`
+2. 验证 WS ticket JWT + 检查角色匹配 + 消费一次性票据
+3. 启动 `run_session()` 主循环
+
+### 会话循环
+
+- 发送 `Hello` 帧（conn_id, server_time_ms, heartbeat_interval_ms）
+- 自动订阅默认 topic（Account 或 Host）
+- `tokio::select!` 分支：客户端消息 / 推送通道 / 遗留 outbox / 撤销信号
+- 关闭码: 4401（认证撤销）、1011（内部错误）、4400（请求错误）
+
+### RealtimeFanout（核心扇出引擎）
+
+- 持有 `SessionRegistry`、`SubscriptionManager`、`StoreHandle`、`MessageBusBackend`
+- `fanout_ui_event()` — 推送到特定设备会话
+- `fanout_social_message()` — 推送到所有关联账户的移动端会话
+- `dispatch_outbox_batch()` — 从数据库认领 outbox 事件，分发到 topic 订阅者
+
+### MessageBusBackend（多实例集群）
+
+- `Inline` — 无操作（单实例）
+- `Redis` — 通过 Redis pub/sub，支持自动重连
+
+## 数据库层 (`src/store/`)
+
+### 存储: `StoreHandle` 枚举
+
+`Sqlite(SqlitePool)` 或 `Postgres(PgPool)`，通过 `AsStorePool` trait 抽象。
+
+### 核心表
+
+| 表 | 用途 |
+|----|------|
+| `accounts` | 账户（email, password_hash, minos_id, display_name） |
+| `devices` | 设备（role: agent-host/mobile-client/browser-admin, secret_hash, account_id） |
+| `pairing_tokens` | 配对令牌（token_hash, issuer_device_id, expires_at） |
+| `pairing_codes` | 配对码（code_hash, host_installation_id, status） |
+| `host_installation_tokens` | Host 安装令牌 |
+| `refresh_tokens` | 刷新令牌 |
+| `account_host_pairings` | 账户-Host 关联 |
+| `friend_requests` | 好友请求 |
+| `friendships` | 好友关系 |
+| `conversations` | 对话（直接/群组） |
+| `chat_messages` | 聊天消息 |
+| `agents` | Agent 定义 |
+| `projects` | 项目 |
+| `agent_sessions` | Agent 会话 |
+| `agent_turns` | Agent 轮次 |
+| `agent_turn_events` | 轮次流事件 |
+| `approval_requests` | 审批请求 |
+| `host_commands` | 持久化命令队列 |
+| `durable_event_log` | 按 topic 排序的事件日志 |
+| `outbox_events` | 分发工作队列 |
+
+### 30 个 Store 子模块
+
+涵盖: accounts, devices, tokens, pairing_codes, host_installation_tokens, refresh_tokens, account_host_pairings, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, threads, raw_events, projects, push_tokens, notification_preferences, notification_cooldowns 等。
+
+## Agent 会话管理 (`src/agent_sessions/`)
+
+### 生命周期
+
+1. `POST /v1/agent-sessions/start` — 创建会话（幂等键），关联 conversation + 可选 project
+2. Host 通过 `HostStreamEvent` WS 帧流式发送事件
+3. `POST /v1/agent-sessions/send-input` — 用户输入
+4. `POST /v1/agent-sessions/stop` — 请求停止
+5. `POST /v1/agent-sessions/read-turns` — 读取轮次历史
+
+### Host 命令系统
+
+- 持久化命令队列存储在 `host_commands` 表
+- 通过 `durable_event_log` → `outbox_events` 发出
+- Host 通过 `HostCommandAck` 确认，`HostCommandResult` 完成
+- `HostCommandTimeoutJob` 后台任务处理超时命令
+
+## 状态管理层次
+
+```
+RuntimeShell           -- 拥有 AppContext、后台任务、集群监听
+  └── AppContext       -- 组合所有服务
+        ├── SessionRegistry           -- 内存中的活跃 WS 会话
+        ├── SubscriptionManager       -- topic 订阅管理
+        ├── PairingService            -- 配对业务逻辑
+        ├── AuthUseCase               -- 认证业务逻辑
+        ├── IngestUseCase             -- 原始事件摄取
+        ├── RealtimeFanout            -- 事件扇出引擎
+        ├── ApprovalService           -- 审批请求处理
+        ├── HostCommandService        -- 持久化命令队列
+        ├── AgentSessionService       -- Agent 会话管理
+        ├── ProjectService            -- 项目 CRUD
+        ├── NotificationService       -- 推送通知
+        └── StoreHandle               -- 数据库连接池
+```
+
+## 后台任务 (`src/jobs/`)
+
+| 任务 | 用途 |
+|------|------|
+| `RefreshTokenGcJob` | 清理过期 refresh token |
+| `ApprovalTimeoutJob` | 过期审批自动处理 |
+| `HostCommandTimeoutJob` | 超时 host 命令标记失败 |
+| `RetentionCleanerJob` | 清理旧事件/线程 |
+| `StaleSessionSweeperJob` | 清理过期 outbox 认领 |
+| `AuditIndexerJob` | 审计数据索引 |
+| `OutboxDispatcherJob` | 分发待处理 outbox 事件 |
+
+所有任务实现 `Job` trait（`run()`, `interval()`, `applies_to(runtime_mode)`）。
+
+## 错误处理 (`src/error.rs`)
+
+`BackendError` 枚举（thiserror derive）：StoreConnect, StoreMigrate, DeviceNotFound, PairingTokenInvalid, EmailTaken, PeerOffline, ForwardRpc 等。
+
+HTTP 错误返回 `ErrorEnvelope`（`code` + `message`），WebSocket 使用关闭码（4400/4401/1011）。
+
+## 集成测试 (`tests/`)
+
+15 个测试文件覆盖：auth 端点、配对流程、agent 会话、社交功能、项目、WS 网关、HTTP 握手、端到端流程、事件摄取、存储、CORS 等。

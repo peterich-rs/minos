@@ -546,14 +546,14 @@ impl AgentManager {
         }
         let mut resumed = false;
         let mut provider_session_id = None;
-        let chat_mcp =
+        let mcp_server =
             resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Gemini);
         if let Some(session_id) = resume_session_id {
             match instance
                 .resume_session(
                     session_id,
                     workspace,
-                    Some(chat_mcp.iter().map(gemini_mcp_server).collect()),
+                    Some(mcp_server.iter().map(gemini_mcp_server).collect()),
                 )
                 .await
             {
@@ -574,7 +574,7 @@ impl AgentManager {
         }
         if !resumed {
             let response = instance
-                .new_session(workspace, chat_mcp.iter().map(gemini_mcp_server).collect())
+                .new_session(workspace, mcp_server.iter().map(gemini_mcp_server).collect())
                 .await
                 .map_err(|error| anyhow::anyhow!("gemini ACP session/new failed: {error}"))?;
             provider_session_id = Some(response.session_id);
@@ -608,7 +608,7 @@ impl AgentManager {
             .unwrap_or_else(|| PathBuf::from(AgentName::Opencode.bin_name()));
         let port = pick_free_port(self.config.opencode_port_range.clone())?;
         let password = uuid::Uuid::new_v4().to_string();
-        let chat_mcp = resolve_mcp_server(
+        let mcp_server = resolve_mcp_server(
             self.config.mcp.as_ref(),
             workspace,
             AgentName::Opencode,
@@ -618,7 +618,7 @@ impl AgentManager {
             port,
             password,
             subprocess_env: self.config.subprocess_env.clone(),
-            opencode_config_content: chat_mcp.as_ref().map(opencode_config_content),
+            opencode_config_content: mcp_server.as_ref().map(opencode_config_content),
         };
         let instance =
             crate::opencode_driver::OpencodeServerInstance::spawn(workspace, config).await?;
@@ -733,13 +733,13 @@ impl AgentManager {
 
         let listen_arg = format!("ws://127.0.0.1:{port}");
         let spawn_policies = resolve_session_policies(policies, &self.config.subprocess_env);
-        let chat_mcp =
+        let mcp_server =
             resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Codex);
         let args = build_codex_spawn_args(
             &listen_arg,
             &workspace_display,
             &spawn_policies,
-            chat_mcp.as_ref(),
+            mcp_server.as_ref(),
         );
         let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
         let env = self.config.subprocess_env.clone();
@@ -1092,12 +1092,12 @@ impl AgentManager {
         let resume_sid =
             (has_runtime_session || has_persisted_history).then_some(provider_session_id.as_str());
         let session_id = resume_sid.is_none().then_some(provider_session_id.as_str());
-        let chat_mcp = resolve_mcp_server(
+        let mcp_server = resolve_mcp_server(
             self.config.mcp.as_ref(),
             &handle.workspace,
             AgentName::Claude,
         );
-        let claude_mcp_config = chat_mcp.as_ref().map(claude_mcp_config_json);
+        let claude_mcp_config = mcp_server.as_ref().map(claude_mcp_config_json);
         let session = crate::claude_driver::ClaudeNdjsonSession::start_turn(
             &cli_path,
             &handle.workspace,
@@ -2077,7 +2077,7 @@ fn build_codex_spawn_args(
     listen_arg: &str,
     workspace_display: &str,
     policies: &ResolvedSessionPolicies,
-    chat_mcp: Option<&ResolvedMcpServer>,
+    mcp_server: Option<&ResolvedMcpServer>,
 ) -> Vec<String> {
     let mut args = vec![
         "app-server".to_string(),
@@ -2101,7 +2101,7 @@ fn build_codex_spawn_args(
     args.push(sandbox_arg);
     args.push("-c".to_string());
     args.push("shell_environment_policy.inherit=all".to_string());
-    if let Some(server) = chat_mcp {
+    if let Some(server) = mcp_server {
         args.extend(codex_mcp_config_args(server));
     }
     args
@@ -2699,7 +2699,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_spawn_args_include_chat_mcp_config_when_enabled() {
+    fn codex_spawn_args_include_mcp_config_when_enabled() {
         let resolved = ResolvedSessionPolicies::default();
         let server = ResolvedMcpServer {
             name: "minos_chat".into(),
