@@ -19,7 +19,35 @@ extension AppState {
         // `.closed` today.
         if case .closed = state {
             currentSession = nil
+            return
         }
+
+        Task { [weak self] in
+            await self?.refreshAgentThreadSnapshot()
+        }
+    }
+
+    @MainActor
+    func refreshAgentThreadSnapshot() async {
+        guard phase == .running, let daemon else { return }
+
+        do {
+            applyAgentThreadSnapshot(try await daemon.currentAgentThread())
+        } catch let error as MinosError {
+            AppLog.error("appState.agent", "currentAgentThread failed · \(error.technicalDetails)")
+        } catch {
+            AppLog.error("appState.agent", "Unexpected currentAgentThread failure: \(String(describing: error))")
+        }
+    }
+
+    @MainActor
+    func applyAgentThreadSnapshot(_ snapshot: AgentThreadSnapshot?) {
+        guard let snapshot else {
+            return
+        }
+
+        agentState = snapshot.state
+        currentSession = StartAgentResponse(sessionId: snapshot.threadId, cwd: snapshot.workspaceRoot)
     }
 
     @MainActor

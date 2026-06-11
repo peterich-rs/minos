@@ -32,6 +32,7 @@ protocol DaemonDriving: AnyObject, Sendable {
 
     // ── Agent runtime (post-Phase-C multi-thread surface) ──
     func currentAgentState() -> ThreadState
+    func currentAgentThread() async throws -> AgentThreadSnapshot?
     func startAgent(_ req: StartAgentRequest) async throws -> StartAgentResponse
     func sendUserMessage(_ req: SendUserMessageRequest) async throws
     func interruptThread(_ req: InterruptThreadRequest) async throws

@@ -214,13 +214,7 @@ struct MenuBarView: View {
     }
 
     private func lastActiveText(_ peer: HostPeerSummary) -> String {
-        guard peer.lastActiveAtMs > 0 else {
-            return "最后活跃未知"
-        }
-        let date = Date(timeIntervalSince1970: TimeInterval(peer.lastActiveAtMs) / 1000)
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        return "最后活跃 \(formatter.localizedString(for: date, relativeTo: Date()))"
+        PeerActivityFormatter.lastActiveText(epochMilliseconds: peer.lastActiveAtMs)
     }
 
     // ── Phase: boot failed ──────────────────────────────────────────
@@ -301,5 +295,28 @@ struct MenuBarView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+enum PeerActivityFormatter {
+    static func date(fromEpochMilliseconds milliseconds: Int64) -> Date? {
+        guard milliseconds > 0 else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
+    }
+
+    static func lastActiveText(
+        epochMilliseconds milliseconds: Int64,
+        relativeTo now: Date = Date(),
+        locale: Locale = Locale(identifier: "zh_CN")
+    ) -> String {
+        guard let date = date(fromEpochMilliseconds: milliseconds) else {
+            return "最后活跃未知"
+        }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = locale
+        formatter.calendar = .autoupdatingCurrent
+        return "最后活跃 \(formatter.localizedString(for: date, relativeTo: now))"
     }
 }

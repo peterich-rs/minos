@@ -21,6 +21,27 @@ final class AgentStateTests: XCTestCase {
     }
 
     @MainActor
+    func testAgentObserverRefreshesCurrentThreadSnapshot() async {
+        let expected = ThreadState.running(turnStartedAtMs: 1_700_000_000_000)
+        let daemon = MockDaemon(
+            currentAgentThread: MockDaemon.makeAgentThreadSnapshot(
+                threadId: "mobile-thread",
+                workspaceRoot: "/Users/fan/work",
+                state: expected
+            )
+        )
+        let appState = await bootedAppState(with: daemon)
+
+        daemon.emitAgentState(expected)
+        await waitForAgentSession(appState)
+
+        XCTAssertEqual(daemon.currentAgentThreadCallCount, 1)
+        XCTAssertEqual(appState.agentState, expected)
+        XCTAssertEqual(appState.currentSession?.sessionId, "mobile-thread")
+        XCTAssertEqual(appState.currentSession?.cwd, "/Users/fan/work")
+    }
+
+    @MainActor
     func testStartAgentStoresSession() async {
         let daemon = MockDaemon(
             startAgentResult: .success(
@@ -153,5 +174,12 @@ final class AgentStateTests: XCTestCase {
             agentSubscription: agentSub
         )
         return appState
+    }
+
+    @MainActor
+    private func waitForAgentSession(_ appState: AppState) async {
+        for _ in 0..<20 where appState.currentSession == nil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 }

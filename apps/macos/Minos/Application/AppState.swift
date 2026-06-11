@@ -26,6 +26,7 @@ final class AppState: @unchecked Sendable {
         let trustedDevice: PeerRecord?
         let peers: [HostPeerSummary]
         let agentState: ThreadState
+        let agentThread: AgentThreadSnapshot?
     }
 
     // ── Daemon + subscriptions ──
@@ -163,7 +164,8 @@ final class AppState: @unchecked Sendable {
             trustedDevice: snapshot.trustedDevice,
             peers: snapshot.peers,
             agentSubscription: agentSubscription,
-            agentState: snapshot.agentState
+            agentState: snapshot.agentState,
+            agentThread: snapshot.agentThread
         )
     }
 
@@ -178,7 +180,8 @@ final class AppState: @unchecked Sendable {
         trustedDevice: PeerRecord?,
         peers: [HostPeerSummary] = [],
         agentSubscription: (any SubscriptionHandle)? = nil,
-        agentState: ThreadState = .idle
+        agentState: ThreadState = .idle,
+        agentThread: AgentThreadSnapshot? = nil
     ) {
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()
@@ -194,7 +197,7 @@ final class AppState: @unchecked Sendable {
         self.peers = resolvedPeers
         self.peer = resolvedPeers.isEmpty ? peer : Self.aggregatePeerState(from: resolvedPeers)
         self.agentState = agentState
-        self.currentSession = nil
+        applyAgentThreadSnapshot(agentThread)
         self.trustedDevice = resolvedPeers.first.map(Self.peerRecord) ?? trustedDevice
         self.phase = .running
     }

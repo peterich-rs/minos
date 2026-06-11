@@ -23,6 +23,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     var currentRelayLinkValue: RelayLinkState
     var currentPeerValue: PeerState
     var currentAgentStateValue: ThreadState
+    var currentAgentThreadValue: AgentThreadSnapshot?
+    var currentAgentThreadError: MinosError?
     var currentTrustedDeviceValue: PeerRecord?
     var currentTrustedDeviceError: MinosError?
     var currentPeersValue: [HostPeerSummary]
@@ -44,6 +46,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     private(set) var forgetPeerCallCount = 0
     private(set) var forgetPeerDeviceCalls: [DeviceId] = []
     private(set) var pairingQrCallCount = 0
+    private(set) var currentAgentThreadCallCount = 0
     private(set) var startAgentCalls: [StartAgentRequest] = []
     private(set) var sendUserMessageCalls: [SendUserMessageRequest] = []
     private(set) var interruptThreadCalls: [InterruptThreadRequest] = []
@@ -60,6 +63,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         currentRelayLink: RelayLinkState = .disconnected,
         currentPeer: PeerState = .unpaired,
         currentAgentState: ThreadState = .idle,
+        currentAgentThread: AgentThreadSnapshot? = nil,
         currentTrustedDevice: PeerRecord? = nil,
         currentPeers: [HostPeerSummary]? = nil,
         pairingQrResult: Result<RelayQrPayload, MinosError> = .success(MockDaemon.makeQrPayload()),
@@ -73,6 +77,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         currentRelayLinkValue = currentRelayLink
         currentPeerValue = currentPeer
         currentAgentStateValue = currentAgentState
+        currentAgentThreadValue = currentAgentThread
         currentTrustedDeviceValue = currentTrustedDevice
         currentPeersValue = currentPeers ?? MockDaemon.defaultPeers(
             trustedDevice: currentTrustedDevice,
@@ -90,6 +95,14 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     func currentRelayLink() -> RelayLinkState { currentRelayLinkValue }
     func currentPeer() -> PeerState { currentPeerValue }
     func currentAgentState() -> ThreadState { currentAgentStateValue }
+
+    func currentAgentThread() async throws -> AgentThreadSnapshot? {
+        currentAgentThreadCallCount += 1
+        if let currentAgentThreadError {
+            throw currentAgentThreadError
+        }
+        return currentAgentThreadValue
+    }
 
     func currentTrustedDevice() async throws -> PeerRecord? {
         if let currentTrustedDeviceError {
@@ -230,6 +243,14 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         cwd: String = "/Users/fan/.minos/workspaces"
     ) -> StartAgentResponse {
         StartAgentResponse(sessionId: sessionId, cwd: cwd)
+    }
+
+    static func makeAgentThreadSnapshot(
+        threadId: String = "thread-abc12",
+        workspaceRoot: String = "/Users/fan/.minos/workspaces",
+        state: ThreadState = .idle
+    ) -> AgentThreadSnapshot {
+        AgentThreadSnapshot(threadId: threadId, workspaceRoot: workspaceRoot, state: state)
     }
 
     static func makeTrustedDevice(

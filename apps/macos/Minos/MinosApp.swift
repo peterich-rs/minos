@@ -81,7 +81,7 @@ struct MinosApp: App {
 
         if !Self.isRunningTests {
             Task {
-                await DaemonBootstrap.bootstrap(initialState)
+                await DaemonBootstrap.bootstrap(initialState, clearExistingLogs: true)
             }
         }
     }

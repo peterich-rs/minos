@@ -26,6 +26,23 @@ final class AppStateTests: XCTestCase {
         }
     }
 
+    func testPeerActivityDateUsesEpochMilliseconds() throws {
+        let date = try XCTUnwrap(
+            PeerActivityFormatter.date(fromEpochMilliseconds: 1_700_000_000_000)
+        )
+
+        XCTAssertEqual(date.timeIntervalSince1970, 1_700_000_000, accuracy: 0.001)
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        var shanghai = Calendar(identifier: .gregorian)
+        shanghai.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+
+        XCTAssertEqual(utc.component(.hour, from: date), 22)
+        XCTAssertEqual(shanghai.component(.hour, from: date), 6)
+        XCTAssertNil(PeerActivityFormatter.date(fromEpochMilliseconds: 0))
+    }
+
     // ── Gates ──
 
     @MainActor

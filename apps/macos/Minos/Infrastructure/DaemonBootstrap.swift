@@ -48,10 +48,13 @@ enum DaemonBootstrap {
     /// real Rust runtime.
     static func bootstrap(
         _ appState: AppState,
+        clearExistingLogs: Bool = false,
         startDaemon: @escaping @Sendable (RelayConfig, String) async throws -> any DaemonDriving = defaultStartDaemon
     ) async {
         await appState.beginBoot()
+        let logCleanup = clearExistingLogs ? StartupLogCleaner.clearExistingLogs() : nil
         try? initLogging()
+        logStartupCleanup(logCleanup)
         let macName = hostName()
         AppLog.info("bootstrap", "Bootstrapping daemon for \(macName)")
 
@@ -68,6 +71,20 @@ enum DaemonBootstrap {
         }
 
         await runStart(appState: appState, config: config, macName: macName, startDaemon: startDaemon)
+    }
+
+    private static func logStartupCleanup(_ result: StartupLogCleanupResult?) {
+        guard let result else { return }
+
+        let summary = "dir=\(result.logDirectory.path); deleted=\(result.deletedCount); skipped=\(result.skippedCount)"
+        if result.failures.isEmpty {
+            AppLog.info("bootstrap", "Startup log cleanup complete; \(summary)")
+        } else {
+            AppLog.warn(
+                "bootstrap",
+                "Startup log cleanup incomplete; \(summary); failures=\(result.failures.joined(separator: " | "))"
+            )
+        }
     }
 
     /// Inner half of `bootstrap`: spawn the daemon, wire observers, and
@@ -140,6 +157,7 @@ enum DaemonBootstrap {
         let relayLink = daemon.currentRelayLink()
         let peer = daemon.currentPeer()
         let agentState = daemon.currentAgentState()
+        let agentThread = try await daemon.currentAgentThread()
         let trustedDevice = try await daemon.currentTrustedDevice()
         let peers = try await daemon.currentPeers()
         return AppState.BootSnapshot(
@@ -147,7 +165,8 @@ enum DaemonBootstrap {
             peer: peer,
             trustedDevice: trustedDevice,
             peers: peers,
-            agentState: agentState
+            agentState: agentState,
+            agentThread: agentThread
         )
     }
 
@@ -226,6 +245,13 @@ enum AppDirectories {
             .appendingPathComponent("local-state.json")
     }
 
+    static func logsDirectory(
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        minosHome(env: env)
+            .appendingPathComponent("logs", isDirectory: true)
+    }
+
     private static func minosHome(env: [String: String]) -> URL {
         if let raw = env["MINOS_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !raw.isEmpty {
@@ -241,6 +267,62 @@ enum AppDirectories {
             in: .userDomainMask
         ).first ?? URL(fileURLWithPath: NSHomeDirectory())
         return support.appendingPathComponent("Minos/local-state.json")
+    }
+}
+
+struct StartupLogCleanupResult {
+    let logDirectory: URL
+    let deletedCount: Int
+    let skippedCount: Int
+    let failures: [String]
+}
+
+enum StartupLogCleaner {
+    static func clearExistingLogs(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> StartupLogCleanupResult {
+        let logDirectory = AppDirectories.logsDirectory(env: env)
+        var deletedCount = 0
+        var skippedCount = 0
+        var failures: [String] = []
+
+        do {
+            try fileManager.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+            let entries = try fileManager.contentsOfDirectory(
+                at: logDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            )
+
+            for entry in entries {
+                if shouldSkip(entry) {
+                    skippedCount += 1
+                    continue
+                }
+                do {
+                    try fileManager.removeItem(at: entry)
+                    deletedCount += 1
+                } catch {
+                    failures.append("\(entry.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            failures.append("\(logDirectory.path): \(error.localizedDescription)")
+        }
+
+        return StartupLogCleanupResult(
+            logDirectory: logDirectory,
+            deletedCount: deletedCount,
+            skippedCount: skippedCount,
+            failures: failures
+        )
+    }
+
+    private static func shouldSkip(_ entry: URL) -> Bool {
+        guard let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+            return false
+        }
+        return values.isDirectory == true && values.isSymbolicLink != true
     }
 }
 

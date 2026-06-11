@@ -182,7 +182,7 @@ final class AppStateBootTests: XCTestCase {
             at: legacyPath.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let bytes = try XCTUnwrap(#"{"self_device_id":"\#(deviceId)"}"#.data(using: .utf8))
+        let bytes = Data(#"{"self_device_id":"\#(deviceId)"}"#.utf8)
         try bytes.write(to: legacyPath)
 
         let loaded = try LocalStateLoader.loadOrInit(at: newPath, legacyPath: legacyPath)
@@ -248,6 +248,17 @@ final class AppStateBootTests: XCTestCase {
             name: "iPhone",
             pairedAt: originalPairedAt
         )
+        daemon.currentTrustedDeviceValue = appState.trustedDevice
+        daemon.currentPeersValue = [
+            MockDaemon.makePeerSummary(
+                deviceId: did,
+                deviceName: "iPhone",
+                accountEmail: "",
+                pairedAtMs: Int64(originalPairedAt.timeIntervalSince1970 * 1000),
+                lastActiveAtMs: Int64(originalPairedAt.timeIntervalSince1970 * 1000),
+                online: true
+            )
+        ]
 
         // Two repeat emissions that would historically have stamped
         // `pairedAt = Date()` on each hit, wiping the original value.
