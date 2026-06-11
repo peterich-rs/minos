@@ -837,6 +837,16 @@ fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
         "generated DaemonHandle.subscribeAgentState binding",
     )?;
     require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "public struct AgentThreadSnapshot",
+        "generated Swift record for current agent thread snapshot",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "open func currentAgentThread()",
+        "generated DaemonHandle.currentAgentThread binding",
+    )?;
+    require_generated_text(
         &out_dir.join("minos_protocol.swift"),
         "public struct StartAgentRequest",
         "generated Swift record for StartAgentRequest",

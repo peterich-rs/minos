@@ -209,6 +209,32 @@ impl LocalStore {
         Ok(())
     }
 
+    pub async fn update_thread_status(
+        &self,
+        thread_id: &str,
+        status: &str,
+        pause_reason: Option<&str>,
+        close_reason: Option<&str>,
+        ended_at: Option<i64>,
+        ts_ms: i64,
+    ) -> anyhow::Result<u64> {
+        let result = sqlx::query(
+            "UPDATE threads SET status = ?, last_pause_reason = ?, \
+                                last_close_reason = ?, ended_at = ?, \
+                                last_activity_at = ? \
+             WHERE thread_id = ?",
+        )
+        .bind(status)
+        .bind(pause_reason)
+        .bind(close_reason)
+        .bind(ended_at)
+        .bind(ts_ms)
+        .bind(thread_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn delete_thread(&self, thread_id: &str) -> anyhow::Result<u64> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM events WHERE thread_id = ?")
@@ -491,6 +517,37 @@ mod tests {
         assert_eq!(threads.len(), 3);
         let one = store.get_thread("thr-1").await.unwrap();
         assert_eq!(one.unwrap().agent, "codex");
+    }
+
+    #[tokio::test]
+    async fn update_thread_status_persists_runtime_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-status', '/w', 'codex', 'idle', 0, 1, 1)")
+            .execute(store.pool())
+            .await
+            .unwrap();
+
+        let updated = store
+            .update_thread_status("thr-status", "running", None, None, None, 42)
+            .await
+            .unwrap();
+        assert_eq!(updated, 1);
+
+        let row = store.get_thread("thr-status").await.unwrap().unwrap();
+        assert_eq!(row.status, "running");
+        assert_eq!(row.last_activity_at, 42);
+        assert!(row.last_pause_reason.is_none());
+        assert!(row.last_close_reason.is_none());
+        assert!(row.ended_at.is_none());
     }
 
     #[tokio::test]

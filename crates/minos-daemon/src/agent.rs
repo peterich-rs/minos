@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use minos_agent_runtime::{
-    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest, SessionPolicies,
-    ThreadState,
+    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, ManagerEvent, RawIngest,
+    SessionPolicies, ThreadState,
 };
 use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::MinosError;
@@ -23,6 +24,14 @@ use tokio::sync::{broadcast, mpsc, watch};
 use crate::store::event_writer::{provider_session_id_from_ingest, EventWriter};
 use crate::store::{EventRow, LocalStore, ThreadRow};
 use crate::subscription::{AgentStateObserver, Subscription};
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentThreadSnapshot {
+    pub thread_id: String,
+    pub workspace_root: String,
+    pub state: ThreadState,
+}
 
 /// `AgentGlue` is the daemon-side wrapper that:
 /// 1. Owns the `AgentManager` (multi-workspace codex instance manager).
@@ -123,6 +132,65 @@ impl AgentGlue {
 
         let (state_tx, state_rx) = watch::channel(ThreadState::Idle);
         let state_tx = Arc::new(state_tx);
+        let mut manager_events = manager.manager_event_stream();
+        let store_clone = store.clone();
+        let state_tx_clone = state_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                match manager_events.recv().await {
+                    Ok(ManagerEvent::ThreadAdded {
+                        thread_id,
+                        workspace,
+                        agent,
+                    }) => {
+                        let cwd = workspace.display().to_string();
+                        persist_thread_parent_rows_inner(
+                            &store_clone,
+                            &thread_id,
+                            &cwd,
+                            agent,
+                            None,
+                        )
+                        .await;
+                    }
+                    Ok(ManagerEvent::ThreadStateChanged {
+                        thread_id,
+                        new,
+                        at_ms,
+                        ..
+                    }) => {
+                        persist_runtime_state_inner(&store_clone, &thread_id, &new, at_ms).await;
+                        let _ = state_tx_clone.send(new);
+                    }
+                    Ok(ManagerEvent::ThreadClosed { thread_id, reason }) => {
+                        let state = ThreadState::Closed { reason };
+                        let at_ms = current_unix_ms();
+                        persist_runtime_state_inner(&store_clone, &thread_id, &state, at_ms).await;
+                        let _ = state_tx_clone.send(state);
+                    }
+                    Ok(ManagerEvent::InstanceCrashed {
+                        affected_threads,
+                        reason,
+                        ..
+                    }) => {
+                        let state = ThreadState::Suspended { reason };
+                        let at_ms = current_unix_ms();
+                        for thread_id in affected_threads {
+                            persist_runtime_state_inner(&store_clone, &thread_id, &state, at_ms)
+                                .await;
+                            let _ = state_tx_clone.send(state.clone());
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => tracing::warn!(
+                        target: "minos_daemon::agent",
+                        skipped,
+                        "manager event bridge lagged",
+                    ),
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
         Self {
             manager,
             writer,
@@ -348,34 +416,8 @@ impl AgentGlue {
         agent: minos_domain::AgentName,
         provider_session_id: Option<&str>,
     ) {
-        let now_ms = current_unix_ms();
-        if let Err(e) = self.store.upsert_workspace(cwd, now_ms).await {
-            tracing::warn!(
-                target: "minos_daemon::agent",
-                error = %e,
-                workspace = %cwd,
-                "store.upsert_workspace failed; events FK may reject ingest",
-            );
-        }
-        if let Err(e) = self
-            .store
-            .insert_thread(
-                thread_id,
-                cwd,
-                agent_label(agent),
-                provider_session_id,
-                "idle",
-                now_ms,
-            )
-            .await
-        {
-            tracing::warn!(
-                target: "minos_daemon::agent",
-                error = %e,
-                thread_id = %thread_id,
-                "store.insert_thread failed; events FK may reject ingest",
-            );
-        }
+        persist_thread_parent_rows_inner(&self.store, thread_id, cwd, agent, provider_session_id)
+            .await;
     }
 
     async fn persist_current_provider_session_id(&self, thread_id: &str) {
@@ -630,6 +672,61 @@ impl AgentGlue {
             thread,
             state: live_state.unwrap_or(row_state_to_proto(&row)?),
         })
+    }
+
+    pub async fn current_agent_thread(&self) -> Result<Option<AgentThreadSnapshot>, MinosError> {
+        let live_snapshots = self.manager.list_threads().await;
+        let rows = self
+            .store
+            .list_threads(None, Some(500), None)
+            .await
+            .map_err(|e| map_store_error("current_agent_thread", e))?;
+        let row_by_thread = rows
+            .iter()
+            .map(|row| (row.thread_id.as_str(), row))
+            .collect::<HashMap<_, _>>();
+
+        let mut live_candidates = live_snapshots
+            .into_iter()
+            .filter(|snapshot| !matches!(snapshot.state, ThreadState::Closed { .. }))
+            .map(|snapshot| {
+                let last_activity_at = row_by_thread
+                    .get(snapshot.thread_id.as_str())
+                    .map_or(0, |row| row.last_activity_at);
+                (state_priority(&snapshot.state), last_activity_at, snapshot)
+            })
+            .collect::<Vec<_>>();
+        live_candidates.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| right.1.cmp(&left.1))
+                .then_with(|| left.2.thread_id.as_str().cmp(right.2.thread_id.as_str()))
+        });
+        if let Some((_, _, snapshot)) = live_candidates.into_iter().next() {
+            return Ok(Some(AgentThreadSnapshot {
+                thread_id: snapshot.thread_id,
+                workspace_root: snapshot.workspace.display().to_string(),
+                state: snapshot.state,
+            }));
+        }
+
+        for row in rows {
+            let state = row_state_to_runtime(&row)?;
+            if matches!(
+                state,
+                ThreadState::Starting
+                    | ThreadState::Idle
+                    | ThreadState::Running { .. }
+                    | ThreadState::Resuming
+            ) {
+                return Ok(Some(AgentThreadSnapshot {
+                    thread_id: row.thread_id,
+                    workspace_root: row.workspace_root,
+                    state,
+                }));
+            }
+        }
+        Ok(None)
     }
 
     #[must_use]
@@ -1136,6 +1233,96 @@ fn parse_close_reason_runtime(
     }
 }
 
+fn state_priority(state: &ThreadState) -> u8 {
+    match state {
+        ThreadState::Running { .. } => 0,
+        ThreadState::Starting | ThreadState::Resuming => 1,
+        ThreadState::Idle => 2,
+        ThreadState::Suspended { .. } => 3,
+        ThreadState::Closed { .. } => 4,
+    }
+}
+
+async fn persist_runtime_state_inner(
+    store: &LocalStore,
+    thread_id: &str,
+    state: &ThreadState,
+    at_ms: i64,
+) {
+    let (status, pause_reason, close_reason, ended_at) = runtime_state_columns(state, at_ms);
+    match store
+        .update_thread_status(
+            thread_id,
+            status,
+            pause_reason,
+            close_reason,
+            ended_at,
+            at_ms,
+        )
+        .await
+    {
+        Ok(0) => tracing::warn!(
+            target: "minos_daemon::agent",
+            thread_id,
+            status,
+            "store.update_thread_status affected no rows",
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::warn!(
+            target: "minos_daemon::agent",
+            error = %error,
+            thread_id,
+            status,
+            "store.update_thread_status failed",
+        ),
+    }
+}
+
+fn runtime_state_columns(
+    state: &ThreadState,
+    at_ms: i64,
+) -> (
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+    Option<i64>,
+) {
+    match state {
+        ThreadState::Starting => ("starting", None, None, None),
+        ThreadState::Idle => ("idle", None, None, None),
+        ThreadState::Running { .. } => ("running", None, None, None),
+        ThreadState::Suspended { reason } => (
+            "suspended",
+            Some(runtime_pause_reason_label(reason)),
+            None,
+            None,
+        ),
+        ThreadState::Resuming => ("resuming", None, None, None),
+        ThreadState::Closed { reason } => (
+            "closed",
+            None,
+            Some(runtime_close_reason_label(reason)),
+            Some(at_ms),
+        ),
+    }
+}
+
+fn runtime_pause_reason_label(reason: &minos_agent_runtime::PauseReason) -> &'static str {
+    match reason {
+        minos_agent_runtime::PauseReason::UserInterrupt => "user_interrupt",
+        minos_agent_runtime::PauseReason::CodexCrashed => "codex_crashed",
+        minos_agent_runtime::PauseReason::DaemonRestart => "daemon_restart",
+        minos_agent_runtime::PauseReason::InstanceReaped => "instance_reaped",
+    }
+}
+
+fn runtime_close_reason_label(reason: &minos_agent_runtime::CloseReason) -> &'static str {
+    match reason {
+        minos_agent_runtime::CloseReason::UserClose => "user_close",
+        minos_agent_runtime::CloseReason::TerminalError => "terminal_error",
+    }
+}
+
 fn map_host_skills_response(response: CodexSkillsListResponse) -> ListHostSkillsResponse {
     ListHostSkillsResponse {
         data: response
@@ -1194,6 +1381,55 @@ fn current_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+async fn persist_thread_parent_rows_inner(
+    store: &LocalStore,
+    thread_id: &str,
+    cwd: &str,
+    agent: minos_domain::AgentName,
+    provider_session_id: Option<&str>,
+) {
+    let now_ms = current_unix_ms();
+    if let Err(e) = store.upsert_workspace(cwd, now_ms).await {
+        tracing::warn!(
+            target: "minos_daemon::agent",
+            error = %e,
+            workspace = %cwd,
+            "store.upsert_workspace failed; events FK may reject ingest",
+        );
+    }
+    if let Err(e) = store
+        .insert_thread(
+            thread_id,
+            cwd,
+            agent_label(agent),
+            provider_session_id,
+            "idle",
+            now_ms,
+        )
+        .await
+    {
+        tracing::warn!(
+            target: "minos_daemon::agent",
+            error = %e,
+            thread_id = %thread_id,
+            "store.insert_thread failed; events FK may reject ingest",
+        );
+    }
+    if let Some(provider_session_id) = provider_session_id {
+        if let Err(e) = store
+            .update_thread_provider_session_id(thread_id, Some(provider_session_id))
+            .await
+        {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                thread_id = %thread_id,
+                "store.update_thread_provider_session_id failed",
+            );
+        }
+    }
 }
 
 fn provider_session_id_from_event(
@@ -1376,6 +1612,110 @@ mod tests {
                 reason: ProtoCloseReason::UserClose,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn manager_state_change_persists_thread_status() {
+        let test = test_glue().await;
+        let workspace = test._tmp.path().join("live-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace_root = workspace.display().to_string();
+        test.glue
+            .store
+            .upsert_workspace(&workspace_root, 10)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+             VALUES ('thr-live', ?, 'codex', 'idle', 0, 10, 10)",
+        )
+        .bind(&workspace_root)
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+        test.glue
+            .manager
+            .register_persisted_thread(
+                "thr-live".into(),
+                workspace,
+                minos_domain::AgentName::Codex,
+                Some("thr-live".into()),
+                ThreadState::Idle,
+                0,
+            )
+            .await
+            .unwrap();
+
+        let result = test
+            .glue
+            .manager
+            .send_user_message("thr-live", "ping".into())
+            .await;
+        assert!(result.is_err());
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let row = test
+            .glue
+            .store
+            .get_thread("thr-live")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, "running");
+        assert!(matches!(
+            test.glue.current_state(),
+            ThreadState::Running { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn current_agent_thread_prefers_live_running_thread() {
+        let test = test_glue().await;
+        let workspace = test._tmp.path().join("snapshot-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace_root = std::fs::canonicalize(&workspace)
+            .unwrap()
+            .display()
+            .to_string();
+        test.glue
+            .store
+            .upsert_workspace(&workspace_root, 10)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+             VALUES ('thr-snapshot', ?, 'codex', 'idle', 0, 10, 20)",
+        )
+        .bind(&workspace_root)
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+        let state = ThreadState::Running {
+            turn_started_at_ms: 99,
+        };
+        test.glue
+            .manager
+            .register_persisted_thread(
+                "thr-snapshot".into(),
+                workspace,
+                minos_domain::AgentName::Codex,
+                Some("thr-snapshot".into()),
+                state.clone(),
+                0,
+            )
+            .await
+            .unwrap();
+
+        let snapshot = test
+            .glue
+            .current_agent_thread()
+            .await
+            .unwrap()
+            .expect("live thread snapshot");
+
+        assert_eq!(snapshot.thread_id, "thr-snapshot");
+        assert_eq!(snapshot.workspace_root, workspace_root);
+        assert_eq!(snapshot.state, state);
     }
 
     #[tokio::test]

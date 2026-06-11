@@ -476,6 +476,13 @@ impl DaemonHandle {
     pub fn current_agent_state(&self) -> crate::ThreadState {
         self.inner.agent.current_state()
     }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn current_agent_thread(
+        &self,
+    ) -> Result<Option<crate::agent::AgentThreadSnapshot>, MinosError> {
+        self.inner.agent.current_agent_thread().await
+    }
 }
 
 // ── Agent-runtime methods served only over JSON-RPC, not UniFFI. ──

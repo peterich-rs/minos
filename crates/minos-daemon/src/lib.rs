@@ -19,7 +19,7 @@ pub mod rpc_server;
 pub mod store;
 pub mod subscription;
 
-pub use agent::AgentGlue;
+pub use agent::{AgentGlue, AgentThreadSnapshot};
 pub use config::{RelayConfig, BACKEND_URL};
 pub use handle::*;
 pub use local_state::LocalState;

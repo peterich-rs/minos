@@ -13,8 +13,10 @@ use minos_agent_runtime::RawIngest;
 use minos_domain::AgentName;
 use minos_protocol::realtime::ClientFrame;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventSource {
@@ -97,19 +99,41 @@ async fn process_batch(
     if jobs.is_empty() {
         return;
     }
+    let mut checked_threads = HashSet::new();
+    let mut parent_errors = HashMap::new();
+    for job in &jobs {
+        if checked_threads.insert(job.ingest.thread_id.clone()) {
+            if let Err(e) = wait_for_thread_parent(store, &job.ingest.thread_id).await {
+                parent_errors.insert(job.ingest.thread_id.clone(), e.to_string());
+            }
+        }
+    }
+
+    let mut ready_jobs = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        if let Some(error) = parent_errors.get(&job.ingest.thread_id) {
+            let _ = job.ack.send(Err(anyhow::anyhow!(error.clone())));
+        } else {
+            ready_jobs.push(job);
+        }
+    }
+    if ready_jobs.is_empty() {
+        return;
+    }
+
     let mut tx = match store.pool().begin().await {
         Ok(tx) => tx,
         Err(e) => {
             let err = std::sync::Arc::new(e);
-            for j in jobs {
+            for j in ready_jobs {
                 let _ = j.ack.send(Err(anyhow::anyhow!("begin tx: {err}")));
             }
             return;
         }
     };
-    let mut results: Vec<Result<u64>> = Vec::with_capacity(jobs.len());
-    let mut frames: Vec<ClientFrame> = Vec::with_capacity(jobs.len());
-    for job in &jobs {
+    let mut results: Vec<Result<u64>> = Vec::with_capacity(ready_jobs.len());
+    let mut frames: Vec<ClientFrame> = Vec::with_capacity(ready_jobs.len());
+    for job in &ready_jobs {
         let prev: Option<i64> =
             match sqlx::query_scalar("SELECT last_seq FROM threads WHERE thread_id = ?")
                 .bind(&job.ingest.thread_id)
@@ -122,7 +146,14 @@ async fn process_batch(
                     continue;
                 }
             };
-        let seq = (prev.unwrap_or(0) + 1) as u64;
+        let Some(prev) = prev else {
+            results.push(Err(anyhow::anyhow!(
+                "thread parent row disappeared before event write: {}",
+                job.ingest.thread_id
+            )));
+            continue;
+        };
+        let seq = (prev + 1) as u64;
         let payload = match serde_json::to_vec(&job.ingest.payload) {
             Ok(v) => v,
             Err(e) => {
@@ -186,17 +217,37 @@ async fn process_batch(
         });
     }
     if let Err(e) = tx.commit().await {
-        for (job, _) in jobs.into_iter().zip(results) {
+        for (job, _) in ready_jobs.into_iter().zip(results) {
             let _ = job.ack.send(Err(anyhow::anyhow!("commit: {e}")));
         }
         return;
     }
-    for (job, r) in jobs.into_iter().zip(results) {
+    for (job, r) in ready_jobs.into_iter().zip(results) {
         let _ = job.ack.send(r);
     }
     for frame in frames {
         let _ = relay_out.send(frame).await;
     }
+}
+
+async fn wait_for_thread_parent(store: &LocalStore, thread_id: &str) -> Result<()> {
+    let started = Instant::now();
+    for delay_ms in [0, 10, 25, 50, 100, 200, 400, 400, 400, 400, 400] {
+        if delay_ms > 0 {
+            sleep(Duration::from_millis(delay_ms)).await;
+        }
+        let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM threads WHERE thread_id = ?")
+            .bind(thread_id)
+            .fetch_optional(store.pool())
+            .await?;
+        if exists.is_some() {
+            return Ok(());
+        }
+    }
+    Err(anyhow::anyhow!(
+        "thread parent row missing for {thread_id} after {:?}",
+        started.elapsed()
+    ))
 }
 
 fn host_stream_payload(ingest: &RawIngest, seq: u64) -> Value {
@@ -421,6 +472,55 @@ mod tests {
                 }
                 other => panic!("unexpected frame: {other:?}"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn write_live_waits_for_delayed_thread_parent_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            LocalStore::open(&tmp.path().join("t.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let (relay_tx, mut relay_rx) = mpsc::channel(16);
+        let writer = EventWriter::spawn(store.clone(), relay_tx);
+
+        let pending = {
+            let writer = writer.clone();
+            tokio::spawn(async move {
+                writer
+                    .write_live(RawIngest {
+                        agent: minos_agent_runtime::AgentKind::Codex,
+                        thread_id: "thr-delayed".into(),
+                        payload: serde_json::json!({"kind": "delayed-parent"}),
+                        ts_ms: 42,
+                    })
+                    .await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        seed_thread(&store, "thr-delayed").await;
+
+        let seq = tokio::time::timeout(Duration::from_secs(3), pending)
+            .await
+            .expect("write_live should finish after the parent row appears")
+            .expect("writer task should not panic")
+            .expect("delayed parent row should prevent FK failure");
+        assert_eq!(seq, 1);
+
+        let rows = store.read_events("thr-delayed", 1, 1).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].seq, 1);
+
+        let frame = relay_rx.recv().await.unwrap();
+        match frame {
+            ClientFrame::HostStreamEvent { topic, kind, .. } => {
+                assert_eq!(topic, "agent_session:thr-delayed");
+                assert_eq!(kind, "agent_event");
+            }
+            other => panic!("unexpected frame: {other:?}"),
         }
     }
 }
