@@ -31,8 +31,8 @@ use url::Url;
 pub const MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS: &str = "\
 You are running inside Minos teamwork mode, where CLI coding agents work in a shared chat room with the user and other agents. \
 Treat the Minos room as coordination context, not as a generic terminal session. \
-When room history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_chat` MCP server to inspect the bound room before answering. \
-Use `list_chat_messages` for recent room history, `request_agent_help` to ask another Minos agent for focused assistance, and `mention_user` only for concise user-visible updates that should be posted back to the room.";
+When room history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_teamwork` MCP server to inspect the bound room before answering. \
+Use `list_room_messages` for recent room history, `delegate_to_agent` with `get_delegation_status`/`cancel_delegation` for focused cross-agent work, `ask_user_question` with `check_user_feedback` for user clarification, `post_room_update` only for concise user-visible room updates, and `react_to_message` for lightweight acknowledgement.";
 
 #[derive(Clone, Debug)]
 pub struct InstanceCaps {
@@ -546,8 +546,7 @@ impl AgentManager {
         }
         let mut resumed = false;
         let mut provider_session_id = None;
-        let mcp_server =
-            resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Gemini);
+        let mcp_server = resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Gemini);
         if let Some(session_id) = resume_session_id {
             match instance
                 .resume_session(
@@ -574,7 +573,10 @@ impl AgentManager {
         }
         if !resumed {
             let response = instance
-                .new_session(workspace, mcp_server.iter().map(gemini_mcp_server).collect())
+                .new_session(
+                    workspace,
+                    mcp_server.iter().map(gemini_mcp_server).collect(),
+                )
                 .await
                 .map_err(|error| anyhow::anyhow!("gemini ACP session/new failed: {error}"))?;
             provider_session_id = Some(response.session_id);
@@ -608,11 +610,8 @@ impl AgentManager {
             .unwrap_or_else(|| PathBuf::from(AgentName::Opencode.bin_name()));
         let port = pick_free_port(self.config.opencode_port_range.clone())?;
         let password = uuid::Uuid::new_v4().to_string();
-        let mcp_server = resolve_mcp_server(
-            self.config.mcp.as_ref(),
-            workspace,
-            AgentName::Opencode,
-        );
+        let mcp_server =
+            resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Opencode);
         let config = crate::opencode_driver::OpencodeServerConfig {
             opencode_bin: bin,
             port,
@@ -733,8 +732,7 @@ impl AgentManager {
 
         let listen_arg = format!("ws://127.0.0.1:{port}");
         let spawn_policies = resolve_session_policies(policies, &self.config.subprocess_env);
-        let mcp_server =
-            resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Codex);
+        let mcp_server = resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Codex);
         let args = build_codex_spawn_args(
             &listen_arg,
             &workspace_display,
@@ -1970,8 +1968,6 @@ fn resolve_mcp_server(
     let config = config?;
     let mut args = config.server_args.clone();
     args.extend([
-        "--db-path".into(),
-        config.db_path.display().to_string(),
         "--room-id".into(),
         minos_chat_store::room_id_for_workspace(workspace),
         "--source-agent".into(),
@@ -1981,7 +1977,7 @@ fn resolve_mcp_server(
     ]);
     args.extend(mcp_permission_args(config.permissions));
     Some(ResolvedMcpServer {
-        name: "minos_chat".into(),
+        name: "minos_teamwork".into(),
         command: config.server_bin.display().to_string(),
         args,
     })
@@ -1991,14 +1987,29 @@ fn mcp_permission_args(
     permissions: minos_chat_store::mcp_server::McpToolPermissions,
 ) -> Vec<String> {
     let mut args = Vec::new();
-    if !permissions.read_chat {
-        args.push("--disable-read-chat".into());
+    if !permissions.list_room_messages {
+        args.push("--disable-list-room-messages".into());
     }
-    if !permissions.mention_agent {
-        args.push("--disable-mention-agent".into());
+    if !permissions.delegate_to_agent {
+        args.push("--disable-delegate-to-agent".into());
     }
-    if !permissions.mention_user {
-        args.push("--disable-mention-user".into());
+    if !permissions.get_delegation_status {
+        args.push("--disable-get-delegation-status".into());
+    }
+    if !permissions.cancel_delegation {
+        args.push("--disable-cancel-delegation".into());
+    }
+    if !permissions.ask_user_question {
+        args.push("--disable-ask-user-question".into());
+    }
+    if !permissions.check_user_feedback {
+        args.push("--disable-check-user-feedback".into());
+    }
+    if !permissions.post_room_update {
+        args.push("--disable-post-room-update".into());
+    }
+    if !permissions.react_to_message {
+        args.push("--disable-react-to-message".into());
     }
     args
 }
@@ -2702,11 +2713,9 @@ mod tests {
     fn codex_spawn_args_include_mcp_config_when_enabled() {
         let resolved = ResolvedSessionPolicies::default();
         let server = ResolvedMcpServer {
-            name: "minos_chat".into(),
-            command: "/tmp/minos-mcp".into(),
+            name: "minos_teamwork".into(),
+            command: "/tmp/minos-teamwork-mcp".into(),
             args: vec![
-                "--db-path".into(),
-                "/tmp/daemon.sqlite".into(),
                 "--room-id".into(),
                 "room-main".into(),
                 "--source-agent".into(),
@@ -2721,20 +2730,20 @@ mod tests {
 
         assert!(has_arg(
             &args,
-            "mcp_servers.minos_chat.command=\"/tmp/minos-mcp\""
+            "mcp_servers.minos_teamwork.command=\"/tmp/minos-teamwork-mcp\""
         ));
         assert!(has_arg(
             &args,
-            "mcp_servers.minos_chat.args=[\"--db-path\",\"/tmp/daemon.sqlite\",\"--room-id\",\"room-main\",\"--source-agent\",\"codex\",\"--socket-path\",\"/tmp/mcp-daemon.sock\"]"
+            "mcp_servers.minos_teamwork.args=[\"--room-id\",\"room-main\",\"--source-agent\",\"codex\",\"--socket-path\",\"/tmp/mcp-daemon.sock\"]"
         ));
-        assert!(has_arg(&args, "mcp_servers.minos_chat.enabled=true"));
+        assert!(has_arg(&args, "mcp_servers.minos_teamwork.enabled=true"));
     }
 
     #[test]
     fn resolve_mcp_server_preserves_command_prefix_args() {
         let config = McpConfig {
             server_bin: "/tmp/minos-tui".into(),
-            server_args: vec!["minos-mcp".into()],
+            server_args: vec!["minos-teamwork-mcp".into()],
             socket_path: "/tmp/mcp-test.sock".into(),
             db_path: "/tmp/minos.sqlite".into(),
             permissions: minos_chat_store::mcp_server::McpToolPermissions::default(),
@@ -2751,9 +2760,7 @@ mod tests {
         assert_eq!(
             server.args,
             vec![
-                "minos-mcp",
-                "--db-path",
-                "/tmp/minos.sqlite",
+                "minos-teamwork-mcp",
                 "--room-id",
                 "room-minos",
                 "--source-agent",
@@ -2767,12 +2774,10 @@ mod tests {
     #[test]
     fn claude_mcp_config_json_includes_bound_room_and_source_agent() {
         let server = ResolvedMcpServer {
-            name: "minos_chat".into(),
+            name: "minos_teamwork".into(),
             command: "/tmp/minos-tui".into(),
             args: vec![
-                "minos-mcp".into(),
-                "--db-path".into(),
-                "/tmp/minos.sqlite".into(),
+                "minos-teamwork-mcp".into(),
                 "--room-id".into(),
                 "room-minos".into(),
                 "--source-agent".into(),
@@ -2786,21 +2791,24 @@ mod tests {
             serde_json::from_str(&claude_mcp_config_json(&server)).expect("valid JSON");
 
         assert_eq!(
-            config["mcpServers"]["minos_chat"]["command"],
+            config["mcpServers"]["minos_teamwork"]["command"],
             "/tmp/minos-tui"
         );
-        assert_eq!(config["mcpServers"]["minos_chat"]["args"][0], "minos-mcp");
-        assert!(config["mcpServers"]["minos_chat"]["args"]
+        assert_eq!(
+            config["mcpServers"]["minos_teamwork"]["args"][0],
+            "minos-teamwork-mcp"
+        );
+        assert!(config["mcpServers"]["minos_teamwork"]["args"]
             .as_array()
             .unwrap()
             .windows(2)
             .any(|pair| pair[0] == "--room-id" && pair[1] == "room-minos"));
-        assert!(config["mcpServers"]["minos_chat"]["args"]
+        assert!(config["mcpServers"]["minos_teamwork"]["args"]
             .as_array()
             .unwrap()
             .windows(2)
             .any(|pair| pair[0] == "--source-agent" && pair[1] == "claude"));
-        assert!(config["mcpServers"]["minos_chat"]["args"]
+        assert!(config["mcpServers"]["minos_teamwork"]["args"]
             .as_array()
             .unwrap()
             .windows(2)
@@ -2808,14 +2816,12 @@ mod tests {
     }
 
     #[test]
-    fn opencode_config_content_includes_local_minos_chat_server() {
+    fn opencode_config_content_includes_local_minos_teamwork_server() {
         let server = ResolvedMcpServer {
-            name: "minos_chat".into(),
+            name: "minos_teamwork".into(),
             command: "/tmp/minos-tui".into(),
             args: vec![
-                "minos-mcp".into(),
-                "--db-path".into(),
-                "/tmp/minos.sqlite".into(),
+                "minos-teamwork-mcp".into(),
                 "--room-id".into(),
                 "room-minos".into(),
                 "--source-agent".into(),
@@ -2828,11 +2834,17 @@ mod tests {
         let config: Value =
             serde_json::from_str(&opencode_config_content(&server)).expect("valid JSON");
 
-        assert_eq!(config["mcp"]["minos_chat"]["type"], "local");
-        assert_eq!(config["mcp"]["minos_chat"]["enabled"], true);
-        assert_eq!(config["mcp"]["minos_chat"]["command"][0], "/tmp/minos-tui");
-        assert_eq!(config["mcp"]["minos_chat"]["command"][1], "minos-mcp");
-        assert!(config["mcp"]["minos_chat"]["command"]
+        assert_eq!(config["mcp"]["minos_teamwork"]["type"], "local");
+        assert_eq!(config["mcp"]["minos_teamwork"]["enabled"], true);
+        assert_eq!(
+            config["mcp"]["minos_teamwork"]["command"][0],
+            "/tmp/minos-tui"
+        );
+        assert_eq!(
+            config["mcp"]["minos_teamwork"]["command"][1],
+            "minos-teamwork-mcp"
+        );
+        assert!(config["mcp"]["minos_teamwork"]["command"]
             .as_array()
             .unwrap()
             .windows(2)
@@ -2842,12 +2854,10 @@ mod tests {
     #[test]
     fn gemini_mcp_server_includes_bound_room_and_source_agent() {
         let server = ResolvedMcpServer {
-            name: "minos_chat".into(),
+            name: "minos_teamwork".into(),
             command: "/tmp/minos-tui".into(),
             args: vec![
-                "minos-mcp".into(),
-                "--db-path".into(),
-                "/tmp/minos.sqlite".into(),
+                "minos-teamwork-mcp".into(),
                 "--room-id".into(),
                 "room-minos".into(),
                 "--source-agent".into(),
@@ -2859,9 +2869,9 @@ mod tests {
 
         let config = serde_json::to_value(gemini_mcp_server(&server)).expect("valid JSON");
 
-        assert_eq!(config["name"], "minos_chat");
+        assert_eq!(config["name"], "minos_teamwork");
         assert_eq!(config["command"], "/tmp/minos-tui");
-        assert_eq!(config["args"][0], "minos-mcp");
+        assert_eq!(config["args"][0], "minos-teamwork-mcp");
         assert!(config["args"]
             .as_array()
             .unwrap()
@@ -3073,7 +3083,7 @@ done
         cfg.gemini_bin = Some(script_path);
         cfg.mcp = Some(McpConfig {
             server_bin: "/tmp/minos-tui".into(),
-            server_args: vec!["minos-mcp".into()],
+            server_args: vec!["minos-teamwork-mcp".into()],
             socket_path: "/tmp/mcp-test.sock".into(),
             db_path: "/tmp/minos-chat.sqlite".into(),
             permissions: minos_chat_store::mcp_server::McpToolPermissions::default(),
@@ -3091,11 +3101,14 @@ done
         let request: Value = serde_json::from_str(&std::fs::read_to_string(request_path).unwrap())
             .expect("session/new request should be JSON");
         let mcp_server = &request["params"]["mcpServers"][0];
-        assert_eq!(mcp_server["name"], "minos_chat");
+        assert_eq!(mcp_server["name"], "minos_teamwork");
         assert_eq!(mcp_server["command"], "/tmp/minos-tui");
-        assert_eq!(mcp_server["args"][0], "minos-mcp");
-        assert_eq!(mcp_server["args"][1], "--db-path");
-        assert_eq!(mcp_server["args"][2], "/tmp/minos-chat.sqlite");
+        assert_eq!(mcp_server["args"][0], "minos-teamwork-mcp");
+        assert!(mcp_server["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|arg| arg != "--db-path"));
         assert!(mcp_server["args"]
             .as_array()
             .unwrap()
@@ -4107,7 +4120,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     "elicitationId": "elic-1",
                     "message": "Open this URL",
                     "mode": "url",
-                    "serverName": "minos_chat",
+                    "serverName": "minos_teamwork",
                     "threadId": thread_id,
                     "turnId": turn_id,
                     "url": "https://example.com"
@@ -4157,7 +4170,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn minos_chat_form_elicitation_is_forwarded_and_auto_accepted_with_room() {
+    async fn minos_teamwork_form_elicitation_is_forwarded_and_auto_accepted_with_room() {
         let tmp = tempfile::tempdir().unwrap();
         let thread_id = "thr-mcp-chat";
         let turn_id = "turn-mcp-chat";
@@ -4180,7 +4193,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                         },
                         "required": ["room_id"]
                     },
-                    "serverName": "minos_chat",
+                    "serverName": "minos_teamwork",
                     "threadId": thread_id,
                     "turnId": turn_id,
                 }),
@@ -4222,7 +4235,10 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         .expect("mcp elicitation synthetic ingest should arrive");
 
         assert_eq!(ingest.thread_id, thread_id);
-        assert_eq!(ingest.payload["params"]["serverName"], json!("minos_chat"));
+        assert_eq!(
+            ingest.payload["params"]["serverName"],
+            json!("minos_teamwork")
+        );
         assert_eq!(ingest.payload["params"]["threadId"], json!(thread_id));
         assert_eq!(ingest.payload["params"]["turnId"], json!(turn_id));
 

@@ -16,10 +16,10 @@ That log line does not prove MCP startup failure. In the repo, MCP is already
 wired in several places:
 
 - `crates/minos-tui/src/backend/embedded.rs` starts embedded agents with the
-  current Minos binary plus the hidden `chat-mcp` subcommand.
-- `crates/minos-chat-store/src/mcp.rs` implements `minos-chat-mcp` with
-  `list_chat_messages`, `request_agent_help`, and `mention_user`.
-- `crates/minos-daemon/src/agent.rs` enables the default `minos-chat-mcp`
+  current Minos binary plus the hidden `minos-teamwork-mcp` subcommand.
+- `crates/minos-chat-store/src/mcp_server.rs` implements `minos-teamwork-mcp`
+  with `list_room_messages`, `delegate_to_agent`, and `post_room_update`.
+- `crates/minos-daemon/src/agent.rs` enables the default `minos-teamwork-mcp`
   configuration for daemon-managed agents.
 - `crates/minos-agent-runtime/src/manager.rs` binds the MCP server to
   `room_id_for_workspace(workspace)` with `--room-id` and passes
@@ -32,14 +32,14 @@ system prompt, or MCP server instructions tell it when the Minos room matters.
 
 ## MCP Injection
 
-All Minos MCP injections name the server `minos_chat`.
+All Minos MCP injections name the server `minos_teamwork`.
 
 | Agent | Current injection path |
 | --- | --- |
-| Codex | `codex app-server` receives `-c mcp_servers.minos_chat.command=...`, `-c mcp_servers.minos_chat.args=[...]`, and `-c mcp_servers.minos_chat.enabled=true`. |
-| Claude | `claude -p` receives `--mcp-config <json>` with `mcpServers.minos_chat` and `--strict-mcp-config`. |
-| Gemini | ACP `session/new` and `session/resume` receive `mcpServers` containing `minos_chat` as a stdio server. |
-| OpenCode | `opencode serve` receives `OPENCODE_CONFIG_CONTENT` containing a local enabled `mcp.minos_chat` server, unless the caller already supplied that environment variable. |
+| Codex | `codex app-server` receives `-c mcp_servers.minos_teamwork.command=...`, `-c mcp_servers.minos_teamwork.args=[...]`, and `-c mcp_servers.minos_teamwork.enabled=true`. |
+| Claude | `claude -p` receives `--mcp-config <json>` with `mcpServers.minos_teamwork` and `--strict-mcp-config`. |
+| Gemini | ACP `session/new` and `session/resume` receive `mcpServers` containing `minos_teamwork` as a stdio server. |
+| OpenCode | `opencode serve` receives `OPENCODE_CONFIG_CONTENT` containing a local enabled `mcp.minos_teamwork` server, unless the caller already supplied that environment variable. |
 
 The MCP server now also returns an `instructions` field during `initialize`.
 Codex documents that it reads MCP server instructions and uses them as
@@ -91,13 +91,19 @@ System/developer prompt support differs by CLI:
 
 Agents working in Minos should:
 
-- Use `minos_chat.list_chat_messages` when room history, teammate output,
+- Use `minos_teamwork.list_room_messages` when room history, teammate output,
   mentions, current room state, or cross-agent coordination may affect the
   answer.
-- Use `minos_chat.request_agent_help` for focused requests to another Minos
-  agent in the same room.
-- Use `minos_chat.mention_user` only for concise user-visible updates that need
+- Use `minos_teamwork.delegate_to_agent` for focused requests to another Minos
+  agent in the same room; use `get_delegation_status` or `cancel_delegation`
+  with the returned delegation id when tracking or stopping that work.
+- Use `minos_teamwork.ask_user_question` for non-blocking clarification and
+  `minos_teamwork.check_user_feedback` with the returned feedback id before
+  relying on an answer.
+- Use `minos_teamwork.post_room_update` only for concise user-visible updates that need
   to appear in the shared room.
+- Use `minos_teamwork.react_to_message` for lightweight emoji acknowledgement
+  on a specific room message.
 - Avoid treating the direct prompt as a complete snapshot of the chat room when
   MCP is available.
 

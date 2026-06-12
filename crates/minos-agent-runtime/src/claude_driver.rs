@@ -292,7 +292,7 @@ mod tests {
             "hello",
             Some("session-1"),
             None,
-            Some(r#"{"mcpServers":{"minos_chat":{"command":"minos-mcp"}}}"#),
+            Some(r#"{"mcpServers":{"minos_teamwork":{"command":"minos-teamwork-mcp"}}}"#),
         );
 
         assert!(args.windows(2).any(|pair| pair == ["-p", "hello"]));
@@ -301,12 +301,12 @@ mod tests {
             .any(|pair| pair == ["--session-id", "session-1"]));
         assert!(args
             .windows(2)
-            .any(|pair| { pair[0] == "--mcp-config" && pair[1].contains(r#""minos_chat""#) }));
+            .any(|pair| { pair[0] == "--mcp-config" && pair[1].contains(r#""minos_teamwork""#) }));
         assert!(args.iter().any(|arg| arg == "--strict-mcp-config"));
         assert!(args.windows(2).any(|pair| {
             pair[0] == "--append-system-prompt"
                 && pair[1].contains("Minos teamwork mode")
-                && pair[1].contains("minos_chat")
+                && pair[1].contains("minos_teamwork")
         }));
     }
 

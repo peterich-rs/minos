@@ -5,11 +5,10 @@ use anyhow::{Context, Result};
 use tokio::net::UnixListener;
 use tracing::{debug, warn};
 
-use crate::mcp_socket::{SocketRequest, SocketResponse};
+use crate::mcp_socket::{SocketRequest, SocketResponse, MAX_FRAME_LEN};
 
-pub type ToolCallback = Arc<
-    dyn Fn(SocketRequest) -> tokio::task::JoinHandle<Result<SocketResponse>> + Send + Sync,
->;
+pub type ToolCallback =
+    Arc<dyn Fn(SocketRequest) -> tokio::task::JoinHandle<Result<SocketResponse>> + Send + Sync>;
 
 pub struct McpSocketHandler {
     socket_path: PathBuf,
@@ -76,10 +75,14 @@ impl McpSocketHandler {
         let mut writer = tokio::io::BufWriter::new(write_half);
         loop {
             let payload_len = read_u32(&mut reader).await?;
+            anyhow::ensure!(
+                payload_len <= MAX_FRAME_LEN,
+                "socket frame too large: {payload_len} bytes"
+            );
             let mut payload = vec![0u8; payload_len as usize];
             tokio::io::AsyncReadExt::read_exact(&mut reader, &mut payload).await?;
-            let request: SocketRequest = serde_json::from_slice(&payload)
-                .context("failed to deserialize socket request")?;
+            let request: SocketRequest =
+                serde_json::from_slice(&payload).context("failed to deserialize socket request")?;
             debug!(
                 target: "minos_mcp_handler",
                 ?request,

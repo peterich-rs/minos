@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use minos_chat_store::{ChatAgentSession, ChatStore, NewChatMessage};
+use minos_chat_store::{
+    ChatAgentSession, ChatMessagePage, ChatStore, MessageReactionAction, MessageReactionResult,
+    NewChatMessage, TeamworkDelegation, UserFeedbackRequest,
+};
+use minos_domain::AgentName;
 use minos_protocol::LocalGroupChatMessage;
 
 #[derive(Clone)]
@@ -66,6 +70,25 @@ impl GroupChatStore {
         &self.room_id
     }
 
+    pub async fn list_messages_desc(
+        &self,
+        before_seq: Option<u64>,
+        limit: Option<u32>,
+    ) -> anyhow::Result<ChatMessagePage> {
+        let Some(store) = self.open().await? else {
+            return Ok(ChatMessagePage {
+                room_id: self.room_id.clone(),
+                messages: Vec::new(),
+                next_before_seq: None,
+                has_more: false,
+            });
+        };
+        self.migrate_legacy_jsonl_if_needed(&store).await?;
+        store
+            .list_messages_desc(&self.room_id, before_seq, limit)
+            .await
+    }
+
     pub async fn list_agent_sessions(&self) -> anyhow::Result<Vec<ChatAgentSession>> {
         let Some(store) = self.open().await? else {
             return Ok(Vec::new());
@@ -92,6 +115,83 @@ impl GroupChatStore {
         Ok(message.into())
     }
 
+    pub async fn create_delegation(
+        &self,
+        source_agent: Option<AgentName>,
+        target_agent: AgentName,
+        prompt: String,
+        thread_id: Option<String>,
+    ) -> anyhow::Result<TeamworkDelegation> {
+        self.open_required()
+            .await?
+            .create_delegation(&self.room_id, source_agent, target_agent, prompt, thread_id)
+            .await
+    }
+
+    pub async fn get_delegation(
+        &self,
+        delegation_id: &str,
+    ) -> anyhow::Result<Option<TeamworkDelegation>> {
+        self.open_required()
+            .await?
+            .get_delegation(&self.room_id, delegation_id)
+            .await
+    }
+
+    pub async fn cancel_delegation(
+        &self,
+        delegation_id: &str,
+        reason: Option<String>,
+    ) -> anyhow::Result<TeamworkDelegation> {
+        self.open_required()
+            .await?
+            .cancel_delegation(&self.room_id, delegation_id, reason)
+            .await
+    }
+
+    pub async fn create_user_feedback(
+        &self,
+        source_agent: Option<AgentName>,
+        question: String,
+        question_message_seq: u64,
+    ) -> anyhow::Result<UserFeedbackRequest> {
+        self.open_required()
+            .await?
+            .create_user_feedback(&self.room_id, source_agent, question, question_message_seq)
+            .await
+    }
+
+    pub async fn check_user_feedback(
+        &self,
+        feedback_id: &str,
+    ) -> anyhow::Result<UserFeedbackRequest> {
+        self.open_required()
+            .await?
+            .check_user_feedback(&self.room_id, feedback_id)
+            .await
+    }
+
+    pub async fn react_to_message(
+        &self,
+        source_agent: Option<AgentName>,
+        message_id: Option<String>,
+        message_seq: Option<u64>,
+        emoji: String,
+        action: MessageReactionAction,
+    ) -> anyhow::Result<MessageReactionResult> {
+        self.open_required()
+            .await?
+            .react_to_message(
+                &self.room_id,
+                source_agent,
+                message_id,
+                message_seq,
+                emoji,
+                action,
+            )
+            .await
+    }
+
     async fn open(&self) -> anyhow::Result<Option<ChatStore>> {
         let Some(path) = &self.db_path else {
             return Ok(None);
@@ -101,6 +201,12 @@ impl GroupChatStore {
             .ensure_room(&self.room_id, &self.room_title, &self.workspace_root)
             .await?;
         Ok(Some(store))
+    }
+
+    async fn open_required(&self) -> anyhow::Result<ChatStore> {
+        self.open()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("group chat storage is disabled"))
     }
 
     async fn migrate_legacy_jsonl_if_needed(&self, store: &ChatStore) -> anyhow::Result<()> {

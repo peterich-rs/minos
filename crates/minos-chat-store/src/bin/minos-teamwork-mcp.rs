@@ -5,15 +5,12 @@ use clap::Parser;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "minos-mcp",
+    name = "minos-teamwork-mcp",
     about = "Expose Minos features over MCP stdio, proxied to the Minos main process via Unix socket"
 )]
 struct Args {
     #[arg(long)]
     socket_path: PathBuf,
-
-    #[arg(long)]
-    db_path: PathBuf,
 
     #[arg(long)]
     room_id: String,
@@ -22,13 +19,28 @@ struct Args {
     source_agent: Option<String>,
 
     #[arg(long)]
-    disable_read_chat: bool,
+    disable_list_room_messages: bool,
 
     #[arg(long)]
-    disable_mention_agent: bool,
+    disable_delegate_to_agent: bool,
 
     #[arg(long)]
-    disable_mention_user: bool,
+    disable_get_delegation_status: bool,
+
+    #[arg(long)]
+    disable_cancel_delegation: bool,
+
+    #[arg(long)]
+    disable_ask_user_question: bool,
+
+    #[arg(long)]
+    disable_check_user_feedback: bool,
+
+    #[arg(long)]
+    disable_post_room_update: bool,
+
+    #[arg(long)]
+    disable_react_to_message: bool,
 }
 
 #[tokio::main]
@@ -41,13 +53,17 @@ async fn main() -> Result<()> {
         .transpose()?;
     minos_chat_store::mcp_server::serve_stdio(minos_chat_store::mcp_server::McpServerConfig {
         socket_path: args.socket_path,
-        db_path: args.db_path,
         room_id: args.room_id,
         source_agent,
         permissions: minos_chat_store::mcp_server::McpToolPermissions {
-            read_chat: !args.disable_read_chat,
-            mention_agent: !args.disable_mention_agent,
-            mention_user: !args.disable_mention_user,
+            list_room_messages: !args.disable_list_room_messages,
+            delegate_to_agent: !args.disable_delegate_to_agent,
+            get_delegation_status: !args.disable_get_delegation_status,
+            cancel_delegation: !args.disable_cancel_delegation,
+            ask_user_question: !args.disable_ask_user_question,
+            check_user_feedback: !args.disable_check_user_feedback,
+            post_room_update: !args.disable_post_room_update,
+            react_to_message: !args.disable_react_to_message,
         },
     })
     .await

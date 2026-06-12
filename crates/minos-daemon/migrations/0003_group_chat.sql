@@ -42,20 +42,3 @@ CREATE TABLE IF NOT EXISTS chat_agent_sessions (
 
 CREATE INDEX IF NOT EXISTS chat_agent_sessions_by_room_last
     ON chat_agent_sessions(room_id, last_message_seq DESC);
-
-CREATE TABLE IF NOT EXISTS chat_mcp_commands (
-    command_seq     INTEGER PRIMARY KEY,
-    room_id         TEXT NOT NULL REFERENCES chat_rooms(room_id),
-    created_at_ms   INTEGER NOT NULL,
-    claimed_at_ms   INTEGER,
-    completed_at_ms INTEGER,
-    status          TEXT NOT NULL CHECK(status IN ('pending', 'claimed', 'completed', 'failed')),
-    command_type    TEXT NOT NULL CHECK(command_type IN ('mention_agent', 'mention_user')),
-    source_agent    TEXT,
-    target_agent    TEXT,
-    body            TEXT NOT NULL,
-    error           TEXT
-);
-
-CREATE INDEX IF NOT EXISTS chat_mcp_commands_by_room_status_seq
-    ON chat_mcp_commands(room_id, status, command_seq ASC);

@@ -8,6 +8,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 
+use crate::event::AppEvent;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendConnectionState {
     Embedded,
@@ -85,6 +87,13 @@ pub trait AgentBackend: Send + Sync {
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest>;
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent>;
+
+    fn start_mcp_socket_handler(
+        &self,
+        _event_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn connection_state(&self) -> BackendConnectionState;
 }

@@ -1,7 +1,7 @@
 use anyhow::Result;
+use minos_chat_store::teamwork_mcp::SkillRef;
 use std::path::{Path, PathBuf};
 
-const MINOS_TEAMWORK_SKILL_NAME: &str = "minos-teamwork";
 const MINOS_TEAMWORK_SKILL_MD: &str = include_str!("../skills/minos-teamwork/SKILL.md");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,23 +9,34 @@ pub struct SkillInstallReport {
     pub installed_paths: Vec<PathBuf>,
 }
 
-pub fn install_global_agent_skills() -> Result<SkillInstallReport> {
+pub fn install_global_agent_skills(skill_refs: &[SkillRef]) -> Result<SkillInstallReport> {
     let home = resolve_home_dir()?;
-    install_global_agent_skills_for_home(&home)
+    install_global_agent_skills_for_home(&home, skill_refs)
 }
 
-fn install_global_agent_skills_for_home(home: &Path) -> Result<SkillInstallReport> {
-    let installed_paths = global_skill_paths(home)
-        .into_iter()
-        .map(|path| {
-            write_if_changed(&path, MINOS_TEAMWORK_SKILL_MD)?;
-            Ok(path)
-        })
-        .collect::<Result<Vec<_>>>()?;
+fn install_global_agent_skills_for_home(
+    home: &Path,
+    skill_refs: &[SkillRef],
+) -> Result<SkillInstallReport> {
+    let mut installed_paths = Vec::new();
+    for skill_ref in skill_refs {
+        let content = embedded_skill_content(skill_ref.id)?;
+        for path in global_skill_paths(home, skill_ref.id) {
+            write_if_changed(&path, content)?;
+            installed_paths.push(path);
+        }
+    }
     Ok(SkillInstallReport { installed_paths })
 }
 
-fn global_skill_paths(home: &Path) -> Vec<PathBuf> {
+fn embedded_skill_content(skill_id: &str) -> Result<&'static str> {
+    match skill_id {
+        "minos-teamwork" => Ok(MINOS_TEAMWORK_SKILL_MD),
+        _ => anyhow::bail!("unknown embedded skill ref: {skill_id}"),
+    }
+}
+
+fn global_skill_paths(home: &Path, skill_name: &str) -> Vec<PathBuf> {
     [
         home.join(".agents").join("skills"),
         home.join(".claude").join("skills"),
@@ -33,7 +44,7 @@ fn global_skill_paths(home: &Path) -> Vec<PathBuf> {
         home.join(".config").join("opencode").join("skills"),
     ]
     .into_iter()
-    .map(|root| root.join(MINOS_TEAMWORK_SKILL_NAME).join("SKILL.md"))
+    .map(|root| root.join(skill_name).join("SKILL.md"))
     .collect()
 }
 
@@ -71,7 +82,7 @@ mod tests {
     #[test]
     fn global_skill_paths_include_supported_cli_locations() {
         let home = PathBuf::from("/tmp/minos-home");
-        let paths = global_skill_paths(&home);
+        let paths = global_skill_paths(&home, "minos-teamwork");
 
         assert_eq!(paths.len(), 4);
         assert!(paths
@@ -92,13 +103,17 @@ mod tests {
     fn install_global_agent_skills_writes_embedded_skill() {
         let temp = tempfile::tempdir().unwrap();
 
-        let report = install_global_agent_skills_for_home(temp.path()).unwrap();
+        let report = install_global_agent_skills_for_home(
+            temp.path(),
+            &[minos_chat_store::teamwork_mcp::MINOS_TEAMWORK_SKILL],
+        )
+        .unwrap();
 
         assert_eq!(report.installed_paths.len(), 4);
         for path in report.installed_paths {
             let content = std::fs::read_to_string(path).unwrap();
             assert!(content.contains("name: minos-teamwork"));
-            assert!(content.contains("minos_chat"));
+            assert!(content.contains("minos_teamwork"));
         }
     }
 }

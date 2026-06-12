@@ -139,7 +139,7 @@ fn resolve_mcp_server_elicitation(
     params: &McpServerElicitationRequestParams,
     context: &NonApprovalContext,
 ) -> McpServerElicitationRequestResponse {
-    if let Some(content) = minos_chat_form_elicitation_content(params, context) {
+    if let Some(content) = minos_teamwork_form_elicitation_content(params, context) {
         return McpServerElicitationRequestResponse {
             action: McpServerElicitationAction::Accept,
             content: Some(content),
@@ -154,7 +154,7 @@ fn resolve_mcp_server_elicitation(
     }
 }
 
-fn minos_chat_form_elicitation_content(
+fn minos_teamwork_form_elicitation_content(
     params: &McpServerElicitationRequestParams,
     context: &NonApprovalContext,
 ) -> Option<Value> {
@@ -166,14 +166,14 @@ fn minos_chat_form_elicitation_content(
         } => (server_name, requested_schema),
         McpServerElicitationRequestParams::Variant1 { .. } => return None,
     };
-    if server_name != "minos_chat" {
+    if server_name != "minos_teamwork" {
         return None;
     }
 
     let required = requested_schema.required.as_deref().unwrap_or_default();
     let mut content = Map::new();
     for (name, schema) in &requested_schema.properties {
-        if let Some(value) = default_value_for_minos_chat_field(name, schema, context) {
+        if let Some(value) = default_value_for_minos_teamwork_field(name, schema, context) {
             content.insert(name.clone(), value);
         }
     }
@@ -184,7 +184,7 @@ fn minos_chat_form_elicitation_content(
     Some(Value::Object(content))
 }
 
-fn default_value_for_minos_chat_field(
+fn default_value_for_minos_teamwork_field(
     name: &str,
     schema: &McpElicitationPrimitiveSchema,
     context: &NonApprovalContext,
@@ -407,7 +407,7 @@ mod tests {
                 "elicitationId": "elic-1",
                 "message": "Open this URL",
                 "mode": "url",
-                "serverName": "minos_chat",
+                "serverName": "minos_teamwork",
                 "threadId": "thr-1",
                 "turnId": "turn-1",
                 "url": "https://example.com"
@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_resolve_minos_chat_form_elicitation_accepts_default_room() {
+    fn auto_resolve_minos_teamwork_form_elicitation_accepts_default_room() {
         let req: ServerRequest = serde_json::from_value(json!({
             "method": "mcpServer/elicitation/request",
             "params": {
@@ -433,7 +433,7 @@ mod tests {
                     },
                     "required": ["room_id"]
                 },
-                "serverName": "minos_chat",
+                "serverName": "minos_teamwork",
                 "threadId": "thr-1",
                 "turnId": "turn-1"
             }

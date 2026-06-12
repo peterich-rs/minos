@@ -1,6 +1,6 @@
 ---
 name: minos-teamwork
-description: Use when working inside Minos TUI/teamwork chat rooms, coordinating with the user or other CLI agents, reading current room context, using the minos_chat MCP server, or deciding whether to post room-visible updates.
+description: Use when working inside Minos TUI/teamwork chat rooms, coordinating with the user or other CLI agents, reading current room context, using the minos_teamwork MCP server, or deciding whether to post room-visible updates.
 ---
 
 # Minos Teamwork
@@ -19,22 +19,31 @@ Treat the direct agent session and the Minos chat room as different surfaces:
 
 ## MCP usage
 
-Use the `minos_chat` MCP server when chat room context could affect the answer.
+Use the `minos_teamwork` MCP server when chat room context could affect the answer.
 Do not assume the prompt contains the current room state if MCP is available.
 
-- Call `list_chat_messages` before answering when the user refers to the room,
+- Call `list_room_messages` before answering when the user refers to the room,
   "current chat", prior teammate output, mentions, coordination status, or
   anything another agent may have said.
-- Call `request_agent_help` when another Minos agent is better positioned to
+- Call `delegate_to_agent` when another Minos agent is better positioned to
   provide focused help. Keep the prompt specific and include the exact context
+  needed. Save the returned `delegation_id`; use `get_delegation_status` to
+  check it and `cancel_delegation` only when the delegated work is no longer
   needed.
-- Call `mention_user` only for concise room-visible updates that should appear
+- Call `ask_user_question` for concise clarification that must be visible in
+  the room. It is non-blocking; use `check_user_feedback` with the returned
+  `feedback_id` before relying on the answer.
+- Call `post_room_update` only for concise room-visible updates that should appear
   in the shared chat. Do not duplicate routine final answers into the room
   unless the user or workflow needs a visible status update.
+- Call `react_to_message` to acknowledge a specific room message with an emoji
+  instead of posting a new message when a lightweight reaction is enough.
 
 ## Working style
 
-- Prefer concrete room facts from `list_chat_messages` over memory or guesses.
+- Prefer concrete room facts from `list_room_messages` over memory or guesses.
+- Treat delegation and feedback ids as workflow state; include them when
+  checking or cancelling existing work.
 - If MCP is missing, say that room state is unavailable through MCP and proceed
   from visible context.
 - Keep inter-agent requests short and actionable.

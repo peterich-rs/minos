@@ -69,9 +69,11 @@ impl AgentRuntimeConfig {
     pub fn enable_default_mcp(&mut self) -> anyhow::Result<()> {
         let db_path = minos_chat_store::default_db_path()?;
         let minos_home = db_path.parent().expect("db_path parent").to_path_buf();
-        let socket_path = minos_home.join("run").join(format!("mcp-daemon-{}.sock", uuid::Uuid::new_v4()));
+        let socket_path = minos_home
+            .join("run")
+            .join(format!("mcp-daemon-{}.sock", uuid::Uuid::new_v4()));
         self.mcp = Some(McpConfig {
-            server_bin: PathBuf::from("minos-mcp"),
+            server_bin: PathBuf::from("minos-teamwork-mcp"),
             server_args: Vec::new(),
             socket_path,
             db_path,

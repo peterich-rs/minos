@@ -1,5 +1,6 @@
 use crossterm::event::{KeyEvent, MouseEvent};
 use minos_agent_runtime::{ManagerEvent, RawIngest};
+use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_domain::AgentName;
 use std::path::PathBuf;
 
@@ -16,11 +17,17 @@ pub enum AppEvent {
         thread_id: String,
         error: String,
     },
+    McpToolCall(McpToolEvent),
     Key(KeyEvent),
     Mouse(MouseEvent),
     #[allow(dead_code)]
     Resize(u16, u16),
     Tick,
+}
+
+pub struct McpToolEvent {
+    pub request: SocketRequest,
+    pub response_tx: tokio::sync::oneshot::Sender<anyhow::Result<SocketResponse>>,
 }
 
 pub fn spawn_ingest_pump(

@@ -10,8 +10,11 @@ use serde_json::Value;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::broadcast;
 
+use crate::event::{AppEvent, McpToolEvent};
+
 pub struct EmbeddedBackend {
     manager: Arc<AgentManager>,
+    mcp_socket_path: Option<PathBuf>,
 }
 
 impl EmbeddedBackend {
@@ -32,9 +35,11 @@ impl EmbeddedBackend {
             minos_home.join("run").join(format!("mcp-{id}.sock"))
         };
         let mcp_result = match std::env::current_exe() {
-            Ok(current_exe) => {
-                config.enable_mcp_with_command(current_exe, vec!["minos-mcp".into()], socket_path)
-            }
+            Ok(current_exe) => config.enable_mcp_with_command(
+                current_exe,
+                vec!["minos-teamwork-mcp".into()],
+                socket_path,
+            ),
             Err(error) => {
                 tracing::warn!(
                     target: "minos_tui::backend::embedded",
@@ -54,6 +59,7 @@ impl EmbeddedBackend {
                 "failed to enable default MCP"
             );
         }
+        let mcp_socket_path = config.mcp.as_ref().map(|mcp| mcp.socket_path.clone());
         config.subprocess_env = Arc::new(shell_env);
         let caps = InstanceCaps {
             max_instances,
@@ -62,6 +68,7 @@ impl EmbeddedBackend {
         let manager = AgentManager::new(config, caps);
         Ok(Self {
             manager: Arc::new(manager),
+            mcp_socket_path,
         })
     }
 }
@@ -181,6 +188,42 @@ impl AgentBackend for EmbeddedBackend {
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent> {
         self.manager.manager_event_stream()
+    }
+
+    fn start_mcp_socket_handler(
+        &self,
+        event_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ) -> Result<()> {
+        let Some(socket_path) = self.mcp_socket_path.clone() else {
+            return Ok(());
+        };
+        let callback: minos_chat_store::mcp_handler::ToolCallback = Arc::new(move |request| {
+            let event_tx = event_tx.clone();
+            tokio::spawn(async move {
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                event_tx
+                    .send(AppEvent::McpToolCall(McpToolEvent {
+                        request,
+                        response_tx,
+                    }))
+                    .map_err(|_| anyhow::anyhow!("TUI event loop is closed"))?;
+                response_rx
+                    .await
+                    .map_err(|_| anyhow::anyhow!("TUI dropped MCP socket response"))?
+            })
+        });
+        tokio::spawn(async move {
+            let handler =
+                minos_chat_store::mcp_handler::McpSocketHandler::new(socket_path, callback);
+            if let Err(error) = handler.run().await {
+                tracing::warn!(
+                    target: "minos_tui::backend::embedded",
+                    error = %error,
+                    "MCP socket handler stopped"
+                );
+            }
+        });
+        Ok(())
     }
 
     fn connection_state(&self) -> BackendConnectionState {

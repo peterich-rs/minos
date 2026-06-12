@@ -47,28 +47,40 @@ struct Cli {
     daemon_url: Option<String>,
 
     #[arg(long)]
-    mcp_disable_read_chat: bool,
+    mcp_disable_list_room_messages: bool,
 
     #[arg(long)]
-    mcp_disable_mention_agent: bool,
+    mcp_disable_delegate_to_agent: bool,
 
     #[arg(long)]
-    mcp_disable_mention_user: bool,
+    mcp_disable_get_delegation_status: bool,
+
+    #[arg(long)]
+    mcp_disable_cancel_delegation: bool,
+
+    #[arg(long)]
+    mcp_disable_ask_user_question: bool,
+
+    #[arg(long)]
+    mcp_disable_check_user_feedback: bool,
+
+    #[arg(long)]
+    mcp_disable_post_room_update: bool,
+
+    #[arg(long)]
+    mcp_disable_react_to_message: bool,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    #[command(name = "minos-mcp", hide = true)]
-    MinosMcp(MinosMcpArgs),
+    #[command(name = "minos-teamwork-mcp", hide = true)]
+    MinosTeamworkMcp(MinosTeamworkMcpArgs),
 }
 
 #[derive(Parser, Debug)]
-struct MinosMcpArgs {
+struct MinosTeamworkMcpArgs {
     #[arg(long)]
-    db_path: Option<std::path::PathBuf>,
-
-    #[arg(long)]
-    socket_path: Option<std::path::PathBuf>,
+    socket_path: std::path::PathBuf,
 
     #[arg(long)]
     room_id: String,
@@ -77,13 +89,28 @@ struct MinosMcpArgs {
     source_agent: Option<String>,
 
     #[arg(long)]
-    disable_read_chat: bool,
+    disable_list_room_messages: bool,
 
     #[arg(long)]
-    disable_mention_agent: bool,
+    disable_delegate_to_agent: bool,
 
     #[arg(long)]
-    disable_mention_user: bool,
+    disable_get_delegation_status: bool,
+
+    #[arg(long)]
+    disable_cancel_delegation: bool,
+
+    #[arg(long)]
+    disable_ask_user_question: bool,
+
+    #[arg(long)]
+    disable_check_user_feedback: bool,
+
+    #[arg(long)]
+    disable_post_room_update: bool,
+
+    #[arg(long)]
+    disable_react_to_message: bool,
 }
 
 fn parse_agent_name(s: &str) -> Result<AgentName> {
@@ -110,16 +137,26 @@ fn validate_backend_args(cli: &Cli) -> Result<()> {
 }
 
 fn has_mcp_policy_overrides(cli: &Cli) -> bool {
-    cli.mcp_disable_read_chat
-        || cli.mcp_disable_mention_agent
-        || cli.mcp_disable_mention_user
+    cli.mcp_disable_list_room_messages
+        || cli.mcp_disable_delegate_to_agent
+        || cli.mcp_disable_get_delegation_status
+        || cli.mcp_disable_cancel_delegation
+        || cli.mcp_disable_ask_user_question
+        || cli.mcp_disable_check_user_feedback
+        || cli.mcp_disable_post_room_update
+        || cli.mcp_disable_react_to_message
 }
 
 fn mcp_permissions_from_cli(cli: &Cli) -> minos_chat_store::mcp_server::McpToolPermissions {
     minos_chat_store::mcp_server::McpToolPermissions {
-        read_chat: !cli.mcp_disable_read_chat,
-        mention_agent: !cli.mcp_disable_mention_agent,
-        mention_user: !cli.mcp_disable_mention_user,
+        list_room_messages: !cli.mcp_disable_list_room_messages,
+        delegate_to_agent: !cli.mcp_disable_delegate_to_agent,
+        get_delegation_status: !cli.mcp_disable_get_delegation_status,
+        cancel_delegation: !cli.mcp_disable_cancel_delegation,
+        ask_user_question: !cli.mcp_disable_ask_user_question,
+        check_user_feedback: !cli.mcp_disable_check_user_feedback,
+        post_room_update: !cli.mcp_disable_post_room_update,
+        react_to_message: !cli.mcp_disable_react_to_message,
     }
 }
 
@@ -189,36 +226,30 @@ fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    if let Some(Command::MinosMcp(args)) = cli.command {
+    if let Some(Command::MinosTeamworkMcp(args)) = cli.command {
         let source_agent = args
             .source_agent
             .as_deref()
             .map(parse_agent_name)
             .transpose()?;
-        let db_path = args
-            .db_path
-            .unwrap_or_else(|| minos_chat_store::default_db_path().expect("default db path"));
-        let minos_home = db_path.parent().expect("db_path parent").to_path_buf();
-        let socket_path = args
-            .socket_path
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| {
-                let id = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_nanos());
-                minos_home.join("run").join(format!("mcp-{id}.sock"))
-            });
-        return minos_chat_store::mcp_server::serve_stdio(minos_chat_store::mcp_server::McpServerConfig {
-            socket_path,
-            db_path,
-            room_id: args.room_id,
-            source_agent,
-            permissions: minos_chat_store::mcp_server::McpToolPermissions {
-                read_chat: !args.disable_read_chat,
-                mention_agent: !args.disable_mention_agent,
-                mention_user: !args.disable_mention_user,
+        let socket_path = args.socket_path;
+        return minos_chat_store::mcp_server::serve_stdio(
+            minos_chat_store::mcp_server::McpServerConfig {
+                socket_path,
+                room_id: args.room_id,
+                source_agent,
+                permissions: minos_chat_store::mcp_server::McpToolPermissions {
+                    list_room_messages: !args.disable_list_room_messages,
+                    delegate_to_agent: !args.disable_delegate_to_agent,
+                    get_delegation_status: !args.disable_get_delegation_status,
+                    cancel_delegation: !args.disable_cancel_delegation,
+                    ask_user_question: !args.disable_ask_user_question,
+                    check_user_feedback: !args.disable_check_user_feedback,
+                    post_room_update: !args.disable_post_room_update,
+                    react_to_message: !args.disable_react_to_message,
+                },
             },
-        })
+        )
         .await;
     }
 
@@ -226,7 +257,10 @@ async fn main() -> Result<()> {
     let workspace = std::fs::canonicalize(&cli.workspace).unwrap_or_else(|_| cli.workspace.clone());
     let log_path = logging::resolve_log_path(&workspace, cli.log_file.clone());
     logging::init(&log_path)?;
-    match skills::install_global_agent_skills() {
+    let mcp_permissions = mcp_permissions_from_cli(&cli);
+    let mcp_skill_refs = minos_chat_store::teamwork_mcp::TeamworkMcpToolCatalog::default_catalog()
+        .skill_refs(mcp_permissions);
+    match skills::install_global_agent_skills(&mcp_skill_refs) {
         Ok(report) => {
             tracing::info!(
                 count = report.installed_paths.len(),
@@ -242,7 +276,6 @@ async fn main() -> Result<()> {
     }
 
     let max_instances = cli.max_instances.unwrap_or(3);
-    let mcp_permissions = mcp_permissions_from_cli(&cli);
     let backend: Arc<dyn crate::backend::AgentBackend> = match cli.backend {
         BackendKind::Embedded => Arc::new(
             crate::backend::EmbeddedBackend::new(
@@ -265,6 +298,7 @@ async fn main() -> Result<()> {
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx.clone());
+    backend.start_mcp_socket_handler(tx.clone())?;
 
     let ingest_rx = backend.subscribe_ingest().await;
     event::spawn_ingest_pump(ingest_rx, tx.clone());
@@ -322,9 +356,14 @@ mod tests {
             log_file: None,
             backend,
             daemon_url: None,
-            mcp_disable_read_chat: false,
-            mcp_disable_mention_agent: false,
-            mcp_disable_mention_user: false,
+            mcp_disable_list_room_messages: false,
+            mcp_disable_delegate_to_agent: false,
+            mcp_disable_get_delegation_status: false,
+            mcp_disable_cancel_delegation: false,
+            mcp_disable_ask_user_question: false,
+            mcp_disable_check_user_feedback: false,
+            mcp_disable_post_room_update: false,
+            mcp_disable_react_to_message: false,
         }
     }
 
@@ -339,7 +378,7 @@ mod tests {
         assert!(validate_backend_args(&embedded_cli).is_err());
 
         let mut daemon_cli = test_cli(BackendKind::Daemon);
-        daemon_cli.mcp_disable_mention_user = true;
+        daemon_cli.mcp_disable_post_room_update = true;
         assert!(validate_backend_args(&daemon_cli).is_err());
     }
 

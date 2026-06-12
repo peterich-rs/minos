@@ -6,17 +6,18 @@ use minos_agent_runtime::{
     AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, ManagerEvent, RawIngest,
     SessionPolicies, ThreadState,
 };
+use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
-use minos_domain::MinosError;
+use minos_domain::{AgentName, MinosError};
 use minos_protocol::{
     AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
     ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams,
     GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
     ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
-    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse,
-    PauseReason as ProtoPauseReason, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
-    ThreadState as ProtoThreadState, ThreadSummary, WriteHostSkillConfigRequest,
-    WriteHostSkillConfigResponse,
+    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, LocalGroupChatMessage,
+    LocalGroupChatMessageKind, PauseReason as ProtoPauseReason, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::ThreadEndReason;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -81,12 +82,17 @@ impl AgentGlue {
                 "failed to enable default MCP"
             );
         }
+        let mcp_config = cfg.mcp.clone();
         cfg.subprocess_env = subprocess_env;
         #[cfg(feature = "test-support")]
         apply_test_ws_override(&mut cfg);
         let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
         let writer = Arc::new(EventWriter::spawn(store.clone(), relay_out_tx));
-        Self::wire_with(manager, writer, store, workspace_root)
+        let glue = Self::wire_with(manager.clone(), writer, store, workspace_root.clone());
+        if let Some(mcp_config) = mcp_config {
+            spawn_mcp_socket_handler(mcp_config, manager, workspace_root);
+        }
+        glue
     }
 
     /// Test-time / advanced constructor that accepts a pre-built manager and
@@ -1367,6 +1373,290 @@ fn map_anyhow(e: anyhow::Error) -> MinosError {
         method: "agent_manager".into(),
         message: e.to_string(),
     }
+}
+
+fn spawn_mcp_socket_handler(
+    mcp_config: minos_agent_runtime::config::McpConfig,
+    manager: Arc<AgentManager>,
+    default_workspace: PathBuf,
+) {
+    let socket_path = mcp_config.socket_path.clone();
+    let db_path = mcp_config.db_path.clone();
+    let callback: minos_chat_store::mcp_handler::ToolCallback = Arc::new(move |request| {
+        let manager = manager.clone();
+        let db_path = db_path.clone();
+        let default_workspace = default_workspace.clone();
+        tokio::spawn(async move {
+            handle_daemon_mcp_request(manager, db_path, default_workspace, request).await
+        })
+    });
+    tokio::spawn(async move {
+        let handler = minos_chat_store::mcp_handler::McpSocketHandler::new(socket_path, callback);
+        if let Err(error) = handler.run().await {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %error,
+                "MCP socket handler stopped"
+            );
+        }
+    });
+}
+
+async fn handle_daemon_mcp_request(
+    manager: Arc<AgentManager>,
+    db_path: PathBuf,
+    default_workspace: PathBuf,
+    request: SocketRequest,
+) -> anyhow::Result<SocketResponse> {
+    match request {
+        SocketRequest::Ping => Ok(SocketResponse::Pong),
+        SocketRequest::ListRoomMessages {
+            room_id,
+            before_seq,
+            limit,
+        } => {
+            let store = minos_chat_store::ChatStore::open(&db_path).await?;
+            let page = store
+                .list_messages_desc(&room_id, before_seq, limit)
+                .await?;
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::to_value(page)?),
+            })
+        }
+        SocketRequest::DelegateToAgent {
+            room_id,
+            source_agent,
+            target_agent,
+            prompt,
+        } => {
+            let target_agent = parse_socket_agent(&target_agent)?;
+            let source_agent = source_agent
+                .as_deref()
+                .map(parse_socket_agent)
+                .transpose()?;
+            let prompt = prompt.trim().to_owned();
+            anyhow::ensure!(!prompt.is_empty(), "delegate_to_agent prompt is empty");
+            let outcome = manager
+                .dispatch_message(
+                    target_agent,
+                    default_workspace.clone(),
+                    None,
+                    prompt.clone(),
+                    None,
+                )
+                .await?;
+            let group_text = format!("@{} {prompt}", target_agent.bin_name());
+            append_daemon_group_message(
+                &db_path,
+                &room_id,
+                Some(target_agent),
+                Some(outcome.session_id.clone()),
+                Some(short_thread_id(&outcome.session_id)),
+                outcome.cwd.clone(),
+                LocalGroupChatMessageKind::User,
+                group_text,
+            )
+            .await?;
+            let store = minos_chat_store::ChatStore::open(&db_path).await?;
+            let delegation = store
+                .create_delegation(
+                    &room_id,
+                    source_agent,
+                    target_agent,
+                    prompt,
+                    Some(outcome.session_id.clone()),
+                )
+                .await?;
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::json!({
+                    "accepted": true,
+                    "target_agent": target_agent.bin_name(),
+                    "session_id": outcome.session_id,
+                    "delegation": delegation,
+                })),
+            })
+        }
+        SocketRequest::GetDelegationStatus {
+            room_id,
+            delegation_id,
+        } => {
+            let store = minos_chat_store::ChatStore::open(&db_path).await?;
+            let delegation = store
+                .get_delegation(&room_id, &delegation_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("delegation not found: {delegation_id}"))?;
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::to_value(delegation)?),
+            })
+        }
+        SocketRequest::CancelDelegation {
+            room_id,
+            delegation_id,
+            reason,
+        } => {
+            let store = minos_chat_store::ChatStore::open(&db_path).await?;
+            let delegation = store
+                .cancel_delegation(&room_id, &delegation_id, reason)
+                .await?;
+            if let Some(thread_id) = delegation.thread_id.as_deref() {
+                let _ = manager.interrupt_thread(thread_id).await;
+            }
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::to_value(delegation)?),
+            })
+        }
+        SocketRequest::AskUserQuestion {
+            room_id,
+            source_agent,
+            question,
+        } => {
+            let source_agent = source_agent
+                .as_deref()
+                .map(parse_socket_agent)
+                .transpose()?;
+            let body = question.trim();
+            anyhow::ensure!(!body.is_empty(), "ask_user_question question is empty");
+            let text = if body.starts_with("@user") {
+                body.to_owned()
+            } else {
+                format!("@user {body}")
+            };
+            let message = append_daemon_group_message(
+                &db_path,
+                &room_id,
+                source_agent,
+                None,
+                None,
+                default_workspace.clone(),
+                LocalGroupChatMessageKind::AgentResult,
+                text,
+            )
+            .await?;
+            let store = minos_chat_store::ChatStore::open(&db_path).await?;
+            let feedback = store
+                .create_user_feedback(&room_id, source_agent, body.to_owned(), message.seq)
+                .await?;
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::to_value(feedback)?),
+            })
+        }
+        SocketRequest::CheckUserFeedback {
+            room_id,
+            feedback_id,
+        } => {
+            let store = minos_chat_store::ChatStore::open(&db_path).await?;
+            let feedback = store.check_user_feedback(&room_id, &feedback_id).await?;
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::to_value(feedback)?),
+            })
+        }
+        SocketRequest::PostRoomUpdate {
+            room_id,
+            source_agent,
+            message,
+        } => {
+            let body = message.trim();
+            anyhow::ensure!(!body.is_empty(), "post_room_update message is empty");
+            let text = if body.starts_with("@user") {
+                body.to_owned()
+            } else {
+                format!("@user {body}")
+            };
+            let source_agent = source_agent
+                .as_deref()
+                .map(parse_socket_agent)
+                .transpose()?;
+            append_daemon_group_message(
+                &db_path,
+                &room_id,
+                source_agent,
+                None,
+                None,
+                default_workspace,
+                LocalGroupChatMessageKind::AgentResult,
+                text,
+            )
+            .await?;
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::json!({ "accepted": true })),
+            })
+        }
+        SocketRequest::ReactToMessage {
+            room_id,
+            source_agent,
+            message_id,
+            message_seq,
+            emoji,
+            action,
+        } => {
+            let source_agent = source_agent
+                .as_deref()
+                .map(parse_socket_agent)
+                .transpose()?;
+            let store = minos_chat_store::ChatStore::open(&db_path).await?;
+            let reaction = store
+                .react_to_message(
+                    &room_id,
+                    source_agent,
+                    message_id,
+                    message_seq,
+                    emoji,
+                    action,
+                )
+                .await?;
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::to_value(reaction)?),
+            })
+        }
+    }
+}
+
+async fn append_daemon_group_message(
+    db_path: &Path,
+    room_id: &str,
+    agent: Option<AgentName>,
+    thread_id: Option<String>,
+    thread_short_id: Option<String>,
+    workspace: PathBuf,
+    kind: LocalGroupChatMessageKind,
+    text: String,
+) -> anyhow::Result<LocalGroupChatMessage> {
+    let store = minos_chat_store::ChatStore::open(db_path).await?;
+    let room_title = minos_chat_store::room_title_for_workspace(&workspace);
+    let workspace_root = workspace.display().to_string();
+    store
+        .ensure_room(room_id, &room_title, &workspace_root)
+        .await?;
+    let message = store
+        .append_message(
+            room_id,
+            minos_chat_store::NewChatMessage::from(LocalGroupChatMessage {
+                seq: 0,
+                message_id: String::new(),
+                created_at_ms: current_unix_ms(),
+                kind,
+                text,
+                agent,
+                thread_id,
+                thread_short_id,
+                workspace: Some(workspace_root),
+            }),
+        )
+        .await?;
+    Ok(message.into())
+}
+
+fn parse_socket_agent(value: &str) -> anyhow::Result<AgentName> {
+    let normalized = value.trim().to_ascii_lowercase();
+    AgentName::all()
+        .iter()
+        .copied()
+        .find(|agent| agent.bin_name() == normalized.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown agent: {value}"))
+}
+
+fn short_thread_id(thread_id: &str) -> String {
+    thread_id[..8.min(thread_id.len())].to_owned()
 }
 
 pub(crate) fn map_store_error(operation: &str, e: anyhow::Error) -> MinosError {

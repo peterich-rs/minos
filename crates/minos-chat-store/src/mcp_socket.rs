@@ -3,27 +3,55 @@ use std::io::{self, Read, Write};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::MessageReactionAction;
+
 const FRAME_HEADER_LEN: usize = 4;
-const MAX_FRAME_LEN: u32 = 4 * 1024 * 1024;
+pub const MAX_FRAME_LEN: u32 = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum SocketRequest {
-    ListChatMessages {
+    ListRoomMessages {
         room_id: String,
         before_seq: Option<u64>,
         limit: Option<u32>,
     },
-    RequestAgentHelp {
+    DelegateToAgent {
         room_id: String,
         source_agent: Option<String>,
         target_agent: String,
         prompt: String,
     },
-    MentionUser {
+    GetDelegationStatus {
+        room_id: String,
+        delegation_id: String,
+    },
+    CancelDelegation {
+        room_id: String,
+        delegation_id: String,
+        reason: Option<String>,
+    },
+    AskUserQuestion {
+        room_id: String,
+        source_agent: Option<String>,
+        question: String,
+    },
+    CheckUserFeedback {
+        room_id: String,
+        feedback_id: String,
+    },
+    PostRoomUpdate {
         room_id: String,
         source_agent: Option<String>,
         message: String,
+    },
+    ReactToMessage {
+        room_id: String,
+        source_agent: Option<String>,
+        message_id: Option<String>,
+        message_seq: Option<u64>,
+        emoji: String,
+        action: MessageReactionAction,
     },
     Ping,
 }

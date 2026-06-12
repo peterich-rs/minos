@@ -7,6 +7,7 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use minos_agent_runtime::{ManagerEvent, ThreadState};
+use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_domain::{AgentName, AgentStatus};
 use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};
 use tracing::debug;
@@ -124,6 +125,11 @@ impl App {
                     "Failed to send message to {}: {error}",
                     short_thread_id(&thread_id)
                 ));
+                true
+            }
+            AppEvent::McpToolCall(event) => {
+                let response = self.handle_mcp_tool_call(event.request).await;
+                let _ = event.response_tx.send(response);
                 true
             }
             AppEvent::Key(key) => self.handle_key(key).await,
@@ -1999,6 +2005,220 @@ impl App {
         Some(format!("@{} {trimmed}", thread.agent.bin_name()))
     }
 
+    async fn handle_mcp_tool_call(
+        &mut self,
+        request: SocketRequest,
+    ) -> anyhow::Result<SocketResponse> {
+        match request {
+            SocketRequest::Ping => Ok(SocketResponse::Pong),
+            SocketRequest::ListRoomMessages {
+                room_id,
+                before_seq,
+                limit,
+            } => {
+                self.ensure_mcp_room(&room_id)?;
+                let page = self
+                    .group_chat_store
+                    .list_messages_desc(before_seq, limit)
+                    .await?;
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::to_value(page)?),
+                })
+            }
+            SocketRequest::DelegateToAgent {
+                room_id,
+                source_agent,
+                target_agent,
+                prompt,
+            } => {
+                self.ensure_mcp_room(&room_id)?;
+                let target_agent = parse_agent_name(&target_agent)
+                    .ok_or_else(|| anyhow::anyhow!("unknown agent: {target_agent}"))?;
+                if let Some(error) = self.agent_unavailability_error(target_agent) {
+                    anyhow::bail!(error);
+                }
+                let prompt = prompt.trim().to_owned();
+                anyhow::ensure!(!prompt.is_empty(), "delegate_to_agent prompt is empty");
+                let source_agent = source_agent
+                    .as_deref()
+                    .map(|agent| {
+                        parse_agent_name(agent)
+                            .ok_or_else(|| anyhow::anyhow!("unknown source agent: {agent}"))
+                    })
+                    .transpose()?;
+                let delegation = self
+                    .group_chat_store
+                    .create_delegation(source_agent, target_agent, prompt.clone(), None)
+                    .await?;
+                let group_text = format!("@{} {prompt}", target_agent.bin_name());
+                self.dispatch_prompt_to_agent(target_agent, prompt, group_text)
+                    .await;
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::json!({
+                        "accepted": true,
+                        "target_agent": target_agent.bin_name(),
+                        "delegation": delegation,
+                    })),
+                })
+            }
+            SocketRequest::GetDelegationStatus {
+                room_id,
+                delegation_id,
+            } => {
+                self.ensure_mcp_room(&room_id)?;
+                let delegation = self
+                    .group_chat_store
+                    .get_delegation(&delegation_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("delegation not found: {delegation_id}"))?;
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::to_value(delegation)?),
+                })
+            }
+            SocketRequest::CancelDelegation {
+                room_id,
+                delegation_id,
+                reason,
+            } => {
+                self.ensure_mcp_room(&room_id)?;
+                let delegation = self
+                    .group_chat_store
+                    .cancel_delegation(&delegation_id, reason)
+                    .await?;
+                if let Some(thread_id) = delegation.thread_id.as_deref() {
+                    let _ = self.backend.interrupt_thread(thread_id).await;
+                }
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::to_value(delegation)?),
+                })
+            }
+            SocketRequest::AskUserQuestion {
+                room_id,
+                source_agent,
+                question,
+            } => {
+                self.ensure_mcp_room(&room_id)?;
+                let body = question.trim();
+                anyhow::ensure!(!body.is_empty(), "ask_user_question question is empty");
+                let text = if body.starts_with("@user") {
+                    body.to_owned()
+                } else {
+                    format!("@user {body}")
+                };
+                let source_agent = source_agent
+                    .as_deref()
+                    .map(|agent| {
+                        parse_agent_name(agent)
+                            .ok_or_else(|| anyhow::anyhow!("unknown source agent: {agent}"))
+                    })
+                    .transpose()?;
+                let message = self
+                    .append_group_chat_message_result(LocalGroupChatMessage {
+                        seq: 0,
+                        message_id: String::new(),
+                        created_at_ms: chrono::Utc::now().timestamp_millis(),
+                        kind: LocalGroupChatMessageKind::AgentResult,
+                        text,
+                        agent: source_agent,
+                        thread_id: None,
+                        thread_short_id: None,
+                        workspace: Some(self.workspace.display().to_string()),
+                    })
+                    .await?;
+                let feedback = self
+                    .group_chat_store
+                    .create_user_feedback(source_agent, body.to_owned(), message.seq)
+                    .await?;
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::to_value(feedback)?),
+                })
+            }
+            SocketRequest::CheckUserFeedback {
+                room_id,
+                feedback_id,
+            } => {
+                self.ensure_mcp_room(&room_id)?;
+                let feedback = self
+                    .group_chat_store
+                    .check_user_feedback(&feedback_id)
+                    .await?;
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::to_value(feedback)?),
+                })
+            }
+            SocketRequest::PostRoomUpdate {
+                room_id,
+                source_agent,
+                message,
+            } => {
+                self.ensure_mcp_room(&room_id)?;
+                let body = message.trim();
+                anyhow::ensure!(!body.is_empty(), "post_room_update message is empty");
+                let text = if body.starts_with("@user") {
+                    body.to_owned()
+                } else {
+                    format!("@user {body}")
+                };
+                let source_agent = source_agent
+                    .as_deref()
+                    .map(|agent| {
+                        parse_agent_name(agent)
+                            .ok_or_else(|| anyhow::anyhow!("unknown source agent: {agent}"))
+                    })
+                    .transpose()?;
+                self.append_group_chat_message_result(LocalGroupChatMessage {
+                    seq: 0,
+                    message_id: String::new(),
+                    created_at_ms: chrono::Utc::now().timestamp_millis(),
+                    kind: LocalGroupChatMessageKind::AgentResult,
+                    text,
+                    agent: source_agent,
+                    thread_id: None,
+                    thread_short_id: None,
+                    workspace: Some(self.workspace.display().to_string()),
+                })
+                .await?;
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::json!({
+                        "accepted": true,
+                    })),
+                })
+            }
+            SocketRequest::ReactToMessage {
+                room_id,
+                source_agent,
+                message_id,
+                message_seq,
+                emoji,
+                action,
+            } => {
+                self.ensure_mcp_room(&room_id)?;
+                let source_agent = source_agent
+                    .as_deref()
+                    .map(|agent| {
+                        parse_agent_name(agent)
+                            .ok_or_else(|| anyhow::anyhow!("unknown source agent: {agent}"))
+                    })
+                    .transpose()?;
+                let reaction = self
+                    .group_chat_store
+                    .react_to_message(source_agent, message_id, message_seq, emoji, action)
+                    .await?;
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::to_value(reaction)?),
+                })
+            }
+        }
+    }
+
+    fn ensure_mcp_room(&self, room_id: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            room_id == self.group_chat_store.room_id(),
+            "MCP request room_id does not match this TUI room"
+        );
+        Ok(())
+    }
+
     async fn record_user_group_message(&mut self, thread_id: &str, text: String) {
         let Some(message) = self.group_message(thread_id, LocalGroupChatMessageKind::User, text)
         else {
@@ -2082,8 +2302,8 @@ impl App {
     }
 
     async fn append_group_chat_message(&mut self, message: LocalGroupChatMessage) {
-        match self.group_chat_store.append(message).await {
-            Ok(message) => self.ui.group_chat.push_message(message),
+        match self.append_group_chat_message_result(message).await {
+            Ok(_) => {}
             Err(error) => {
                 tracing::warn!(
                     target: "minos_tui::app",
@@ -2094,6 +2314,15 @@ impl App {
                     .set_error(format!("Failed to record group chat message: {error}"));
             }
         }
+    }
+
+    async fn append_group_chat_message_result(
+        &mut self,
+        message: LocalGroupChatMessage,
+    ) -> anyhow::Result<LocalGroupChatMessage> {
+        let message = self.group_chat_store.append(message).await?;
+        self.ui.group_chat.push_message(message.clone());
+        Ok(message)
     }
 }
 
@@ -2399,7 +2628,6 @@ mod tests {
     use async_trait::async_trait;
     use crossterm::event::{KeyEventState, MouseEvent, MouseEventKind};
     use minos_agent_runtime::{RawIngest, StartAgentOutcome};
-    use minos_chat_store::ChatStore;
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
     use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
     use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};

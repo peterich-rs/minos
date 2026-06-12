@@ -21,8 +21,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [[bin]]
-name = "minos-mcp"
-path = "src/bin/minos-mcp.rs"
+name = "minos-teamwork-mcp"
+path = "src/bin/minos-teamwork-mcp.rs"
 
 [dev-dependencies]
 tempfile = { workspace = true }
