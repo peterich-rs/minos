@@ -3233,6 +3233,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ArtifactRef dco_decode_artifact_ref(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return ArtifactRef(
+      threadId: dco_decode_String(arr[0]),
+      artifactId: dco_decode_String(arr[1]),
+      sizeBytes: dco_decode_u_64(arr[2]),
+      sha256: dco_decode_String(arr[3]),
+      mediaType: dco_decode_String(arr[4]),
+    );
+  }
+
+  @protected
   AuthStateFrame dco_decode_auth_state_frame(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
@@ -3278,6 +3293,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ArtifactRef dco_decode_box_autoadd_artifact_ref(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_artifact_ref(raw);
+  }
+
+  @protected
   AuthSummary dco_decode_box_autoadd_auth_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_auth_summary(raw);
@@ -3305,6 +3326,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_delete_project_request(raw);
+  }
+
+  @protected
+  DisplayPayload dco_decode_box_autoadd_display_payload(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_display_payload(raw);
   }
 
   @protected
@@ -3545,6 +3572,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (arr.length != 1)
       throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
     return DeleteProjectRequest(projectId: dco_decode_String(arr[0]));
+  }
+
+  @protected
+  DisplayPayload dco_decode_display_payload(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return DisplayPayload_Inline(text: dco_decode_String(raw[1]));
+      case 1:
+        return DisplayPayload_StreamingWindow(
+          head: dco_decode_String(raw[1]),
+          receivedBytes: dco_decode_u_64(raw[2]),
+          artifact: dco_decode_opt_box_autoadd_artifact_ref(raw[3]),
+        );
+      case 2:
+        return DisplayPayload_WindowedFinal(
+          head: dco_decode_String(raw[1]),
+          tail: dco_decode_String(raw[2]),
+          omittedBytes: dco_decode_u_64(raw[3]),
+          artifact: dco_decode_box_autoadd_artifact_ref(raw[4]),
+        );
+      default:
+        throw Exception("unreachable");
+    }
   }
 
   @protected
@@ -4129,6 +4180,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ArtifactRef? dco_decode_opt_box_autoadd_artifact_ref(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_artifact_ref(raw);
+  }
+
+  @protected
   ChatMessageReplySummary?
   dco_decode_opt_box_autoadd_chat_message_reply_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -4402,34 +4459,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 5:
         return UiEventMessage_TextDelta(
           messageId: dco_decode_String(raw[1]),
-          text: dco_decode_String(raw[2]),
+          text: dco_decode_box_autoadd_display_payload(raw[2]),
         );
       case 6:
         return UiEventMessage_TextReplace(
           messageId: dco_decode_String(raw[1]),
-          text: dco_decode_String(raw[2]),
+          text: dco_decode_box_autoadd_display_payload(raw[2]),
         );
       case 7:
         return UiEventMessage_ReasoningDelta(
           messageId: dco_decode_String(raw[1]),
-          text: dco_decode_String(raw[2]),
+          text: dco_decode_box_autoadd_display_payload(raw[2]),
         );
       case 8:
         return UiEventMessage_ReasoningReplace(
           messageId: dco_decode_String(raw[1]),
-          text: dco_decode_String(raw[2]),
+          text: dco_decode_box_autoadd_display_payload(raw[2]),
         );
       case 9:
         return UiEventMessage_ToolCallPlaced(
           messageId: dco_decode_String(raw[1]),
           toolCallId: dco_decode_String(raw[2]),
           name: dco_decode_String(raw[3]),
-          argsJson: dco_decode_String(raw[4]),
+          argsJson: dco_decode_box_autoadd_display_payload(raw[4]),
         );
       case 10:
         return UiEventMessage_ToolCallCompleted(
           toolCallId: dco_decode_String(raw[1]),
-          output: dco_decode_String(raw[2]),
+          output: dco_decode_box_autoadd_display_payload(raw[2]),
           isError: dco_decode_bool(raw[3]),
         );
       case 11:
@@ -4694,6 +4751,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ArtifactRef sse_decode_artifact_ref(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_threadId = sse_decode_String(deserializer);
+    var var_artifactId = sse_decode_String(deserializer);
+    var var_sizeBytes = sse_decode_u_64(deserializer);
+    var var_sha256 = sse_decode_String(deserializer);
+    var var_mediaType = sse_decode_String(deserializer);
+    return ArtifactRef(
+      threadId: var_threadId,
+      artifactId: var_artifactId,
+      sizeBytes: var_sizeBytes,
+      sha256: var_sha256,
+      mediaType: var_mediaType,
+    );
+  }
+
+  @protected
   AuthStateFrame sse_decode_auth_state_frame(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -4735,6 +4809,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ArtifactRef sse_decode_box_autoadd_artifact_ref(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_artifact_ref(deserializer));
+  }
+
+  @protected
   AuthSummary sse_decode_box_autoadd_auth_summary(
     SseDeserializer deserializer,
   ) {
@@ -4764,6 +4846,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_delete_project_request(deserializer));
+  }
+
+  @protected
+  DisplayPayload sse_decode_box_autoadd_display_payload(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_display_payload(deserializer));
   }
 
   @protected
@@ -5027,6 +5117,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_projectId = sse_decode_String(deserializer);
     return DeleteProjectRequest(projectId: var_projectId);
+  }
+
+  @protected
+  DisplayPayload sse_decode_display_payload(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        var var_text = sse_decode_String(deserializer);
+        return DisplayPayload_Inline(text: var_text);
+      case 1:
+        var var_head = sse_decode_String(deserializer);
+        var var_receivedBytes = sse_decode_u_64(deserializer);
+        var var_artifact = sse_decode_opt_box_autoadd_artifact_ref(
+          deserializer,
+        );
+        return DisplayPayload_StreamingWindow(
+          head: var_head,
+          receivedBytes: var_receivedBytes,
+          artifact: var_artifact,
+        );
+      case 2:
+        var var_head = sse_decode_String(deserializer);
+        var var_tail = sse_decode_String(deserializer);
+        var var_omittedBytes = sse_decode_u_64(deserializer);
+        var var_artifact = sse_decode_box_autoadd_artifact_ref(deserializer);
+        return DisplayPayload_WindowedFinal(
+          head: var_head,
+          tail: var_tail,
+          omittedBytes: var_omittedBytes,
+          artifact: var_artifact,
+        );
+      default:
+        throw UnimplementedError('');
+    }
   }
 
   @protected
@@ -5794,6 +5920,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ArtifactRef? sse_decode_opt_box_autoadd_artifact_ref(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_artifact_ref(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   ChatMessageReplySummary?
   sse_decode_opt_box_autoadd_chat_message_reply_summary(
     SseDeserializer deserializer,
@@ -6164,28 +6303,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         );
       case 5:
         var var_messageId = sse_decode_String(deserializer);
-        var var_text = sse_decode_String(deserializer);
+        var var_text = sse_decode_box_autoadd_display_payload(deserializer);
         return UiEventMessage_TextDelta(
           messageId: var_messageId,
           text: var_text,
         );
       case 6:
         var var_messageId = sse_decode_String(deserializer);
-        var var_text = sse_decode_String(deserializer);
+        var var_text = sse_decode_box_autoadd_display_payload(deserializer);
         return UiEventMessage_TextReplace(
           messageId: var_messageId,
           text: var_text,
         );
       case 7:
         var var_messageId = sse_decode_String(deserializer);
-        var var_text = sse_decode_String(deserializer);
+        var var_text = sse_decode_box_autoadd_display_payload(deserializer);
         return UiEventMessage_ReasoningDelta(
           messageId: var_messageId,
           text: var_text,
         );
       case 8:
         var var_messageId = sse_decode_String(deserializer);
-        var var_text = sse_decode_String(deserializer);
+        var var_text = sse_decode_box_autoadd_display_payload(deserializer);
         return UiEventMessage_ReasoningReplace(
           messageId: var_messageId,
           text: var_text,
@@ -6194,7 +6333,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         var var_messageId = sse_decode_String(deserializer);
         var var_toolCallId = sse_decode_String(deserializer);
         var var_name = sse_decode_String(deserializer);
-        var var_argsJson = sse_decode_String(deserializer);
+        var var_argsJson = sse_decode_box_autoadd_display_payload(deserializer);
         return UiEventMessage_ToolCallPlaced(
           messageId: var_messageId,
           toolCallId: var_toolCallId,
@@ -6203,7 +6342,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         );
       case 10:
         var var_toolCallId = sse_decode_String(deserializer);
-        var var_output = sse_decode_String(deserializer);
+        var var_output = sse_decode_box_autoadd_display_payload(deserializer);
         var var_isError = sse_decode_bool(deserializer);
         return UiEventMessage_ToolCallCompleted(
           toolCallId: var_toolCallId,
@@ -6493,6 +6632,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_artifact_ref(ArtifactRef self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.threadId, serializer);
+    sse_encode_String(self.artifactId, serializer);
+    sse_encode_u_64(self.sizeBytes, serializer);
+    sse_encode_String(self.sha256, serializer);
+    sse_encode_String(self.mediaType, serializer);
+  }
+
+  @protected
   void sse_encode_auth_state_frame(
     AuthStateFrame self,
     SseSerializer serializer,
@@ -6535,6 +6684,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_artifact_ref(
+    ArtifactRef self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_artifact_ref(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_auth_summary(
     AuthSummary self,
     SseSerializer serializer,
@@ -6568,6 +6726,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_delete_project_request(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_display_payload(
+    DisplayPayload self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_display_payload(self, serializer);
   }
 
   @protected
@@ -6818,6 +6985,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.projectId, serializer);
+  }
+
+  @protected
+  void sse_encode_display_payload(
+    DisplayPayload self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case DisplayPayload_Inline(text: final text):
+        sse_encode_i_32(0, serializer);
+        sse_encode_String(text, serializer);
+      case DisplayPayload_StreamingWindow(
+        head: final head,
+        receivedBytes: final receivedBytes,
+        artifact: final artifact,
+      ):
+        sse_encode_i_32(1, serializer);
+        sse_encode_String(head, serializer);
+        sse_encode_u_64(receivedBytes, serializer);
+        sse_encode_opt_box_autoadd_artifact_ref(artifact, serializer);
+      case DisplayPayload_WindowedFinal(
+        head: final head,
+        tail: final tail,
+        omittedBytes: final omittedBytes,
+        artifact: final artifact,
+      ):
+        sse_encode_i_32(2, serializer);
+        sse_encode_String(head, serializer);
+        sse_encode_String(tail, serializer);
+        sse_encode_u_64(omittedBytes, serializer);
+        sse_encode_box_autoadd_artifact_ref(artifact, serializer);
+    }
   }
 
   @protected
@@ -7488,6 +7688,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_artifact_ref(
+    ArtifactRef? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_artifact_ref(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_chat_message_reply_summary(
     ChatMessageReplySummary? self,
     SseSerializer serializer,
@@ -7807,28 +8020,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ):
         sse_encode_i_32(5, serializer);
         sse_encode_String(messageId, serializer);
-        sse_encode_String(text, serializer);
+        sse_encode_box_autoadd_display_payload(text, serializer);
       case UiEventMessage_TextReplace(
         messageId: final messageId,
         text: final text,
       ):
         sse_encode_i_32(6, serializer);
         sse_encode_String(messageId, serializer);
-        sse_encode_String(text, serializer);
+        sse_encode_box_autoadd_display_payload(text, serializer);
       case UiEventMessage_ReasoningDelta(
         messageId: final messageId,
         text: final text,
       ):
         sse_encode_i_32(7, serializer);
         sse_encode_String(messageId, serializer);
-        sse_encode_String(text, serializer);
+        sse_encode_box_autoadd_display_payload(text, serializer);
       case UiEventMessage_ReasoningReplace(
         messageId: final messageId,
         text: final text,
       ):
         sse_encode_i_32(8, serializer);
         sse_encode_String(messageId, serializer);
-        sse_encode_String(text, serializer);
+        sse_encode_box_autoadd_display_payload(text, serializer);
       case UiEventMessage_ToolCallPlaced(
         messageId: final messageId,
         toolCallId: final toolCallId,
@@ -7839,7 +8052,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(messageId, serializer);
         sse_encode_String(toolCallId, serializer);
         sse_encode_String(name, serializer);
-        sse_encode_String(argsJson, serializer);
+        sse_encode_box_autoadd_display_payload(argsJson, serializer);
       case UiEventMessage_ToolCallCompleted(
         toolCallId: final toolCallId,
         output: final output,
@@ -7847,7 +8060,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ):
         sse_encode_i_32(10, serializer);
         sse_encode_String(toolCallId, serializer);
-        sse_encode_String(output, serializer);
+        sse_encode_box_autoadd_display_payload(output, serializer);
         sse_encode_bool(isError, serializer);
       case UiEventMessage_Error(
         code: final code,

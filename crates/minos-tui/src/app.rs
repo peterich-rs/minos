@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -20,6 +20,11 @@ use crate::ui::{
     room_list::RoomEntry, AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState,
 };
 
+enum MessageTarget {
+    ExistingThread(String),
+    NewAgent(AgentName),
+}
+
 pub struct App {
     backend: Arc<dyn AgentBackend>,
     ui: UiState,
@@ -31,6 +36,7 @@ pub struct App {
     group_chat_store: GroupChatStore,
     recorded_agent_results: HashMap<String, String>,
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+    last_daemon_history_sync: Option<Instant>,
 }
 
 impl App {
@@ -63,6 +69,7 @@ impl App {
             group_chat_store,
             recorded_agent_results: HashMap::new(),
             event_tx: None,
+            last_daemon_history_sync: None,
         }
     }
 
@@ -91,21 +98,21 @@ impl App {
                     );
                     return false;
                 }
-                let seq = local_seq_from_payload(&ingest.payload);
-                if !self.mark_ingest_applied(&ingest.thread_id, seq, &ingest.payload) {
+                if !self.mark_ingest_applied(&ingest) {
                     return false;
                 }
+                let marks_done = frame_marks_agent_result_done(&ingest);
                 if let Some(chat) = self.ui.chat_states.get_mut(&ingest.thread_id) {
-                    let events = chat.translation_state.translate(&ingest.payload);
                     debug!(
                         agent = %ingest.agent.bin_name(),
                         thread_id = %ingest.thread_id,
-                        event_count = events.len(),
-                        "translated ingest payload"
+                        event_count = ingest.ui_events.len(),
+                        "applying projected ingest frame"
                     );
-                    chat.apply_ui_events(events);
+                    chat.apply_ui_events(ingest.ui_events.clone());
                     let thread_id = ingest.thread_id.clone();
-                    self.record_agent_group_result_if_done(&thread_id).await;
+                    self.record_agent_group_result_if_ingest_done(&thread_id, marks_done)
+                        .await;
                     return true;
                 }
                 false
@@ -141,6 +148,9 @@ impl App {
 
     async fn handle_tick(&mut self) -> bool {
         let mut redraw = false;
+        if self.sync_daemon_threads_if_due().await {
+            redraw = true;
+        }
         if let Some((_, instant)) = self.ui.error_flash {
             if instant.elapsed() > Duration::from_secs(3) {
                 self.ui.error_flash = None;
@@ -187,6 +197,29 @@ impl App {
     }
 
     async fn hydrate_daemon_threads(&mut self) {
+        let _ = self.sync_daemon_threads_from_backend(false).await;
+    }
+
+    async fn sync_daemon_threads_if_due(&mut self) -> bool {
+        if !matches!(
+            self.backend.connection_state(),
+            crate::backend::BackendConnectionState::Connected { .. }
+        ) {
+            return false;
+        }
+        let now = Instant::now();
+        if self
+            .last_daemon_history_sync
+            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(2))
+        {
+            return false;
+        }
+        self.last_daemon_history_sync = Some(now);
+        self.sync_daemon_threads_from_backend(true).await
+    }
+
+    async fn sync_daemon_threads_from_backend(&mut self, incremental: bool) -> bool {
+        let mut changed = false;
         match self.backend.list_threads().await {
             Ok(threads) => {
                 for snap in threads {
@@ -197,9 +230,18 @@ impl App {
                         .iter_mut()
                         .find(|thread| thread.thread_id == snap.thread_id)
                     {
-                        entry.agent = agent;
-                        entry.workspace = snap.workspace.clone();
-                        entry.state = snap.state.clone();
+                        if entry.agent != agent {
+                            entry.agent = agent;
+                            changed = true;
+                        }
+                        if entry.workspace != snap.workspace {
+                            entry.workspace = snap.workspace.clone();
+                            changed = true;
+                        }
+                        if entry.state != snap.state {
+                            entry.state = snap.state.clone();
+                            changed = true;
+                        }
                     } else {
                         self.ui.threads.push(ThreadEntry {
                             thread_id: snap.thread_id.clone(),
@@ -207,12 +249,29 @@ impl App {
                             workspace: snap.workspace.clone(),
                             state: snap.state.clone(),
                         });
+                        changed = true;
                     }
                     self.ensure_chat_state_agent(&snap.thread_id, agent);
-                    self.hydrate_thread_if_needed(&snap.thread_id).await;
+                    if incremental && self.hydrated_threads.contains(&snap.thread_id) {
+                        if self
+                            .replay_thread_history_after_watermark(&snap.thread_id)
+                            .await
+                        {
+                            changed = true;
+                        }
+                    } else if self.hydrate_thread_if_needed(&snap.thread_id).await {
+                        changed = true;
+                    }
+                    let before = self.ui.group_chat.messages.len();
+                    self.record_agent_group_result_if_done(&snap.thread_id)
+                        .await;
+                    if self.ui.group_chat.messages.len() != before {
+                        changed = true;
+                    }
                 }
                 if !self.ui.threads.is_empty() && self.ui.selected_thread.is_none() {
                     self.select_thread(0);
+                    changed = true;
                 }
             }
             Err(e) => {
@@ -223,10 +282,16 @@ impl App {
                 );
             }
         }
+        changed
     }
 
-    async fn replay_thread_history(&mut self, thread_id: &str) {
-        let mut from_seq = None;
+    async fn replay_thread_history_from(
+        &mut self,
+        thread_id: &str,
+        mut from_seq: Option<u64>,
+        mark_hydrated: bool,
+    ) -> bool {
+        let mut changed = false;
         loop {
             let response = match self
                 .backend
@@ -241,40 +306,43 @@ impl App {
                         thread_id = %thread_id,
                         "replay_thread_history failed"
                     );
-                    return;
+                    return changed;
                 }
             };
 
             for frame in response.events {
-                let mut payload = frame.payload;
-                if frame.seq > 0 {
-                    if let serde_json::Value::Object(map) = &mut payload {
-                        map.entry("_local_seq")
-                            .or_insert_with(|| serde_json::Value::from(frame.seq));
-                    }
-                }
-                if !self.mark_ingest_applied(thread_id, frame.seq, &payload) {
+                if !self.mark_ingest_applied(&frame) {
                     continue;
                 }
                 if let Some(chat) = self.ui.chat_states.get_mut(thread_id) {
-                    let events = chat.translation_state.translate(&payload);
-                    chat.apply_ui_events(events);
+                    if !frame.ui_events.is_empty() {
+                        changed = true;
+                    }
+                    chat.apply_ui_events(frame.ui_events);
                 }
             }
 
             let Some(next_seq) = response.next_seq else {
-                self.hydrated_threads.insert(thread_id.to_owned());
-                return;
+                if mark_hydrated {
+                    self.hydrated_threads.insert(thread_id.to_owned());
+                }
+                return changed;
             };
             from_seq = Some(next_seq.saturating_sub(1));
         }
     }
 
-    async fn hydrate_thread_if_needed(&mut self, thread_id: &str) {
+    async fn replay_thread_history_after_watermark(&mut self, thread_id: &str) -> bool {
+        let from_seq = self.thread_watermarks.get(thread_id).copied();
+        self.replay_thread_history_from(thread_id, from_seq, false)
+            .await
+    }
+
+    async fn hydrate_thread_if_needed(&mut self, thread_id: &str) -> bool {
         if self.hydrated_threads.contains(thread_id) {
-            return;
+            return false;
         }
-        self.replay_thread_history(thread_id).await;
+        self.replay_thread_history_from(thread_id, None, true).await
     }
 
     fn ensure_chat_state_agent(&mut self, thread_id: &str, agent: AgentName) {
@@ -291,13 +359,10 @@ impl App {
         }
     }
 
-    fn mark_ingest_applied(
-        &mut self,
-        thread_id: &str,
-        seq: u64,
-        payload: &serde_json::Value,
-    ) -> bool {
-        let fingerprint = ingest_fingerprint(thread_id, payload);
+    fn mark_ingest_applied(&mut self, frame: &minos_protocol::LocalIngestFrame) -> bool {
+        let thread_id = frame.thread_id.as_str();
+        let seq = frame.seq;
+        let fingerprint = ingest_fingerprint(frame);
         if self.applied_ingest_fingerprints.contains(&fingerprint) {
             if seq > 0 {
                 let watermark = self
@@ -365,6 +430,12 @@ impl App {
                     new,
                     ThreadState::Starting | ThreadState::Running { .. } | ThreadState::Resuming
                 );
+                let thread_agent = self
+                    .ui
+                    .threads
+                    .iter()
+                    .find(|t| t.thread_id == thread_id)
+                    .map(|thread| thread.agent);
                 if let Some(entry) = self
                     .ui
                     .threads
@@ -378,10 +449,18 @@ impl App {
                         chat.finish_all_streaming();
                     }
                 }
-                self.record_agent_group_result_if_done(&thread_id).await;
+                if thread_agent != Some(AgentName::Opencode) {
+                    self.record_agent_group_result_if_done(&thread_id).await;
+                }
                 true
             }
             ManagerEvent::ThreadClosed { thread_id, reason } => {
+                let thread_agent = self
+                    .ui
+                    .threads
+                    .iter()
+                    .find(|t| t.thread_id == thread_id)
+                    .map(|thread| thread.agent);
                 if let Some(entry) = self
                     .ui
                     .threads
@@ -393,7 +472,9 @@ impl App {
                 if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
                     chat.finish_all_streaming();
                 }
-                self.record_agent_group_result_if_done(&thread_id).await;
+                if thread_agent != Some(AgentName::Opencode) {
+                    self.record_agent_group_result_if_done(&thread_id).await;
+                }
                 true
             }
             ManagerEvent::InstanceCrashed {
@@ -1418,12 +1499,29 @@ impl App {
         }
     }
 
-    fn active_room_target_thread_id(&self) -> Option<String> {
-        self.ui
+    fn active_room_target(&self) -> Option<MessageTarget> {
+        if let Some(thread) = self
+            .ui
             .selected_thread
             .and_then(|index| self.ui.threads.get(index))
-            .map(|thread| thread.thread_id.clone())
-            .or_else(|| (self.ui.threads.len() == 1).then(|| self.ui.threads[0].thread_id.clone()))
+        {
+            return Some(if thread_can_receive_message(&thread.state) {
+                MessageTarget::ExistingThread(thread.thread_id.clone())
+            } else {
+                MessageTarget::NewAgent(thread.agent)
+            });
+        }
+
+        let mut candidates = self
+            .ui
+            .threads
+            .iter()
+            .filter(|thread| thread_can_receive_message(&thread.state));
+        let first = candidates.next()?;
+        if candidates.next().is_some() {
+            return None;
+        }
+        Some(MessageTarget::ExistingThread(first.thread_id.clone()))
     }
 
     async fn submit_room_input(&mut self) -> bool {
@@ -1455,14 +1553,22 @@ impl App {
                 .await;
         }
 
-        let Some(thread_id) = self.active_room_target_thread_id() else {
+        let Some(target) = self.active_room_target() else {
             self.ui
                 .set_error("No agent selected. Use @agent or pick one from Agents.".into());
             return true;
         };
-        let group_text = self.group_user_text_for_thread(&thread_id, text.as_str());
         self.ui.room_input.take_input();
-        self.send_text_to_thread(thread_id, text, group_text).await
+        match target {
+            MessageTarget::ExistingThread(thread_id) => {
+                let group_text = self.group_user_text_for_thread(&thread_id, text.as_str());
+                self.send_text_to_thread(thread_id, text, group_text).await
+            }
+            MessageTarget::NewAgent(agent) => {
+                let group_text = format!("@{} {}", agent.bin_name(), text.trim());
+                self.dispatch_prompt_to_agent(agent, text, group_text).await
+            }
+        }
     }
 
     async fn submit_agent_input(&mut self) -> bool {
@@ -1472,11 +1578,22 @@ impl App {
             return true;
         }
 
-        let Some(thread_id) = self.ui.current_thread_id().map(str::to_owned) else {
+        let Some(thread) = self
+            .ui
+            .selected_thread
+            .and_then(|index| self.ui.threads.get(index))
+        else {
             self.ui
                 .set_error("No agent selected for direct chat.".into());
             return true;
         };
+        let thread_id = thread.thread_id.clone();
+        let agent = thread.agent;
+        if !thread_can_receive_message(&thread.state) {
+            self.ui.agent_input.take_input();
+            let group_text = format!("@{} {}", agent.bin_name(), text.trim());
+            return self.dispatch_prompt_to_agent(agent, text, group_text).await;
+        }
         if let Some(pending) = self
             .ui
             .chat_states
@@ -1595,6 +1712,21 @@ impl App {
             ));
             return true;
         };
+        if let Some(thread) = self
+            .ui
+            .threads
+            .iter()
+            .find(|thread| thread.thread_id == thread_id)
+            .filter(|thread| !thread_can_receive_message(&thread.state))
+        {
+            self.ui.set_error(format!(
+                "{} session #{} is closed. Use @{} to start a new session.",
+                thread.agent.bin_name(),
+                short_thread_id(&thread.thread_id),
+                thread.agent.bin_name()
+            ));
+            return true;
+        }
 
         if text.trim().is_empty() {
             if let Some(index) = self
@@ -1704,7 +1836,7 @@ impl App {
                     );
                 }
                 if let Err(error) = backend.send_message(&thread_id, &text).await {
-                    let error = error.to_string();
+                    let error = format_error_chain(&error);
                     tracing::warn!(
                         target: "minos_tui::app",
                         error = %error,
@@ -1726,8 +1858,10 @@ impl App {
             );
         }
         if let Err(error) = self.backend.send_message(&thread_id, &text).await {
-            self.ui
-                .set_error(format!("Failed to send message: {error}"));
+            self.ui.set_error(format!(
+                "Failed to send message: {}",
+                format_error_chain(&error)
+            ));
         }
         true
     }
@@ -2243,6 +2377,28 @@ impl App {
     }
 
     async fn record_agent_group_result_if_done(&mut self, thread_id: &str) {
+        self.record_agent_group_result(thread_id, false).await;
+    }
+
+    async fn record_agent_group_result_if_ingest_done(
+        &mut self,
+        thread_id: &str,
+        allow_ingest_done: bool,
+    ) {
+        let is_opencode = self
+            .ui
+            .threads
+            .iter()
+            .find(|thread| thread.thread_id == thread_id)
+            .is_some_and(|thread| thread.agent == AgentName::Opencode);
+        if is_opencode && !allow_ingest_done {
+            return;
+        }
+        self.record_agent_group_result(thread_id, allow_ingest_done)
+            .await;
+    }
+
+    async fn record_agent_group_result(&mut self, thread_id: &str, allow_ingest_done: bool) {
         let Some(thread) = self
             .ui
             .threads
@@ -2251,7 +2407,7 @@ impl App {
         else {
             return;
         };
-        if !thread_is_done(&thread.state) {
+        if !thread_is_done(&thread.state) && !allow_ingest_done {
             return;
         }
         let Some(chat) = self.ui.chat_states.get(thread_id) else {
@@ -2267,6 +2423,11 @@ impl App {
         {
             return;
         }
+        if self.group_chat_has_agent_result(thread_id, &text) {
+            self.recorded_agent_results
+                .insert(thread_id.to_owned(), message_key);
+            return;
+        }
         let Some(message) =
             self.group_message(thread_id, LocalGroupChatMessageKind::AgentResult, text)
         else {
@@ -2275,6 +2436,14 @@ impl App {
         self.append_group_chat_message(message).await;
         self.recorded_agent_results
             .insert(thread_id.to_owned(), message_key);
+    }
+
+    fn group_chat_has_agent_result(&self, thread_id: &str, text: &str) -> bool {
+        self.ui.group_chat.messages.iter().any(|message| {
+            message.kind == LocalGroupChatMessageKind::AgentResult
+                && message.thread_id.as_deref() == Some(thread_id)
+                && message.text == text
+        })
     }
 
     fn group_message(
@@ -2336,6 +2505,21 @@ fn is_input_focus(focus: Focus) -> bool {
     matches!(focus, Focus::RoomInput | Focus::AgentInput)
 }
 
+fn thread_can_receive_message(state: &ThreadState) -> bool {
+    !matches!(state, ThreadState::Closed { .. })
+}
+
+fn format_error_chain(error: &anyhow::Error) -> String {
+    let mut parts = Vec::new();
+    for cause in error.chain() {
+        let text = cause.to_string();
+        if parts.last() != Some(&text) {
+            parts.push(text);
+        }
+    }
+    parts.join(": ")
+}
+
 fn workspace_room_id(workspace: &std::path::Path) -> String {
     minos_chat_store::room_id_for_workspace(workspace)
 }
@@ -2366,6 +2550,16 @@ fn default_group_chat_store(_workspace: &std::path::Path) -> GroupChatStore {
 
 fn thread_is_done(state: &ThreadState) -> bool {
     matches!(state, ThreadState::Idle | ThreadState::Closed { .. })
+}
+
+fn frame_marks_agent_result_done(frame: &minos_protocol::LocalIngestFrame) -> bool {
+    frame.ui_events.iter().any(|event| {
+        matches!(
+            event,
+            minos_ui_protocol::UiEventMessage::MessageCompleted { .. }
+                | minos_ui_protocol::UiEventMessage::ThreadClosed { .. }
+        )
+    })
 }
 
 fn short_thread_id(thread_id: &str) -> String {
@@ -2413,21 +2607,12 @@ fn parse_agent_name(value: &str) -> Option<AgentName> {
         .find(|agent| agent.bin_name() == normalized.as_str())
 }
 
-fn local_seq_from_payload(payload: &serde_json::Value) -> u64 {
-    payload
-        .get("_local_seq")
-        .and_then(serde_json::Value::as_u64)
-        .or_else(|| payload.get("seq").and_then(serde_json::Value::as_u64))
-        .unwrap_or(0)
-}
-
-fn ingest_fingerprint(thread_id: &str, payload: &serde_json::Value) -> String {
-    let mut payload = payload.clone();
-    if let serde_json::Value::Object(map) = &mut payload {
-        map.remove("_local_seq");
+fn ingest_fingerprint(frame: &minos_protocol::LocalIngestFrame) -> String {
+    if frame.seq > 0 {
+        return format!("{}:seq:{}", frame.thread_id, frame.seq);
     }
-    let payload = serde_json::to_string(&payload).unwrap_or_else(|_| payload.to_string());
-    format!("{thread_id}:{payload}")
+    let payload = serde_json::to_string(&frame.ui_events).unwrap_or_default();
+    format!("{}:{payload}", frame.thread_id)
 }
 
 fn codex_user_input_decision(question_ids: &[String], text: &str) -> serde_json::Value {
@@ -2627,10 +2812,10 @@ mod tests {
     use anyhow::Result;
     use async_trait::async_trait;
     use crossterm::event::{KeyEventState, MouseEvent, MouseEventKind};
-    use minos_agent_runtime::{RawIngest, StartAgentOutcome};
+    use minos_agent_runtime::StartAgentOutcome;
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
     use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
-    use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};
+    use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind, LocalIngestFrame};
     use minos_ui_protocol::{MessageRole, UiEventMessage};
     use ratatui::layout::Rect;
     use tokio::sync::broadcast;
@@ -2654,7 +2839,7 @@ mod tests {
         connection_state: BackendConnectionState,
         block_starts: bool,
         block_sends: bool,
-        ingest_tx: broadcast::Sender<RawIngest>,
+        ingest_tx: broadcast::Sender<LocalIngestFrame>,
         manager_tx: broadcast::Sender<ManagerEvent>,
     }
 
@@ -2866,7 +3051,7 @@ mod tests {
                 .unwrap_or_default())
         }
 
-        async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {
+        async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame> {
             self.ingest_tx.subscribe()
         }
 
@@ -2907,6 +3092,21 @@ mod tests {
             column: 0,
             row: 0,
             modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn projected_frame(
+        thread_id: &str,
+        seq: u64,
+        agent: AgentName,
+        ui_events: Vec<UiEventMessage>,
+    ) -> LocalIngestFrame {
+        LocalIngestFrame {
+            thread_id: thread_id.to_string(),
+            seq,
+            agent,
+            ui_events,
+            ts_ms: i64::try_from(seq).unwrap_or(0),
         }
     }
 
@@ -3107,6 +3307,139 @@ mod tests {
         assert_eq!(app.ui.room_input.content, "");
         assert_eq!(app.ui.selected_thread, Some(0));
         assert_eq!(app.ui.threads[0].agent, AgentName::Gemini);
+    }
+
+    #[tokio::test]
+    async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
+        let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(
+            AgentName::Opencode,
+        )]));
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Opencode)]);
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-opencode-closed".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Closed {
+                reason: minos_agent_runtime::CloseReason::UserClose,
+            },
+        });
+        app.select_thread(0);
+        app.ui.focus = Focus::RoomInput;
+        app.ui.room_input.content = "are you there?".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert_eq!(
+            backend
+                .started
+                .lock()
+                .expect("started list lock")
+                .as_slice(),
+            &[AgentName::Opencode]
+        );
+        assert_eq!(
+            backend
+                .sent_messages
+                .lock()
+                .expect("sent messages lock")
+                .as_slice(),
+            &[("thread-1".to_owned(), "are you there?".to_owned())]
+        );
+        assert_eq!(app.ui.room_input.content, "");
+        assert_eq!(app.ui.selected_thread, Some(1));
+        assert_eq!(app.ui.threads[1].agent, AgentName::Opencode);
+    }
+
+    #[tokio::test]
+    async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
+        let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(
+            AgentName::Opencode,
+        )]));
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Opencode)]);
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-opencode-closed".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Closed {
+                reason: minos_agent_runtime::CloseReason::UserClose,
+            },
+        });
+        app.select_thread(0);
+        app.ui.focus = Focus::AgentInput;
+        app.ui.agent_input.content = "continue".into();
+        app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert_eq!(
+            backend
+                .started
+                .lock()
+                .expect("started list lock")
+                .as_slice(),
+            &[AgentName::Opencode]
+        );
+        assert_eq!(
+            backend
+                .sent_messages
+                .lock()
+                .expect("sent messages lock")
+                .as_slice(),
+            &[("thread-1".to_owned(), "continue".to_owned())]
+        );
+        assert_eq!(app.ui.agent_input.content, "");
+        assert_eq!(app.ui.selected_thread, Some(1));
+        assert_eq!(app.ui.threads[1].agent, AgentName::Opencode);
+    }
+
+    #[tokio::test]
+    async fn routed_prompt_to_closed_thread_reports_error_without_sending() {
+        let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(
+            AgentName::Opencode,
+        )]));
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Opencode)]);
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-opencode-closed".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Closed {
+                reason: minos_agent_runtime::CloseReason::UserClose,
+            },
+        });
+        app.ui.focus = Focus::RoomInput;
+        app.ui.room_input.content = "@opencode#thread-o hello".into();
+        app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+        app.sync_input_agent_picker();
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert!(backend
+            .started
+            .lock()
+            .expect("started list lock")
+            .is_empty());
+        assert!(backend
+            .sent_messages
+            .lock()
+            .expect("sent messages lock")
+            .is_empty());
+        let error = app
+            .ui
+            .error_flash
+            .as_ref()
+            .map(|(message, _)| message.as_str())
+            .unwrap_or("");
+        assert!(error.contains("session #thread-o is closed"));
     }
 
     #[tokio::test]
@@ -3661,6 +3994,224 @@ mod tests {
         assert_eq!(message.text, "The module handles auth.");
         assert_eq!(message.agent, Some(AgentName::Gemini));
         assert_eq!(message.thread_short_id.as_deref(), Some("thread-g"));
+    }
+
+    #[tokio::test]
+    async fn opencode_session_idle_ingest_records_group_result_without_manager_idle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(TestBackend::new());
+        let mut app =
+            App::with_group_chat_store(backend, false, PathBuf::from("/tmp"), group_store);
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-opencode-1234".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp/ws"),
+            state: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+        });
+        app.ui.chat_states.insert(
+            "thread-opencode-1234".into(),
+            ChatState::new("thread-opencode-1234".into(), AgentName::Opencode),
+        );
+
+        assert!(
+            app.handle_event(AppEvent::Ingest(projected_frame(
+                "thread-opencode-1234",
+                1,
+                AgentName::Opencode,
+                vec![
+                    UiEventMessage::MessageStarted {
+                        message_id: "msg-assistant-1".into(),
+                        role: MessageRole::Assistant,
+                        started_at_ms: 1,
+                    },
+                    UiEventMessage::TextDelta {
+                        message_id: "msg-assistant-1".into(),
+                        text: "在的！有什么可以帮你的？".into(),
+                    },
+                ],
+            )))
+            .await
+        );
+        assert!(app.ui.group_chat.messages.is_empty());
+
+        assert!(
+            app.handle_event(AppEvent::Ingest(projected_frame(
+                "thread-opencode-1234",
+                2,
+                AgentName::Opencode,
+                vec![UiEventMessage::MessageCompleted {
+                    message_id: "msg-assistant-1".into(),
+                    finished_at_ms: 2,
+                }],
+            )))
+            .await
+        );
+
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        let message = &app.ui.group_chat.messages[0];
+        assert_eq!(message.kind, LocalGroupChatMessageKind::AgentResult);
+        assert_eq!(message.text, "在的！有什么可以帮你的？");
+        assert_eq!(message.agent, Some(AgentName::Opencode));
+        assert_eq!(message.thread_id.as_deref(), Some("thread-opencode-1234"));
+    }
+
+    #[tokio::test]
+    async fn opencode_manager_idle_does_not_record_partial_result_before_final_snapshot() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(TestBackend::new());
+        let mut app =
+            App::with_group_chat_store(backend, false, PathBuf::from("/tmp"), group_store);
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-opencode-1234".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp/ws"),
+            state: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+        });
+        app.ui.chat_states.insert(
+            "thread-opencode-1234".into(),
+            ChatState::new("thread-opencode-1234".into(), AgentName::Opencode),
+        );
+
+        assert!(
+            app.handle_event(AppEvent::Ingest(projected_frame(
+                "thread-opencode-1234",
+                1,
+                AgentName::Opencode,
+                vec![
+                    UiEventMessage::MessageStarted {
+                        message_id: "msg-assistant-1".into(),
+                        role: MessageRole::Assistant,
+                        started_at_ms: 1,
+                    },
+                    UiEventMessage::TextDelta {
+                        message_id: "msg-assistant-1".into(),
+                        text: "Gemini 说了以下内容：它详细介绍了".into(),
+                    },
+                ],
+            )))
+            .await
+        );
+
+        assert!(
+            app.handle_event(AppEvent::ManagerEvent(ManagerEvent::ThreadStateChanged {
+                thread_id: "thread-opencode-1234".into(),
+                old: ThreadState::Running {
+                    turn_started_at_ms: 0,
+                },
+                new: ThreadState::Idle,
+                at_ms: 2,
+            }))
+            .await
+        );
+        assert!(app.ui.group_chat.messages.is_empty());
+
+        assert!(
+            app.handle_event(AppEvent::Ingest(projected_frame(
+                "thread-opencode-1234",
+                3,
+                AgentName::Opencode,
+                vec![UiEventMessage::TextReplace {
+                    message_id: "msg-assistant-1".into(),
+                    text: "Gemini 说了以下内容：它详细介绍了自己的能力。".into(),
+                }],
+            )))
+            .await
+        );
+        assert!(app.ui.group_chat.messages.is_empty());
+
+        assert!(
+            app.handle_event(AppEvent::Ingest(projected_frame(
+                "thread-opencode-1234",
+                4,
+                AgentName::Opencode,
+                vec![UiEventMessage::MessageCompleted {
+                    message_id: "msg-assistant-1".into(),
+                    finished_at_ms: 4,
+                }],
+            )))
+            .await
+        );
+
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        assert_eq!(
+            app.ui.group_chat.messages[0].text,
+            "Gemini 说了以下内容：它详细介绍了自己的能力。"
+        );
+        assert_eq!(
+            app.ui.group_chat.messages[0].text,
+            "Gemini 说了以下内容：它详细介绍了自己的能力。"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_tick_replays_history_and_records_opencode_result_when_live_ingest_is_missing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(
+            TestBackend::new()
+                .with_connection_state(BackendConnectionState::Connected {
+                    endpoint: "ws://127.0.0.1:43123".into(),
+                })
+                .with_listed_threads(vec![BackendThreadSnapshot {
+                    thread_id: "thread-opencode-1234".into(),
+                    agent: Some(AgentName::Opencode),
+                    workspace: PathBuf::from("/tmp/ws"),
+                    state: ThreadState::Idle,
+                }])
+                .with_history_pages(
+                    "thread-opencode-1234",
+                    vec![ReadThreadRawHistoryResponse {
+                        events: vec![
+                            projected_frame(
+                                "thread-opencode-1234",
+                                1,
+                                AgentName::Opencode,
+                                vec![UiEventMessage::MessageStarted {
+                                    message_id: "msg-assistant-1".into(),
+                                    role: MessageRole::Assistant,
+                                    started_at_ms: 1,
+                                }],
+                            ),
+                            projected_frame(
+                                "thread-opencode-1234",
+                                2,
+                                AgentName::Opencode,
+                                vec![UiEventMessage::TextDelta {
+                                    message_id: "msg-assistant-1".into(),
+                                    text: "在的，有什么可以帮你的？".into(),
+                                }],
+                            ),
+                            projected_frame(
+                                "thread-opencode-1234",
+                                3,
+                                AgentName::Opencode,
+                                vec![UiEventMessage::MessageCompleted {
+                                    message_id: "msg-assistant-1".into(),
+                                    finished_at_ms: 3,
+                                }],
+                            ),
+                        ],
+                        next_seq: None,
+                    }],
+                ),
+        );
+        let mut app =
+            App::with_group_chat_store(backend, false, PathBuf::from("/tmp"), group_store);
+
+        assert!(app.handle_event(AppEvent::Tick).await);
+
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        let message = &app.ui.group_chat.messages[0];
+        assert_eq!(message.kind, LocalGroupChatMessageKind::AgentResult);
+        assert_eq!(message.text, "在的，有什么可以帮你的？");
+        assert_eq!(message.agent, Some(AgentName::Opencode));
+        assert_eq!(message.thread_id.as_deref(), Some("thread-opencode-1234"));
     }
 
     #[tokio::test]

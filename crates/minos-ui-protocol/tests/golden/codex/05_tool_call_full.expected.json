@@ -10,12 +10,12 @@
     "message_id":"i1",
     "tool_call_id":"<uuid>",
     "name":"apply_patch",
-    "args_json":"{\"diff\":\"...\"}"
+    "args_json":{"kind":"inline","text":"{\"diff\":\"...\"}"}
   },
   {
     "kind":"tool_call_completed",
     "tool_call_id":"<uuid>",
-    "output":"patched 1 file",
+    "output":{"kind":"inline","text":"patched 1 file"},
     "is_error":false
   }
 ]

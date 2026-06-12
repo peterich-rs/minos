@@ -27,13 +27,30 @@ CREATE INDEX threads_by_workspace ON threads(workspace_root, last_activity_at DE
 CREATE INDEX threads_by_status    ON threads(status, last_activity_at DESC);
 
 CREATE TABLE events (
-    thread_id TEXT NOT NULL,
-    seq       INTEGER NOT NULL,
-    payload   BLOB NOT NULL,
-    ts_ms     INTEGER NOT NULL,
-    source    TEXT NOT NULL DEFAULT 'live',
+    thread_id            TEXT NOT NULL,
+    seq                  INTEGER NOT NULL,
+    body_kind            TEXT NOT NULL,
+    body_inline          BLOB,
+    artifact_id          TEXT,
+    artifact_size_bytes  INTEGER,
+    artifact_sha256      TEXT,
+    artifact_media_type  TEXT,
+    projection_json      BLOB NOT NULL,
+    ts_ms                INTEGER NOT NULL,
+    source               TEXT NOT NULL DEFAULT 'live',
     PRIMARY KEY (thread_id, seq),
     FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
 ) WITHOUT ROWID;
 
 CREATE INDEX events_by_ts ON events(thread_id, ts_ms);
+
+CREATE TABLE artifacts (
+    thread_id   TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    size_bytes  INTEGER NOT NULL,
+    sha256      TEXT NOT NULL,
+    media_type  TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (thread_id, artifact_id),
+    FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
+) WITHOUT ROWID;

@@ -11,9 +11,10 @@ use minos_domain::MinosError;
 use minos_protocol::{
     ApprovalDecisionRequest, CloseReason, CloseThreadRequest, GetThreadParams, HealthResponse,
     InterruptThreadRequest, ListClisResponse, LocalDaemonRpcServer, LocalIngestFrame,
-    LocalManagerEvent, LocalThreadSnapshot, ReadGroupChatParams, ReadGroupChatResponse,
-    ReadThreadParams, ReadThreadRawHistoryResponse, RespondOpencodePermissionRequest,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState,
+    LocalManagerEvent, LocalThreadSnapshot, ReadArtifactRangeRequest, ReadArtifactRangeResponse,
+    ReadGroupChatParams, ReadGroupChatResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
+    RespondOpencodePermissionRequest, SendUserMessageRequest, StartAgentRequest,
+    StartAgentResponse, ThreadState,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -152,6 +153,24 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             messages: page.messages.into_iter().map(Into::into).collect(),
             next_before_seq: page.next_before_seq,
             has_more: page.has_more,
+        })
+    }
+
+    async fn read_artifact_range(
+        &self,
+        req: ReadArtifactRangeRequest,
+    ) -> jsonrpsee::core::RpcResult<ReadArtifactRangeResponse> {
+        let range = self
+            .agent
+            .store()
+            .read_artifact_range(&req.thread_id, &req.artifact_id, req.offset, req.limit)
+            .await
+            .map_err(|e| rpc_err(map_store_error("read_artifact_range", e)))?;
+        Ok(ReadArtifactRangeResponse {
+            bytes: range.bytes,
+            offset: range.offset,
+            total_size: range.total_size,
+            eof: range.eof,
         })
     }
 
@@ -326,22 +345,11 @@ fn write_discovery_file(path: &PathBuf, addr: SocketAddr) {
 }
 
 fn spawn_ingest_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<LocalIngestFrame>) {
-    let mut rx = agent.ingest_stream();
+    let mut rx = agent.persisted_ingest_stream();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(raw) => {
-                    let seq = match agent.store().get_thread(&raw.thread_id).await {
-                        Ok(Some(row)) => u64::try_from(row.last_seq.max(0)).unwrap_or(0),
-                        Ok(None) | Err(_) => 0,
-                    };
-                    let frame = LocalIngestFrame {
-                        thread_id: raw.thread_id,
-                        seq,
-                        agent: raw.agent,
-                        payload: raw.payload,
-                        ts_ms: raw.ts_ms,
-                    };
+                Ok(frame) => {
                     let _ = tx.send(frame);
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {

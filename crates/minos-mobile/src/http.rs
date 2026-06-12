@@ -33,7 +33,7 @@ use minos_protocol::{
     UpdateAgentRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
     WriteHostSkillConfigResponse,
 };
-use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
+use minos_ui_protocol::{DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use uuid::Uuid;
@@ -2177,7 +2177,7 @@ fn append_turn_summary_ui_events(ui_events: &mut Vec<UiEventMessage>, turn: &Age
     });
     ui_events.push(UiEventMessage::TextDelta {
         message_id: turn.turn_id.clone(),
-        text: text.to_string(),
+        text: DisplayPayload::inline(text.to_string()),
     });
     if turn_is_complete(turn) {
         ui_events.push(UiEventMessage::MessageCompleted {
@@ -2193,7 +2193,7 @@ fn ui_events_for_turn_event(message_id: &str, event: AgentTurnEvent) -> Vec<UiEv
             .map(|text| {
                 vec![UiEventMessage::TextDelta {
                     message_id: message_id.to_string(),
-                    text,
+                    text: DisplayPayload::inline(text),
                 }]
             })
             .unwrap_or_default(),
@@ -2201,7 +2201,7 @@ fn ui_events_for_turn_event(message_id: &str, event: AgentTurnEvent) -> Vec<UiEv
             .map(|text| {
                 vec![UiEventMessage::TextReplace {
                     message_id: message_id.to_string(),
-                    text,
+                    text: DisplayPayload::inline(text),
                 }]
             })
             .unwrap_or_default(),
@@ -2209,7 +2209,7 @@ fn ui_events_for_turn_event(message_id: &str, event: AgentTurnEvent) -> Vec<UiEv
             .map(|text| {
                 vec![UiEventMessage::ReasoningDelta {
                     message_id: message_id.to_string(),
-                    text,
+                    text: DisplayPayload::inline(text),
                 }]
             })
             .unwrap_or_default(),
@@ -2217,7 +2217,7 @@ fn ui_events_for_turn_event(message_id: &str, event: AgentTurnEvent) -> Vec<UiEv
             .map(|text| {
                 vec![UiEventMessage::ReasoningReplace {
                     message_id: message_id.to_string(),
-                    text,
+                    text: DisplayPayload::inline(text),
                 }]
             })
             .unwrap_or_default(),
@@ -2247,7 +2247,7 @@ fn ui_events_for_turn_event(message_id: &str, event: AgentTurnEvent) -> Vec<UiEv
                 message_id: message_id.to_string(),
                 tool_call_id,
                 name,
-                args_json,
+                args_json: DisplayPayload::inline(args_json),
             }]
         }
         "agent_tool_result" | "agent_tool_completed" => {
@@ -2277,7 +2277,7 @@ fn ui_events_for_turn_event(message_id: &str, event: AgentTurnEvent) -> Vec<UiEv
                 .unwrap_or(false);
             vec![UiEventMessage::ToolCallCompleted {
                 tool_call_id,
-                output,
+                output: DisplayPayload::inline(output),
                 is_error,
             }]
         }

@@ -28,11 +28,11 @@ use minos_domain::AgentName;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::config::RawIngest;
+use crate::manager::IngestSink;
 
 /// Timeout before escalating from SIGTERM to SIGKILL.
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
@@ -57,7 +57,7 @@ impl PtyAgent {
         workspace: &Path,
         agent: AgentName,
         thread_id: String,
-        events_tx: broadcast::Sender<RawIngest>,
+        events_tx: IngestSink,
     ) -> Result<Self, anyhow::Error> {
         let mut cmd = Command::new(cli_path);
         cmd.current_dir(workspace)
@@ -94,16 +94,16 @@ impl PtyAgent {
                 let mut seq: u64 = 0;
                 while let Ok(Some(line)) = lines.next_line().await {
                     seq += 1;
-                    let _ = tx.send(RawIngest {
-                        agent: ag,
-                        thread_id: tid.clone(),
-                        payload: json!({
+                    tx.emit(RawIngest::from_json(
+                        ag,
+                        tid.clone(),
+                        json!({
                             "kind": "raw",
                             "raw_kind": "stdout",
                             "payload_json": serde_json::to_string(&line).unwrap_or_default()
                         }),
-                        ts_ms: chrono::Utc::now().timestamp_millis(),
-                    });
+                        chrono::Utc::now().timestamp_millis(),
+                    ));
                     let _ = seq; // suppress unused warning in non-debug
                 }
             })
@@ -117,16 +117,16 @@ impl PtyAgent {
                 let reader = BufReader::new(err_stream);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx.send(RawIngest {
-                        agent: ag,
-                        thread_id: tid.clone(),
-                        payload: json!({
+                    tx.emit(RawIngest::from_json(
+                        ag,
+                        tid.clone(),
+                        json!({
                             "kind": "raw",
                             "raw_kind": "stderr",
                             "payload_json": serde_json::to_string(&line).unwrap_or_default()
                         }),
-                        ts_ms: chrono::Utc::now().timestamp_millis(),
-                    });
+                        chrono::Utc::now().timestamp_millis(),
+                    ));
                 }
             })
         });
@@ -163,7 +163,7 @@ impl PtyAgent {
 
     /// Gracefully close the agent: SIGTERM, wait up to 3s, then SIGKILL.
     /// Emits a `thread_closed` RawIngest event.
-    pub async fn close(mut self, events_tx: &broadcast::Sender<RawIngest>) {
+    pub async fn close(mut self, events_tx: &IngestSink) {
         if let Some(mut child) = self.child.take() {
             // Try graceful termination first
             #[cfg(unix)]
@@ -194,17 +194,17 @@ impl PtyAgent {
         }
 
         // Emit thread_closed event
-        let _ = events_tx.send(RawIngest {
-            agent: self.agent,
-            thread_id: self.thread_id.clone(),
-            payload: json!({
+        events_tx.emit(RawIngest::from_json(
+            self.agent,
+            self.thread_id.clone(),
+            json!({
                 "kind": "thread_closed",
                 "thread_id": self.thread_id,
                 "reason": { "kind": "user_stopped" },
                 "closed_at_ms": chrono::Utc::now().timestamp_millis()
             }),
-            ts_ms: chrono::Utc::now().timestamp_millis(),
-        });
+            chrono::Utc::now().timestamp_millis(),
+        ));
 
         info!(thread_id = %self.thread_id, "pty agent closed");
     }

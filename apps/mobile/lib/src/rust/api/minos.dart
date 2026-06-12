@@ -474,6 +474,41 @@ class AgentSummary {
           updatedAtMs == other.updatedAtMs;
 }
 
+class ArtifactRef {
+  final String threadId;
+  final String artifactId;
+  final BigInt sizeBytes;
+  final String sha256;
+  final String mediaType;
+
+  const ArtifactRef({
+    required this.threadId,
+    required this.artifactId,
+    required this.sizeBytes,
+    required this.sha256,
+    required this.mediaType,
+  });
+
+  @override
+  int get hashCode =>
+      threadId.hashCode ^
+      artifactId.hashCode ^
+      sizeBytes.hashCode ^
+      sha256.hashCode ^
+      mediaType.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ArtifactRef &&
+          runtimeType == other.runtimeType &&
+          threadId == other.threadId &&
+          artifactId == other.artifactId &&
+          sizeBytes == other.sizeBytes &&
+          sha256 == other.sha256 &&
+          mediaType == other.mediaType;
+}
+
 @freezed
 sealed class AuthStateFrame with _$AuthStateFrame {
   const AuthStateFrame._();
@@ -786,6 +821,25 @@ class DeleteProjectRequest {
       other is DeleteProjectRequest &&
           runtimeType == other.runtimeType &&
           projectId == other.projectId;
+}
+
+@freezed
+sealed class DisplayPayload with _$DisplayPayload {
+  const DisplayPayload._();
+
+  const factory DisplayPayload.inline({required String text}) =
+      DisplayPayload_Inline;
+  const factory DisplayPayload.streamingWindow({
+    required String head,
+    required BigInt receivedBytes,
+    ArtifactRef? artifact,
+  }) = DisplayPayload_StreamingWindow;
+  const factory DisplayPayload.windowedFinal({
+    required String head,
+    required String tail,
+    required BigInt omittedBytes,
+    required ArtifactRef artifact,
+  }) = DisplayPayload_WindowedFinal;
 }
 
 enum ErrorKind {
@@ -1784,29 +1838,29 @@ sealed class UiEventMessage with _$UiEventMessage {
   }) = UiEventMessage_MessageCompleted;
   const factory UiEventMessage.textDelta({
     required String messageId,
-    required String text,
+    required DisplayPayload text,
   }) = UiEventMessage_TextDelta;
   const factory UiEventMessage.textReplace({
     required String messageId,
-    required String text,
+    required DisplayPayload text,
   }) = UiEventMessage_TextReplace;
   const factory UiEventMessage.reasoningDelta({
     required String messageId,
-    required String text,
+    required DisplayPayload text,
   }) = UiEventMessage_ReasoningDelta;
   const factory UiEventMessage.reasoningReplace({
     required String messageId,
-    required String text,
+    required DisplayPayload text,
   }) = UiEventMessage_ReasoningReplace;
   const factory UiEventMessage.toolCallPlaced({
     required String messageId,
     required String toolCallId,
     required String name,
-    required String argsJson,
+    required DisplayPayload argsJson,
   }) = UiEventMessage_ToolCallPlaced;
   const factory UiEventMessage.toolCallCompleted({
     required String toolCallId,
-    required String output,
+    required DisplayPayload output,
     required bool isError,
   }) = UiEventMessage_ToolCallCompleted;
   const factory UiEventMessage.error({

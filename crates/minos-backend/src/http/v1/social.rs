@@ -618,7 +618,10 @@ async fn find_completed_agent_reply(
                             message_texts.entry(message_id).or_default();
                         }
                         minos_ui_protocol::UiEventMessage::TextDelta { message_id, text } => {
-                            message_texts.entry(message_id).or_default().push_str(&text);
+                            message_texts
+                                .entry(message_id)
+                                .or_default()
+                                .push_str(&text.render_preview());
                         }
                         minos_ui_protocol::UiEventMessage::MessageCompleted {
                             message_id, ..

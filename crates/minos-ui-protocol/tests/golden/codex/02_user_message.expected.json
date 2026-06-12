@@ -8,6 +8,6 @@
   {
     "kind":"text_delta",
     "message_id":"u1",
-    "text":"hello"
+    "text":{"kind":"inline","text":"hello"}
   }
 ]

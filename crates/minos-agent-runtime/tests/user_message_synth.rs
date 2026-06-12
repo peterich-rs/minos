@@ -48,7 +48,9 @@ async fn send_user_message_emits_synth_user_item_started() {
 
     assert_eq!(ingest.thread_id, session.thread_id);
 
-    let payload = &ingest.payload;
+    let payload = &ingest
+        .json_value()
+        .expect("raw ingest should contain JSON payload");
     assert_eq!(
         payload.get("method").and_then(Value::as_str),
         Some("item/started"),

@@ -13,9 +13,10 @@
 //!
 //! ## Dependency rule
 //!
-//! This crate does **not** depend on `minos-protocol`. It also deliberately
-//! does NOT depend on `minos-ui-protocol` — the `UiEventMessage` translator
-//! lives in the backend so the host daemon stays a thin ingest pipe.
+//! Runtime emits raw bytes plus lightweight transport metadata. Projection to
+//! renderable UI events happens after durable commit; the shared display/artifact
+//! value types live in `minos-ui-protocol` so local, backend, and mobile paths
+//! use the same wire shape.
 
 // `deny` (not `forbid`) so the per-module allows in `process.rs` and
 // `manager.rs` can carve narrow holes for the Unix-only `setpgid(2)` /
@@ -48,12 +49,15 @@ pub mod thread_handle;
 pub mod test_support;
 
 pub use claude_driver::ClaudeNdjsonSession;
-pub use config::{AgentLaunchMode, AgentRuntimeConfig, RawIngest};
+pub use config::{
+    AgentEventProjection, AgentLaunchMode, AgentRuntimeConfig, RawBody, RawIngest, TextLane,
+    ToolStatus, ToolStream, INLINE_RAW_BODY_THRESHOLD,
+};
 pub use gemini_driver::GeminiAcpInstance;
 pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
 pub use manager::{
-    AgentManager, DispatchOutcome, InstanceCaps, SessionPolicies, StartAgentOutcome,
+    AgentManager, DispatchOutcome, IngestSink, InstanceCaps, SessionPolicies, StartAgentOutcome,
 };
 pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;

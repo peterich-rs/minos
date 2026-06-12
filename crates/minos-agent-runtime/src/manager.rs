@@ -22,9 +22,9 @@ use minos_domain::AgentName;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tracing::{info, warn};
 use url::Url;
 
@@ -51,6 +51,79 @@ pub(crate) struct PendingApproval {
 
 pub(crate) type PendingApprovals = Arc<DashMap<String, PendingApproval>>;
 
+const DURABLE_INGEST_QUEUE_CAPACITY: usize = 1024;
+
+#[derive(Clone)]
+pub struct IngestSink {
+    broadcast_tx: broadcast::Sender<RawIngest>,
+    durable_tx: Arc<StdMutex<Option<mpsc::Sender<RawIngest>>>>,
+}
+
+impl IngestSink {
+    #[must_use]
+    pub fn new(broadcast_capacity: usize) -> Self {
+        let (broadcast_tx, _) = broadcast::channel(broadcast_capacity);
+        Self {
+            broadcast_tx,
+            durable_tx: Arc::new(StdMutex::new(None)),
+        }
+    }
+
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<RawIngest> {
+        self.broadcast_tx.subscribe()
+    }
+
+    #[must_use]
+    pub fn install_durable_stream(&self) -> mpsc::Receiver<RawIngest> {
+        let (tx, rx) = mpsc::channel(DURABLE_INGEST_QUEUE_CAPACITY);
+        *self
+            .durable_tx
+            .lock()
+            .expect("durable ingest sink lock poisoned") = Some(tx);
+        rx
+    }
+
+    pub fn emit(&self, ingest: RawIngest) {
+        let durable_tx = self
+            .durable_tx
+            .lock()
+            .expect("durable ingest sink lock poisoned")
+            .clone();
+        if let Some(tx) = durable_tx {
+            match tx.try_send(ingest.clone()) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(ingest)) => {
+                    tokio::spawn(async move {
+                        if let Err(error) = tx.send(ingest).await {
+                            tracing::warn!(
+                                target: "minos_agent_runtime::manager",
+                                error = %error,
+                                "durable ingest sink closed while waiting for queue space",
+                            );
+                        }
+                    });
+                }
+                Err(mpsc::error::TrySendError::Closed(ingest)) => {
+                    tracing::warn!(
+                        target: "minos_agent_runtime::manager",
+                        thread_id = %ingest.thread_id,
+                        agent = %ingest.agent.bin_name(),
+                        "durable ingest sink is closed; event was not queued for persistence",
+                    );
+                }
+            }
+        }
+        if let Err(error) = self.broadcast_tx.send(ingest) {
+            tracing::debug!(
+                target: "minos_agent_runtime::manager",
+                error = %error,
+                "events broadcast send failed (no subscribers)",
+            );
+        }
+    }
+}
+
 impl Default for InstanceCaps {
     fn default() -> Self {
         Self {
@@ -66,7 +139,7 @@ pub struct AgentManager {
     pub(crate) instances: Arc<Mutex<HashMap<PathBuf, Arc<AppServerInstance>>>>,
     pub(crate) threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
     pub(crate) pending_approvals: PendingApprovals,
-    pub(crate) events_tx: broadcast::Sender<RawIngest>,
+    pub(crate) events_tx: IngestSink,
     pub(crate) manager_tx: broadcast::Sender<ManagerEvent>,
     pub(crate) claude_sessions:
         Arc<Mutex<HashMap<String, crate::claude_driver::ClaudeNdjsonSession>>>,
@@ -79,7 +152,7 @@ pub struct AgentManager {
 
 impl AgentManager {
     pub fn new(config: AgentRuntimeConfig, caps: InstanceCaps) -> Self {
-        let (events_tx, _) = broadcast::channel(256);
+        let events_tx = IngestSink::new(1024);
         let (manager_tx, _) = broadcast::channel(64);
         let mgr = Self {
             config: Arc::new(config),
@@ -167,6 +240,10 @@ impl AgentManager {
 
     pub fn ingest_stream(&self) -> broadcast::Receiver<RawIngest> {
         self.events_tx.subscribe()
+    }
+
+    pub fn install_durable_ingest_stream(&self) -> mpsc::Receiver<RawIngest> {
+        self.events_tx.install_durable_stream()
     }
 
     pub fn manager_event_stream(&self) -> broadcast::Receiver<ManagerEvent> {
@@ -1277,12 +1354,12 @@ impl AgentManager {
                     "message": error.to_string(),
                 }),
             };
-            let _ = events_tx.send(RawIngest {
-                agent: AgentName::Gemini,
-                thread_id: thread_id.clone(),
+            events_tx.emit(RawIngest::from_json(
+                AgentName::Gemini,
+                thread_id.clone(),
                 payload,
-                ts_ms: current_unix_ms(),
-            });
+                current_unix_ms(),
+            ));
             mark_thread_idle_with_tx(&thread_id, &handle, &manager_tx);
         });
         Ok(())
@@ -1360,20 +1437,8 @@ impl AgentManager {
                 }
             }),
         };
-        let ingest = RawIngest {
-            agent,
-            thread_id: thread_id.to_string(),
-            payload,
-            ts_ms: current_unix_ms(),
-        };
-        if let Err(e) = self.events_tx.send(ingest) {
-            tracing::debug!(
-                target: "minos_agent_runtime::manager",
-                error = %e,
-                thread_id,
-                "synth_user_message_ingest broadcast failed (no subscribers)",
-            );
-        }
+        let ingest = RawIngest::from_json(agent, thread_id.to_string(), payload, current_unix_ms());
+        self.events_tx.emit(ingest);
     }
 
     async fn implicit_resume(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
@@ -2188,14 +2253,8 @@ async fn non_approval_context_for_request(
     }
 }
 
-fn broadcast_ingest(events_tx: &broadcast::Sender<RawIngest>, ingest: RawIngest) {
-    if let Err(error) = events_tx.send(ingest) {
-        tracing::debug!(
-            target: "minos_agent_runtime::manager",
-            error = %error,
-            "events_tx broadcast send failed (no subscribers)",
-        );
-    }
+fn broadcast_ingest(events_tx: &IngestSink, ingest: RawIngest) {
+    events_tx.emit(ingest);
 }
 
 fn approval_request_ingest(
@@ -2208,10 +2267,10 @@ fn approval_request_ingest(
     timeout: Duration,
 ) -> RawIngest {
     let payload_thread_id = thread_id.clone();
-    RawIngest {
+    RawIngest::from_json(
         agent,
         thread_id,
-        payload: serde_json::json!({
+        serde_json::json!({
             "method": "approval/request",
             "params": {
                 "request_id": request_id,
@@ -2222,16 +2281,16 @@ fn approval_request_ingest(
                 "timeout_ms": u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
             }
         }),
-        ts_ms: current_unix_ms(),
-    }
+        current_unix_ms(),
+    )
 }
 
 fn approval_timeout_ingest(agent: AgentName, thread_id: String, request_id: String) -> RawIngest {
     let payload_thread_id = thread_id.clone();
-    RawIngest {
+    RawIngest::from_json(
         agent,
         thread_id,
-        payload: serde_json::json!({
+        serde_json::json!({
             "method": "approval/timeout",
             "params": {
                 "thread_id": payload_thread_id,
@@ -2239,13 +2298,13 @@ fn approval_timeout_ingest(agent: AgentName, thread_id: String, request_id: Stri
                 "reason": "timeout",
             }
         }),
-        ts_ms: current_unix_ms(),
-    }
+        current_unix_ms(),
+    )
 }
 
 fn spawn_approval_timeout(
     pending_approvals: PendingApprovals,
-    events_tx: broadcast::Sender<RawIngest>,
+    events_tx: IngestSink,
     timeout: Duration,
     request_id: String,
     thread_id: String,
@@ -2292,7 +2351,7 @@ fn spawn_approval_timeout(
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn event_pump_loop(
     client: Arc<CodexClient>,
-    events_tx: broadcast::Sender<RawIngest>,
+    events_tx: IngestSink,
     threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
     pending_approvals: PendingApprovals,
     manager_tx: broadcast::Sender<ManagerEvent>,
@@ -2357,12 +2416,7 @@ async fn event_pump_loop(
                     .get(&thread_id)
                     .map_or(AgentName::Codex, |h| h.agent);
                 let payload = serde_json::json!({ "method": method, "params": params });
-                let ingest = RawIngest {
-                    agent,
-                    thread_id,
-                    payload,
-                    ts_ms: current_unix_ms(),
-                };
+                let ingest = RawIngest::from_json(agent, thread_id, payload, current_unix_ms());
                 broadcast_ingest(&events_tx, ingest);
             }
             Inbound::ServerRequest {
@@ -2452,12 +2506,7 @@ async fn event_pump_loop(
                             });
                             broadcast_ingest(
                                 &events_tx,
-                                RawIngest {
-                                    agent,
-                                    thread_id,
-                                    payload,
-                                    ts_ms: current_unix_ms(),
-                                },
+                                RawIngest::from_json(agent, thread_id, payload, current_unix_ms()),
                             );
                         }
 
@@ -2529,12 +2578,7 @@ async fn event_pump_loop(
                             });
                             broadcast_ingest(
                                 &events_tx,
-                                RawIngest {
-                                    agent,
-                                    thread_id,
-                                    payload,
-                                    ts_ms: current_unix_ms(),
-                                },
+                                RawIngest::from_json(agent, thread_id, payload, current_unix_ms()),
                             );
                         }
                     }
@@ -2994,15 +3038,22 @@ done
             .expect("ingest stream should stay open");
         assert_eq!(user.thread_id, thread_id);
         assert_eq!(
-            user.payload.get("kind").and_then(Value::as_str),
+            user.json_value()
+                .expect("raw ingest should contain JSON payload")
+                .get("kind")
+                .and_then(Value::as_str),
             Some("user_message")
         );
         assert_eq!(
-            user.payload.get("text").and_then(Value::as_str),
+            user.json_value()
+                .expect("raw ingest should contain JSON payload")
+                .get("text")
+                .and_then(Value::as_str),
             Some("ping")
         );
         assert!(user
-            .payload
+            .json_value()
+            .expect("raw ingest should contain JSON payload")
             .get("messageId")
             .and_then(Value::as_str)
             .is_some_and(|value| !value.is_empty()));
@@ -3011,7 +3062,11 @@ done
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
                 if ingest.thread_id == thread_id
-                    && ingest.payload.get("kind").and_then(Value::as_str)
+                    && ingest
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
+                        .get("kind")
+                        .and_then(Value::as_str)
                         == Some("acp_notification")
                 {
                     break ingest;
@@ -3022,7 +3077,10 @@ done
         .expect("fake Gemini ACP notification should arrive");
 
         assert_eq!(
-            chunk.payload["params"]["update"]["content"]["text"],
+            chunk
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["update"]["content"]
+                ["text"],
             "gemini says hi"
         );
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -3197,7 +3255,11 @@ done
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
                 if ingest.thread_id == thread_id
-                    && ingest.payload.get("kind").and_then(Value::as_str)
+                    && ingest
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
+                        .get("kind")
+                        .and_then(Value::as_str)
                         == Some("acp_server_request")
                 {
                     break ingest;
@@ -3207,7 +3269,11 @@ done
         .await
         .expect("Gemini ACP server request should be forwarded");
         assert_eq!(
-            request.payload.get("method").and_then(Value::as_str),
+            request
+                .json_value()
+                .expect("raw ingest should contain JSON payload")
+                .get("method")
+                .and_then(Value::as_str),
             Some("session/request_permission")
         );
 
@@ -3215,7 +3281,11 @@ done
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
                 if ingest.thread_id == thread_id
-                    && ingest.payload.get("kind").and_then(Value::as_str)
+                    && ingest
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
+                        .get("kind")
+                        .and_then(Value::as_str)
                         == Some("acp_notification")
                 {
                     break ingest;
@@ -3225,7 +3295,10 @@ done
         .await
         .expect("fake Gemini should continue after permission cancellation");
         assert_eq!(
-            chunk.payload["params"]["update"]["content"]["text"],
+            chunk
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["update"]["content"]
+                ["text"],
             "permission was cancelled"
         );
 
@@ -3312,7 +3385,11 @@ done
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
                 if ingest.thread_id == thread_id
-                    && ingest.payload.get("kind").and_then(Value::as_str)
+                    && ingest
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
+                        .get("kind")
+                        .and_then(Value::as_str)
                         == Some("acp_notification")
                 {
                     break ingest;
@@ -3323,7 +3400,10 @@ done
         .expect("resumed Gemini ACP notification should arrive");
 
         assert_eq!(
-            chunk.payload["params"]["update"]["content"]["text"],
+            chunk
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["update"]["content"]
+                ["text"],
             "resumed gemini"
         );
         assert_eq!(
@@ -3384,7 +3464,12 @@ printf '{"type":"result","is_error":false}\n'
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
                 if ingest.thread_id == started.thread_id
-                    && ingest.payload.get("type").and_then(Value::as_str) == Some("result")
+                    && ingest
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
+                        .get("type")
+                        .and_then(Value::as_str)
+                        == Some("result")
                 {
                     break;
                 }
@@ -3456,7 +3541,12 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
                 if ingest.thread_id == thread_id
-                    && ingest.payload.get("type").and_then(Value::as_str) == Some("result")
+                    && ingest
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
+                        .get("type")
+                        .and_then(Value::as_str)
+                        == Some("result")
                 {
                     break;
                 }
@@ -3560,7 +3650,12 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
                 if ingest.thread_id == thread_id
-                    && ingest.payload.get("method").and_then(Value::as_str) == Some("item/started")
+                    && ingest
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
+                        .get("method")
+                        .and_then(Value::as_str)
+                        == Some("item/started")
                 {
                     break ingest;
                 }
@@ -3569,7 +3664,9 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         .await
         .expect("synthetic Claude user message should arrive");
         assert_eq!(
-            user.payload["params"]["item"]["content"][0]["text"],
+            user.json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["item"]["content"][0]
+                ["text"],
             "answer while running"
         );
     }
@@ -3681,11 +3778,16 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             .expect("ingest stream should stay open");
         assert_eq!(user.thread_id, thread_id);
         assert_eq!(
-            user.payload.get("method").and_then(Value::as_str),
+            user.json_value()
+                .expect("raw ingest should contain JSON payload")
+                .get("method")
+                .and_then(Value::as_str),
             Some("item/started")
         );
         assert_eq!(
-            user.payload["params"]["item"]["content"][0]["text"],
+            user.json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["item"]["content"][0]
+                ["text"],
             "running answer"
         );
     }
@@ -3854,7 +3956,8 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .expect("ingest broadcast should stay open");
                 if ingest.thread_id == thread_id
                     && ingest
-                        .payload
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
                         .get("method")
                         .and_then(serde_json::Value::as_str)
                         == Some("turn/started")
@@ -4076,7 +4179,12 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .recv()
                     .await
                     .expect("ingest stream should stay open");
-                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/request")
+                if ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload")
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("approval/request")
                 {
                     break ingest;
                 }
@@ -4092,11 +4200,28 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             .next()
             .expect("server request id should be recorded");
         assert_eq!(ingest.thread_id, thread_id);
-        assert_eq!(ingest.payload["params"]["request_id"], json!(request_id));
-        assert_eq!(ingest.payload["params"]["thread_id"], json!(thread_id));
-        assert_eq!(ingest.payload["params"]["turn_id"], json!(turn_id));
         assert_eq!(
-            ingest.payload["params"]["method"],
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["request_id"],
+            json!(request_id)
+        );
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["thread_id"],
+            json!(thread_id)
+        );
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["turn_id"],
+            json!(turn_id)
+        );
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["method"],
             json!("item/commandExecution/requestApproval")
         );
         assert!(mgr.pending_approvals.contains_key(&request_id));
@@ -4152,7 +4277,11 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .recv()
                     .await
                     .expect("ingest stream should stay open");
-                if ingest.payload.get("method").and_then(Value::as_str)
+                if ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload")
+                    .get("method")
+                    .and_then(Value::as_str)
                     == Some("server_request/mcpServer/elicitation/request")
                 {
                     break ingest;
@@ -4163,8 +4292,18 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         .expect("mcp elicitation synthetic ingest should arrive");
 
         assert_eq!(ingest.thread_id, thread_id);
-        assert_eq!(ingest.payload["params"]["threadId"], json!(thread_id));
-        assert_eq!(ingest.payload["params"]["turnId"], json!(turn_id));
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["threadId"],
+            json!(thread_id)
+        );
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["turnId"],
+            json!(turn_id)
+        );
 
         server.stop().await;
     }
@@ -4224,7 +4363,11 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .recv()
                     .await
                     .expect("ingest stream should stay open");
-                if ingest.payload.get("method").and_then(Value::as_str)
+                if ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload")
+                    .get("method")
+                    .and_then(Value::as_str)
                     == Some("server_request/mcpServer/elicitation/request")
                 {
                     break ingest;
@@ -4236,11 +4379,23 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
 
         assert_eq!(ingest.thread_id, thread_id);
         assert_eq!(
-            ingest.payload["params"]["serverName"],
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["serverName"],
             json!("minos_teamwork")
         );
-        assert_eq!(ingest.payload["params"]["threadId"], json!(thread_id));
-        assert_eq!(ingest.payload["params"]["turnId"], json!(turn_id));
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["threadId"],
+            json!(thread_id)
+        );
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["turnId"],
+            json!(turn_id)
+        );
 
         server.stop().await;
     }
@@ -4293,7 +4448,12 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .recv()
                     .await
                     .expect("ingest stream should stay open");
-                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/request")
+                if ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload")
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("approval/request")
                 {
                     break ingest;
                 }
@@ -4304,12 +4464,26 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
 
         assert_eq!(ingest.thread_id, thread_id);
         assert_eq!(
-            ingest.payload["params"]["method"],
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["method"],
             json!("item/tool/requestUserInput")
         );
-        assert_eq!(ingest.payload["params"]["thread_id"], json!(thread_id));
-        assert_eq!(ingest.payload["params"]["turn_id"], json!(turn_id));
-        let request_id = ingest.payload["params"]["request_id"]
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["thread_id"],
+            json!(thread_id)
+        );
+        assert_eq!(
+            ingest
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["turn_id"],
+            json!(turn_id)
+        );
+        let request_id = ingest
+            .json_value()
+            .expect("raw ingest should contain JSON payload")["params"]["request_id"]
             .as_str()
             .expect("request id should be present")
             .to_string();
@@ -4364,7 +4538,12 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .recv()
                     .await
                     .expect("ingest stream should stay open");
-                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/timeout")
+                if ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload")
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("approval/timeout")
                 {
                     break ingest;
                 }
@@ -4373,12 +4552,19 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         .await
         .expect("approval/timeout ingest should arrive");
 
-        let request_id = timed_out.payload["params"]["request_id"]
+        let request_id = timed_out
+            .json_value()
+            .expect("raw ingest should contain JSON payload")["params"]["request_id"]
             .as_str()
             .expect("timeout ingest should carry request_id")
             .to_string();
         assert_eq!(timed_out.thread_id, thread_id);
-        assert_eq!(timed_out.payload["params"]["reason"], json!("timeout"));
+        assert_eq!(
+            timed_out
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["reason"],
+            json!("timeout")
+        );
         assert!(!mgr.pending_approvals.contains_key(&request_id));
 
         server.stop().await;
@@ -4423,7 +4609,12 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .recv()
                     .await
                     .expect("ingest stream should stay open");
-                if ingest.payload.get("method").and_then(Value::as_str) == Some("approval/request")
+                if ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload")
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("approval/request")
                 {
                     break ingest;
                 }
@@ -4431,7 +4622,9 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         })
         .await
         .expect("approval/request ingest should arrive");
-        let request_id = approval_request.payload["params"]["request_id"]
+        let request_id = approval_request
+            .json_value()
+            .expect("raw ingest should contain JSON payload")["params"]["request_id"]
             .as_str()
             .expect("approval/request ingest should carry request_id")
             .to_string();

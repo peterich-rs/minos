@@ -4,15 +4,15 @@
 //!
 //! Spec R3.4 / Plan P6.3.
 
-use minos_agent_runtime::config::RawIngest;
 use minos_agent_runtime::pty_agent::PtyAgent;
+use minos_agent_runtime::IngestSink;
 use minos_domain::AgentName;
-use tokio::sync::broadcast;
 
 #[cfg(unix)]
 #[tokio::test]
 async fn pty_agent_reads_stdout_and_accepts_stdin() {
-    let (tx, mut rx) = broadcast::channel::<RawIngest>(64);
+    let sink = IngestSink::new(64);
+    let mut rx = sink.subscribe();
 
     // Spawn a shell that prints "hello", reads one line, then prints "got <line>"
     let workspace = std::env::temp_dir();
@@ -38,7 +38,7 @@ async fn pty_agent_reads_stdout_and_accepts_stdin() {
         &workspace,
         AgentName::Claude,
         "test-thread-1".to_string(),
-        tx.clone(),
+        sink.clone(),
     )
     .expect("spawn should succeed");
 
@@ -50,7 +50,9 @@ async fn pty_agent_reads_stdout_and_accepts_stdin() {
 
     assert_eq!(first.thread_id, "test-thread-1");
     assert_eq!(first.agent, AgentName::Claude);
-    let payload = first.payload;
+    let payload = first
+        .json_value()
+        .expect("raw ingest should contain JSON payload");
     assert_eq!(payload["kind"], "raw");
     assert_eq!(payload["raw_kind"], "stdout");
     // payload_json is the JSON-encoded string "hello"
@@ -68,11 +70,21 @@ async fn pty_agent_reads_stdout_and_accepts_stdin() {
         .expect("should receive within 5s")
         .expect("channel should not be closed");
 
-    assert_eq!(second.payload["raw_kind"], "stdout");
-    assert_eq!(second.payload["payload_json"], "\"got world\"");
+    assert_eq!(
+        second
+            .json_value()
+            .expect("raw ingest should contain JSON payload")["raw_kind"],
+        "stdout"
+    );
+    assert_eq!(
+        second
+            .json_value()
+            .expect("raw ingest should contain JSON payload")["payload_json"],
+        "\"got world\""
+    );
 
     // Close the agent
-    agent.close(&tx).await;
+    agent.close(&sink).await;
 
     // Should get a thread_closed event
     let closed = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -80,6 +92,16 @@ async fn pty_agent_reads_stdout_and_accepts_stdin() {
         .expect("should receive close event")
         .expect("channel should not be closed");
 
-    assert_eq!(closed.payload["kind"], "thread_closed");
-    assert_eq!(closed.payload["thread_id"], "test-thread-1");
+    assert_eq!(
+        closed
+            .json_value()
+            .expect("raw ingest should contain JSON payload")["kind"],
+        "thread_closed"
+    );
+    assert_eq!(
+        closed
+            .json_value()
+            .expect("raw ingest should contain JSON payload")["thread_id"],
+        "test-thread-1"
+    );
 }

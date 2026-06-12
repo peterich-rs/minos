@@ -4,6 +4,8 @@
 //! permanent home for `AgentManager` consumers.
 
 use minos_domain::AgentName;
+use minos_ui_protocol::{ArtifactRef, DisplayPayload, MessageRole};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -210,13 +212,267 @@ impl AgentLaunchMode {
     }
 }
 
-/// One raw codex notification, carried verbatim across the manager broadcast.
-#[derive(Debug, Clone)]
+pub const INLINE_RAW_BODY_THRESHOLD: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RawBody {
+    InlineBytes { bytes: Vec<u8>, media_type: String },
+    Artifact { artifact: ArtifactRef },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentEventProjection {
+    MessageStarted {
+        message_id: String,
+        role: MessageRole,
+    },
+    MessageDelta {
+        message_id: String,
+        lane: TextLane,
+        text: DisplayPayload,
+    },
+    MessageCompleted {
+        message_id: String,
+    },
+    ToolCallStarted {
+        message_id: String,
+        tool_call_id: String,
+        name: String,
+        args: DisplayPayload,
+    },
+    ToolOutput {
+        tool_call_id: String,
+        stream: ToolStream,
+        output: DisplayPayload,
+    },
+    ToolCallCompleted {
+        tool_call_id: String,
+        status: ToolStatus,
+    },
+    Raw {
+        event_type: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextLane {
+    Assistant,
+    Reasoning,
+    User,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStream {
+    Stdout,
+    Stderr,
+    Result,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+/// One raw agent event carried across the runtime ingest plane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RawIngest {
     pub agent: AgentName,
     pub thread_id: String,
-    pub payload: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
+    pub body: RawBody,
     pub ts_ms: i64,
+}
+
+impl RawIngest {
+    #[must_use]
+    pub fn from_json(agent: AgentName, thread_id: String, payload: Value, ts_ms: i64) -> Self {
+        let provider_session_id = provider_session_id_from_value(agent, &payload);
+        let event_type = event_type_from_value(agent, &payload);
+        let provider_event_id = provider_event_id_from_value(&payload);
+        let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| b"null".to_vec());
+        Self::from_bytes_with_meta(
+            agent,
+            thread_id,
+            bytes,
+            "application/json".to_string(),
+            ts_ms,
+            provider_session_id,
+            provider_event_id,
+            event_type,
+        )
+    }
+
+    #[must_use]
+    pub fn from_bytes(
+        agent: AgentName,
+        thread_id: String,
+        bytes: Vec<u8>,
+        media_type: impl Into<String>,
+        ts_ms: i64,
+    ) -> Self {
+        Self::from_bytes_with_meta(
+            agent,
+            thread_id,
+            bytes,
+            media_type.into(),
+            ts_ms,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[must_use]
+    pub fn from_bytes_with_meta(
+        agent: AgentName,
+        thread_id: String,
+        bytes: Vec<u8>,
+        media_type: String,
+        ts_ms: i64,
+        provider_session_id: Option<String>,
+        provider_event_id: Option<String>,
+        event_type: Option<String>,
+    ) -> Self {
+        Self {
+            agent,
+            thread_id,
+            provider_session_id,
+            provider_event_id,
+            event_type,
+            body: RawBody::InlineBytes { bytes, media_type },
+            ts_ms,
+        }
+    }
+
+    #[must_use]
+    pub fn inline_bytes(&self) -> Option<&[u8]> {
+        match &self.body {
+            RawBody::InlineBytes { bytes, .. } => Some(bytes.as_slice()),
+            RawBody::Artifact { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn media_type(&self) -> &str {
+        match &self.body {
+            RawBody::InlineBytes { media_type, .. } => media_type,
+            RawBody::Artifact { artifact } => &artifact.media_type,
+        }
+    }
+
+    pub fn json_value(&self) -> Option<Value> {
+        let bytes = self.inline_bytes()?;
+        serde_json::from_slice(bytes).ok()
+    }
+
+    #[must_use]
+    pub fn body_len(&self) -> u64 {
+        match &self.body {
+            RawBody::InlineBytes { bytes, .. } => bytes.len() as u64,
+            RawBody::Artifact { artifact } => artifact.size_bytes,
+        }
+    }
+}
+
+fn provider_session_id_from_value(agent: AgentName, payload: &Value) -> Option<String> {
+    match agent {
+        AgentName::Claude => payload
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        AgentName::Gemini => payload
+            .get("params")
+            .and_then(|params| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("sessionId").and_then(Value::as_str))
+            .map(str::to_string),
+        AgentName::Opencode => {
+            let properties = payload.get("properties").unwrap_or(payload);
+            properties
+                .get("sessionID")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    properties
+                        .get("info")
+                        .and_then(|info| info.get("sessionID").or_else(|| info.get("id")))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    properties
+                        .get("part")
+                        .and_then(|part| part.get("sessionID"))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    payload
+                        .get("session")
+                        .and_then(|session| session.get("id"))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    payload
+                        .get("message")
+                        .and_then(|message| message.get("sessionID"))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    payload
+                        .get("part")
+                        .and_then(|part| part.get("sessionID"))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| payload.get("sessionID").and_then(Value::as_str))
+                .map(str::to_string)
+        }
+        AgentName::Codex => None,
+    }
+}
+
+fn event_type_from_value(agent: AgentName, payload: &Value) -> Option<String> {
+    match agent {
+        AgentName::Codex => payload
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        AgentName::Claude => payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        AgentName::Gemini => payload
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        AgentName::Opencode => payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }
+}
+
+fn provider_event_id_from_value(payload: &Value) -> Option<String> {
+    payload
+        .get("id")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("event_id").and_then(Value::as_str))
+        .or_else(|| {
+            payload
+                .get("params")
+                .and_then(|params| params.get("id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
 }
 
 #[cfg(test)]

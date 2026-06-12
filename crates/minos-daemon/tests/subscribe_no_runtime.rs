@@ -41,6 +41,10 @@ impl PeerStateObserver for Capture<PeerState> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn subscribe_relay_link_and_peer_work_without_current_runtime() {
+    let home = tempfile::tempdir().expect("temp minos home");
+    let previous_home = std::env::var_os("MINOS_HOME");
+    std::env::set_var("MINOS_HOME", home.path());
+
     let handle = DaemonHandle::start(
         RelayConfig::new(String::new()),
         DeviceId::new(),
@@ -113,4 +117,9 @@ async fn subscribe_relay_link_and_peer_work_without_current_runtime() {
         "initial snapshot should be Unpaired with no persisted peer, got {:?}",
         peer[0]
     );
+
+    match previous_home {
+        Some(path) => std::env::set_var("MINOS_HOME", path),
+        None => std::env::remove_var("MINOS_HOME"),
+    }
 }

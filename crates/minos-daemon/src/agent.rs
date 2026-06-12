@@ -15,9 +15,9 @@ use minos_protocol::{
     GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
     ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
     ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, LocalGroupChatMessage,
-    LocalGroupChatMessageKind, PauseReason as ProtoPauseReason, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    LocalGroupChatMessageKind, LocalIngestFrame, PauseReason as ProtoPauseReason,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState,
+    ThreadSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::ThreadEndReason;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -57,6 +57,7 @@ pub struct AgentGlue {
     /// pre-Phase-C `AgentRuntime`. Multi-thread fan-out lands in C17.
     state_tx: Arc<watch::Sender<ThreadState>>,
     state_rx: watch::Receiver<ThreadState>,
+    persisted_ingest_tx: broadcast::Sender<LocalIngestFrame>,
     /// Default workspace dir used when `start_agent` is invoked under the
     /// legacy surface (no workspace param). Resolved once at construction
     /// time.
@@ -103,7 +104,7 @@ impl AgentGlue {
         store: Arc<LocalStore>,
         default_workspace: PathBuf,
     ) -> Self {
-        // Spawn the bridge: every RawIngest from the manager is forwarded to
+        // Spawn the bridge: every durable RawIngest from the manager is forwarded to
         // the EventWriter (which persists + broadcasts the corresponding
         // `Envelope::Ingest` outbound).
         //
@@ -112,20 +113,35 @@ impl AgentGlue {
         // the FK-error spam; post-fix the success path was silent and the
         // user couldn't tell whether codex was active. Volume is bounded
         // by codex's own emit rate (~tens/s/thread per spec §8.7).
-        let mut rx = manager.ingest_stream();
+        let (persisted_ingest_tx, _) = broadcast::channel(256);
+        let mut rx = manager.install_durable_ingest_stream();
         let writer_clone = writer.clone();
+        let persisted_ingest_tx_clone = persisted_ingest_tx.clone();
         tokio::spawn(async move {
-            while let Ok(ingest) = rx.recv().await {
+            while let Some(ingest) = rx.recv().await {
                 let thread_id = ingest.thread_id.clone();
-                let payload_bytes = serde_json::to_vec(&ingest.payload).map_or(0, |v| v.len());
+                let agent = ingest.agent;
+                let ts_ms = ingest.ts_ms;
+                let payload_bytes = ingest.body_len();
                 match writer_clone.write_live(ingest).await {
-                    Ok(seq) => tracing::info!(
-                        target: "minos_daemon::agent",
-                        thread_id = %thread_id,
-                        seq,
-                        bytes = payload_bytes,
-                        "ingest event committed",
-                    ),
+                    Ok(committed) => {
+                        let seq = committed.seq;
+                        let ui_events = committed.projection;
+                        let _ = persisted_ingest_tx_clone.send(LocalIngestFrame {
+                            thread_id: thread_id.clone(),
+                            seq,
+                            agent,
+                            ui_events,
+                            ts_ms,
+                        });
+                        tracing::info!(
+                            target: "minos_daemon::agent",
+                            thread_id = %thread_id,
+                            seq,
+                            bytes = payload_bytes,
+                            "ingest event committed",
+                        );
+                    }
                     Err(e) => tracing::error!(
                         target: "minos_daemon::agent",
                         error = %e,
@@ -203,6 +219,7 @@ impl AgentGlue {
             store,
             state_tx,
             state_rx,
+            persisted_ingest_tx,
             default_workspace,
         }
     }
@@ -238,8 +255,8 @@ impl AgentGlue {
         let agent = parse_agent_label(&row.agent)?;
         let mut events = Vec::with_capacity(rows.len());
         for event in rows {
-            let payload: serde_json::Value =
-                serde_json::from_slice(&event.payload).map_err(|e| {
+            let ui_events: Vec<minos_ui_protocol::UiEventMessage> =
+                serde_json::from_slice(&event.projection_json).map_err(|e| {
                     MinosError::CodexProtocolError {
                         method: "read_thread_raw_history".into(),
                         message: e.to_string(),
@@ -249,7 +266,7 @@ impl AgentGlue {
                 thread_id: thread_id.to_owned(),
                 seq: u64::try_from(event.seq.max(0)).unwrap_or(0),
                 agent,
-                payload,
+                ui_events,
                 ts_ms: event.ts_ms,
             });
         }
@@ -753,6 +770,11 @@ impl AgentGlue {
     #[must_use]
     pub fn ingest_stream(&self) -> broadcast::Receiver<RawIngest> {
         self.manager.ingest_stream()
+    }
+
+    #[must_use]
+    pub fn persisted_ingest_stream(&self) -> broadcast::Receiver<LocalIngestFrame> {
+        self.persisted_ingest_tx.subscribe()
     }
 
     pub async fn shutdown(&self) -> Result<(), MinosError> {
@@ -1727,13 +1749,26 @@ fn provider_session_id_from_event(
     agent: minos_domain::AgentName,
     event: &EventRow,
 ) -> Option<String> {
-    let payload = serde_json::from_slice(&event.payload).ok()?;
+    let payload = serde_json::from_slice(event.body_inline.as_deref()?).ok()?;
     provider_session_id_from_ingest(&RawIngest {
         agent,
         thread_id: thread_id.to_string(),
-        payload,
+        provider_session_id: provider_session_id_from_payload(agent, &payload),
+        provider_event_id: None,
+        event_type: None,
+        body: minos_agent_runtime::RawBody::InlineBytes {
+            bytes: serde_json::to_vec(&payload).ok()?,
+            media_type: "application/json".into(),
+        },
         ts_ms: event.ts_ms,
     })
+}
+
+fn provider_session_id_from_payload(
+    agent: minos_domain::AgentName,
+    payload: &serde_json::Value,
+) -> Option<String> {
+    RawIngest::from_json(agent, String::new(), payload.clone(), 0).provider_session_id
 }
 
 fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState {
@@ -1843,6 +1878,43 @@ mod tests {
         assert_eq!(response.threads[0].message_count, 3);
         assert_eq!(response.threads[0].first_ts_ms, 30);
         assert_eq!(response.threads[0].last_ts_ms, 40);
+    }
+
+    #[tokio::test]
+    async fn persisted_ingest_stream_emits_committed_event_seq() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-live", "codex", 10, 20).await;
+        test.glue
+            .manager
+            .register_persisted_thread(
+                "thr-live".into(),
+                PathBuf::from("/w"),
+                AgentName::Codex,
+                None,
+                ThreadState::Idle,
+                3,
+            )
+            .await
+            .unwrap();
+
+        let mut rx = test.glue.persisted_ingest_stream();
+        let _ = test
+            .glue
+            .manager
+            .send_user_message("thr-live", "hello".into())
+            .await;
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("persisted ingest should be emitted")
+            .expect("persisted ingest channel should stay open");
+
+        assert_eq!(frame.thread_id, "thr-live");
+        assert_eq!(frame.seq, 4);
+        assert_eq!(frame.agent, AgentName::Codex);
+        assert!(frame.ui_events.iter().any(|event| matches!(
+            event,
+            minos_ui_protocol::UiEventMessage::MessageStarted { .. }
+        )));
     }
 
     #[tokio::test]
@@ -2036,7 +2108,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, 1, ?, 25, 'live')",
+            "INSERT INTO events(thread_id, seq, body_kind, body_inline, projection_json, ts_ms, source) VALUES (?, 1, 'inline', ?, ?, 25, 'live')",
         )
         .bind("thr-g")
         .bind(
@@ -2046,6 +2118,7 @@ mod tests {
             }))
             .unwrap(),
         )
+        .bind(b"[]".as_slice())
         .execute(test.glue.store.pool())
         .await
         .unwrap();

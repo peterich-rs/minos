@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::config::RawIngest;
+use crate::manager::IngestSink;
 use crate::manager_event::ManagerEvent;
 use crate::state_machine::ThreadState;
 use crate::thread_handle::ThreadHandle;
@@ -40,7 +41,7 @@ impl ClaudeNdjsonSession {
         resume_session_id: Option<&str>,
         threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
         manager_tx: broadcast::Sender<ManagerEvent>,
-        events_tx: broadcast::Sender<RawIngest>,
+        events_tx: IngestSink,
         subprocess_env: &Arc<HashMap<String, String>>,
         mcp_config_json: Option<&str>,
     ) -> anyhow::Result<Self> {
@@ -90,12 +91,12 @@ impl ClaudeNdjsonSession {
                         }),
                     };
                     sync_thread_from_payload(&payload, &tid, &threads, &manager_tx).await;
-                    let _ = tx.send(RawIngest {
-                        agent: AgentName::Claude,
-                        thread_id: tid.clone(),
+                    tx.emit(RawIngest::from_json(
+                        AgentName::Claude,
+                        tid.clone(),
                         payload,
-                        ts_ms: chrono::Utc::now().timestamp_millis(),
-                    });
+                        chrono::Utc::now().timestamp_millis(),
+                    ));
                 }
             })
         });
@@ -144,7 +145,7 @@ impl ClaudeNdjsonSession {
         &self.workspace
     }
 
-    pub async fn close(mut self, events_tx: &broadcast::Sender<RawIngest>) {
+    pub async fn close(mut self, events_tx: &IngestSink) {
         if let Some(mut child) = self.current_turn_child.take() {
             #[cfg(unix)]
             {
@@ -175,17 +176,17 @@ impl ClaudeNdjsonSession {
             task.abort();
         }
 
-        let _ = events_tx.send(RawIngest {
-            agent: AgentName::Claude,
-            thread_id: self.thread_id.clone(),
-            payload: serde_json::json!({
+        events_tx.emit(RawIngest::from_json(
+            AgentName::Claude,
+            self.thread_id.clone(),
+            serde_json::json!({
                 "kind": "thread_closed",
                 "thread_id": self.thread_id,
                 "reason": { "kind": "user_stopped" },
                 "closed_at_ms": chrono::Utc::now().timestamp_millis()
             }),
-            ts_ms: chrono::Utc::now().timestamp_millis(),
-        });
+            chrono::Utc::now().timestamp_millis(),
+        ));
 
         info!(
             target: "minos_agent_runtime::claude_driver",

@@ -95,7 +95,7 @@ fn message_variants() -> Vec<UiEventMessage> {
         },
         UiEventMessage::TextDelta {
             message_id: "msg-2".into(),
-            text: String::new(),
+            text: String::new().into(),
         },
         UiEventMessage::ReasoningDelta {
             message_id: "msg-2".into(),

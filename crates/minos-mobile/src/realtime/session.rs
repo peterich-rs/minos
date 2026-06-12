@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use minos_domain::ConnectionState;
 use minos_protocol::realtime::{ClientFrame, ServerFrame};
 use minos_protocol::{ChatMessageSummary, SenderType, UserSummary};
-use minos_ui_protocol::UiEventMessage;
+use minos_ui_protocol::{DisplayPayload, UiEventMessage};
 use openwire_core::websocket::Message;
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -263,25 +263,37 @@ fn stream_event_to_ui(kind: &str, payload: &serde_json::Value) -> UiEventMessage
             })
         }
         "agent_text_delta" => event_text(payload)
-            .map(|text| UiEventMessage::TextDelta { message_id, text })
+            .map(|text| UiEventMessage::TextDelta {
+                message_id,
+                text: DisplayPayload::inline(text),
+            })
             .unwrap_or_else(|| UiEventMessage::Raw {
                 kind: kind.to_string(),
                 payload_json: payload.to_string(),
             }),
         "agent_text_replace" => event_text(payload)
-            .map(|text| UiEventMessage::TextReplace { message_id, text })
+            .map(|text| UiEventMessage::TextReplace {
+                message_id,
+                text: DisplayPayload::inline(text),
+            })
             .unwrap_or_else(|| UiEventMessage::Raw {
                 kind: kind.to_string(),
                 payload_json: payload.to_string(),
             }),
         "agent_reasoning_delta" => event_text(payload)
-            .map(|text| UiEventMessage::ReasoningDelta { message_id, text })
+            .map(|text| UiEventMessage::ReasoningDelta {
+                message_id,
+                text: DisplayPayload::inline(text),
+            })
             .unwrap_or_else(|| UiEventMessage::Raw {
                 kind: kind.to_string(),
                 payload_json: payload.to_string(),
             }),
         "agent_reasoning_replace" => event_text(payload)
-            .map(|text| UiEventMessage::ReasoningReplace { message_id, text })
+            .map(|text| UiEventMessage::ReasoningReplace {
+                message_id,
+                text: DisplayPayload::inline(text),
+            })
             .unwrap_or_else(|| UiEventMessage::Raw {
                 kind: kind.to_string(),
                 payload_json: payload.to_string(),
@@ -300,12 +312,14 @@ fn stream_event_to_ui(kind: &str, payload: &serde_json::Value) -> UiEventMessage
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("tool")
                 .to_string(),
-            args_json: payload
-                .get("args_json")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-                .or_else(|| payload.get("args").map(serde_json::Value::to_string))
-                .unwrap_or_else(|| "{}".into()),
+            args_json: DisplayPayload::inline(
+                payload
+                    .get("args_json")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| payload.get("args").map(serde_json::Value::to_string))
+                    .unwrap_or_else(|| "{}".into()),
+            ),
         },
         "agent_tool_result" | "agent_tool_completed" => UiEventMessage::ToolCallCompleted {
             tool_call_id: payload
@@ -314,16 +328,18 @@ fn stream_event_to_ui(kind: &str, payload: &serde_json::Value) -> UiEventMessage
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("tool_call")
                 .to_string(),
-            output: payload
-                .get("output")
-                .or_else(|| payload.get("result"))
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| value.to_string())
-                })
-                .unwrap_or_default(),
+            output: DisplayPayload::inline(
+                payload
+                    .get("output")
+                    .or_else(|| payload.get("result"))
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| value.to_string())
+                    })
+                    .unwrap_or_default(),
+            ),
             is_error: payload
                 .get("is_error")
                 .or_else(|| payload.get("error"))
@@ -391,7 +407,10 @@ mod tests {
                 "message_id": "msg-1",
                 "tool_call_id": "tool-1",
                 "name": "shell",
-                "args_json": "{}"
+                "args_json": {
+                    "kind": "inline",
+                    "text": "{}"
+                }
             }),
         );
 

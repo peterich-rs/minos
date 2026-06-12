@@ -1,8 +1,10 @@
 use crate::error::TranslationError;
-use crate::message::{MessageRole, UiEventMessage};
+use crate::message::{DisplayPayload, MessageRole, UiEventMessage};
 use minos_domain::AgentName;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+
+const TOOL_ARGS_DISPLAY_LIMIT: usize = 64 * 1024;
 
 pub struct ClaudeTranslatorState {
     thread_id: String,
@@ -102,7 +104,10 @@ fn translate_synthetic_user_message(raw: &Value) -> Option<Vec<UiEventMessage>> 
         started_at_ms: 0,
     }];
     if !text.is_empty() {
-        events.push(UiEventMessage::TextDelta { message_id, text });
+        events.push(UiEventMessage::TextDelta {
+            message_id,
+            text: DisplayPayload::inline(text),
+        });
     }
     Some(events)
 }
@@ -226,7 +231,10 @@ fn translate_content_block_delta(
                 return Vec::new();
             }
             state.streamed_message_ids.insert(message_id.clone());
-            vec![UiEventMessage::TextDelta { message_id, text }]
+            vec![UiEventMessage::TextDelta {
+                message_id,
+                text: DisplayPayload::inline(text),
+            }]
         }
         (Some(StreamBlockState::Thinking), "thinking_delta") => {
             let Some(message_id) = state.open_assistant_message_id.clone() else {
@@ -240,11 +248,14 @@ fn translate_content_block_delta(
             if text.is_empty() {
                 return Vec::new();
             }
-            vec![UiEventMessage::ReasoningDelta { message_id, text }]
+            vec![UiEventMessage::ReasoningDelta {
+                message_id,
+                text: DisplayPayload::inline(text),
+            }]
         }
         (Some(StreamBlockState::ToolUse { args_json, .. }), "input_json_delta") => {
             if let Some(partial_json) = delta.get("partial_json").and_then(Value::as_str) {
-                args_json.push_str(partial_json);
+                push_bounded_display(args_json, partial_json, TOOL_ARGS_DISPLAY_LIMIT);
             }
             Vec::new()
         }
@@ -275,7 +286,7 @@ fn translate_content_block_stop(
                 message_id,
                 tool_call_id,
                 name,
-                args_json,
+                args_json: DisplayPayload::inline(args_json),
             }]
         }
         _ => Vec::new(),
@@ -323,7 +334,7 @@ fn translate_assistant_message(
                     if !text.is_empty() {
                         events.push(UiEventMessage::TextDelta {
                             message_id: message_id.clone(),
-                            text,
+                            text: DisplayPayload::inline(text),
                         });
                     }
                 }
@@ -337,7 +348,7 @@ fn translate_assistant_message(
                     if !text.is_empty() {
                         events.push(UiEventMessage::ReasoningDelta {
                             message_id: message_id.clone(),
-                            text,
+                            text: DisplayPayload::inline(text),
                         });
                     }
                 }
@@ -364,7 +375,7 @@ fn translate_assistant_message(
                         message_id: message_id.clone(),
                         tool_call_id,
                         name,
-                        args_json,
+                        args_json: DisplayPayload::inline(args_json),
                     });
                 }
                 _ => {}
@@ -427,6 +438,23 @@ fn translate_error(state: &ClaudeTranslatorState, raw: &Value) -> UiEventMessage
         message,
         message_id: state.open_assistant_message_id.clone(),
     }
+}
+
+fn push_bounded_display(buf: &mut String, delta: &str, limit: usize) {
+    if buf.len() >= limit {
+        return;
+    }
+    let remaining = limit - buf.len();
+    if delta.len() <= remaining {
+        buf.push_str(delta);
+        return;
+    }
+    let mut end = remaining;
+    while end > 0 && !delta.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&delta[..end]);
+    buf.push_str("\n[truncated display buffer; full raw event is stored separately]");
 }
 
 fn start_assistant_message(

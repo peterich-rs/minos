@@ -5,7 +5,7 @@ use futures::{StreamExt, TryStreamExt};
 use jsonrpsee::core::client::{ClientT, SubscriptionClientT};
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use minos_agent_runtime::{
-    CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason, RawIngest,
+    CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
     StartAgentOutcome, ThreadState as RuntimeThreadState,
 };
 use minos_domain::{AgentDescriptor, AgentName};
@@ -25,7 +25,7 @@ use tracing::warn;
 pub struct DaemonBackend {
     client: Arc<WsClient>,
     endpoint: String,
-    ingest_tx: broadcast::Sender<RawIngest>,
+    ingest_tx: broadcast::Sender<LocalIngestFrame>,
     manager_tx: broadcast::Sender<ManagerEvent>,
     state: Arc<StdMutex<BackendConnectionState>>,
 }
@@ -84,7 +84,7 @@ impl DaemonBackend {
 
     fn start_ingest_pump(
         client: Arc<WsClient>,
-        tx: broadcast::Sender<RawIngest>,
+        tx: broadcast::Sender<LocalIngestFrame>,
         state: Arc<StdMutex<BackendConnectionState>>,
         endpoint: String,
     ) {
@@ -109,8 +109,7 @@ impl DaemonBackend {
             while let Some(result) = stream.next().await {
                 match result {
                     Ok(frame) => {
-                        let raw = local_ingest_to_raw(frame);
-                        let _ = tx.send(raw);
+                        let _ = tx.send(frame);
                     }
                     Err(e) => {
                         warn!("ingest subscription error: {e}");
@@ -355,7 +354,7 @@ impl AgentBackend for DaemonBackend {
         Ok(response.messages)
     }
 
-    async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {
+    async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame> {
         self.ingest_tx.subscribe()
     }
 
@@ -371,22 +370,6 @@ impl AgentBackend for DaemonBackend {
                 endpoint: self.endpoint.clone(),
                 last_error: Some("state lock poisoned".into()),
             })
-    }
-}
-
-fn local_ingest_to_raw(frame: LocalIngestFrame) -> RawIngest {
-    let mut payload = frame.payload;
-    if frame.seq > 0 {
-        if let serde_json::Value::Object(map) = &mut payload {
-            map.entry("_local_seq")
-                .or_insert_with(|| serde_json::Value::from(frame.seq));
-        }
-    }
-    RawIngest {
-        thread_id: frame.thread_id,
-        agent: frame.agent,
-        payload,
-        ts_ms: frame.ts_ms,
     }
 }
 

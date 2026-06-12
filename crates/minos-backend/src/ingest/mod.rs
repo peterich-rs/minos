@@ -261,11 +261,12 @@ async fn sync_formal_agent_session_from_ui_events(
             }
             UiEventMessage::TextDelta { message_id, text } => {
                 if assistant_message_known(store, session_id, message_id, &role_by_message).await? {
+                    let text = text.render_preview();
                     append_assistant_turn_summary(
                         store,
                         session_id,
                         message_id,
-                        text,
+                        &text,
                         default_ts_ms,
                     )
                     .await?;
@@ -273,11 +274,12 @@ async fn sync_formal_agent_session_from_ui_events(
             }
             UiEventMessage::TextReplace { message_id, text } => {
                 if assistant_message_known(store, session_id, message_id, &role_by_message).await? {
+                    let text = text.render_preview();
                     replace_assistant_turn_summary(
                         store,
                         session_id,
                         message_id,
-                        text,
+                        &text,
                         default_ts_ms,
                     )
                     .await?;
@@ -582,7 +584,9 @@ fn derive_title_from_translated(
     }
 
     translated.iter().find_map(|ui| match ui {
-        minos_ui_protocol::UiEventMessage::TextDelta { text, .. } => sanitize_title(text),
+        minos_ui_protocol::UiEventMessage::TextDelta { text, .. } => {
+            sanitize_title(&text.render_preview())
+        }
         _ => None,
     })
 }

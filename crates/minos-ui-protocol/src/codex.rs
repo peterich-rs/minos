@@ -7,11 +7,13 @@
 //! state for history reads so translations are deterministic.
 
 use crate::error::TranslationError;
-use crate::message::{MessageRole, ThreadEndReason, UiEventMessage};
+use crate::message::{DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage};
 use minos_domain::AgentName;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+const TOOL_ARGS_DISPLAY_LIMIT: usize = 64 * 1024;
 
 /// Per-thread state the translator accumulates while streaming raw codex
 /// notifications. Not thread-safe; one instance per `thread_id`.
@@ -190,7 +192,7 @@ pub fn translate(
                     if !text.is_empty() {
                         events.push(UiEventMessage::TextDelta {
                             message_id: item_id,
-                            text,
+                            text: DisplayPayload::inline(text),
                         });
                     }
                     Ok(events)
@@ -230,7 +232,7 @@ pub fn translate(
             };
             Ok(vec![UiEventMessage::TextDelta {
                 message_id: msg_id,
-                text,
+                text: DisplayPayload::inline(text),
             }])
         }
         // Note: spec §12.1 (2026-04 codex app-server) canonicalises reasoning
@@ -248,7 +250,7 @@ pub fn translate(
             };
             Ok(vec![UiEventMessage::ReasoningDelta {
                 message_id: msg_id,
-                text,
+                text: DisplayPayload::inline(text),
             }])
         }
         // `*/completed` markers are signal-absorbed per spec §12.1: the
@@ -294,7 +296,7 @@ pub fn translate(
                 })?;
             if let Some(tc) = state.tool_calls.get_mut(cli_id) {
                 if let Some(delta) = params.get("argumentsDelta").and_then(Value::as_str) {
-                    tc.args_buf.push_str(delta);
+                    push_bounded_display(&mut tc.args_buf, delta, TOOL_ARGS_DISPLAY_LIMIT);
                 }
             }
             Ok(vec![])
@@ -311,7 +313,7 @@ pub fn translate(
                     message_id: tc.message_id.clone(),
                     tool_call_id: tc.tool_call_id_stable.clone(),
                     name: tc.name.clone(),
-                    args_json: tc.args_buf.clone(),
+                    args_json: DisplayPayload::inline(tc.args_buf.clone()),
                 }])
             } else {
                 Ok(vec![])
@@ -336,7 +338,7 @@ pub fn translate(
             if let Some(tc) = state.tool_calls.remove(cli_id) {
                 Ok(vec![UiEventMessage::ToolCallCompleted {
                     tool_call_id: tc.tool_call_id_stable,
-                    output,
+                    output: DisplayPayload::inline(output),
                     is_error,
                 }])
             } else {
@@ -385,6 +387,23 @@ pub fn translate(
     }
 }
 
+fn push_bounded_display(buf: &mut String, delta: &str, limit: usize) {
+    if buf.len() >= limit {
+        return;
+    }
+    let remaining = limit - buf.len();
+    if delta.len() <= remaining {
+        buf.push_str(delta);
+        return;
+    }
+    let mut end = remaining;
+    while end > 0 && !delta.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&delta[..end]);
+    buf.push_str("\n[truncated display buffer; full raw event is stored separately]");
+}
+
 fn translate_item_completed(
     state: &mut CodexTranslatorState,
     params: &Value,
@@ -415,7 +434,7 @@ fn translate_item_completed(
             }
             events.push(UiEventMessage::TextReplace {
                 message_id: item_id.to_string(),
-                text,
+                text: DisplayPayload::inline(text),
             });
             events
         }
@@ -435,7 +454,7 @@ fn translate_item_completed(
             } else {
                 vec![UiEventMessage::ReasoningReplace {
                     message_id: msg_id,
-                    text,
+                    text: DisplayPayload::inline(text),
                 }]
             }
         }
@@ -466,11 +485,11 @@ fn translate_item_completed(
                     message_id: msg_id,
                     tool_call_id: tool_call_id.clone(),
                     name,
-                    args_json,
+                    args_json: DisplayPayload::inline(args_json),
                 },
                 UiEventMessage::ToolCallCompleted {
                     tool_call_id,
-                    output,
+                    output: DisplayPayload::inline(output),
                     is_error,
                 },
             ]
@@ -493,11 +512,11 @@ fn translate_item_completed(
                     message_id: msg_id,
                     tool_call_id: tool_call_id.clone(),
                     name,
-                    args_json,
+                    args_json: DisplayPayload::inline(args_json),
                 },
                 UiEventMessage::ToolCallCompleted {
                     tool_call_id,
-                    output,
+                    output: DisplayPayload::inline(output),
                     is_error,
                 },
             ]

@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::config::RawIngest;
+use crate::manager::IngestSink;
 use crate::manager_event::ManagerEvent;
 use crate::state_machine::ThreadState;
 use crate::thread_handle::ThreadHandle;
@@ -251,7 +252,7 @@ pub fn spawn_sse_pump(
     session_map: Arc<Mutex<HashMap<String, String>>>,
     threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
     manager_tx: broadcast::Sender<ManagerEvent>,
-    events_tx: broadcast::Sender<RawIngest>,
+    events_tx: IngestSink,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -290,7 +291,7 @@ async fn try_sse_connect(
     session_map: &Arc<Mutex<HashMap<String, String>>>,
     threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
     manager_tx: &broadcast::Sender<ManagerEvent>,
-    events_tx: &broadcast::Sender<RawIngest>,
+    events_tx: &IngestSink,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     info!(
@@ -328,13 +329,13 @@ async fn try_sse_connect(
                     );
                     continue;
                 };
+                events_tx.emit(RawIngest::from_json(
+                    AgentName::Opencode,
+                    thread_id.clone(),
+                    payload.clone(),
+                    chrono::Utc::now().timestamp_millis(),
+                ));
                 sync_thread_state(&payload, &thread_id, threads, manager_tx).await;
-                let _ = events_tx.send(RawIngest {
-                    agent: AgentName::Opencode,
-                    thread_id,
-                    payload,
-                    ts_ms: chrono::Utc::now().timestamp_millis(),
-                });
             }
             Err(e) => {
                 warn!(

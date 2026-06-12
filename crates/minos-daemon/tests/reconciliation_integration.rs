@@ -55,11 +55,12 @@ async fn seed_thread_with_events(
     .unwrap();
     for s in seqs {
         sqlx::query(
-            "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, 'live')",
+            "INSERT INTO events(thread_id, seq, body_kind, body_inline, projection_json, ts_ms, source) VALUES (?, ?, 'inline', ?, ?, ?, 'live')",
         )
         .bind(thread_id)
         .bind(*s as i64)
         .bind(serde_json::to_vec(&serde_json::json!({"seq": s})).unwrap())
+        .bind(b"[]".as_slice())
         .bind(0i64)
         .execute(store.pool())
         .await

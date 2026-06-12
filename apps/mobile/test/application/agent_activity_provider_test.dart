@@ -39,7 +39,10 @@ void main() {
             role: MessageRole.user,
             startedAtMs: platformInt64FromInt(1000),
           ),
-          const UiEventMessage.textDelta(messageId: 'user-1', text: 'hello'),
+          const UiEventMessage.textDelta(
+            messageId: 'user-1',
+            text: DisplayPayload.inline(text: 'hello'),
+          ),
           UiEventMessage.messageCompleted(
             messageId: 'user-1',
             finishedAtMs: platformInt64FromInt(1001),
@@ -63,7 +66,7 @@ void main() {
             ),
             const UiEventMessage.reasoningDelta(
               messageId: 'assistant-1',
-              text: 'checking the repository',
+              text: DisplayPayload.inline(text: 'checking the repository'),
             ),
           ],
         );
@@ -88,7 +91,7 @@ void main() {
             messageId: 'assistant-1',
             toolCallId: 'tool-1',
             name: 'rg',
-            argsJson: '{}',
+            argsJson: DisplayPayload.inline(text: '{}'),
           ),
         ],
       );
@@ -109,7 +112,7 @@ void main() {
           ),
           const UiEventMessage.textDelta(
             messageId: 'assistant-1',
-            text: 'done',
+            text: DisplayPayload.inline(text: 'done'),
           ),
           UiEventMessage.messageCompleted(
             messageId: 'assistant-1',

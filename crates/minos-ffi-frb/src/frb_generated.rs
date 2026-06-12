@@ -3985,6 +3985,14 @@ const _: fn() = || {
         let _: i64 = AgentSummary.updated_at_ms;
     }
     {
+        let ArtifactRef = None::<crate::api::minos::ArtifactRef>.unwrap();
+        let _: String = ArtifactRef.thread_id;
+        let _: String = ArtifactRef.artifact_id;
+        let _: u64 = ArtifactRef.size_bytes;
+        let _: String = ArtifactRef.sha256;
+        let _: String = ArtifactRef.media_type;
+    }
+    {
         let AuthSummary = None::<crate::api::minos::AuthSummary>.unwrap();
         let _: String = AuthSummary.account_id;
         let _: String = AuthSummary.email;
@@ -4063,6 +4071,31 @@ const _: fn() = || {
     {
         let DeleteProjectRequest = None::<crate::api::minos::DeleteProjectRequest>.unwrap();
         let _: String = DeleteProjectRequest.project_id;
+    }
+    match None::<crate::api::minos::DisplayPayload>.unwrap() {
+        crate::api::minos::DisplayPayload::Inline { text } => {
+            let _: String = text;
+        }
+        crate::api::minos::DisplayPayload::StreamingWindow {
+            head,
+            received_bytes,
+            artifact,
+        } => {
+            let _: String = head;
+            let _: u64 = received_bytes;
+            let _: Option<crate::api::minos::ArtifactRef> = artifact;
+        }
+        crate::api::minos::DisplayPayload::WindowedFinal {
+            head,
+            tail,
+            omitted_bytes,
+            artifact,
+        } => {
+            let _: String = head;
+            let _: String = tail;
+            let _: u64 = omitted_bytes;
+            let _: crate::api::minos::ArtifactRef = artifact;
+        }
     }
     {
         let FriendRequestSummary = None::<crate::api::minos::FriendRequestSummary>.unwrap();
@@ -4366,19 +4399,19 @@ const _: fn() = || {
         }
         crate::api::minos::UiEventMessage::TextDelta { message_id, text } => {
             let _: String = message_id;
-            let _: String = text;
+            let _: crate::api::minos::DisplayPayload = text;
         }
         crate::api::minos::UiEventMessage::TextReplace { message_id, text } => {
             let _: String = message_id;
-            let _: String = text;
+            let _: crate::api::minos::DisplayPayload = text;
         }
         crate::api::minos::UiEventMessage::ReasoningDelta { message_id, text } => {
             let _: String = message_id;
-            let _: String = text;
+            let _: crate::api::minos::DisplayPayload = text;
         }
         crate::api::minos::UiEventMessage::ReasoningReplace { message_id, text } => {
             let _: String = message_id;
-            let _: String = text;
+            let _: crate::api::minos::DisplayPayload = text;
         }
         crate::api::minos::UiEventMessage::ToolCallPlaced {
             message_id,
@@ -4389,7 +4422,7 @@ const _: fn() = || {
             let _: String = message_id;
             let _: String = tool_call_id;
             let _: String = name;
-            let _: String = args_json;
+            let _: crate::api::minos::DisplayPayload = args_json;
         }
         crate::api::minos::UiEventMessage::ToolCallCompleted {
             tool_call_id,
@@ -4397,7 +4430,7 @@ const _: fn() = || {
             is_error,
         } => {
             let _: String = tool_call_id;
-            let _: String = output;
+            let _: crate::api::minos::DisplayPayload = output;
             let _: bool = is_error;
         }
         crate::api::minos::UiEventMessage::Error {
@@ -4650,6 +4683,24 @@ impl SseDecode for crate::api::minos::AgentSummary {
     }
 }
 
+impl SseDecode for crate::api::minos::ArtifactRef {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_threadId = <String>::sse_decode(deserializer);
+        let mut var_artifactId = <String>::sse_decode(deserializer);
+        let mut var_sizeBytes = <u64>::sse_decode(deserializer);
+        let mut var_sha256 = <String>::sse_decode(deserializer);
+        let mut var_mediaType = <String>::sse_decode(deserializer);
+        return crate::api::minos::ArtifactRef {
+            thread_id: var_threadId,
+            artifact_id: var_artifactId,
+            size_bytes: var_sizeBytes,
+            sha256: var_sha256,
+            media_type: var_mediaType,
+        };
+    }
+}
+
 impl SseDecode for crate::api::minos::AuthStateFrame {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -4886,6 +4937,45 @@ impl SseDecode for crate::api::minos::DeleteProjectRequest {
         return crate::api::minos::DeleteProjectRequest {
             project_id: var_projectId,
         };
+    }
+}
+
+impl SseDecode for crate::api::minos::DisplayPayload {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                let mut var_text = <String>::sse_decode(deserializer);
+                return crate::api::minos::DisplayPayload::Inline { text: var_text };
+            }
+            1 => {
+                let mut var_head = <String>::sse_decode(deserializer);
+                let mut var_receivedBytes = <u64>::sse_decode(deserializer);
+                let mut var_artifact =
+                    <Option<crate::api::minos::ArtifactRef>>::sse_decode(deserializer);
+                return crate::api::minos::DisplayPayload::StreamingWindow {
+                    head: var_head,
+                    received_bytes: var_receivedBytes,
+                    artifact: var_artifact,
+                };
+            }
+            2 => {
+                let mut var_head = <String>::sse_decode(deserializer);
+                let mut var_tail = <String>::sse_decode(deserializer);
+                let mut var_omittedBytes = <u64>::sse_decode(deserializer);
+                let mut var_artifact = <crate::api::minos::ArtifactRef>::sse_decode(deserializer);
+                return crate::api::minos::DisplayPayload::WindowedFinal {
+                    head: var_head,
+                    tail: var_tail,
+                    omitted_bytes: var_omittedBytes,
+                    artifact: var_artifact,
+                };
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 
@@ -5804,6 +5894,17 @@ impl SseDecode for Option<crate::api::minos::AgentName> {
     }
 }
 
+impl SseDecode for Option<crate::api::minos::ArtifactRef> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::minos::ArtifactRef>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::minos::ChatMessageReplySummary> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -6207,7 +6308,7 @@ impl SseDecode for crate::api::minos::UiEventMessage {
             }
             5 => {
                 let mut var_messageId = <String>::sse_decode(deserializer);
-                let mut var_text = <String>::sse_decode(deserializer);
+                let mut var_text = <crate::api::minos::DisplayPayload>::sse_decode(deserializer);
                 return crate::api::minos::UiEventMessage::TextDelta {
                     message_id: var_messageId,
                     text: var_text,
@@ -6215,7 +6316,7 @@ impl SseDecode for crate::api::minos::UiEventMessage {
             }
             6 => {
                 let mut var_messageId = <String>::sse_decode(deserializer);
-                let mut var_text = <String>::sse_decode(deserializer);
+                let mut var_text = <crate::api::minos::DisplayPayload>::sse_decode(deserializer);
                 return crate::api::minos::UiEventMessage::TextReplace {
                     message_id: var_messageId,
                     text: var_text,
@@ -6223,7 +6324,7 @@ impl SseDecode for crate::api::minos::UiEventMessage {
             }
             7 => {
                 let mut var_messageId = <String>::sse_decode(deserializer);
-                let mut var_text = <String>::sse_decode(deserializer);
+                let mut var_text = <crate::api::minos::DisplayPayload>::sse_decode(deserializer);
                 return crate::api::minos::UiEventMessage::ReasoningDelta {
                     message_id: var_messageId,
                     text: var_text,
@@ -6231,7 +6332,7 @@ impl SseDecode for crate::api::minos::UiEventMessage {
             }
             8 => {
                 let mut var_messageId = <String>::sse_decode(deserializer);
-                let mut var_text = <String>::sse_decode(deserializer);
+                let mut var_text = <crate::api::minos::DisplayPayload>::sse_decode(deserializer);
                 return crate::api::minos::UiEventMessage::ReasoningReplace {
                     message_id: var_messageId,
                     text: var_text,
@@ -6241,7 +6342,8 @@ impl SseDecode for crate::api::minos::UiEventMessage {
                 let mut var_messageId = <String>::sse_decode(deserializer);
                 let mut var_toolCallId = <String>::sse_decode(deserializer);
                 let mut var_name = <String>::sse_decode(deserializer);
-                let mut var_argsJson = <String>::sse_decode(deserializer);
+                let mut var_argsJson =
+                    <crate::api::minos::DisplayPayload>::sse_decode(deserializer);
                 return crate::api::minos::UiEventMessage::ToolCallPlaced {
                     message_id: var_messageId,
                     tool_call_id: var_toolCallId,
@@ -6251,7 +6353,7 @@ impl SseDecode for crate::api::minos::UiEventMessage {
             }
             10 => {
                 let mut var_toolCallId = <String>::sse_decode(deserializer);
-                let mut var_output = <String>::sse_decode(deserializer);
+                let mut var_output = <crate::api::minos::DisplayPayload>::sse_decode(deserializer);
                 let mut var_isError = <bool>::sse_decode(deserializer);
                 return crate::api::minos::UiEventMessage::ToolCallCompleted {
                     tool_call_id: var_toolCallId,
@@ -6854,6 +6956,30 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::AgentSummar
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ArtifactRef> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.thread_id.into_into_dart().into_dart(),
+            self.0.artifact_id.into_into_dart().into_dart(),
+            self.0.size_bytes.into_into_dart().into_dart(),
+            self.0.sha256.into_into_dart().into_dart(),
+            self.0.media_type.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ArtifactRef>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ArtifactRef>>
+    for crate::api::minos::ArtifactRef
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ArtifactRef> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::minos::AuthStateFrame {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
@@ -7172,6 +7298,54 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::DeleteProje
     for crate::api::minos::DeleteProjectRequest
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::DeleteProjectRequest> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::DisplayPayload> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::DisplayPayload::Inline { text } => {
+                [0.into_dart(), text.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::minos::DisplayPayload::StreamingWindow {
+                head,
+                received_bytes,
+                artifact,
+            } => [
+                1.into_dart(),
+                head.into_into_dart().into_dart(),
+                received_bytes.into_into_dart().into_dart(),
+                artifact.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::DisplayPayload::WindowedFinal {
+                head,
+                tail,
+                omitted_bytes,
+                artifact,
+            } => [
+                2.into_dart(),
+                head.into_into_dart().into_dart(),
+                tail.into_into_dart().into_dart(),
+                omitted_bytes.into_into_dart().into_dart(),
+                artifact.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::DisplayPayload>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::DisplayPayload>>
+    for crate::api::minos::DisplayPayload
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::DisplayPayload> {
         self.into()
     }
 }
@@ -8579,6 +8753,17 @@ impl SseEncode for crate::api::minos::AgentSummary {
     }
 }
 
+impl SseEncode for crate::api::minos::ArtifactRef {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.thread_id, serializer);
+        <String>::sse_encode(self.artifact_id, serializer);
+        <u64>::sse_encode(self.size_bytes, serializer);
+        <String>::sse_encode(self.sha256, serializer);
+        <String>::sse_encode(self.media_type, serializer);
+    }
+}
+
 impl SseEncode for crate::api::minos::AuthStateFrame {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -8754,6 +8939,43 @@ impl SseEncode for crate::api::minos::DeleteProjectRequest {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.project_id, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::DisplayPayload {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::minos::DisplayPayload::Inline { text } => {
+                <i32>::sse_encode(0, serializer);
+                <String>::sse_encode(text, serializer);
+            }
+            crate::api::minos::DisplayPayload::StreamingWindow {
+                head,
+                received_bytes,
+                artifact,
+            } => {
+                <i32>::sse_encode(1, serializer);
+                <String>::sse_encode(head, serializer);
+                <u64>::sse_encode(received_bytes, serializer);
+                <Option<crate::api::minos::ArtifactRef>>::sse_encode(artifact, serializer);
+            }
+            crate::api::minos::DisplayPayload::WindowedFinal {
+                head,
+                tail,
+                omitted_bytes,
+                artifact,
+            } => {
+                <i32>::sse_encode(2, serializer);
+                <String>::sse_encode(head, serializer);
+                <String>::sse_encode(tail, serializer);
+                <u64>::sse_encode(omitted_bytes, serializer);
+                <crate::api::minos::ArtifactRef>::sse_encode(artifact, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 
@@ -9465,6 +9687,16 @@ impl SseEncode for Option<crate::api::minos::AgentName> {
     }
 }
 
+impl SseEncode for Option<crate::api::minos::ArtifactRef> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::minos::ArtifactRef>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::minos::ChatMessageReplySummary> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -9805,22 +10037,22 @@ impl SseEncode for crate::api::minos::UiEventMessage {
             crate::api::minos::UiEventMessage::TextDelta { message_id, text } => {
                 <i32>::sse_encode(5, serializer);
                 <String>::sse_encode(message_id, serializer);
-                <String>::sse_encode(text, serializer);
+                <crate::api::minos::DisplayPayload>::sse_encode(text, serializer);
             }
             crate::api::minos::UiEventMessage::TextReplace { message_id, text } => {
                 <i32>::sse_encode(6, serializer);
                 <String>::sse_encode(message_id, serializer);
-                <String>::sse_encode(text, serializer);
+                <crate::api::minos::DisplayPayload>::sse_encode(text, serializer);
             }
             crate::api::minos::UiEventMessage::ReasoningDelta { message_id, text } => {
                 <i32>::sse_encode(7, serializer);
                 <String>::sse_encode(message_id, serializer);
-                <String>::sse_encode(text, serializer);
+                <crate::api::minos::DisplayPayload>::sse_encode(text, serializer);
             }
             crate::api::minos::UiEventMessage::ReasoningReplace { message_id, text } => {
                 <i32>::sse_encode(8, serializer);
                 <String>::sse_encode(message_id, serializer);
-                <String>::sse_encode(text, serializer);
+                <crate::api::minos::DisplayPayload>::sse_encode(text, serializer);
             }
             crate::api::minos::UiEventMessage::ToolCallPlaced {
                 message_id,
@@ -9832,7 +10064,7 @@ impl SseEncode for crate::api::minos::UiEventMessage {
                 <String>::sse_encode(message_id, serializer);
                 <String>::sse_encode(tool_call_id, serializer);
                 <String>::sse_encode(name, serializer);
-                <String>::sse_encode(args_json, serializer);
+                <crate::api::minos::DisplayPayload>::sse_encode(args_json, serializer);
             }
             crate::api::minos::UiEventMessage::ToolCallCompleted {
                 tool_call_id,
@@ -9841,7 +10073,7 @@ impl SseEncode for crate::api::minos::UiEventMessage {
             } => {
                 <i32>::sse_encode(10, serializer);
                 <String>::sse_encode(tool_call_id, serializer);
-                <String>::sse_encode(output, serializer);
+                <crate::api::minos::DisplayPayload>::sse_encode(output, serializer);
                 <bool>::sse_encode(is_error, serializer);
             }
             crate::api::minos::UiEventMessage::Error {

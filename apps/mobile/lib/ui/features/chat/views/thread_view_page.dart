@@ -5,6 +5,7 @@ import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/active_session_provider.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
+import 'package:minos/application/display_payload_preview.dart';
 import 'package:minos/application/flutter_log.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/preferred_agent_provider.dart';
@@ -811,12 +812,16 @@ class _GroupedEvents {
             lastAssistantMessageId = messageId;
           }
         case UiEventMessage_TextDelta(:final messageId, :final text):
-          textByMsg.putIfAbsent(messageId, StringBuffer.new).write(text);
+          textByMsg
+              .putIfAbsent(messageId, StringBuffer.new)
+              .write(text.renderPreview());
         case UiEventMessage_TextReplace(:final messageId, :final text):
-          textByMsg[messageId] = StringBuffer(text);
+          textByMsg[messageId] = StringBuffer(text.renderPreview());
         case UiEventMessage_ReasoningDelta(:final messageId, :final text):
-          reasoningByMsg.putIfAbsent(messageId, StringBuffer.new).write(text);
-          final preview = _statusPreview(text);
+          reasoningByMsg
+              .putIfAbsent(messageId, StringBuffer.new)
+              .write(text.renderPreview());
+          final preview = _statusPreview(text.renderPreview());
           if (preview != null) {
             reasoningStatusByMsg[messageId] = MessageBubbleStatusLine(
               icon: Icons.psychology_outlined,
@@ -825,8 +830,8 @@ class _GroupedEvents {
             );
           }
         case UiEventMessage_ReasoningReplace(:final messageId, :final text):
-          reasoningByMsg[messageId] = StringBuffer(text);
-          final preview = _statusPreview(text);
+          reasoningByMsg[messageId] = StringBuffer(text.renderPreview());
+          final preview = _statusPreview(text.renderPreview());
           if (preview != null) {
             reasoningStatusByMsg[messageId] = MessageBubbleStatusLine(
               icon: Icons.psychology_outlined,
@@ -845,7 +850,7 @@ class _GroupedEvents {
           toolCalls[toolCallId] = _ToolCallEntry(
             messageId: messageId,
             name: name,
-            args: argsJson,
+            args: argsJson.renderPreview(),
           );
           toolStatusByMsg[messageId] = MessageBubbleStatusLine(
             icon: Icons.build_outlined,
@@ -859,7 +864,7 @@ class _GroupedEvents {
         ):
           final existing = toolCalls[toolCallId];
           if (existing != null) {
-            existing.output = output;
+            existing.output = output.renderPreview();
             existing.isError = isError;
             if (existing.messageId.isNotEmpty) {
               toolStatusByMsg[existing.messageId] = MessageBubbleStatusLine(
@@ -880,7 +885,7 @@ class _GroupedEvents {
               messageId: lastAssistantMessageId ?? '',
               name: '(unknown)',
               args: '{}',
-              output: output,
+              output: output.renderPreview(),
               isError: isError,
             );
             if (lastAssistantMessageId != null) {
@@ -1064,9 +1069,11 @@ List<ThreadUserMessageEcho> _extractUserMessageEchoes(
           roles[messageId] = role;
           texts.putIfAbsent(messageId, StringBuffer.new);
         case UiEventMessage_TextDelta(:final messageId, :final text):
-          texts.putIfAbsent(messageId, StringBuffer.new).write(text);
+          texts
+              .putIfAbsent(messageId, StringBuffer.new)
+              .write(text.renderPreview());
         case UiEventMessage_TextReplace(:final messageId, :final text):
-          texts[messageId] = StringBuffer(text);
+          texts[messageId] = StringBuffer(text.renderPreview());
         default:
           break;
       }

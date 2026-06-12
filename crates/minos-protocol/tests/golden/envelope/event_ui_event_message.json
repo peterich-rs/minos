@@ -7,7 +7,10 @@
   "ui": {
     "kind": "text_delta",
     "message_id": "msg_def",
-    "text": "Hi"
+    "text": {
+      "kind": "inline",
+      "text": "Hi"
+    }
   },
   "ts_ms": 1714000000000
 }

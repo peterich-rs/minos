@@ -120,12 +120,7 @@ pub async fn recover_with_root(
             .get("ts_ms")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
-        let ingest = RawIngest {
-            agent: AgentKind::Codex,
-            thread_id: thread_id.to_string(),
-            payload,
-            ts_ms,
-        };
+        let ingest = RawIngest::from_json(AgentKind::Codex, thread_id.to_string(), payload, ts_ms);
         if let Err(e) = writer.write_recovery(ingest).await {
             tracing::warn!(
                 target: "minos_daemon::jsonl_recover",

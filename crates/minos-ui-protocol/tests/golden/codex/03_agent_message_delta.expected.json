@@ -8,12 +8,12 @@
   {
     "kind":"text_delta",
     "message_id":"i1",
-    "text":"Hel"
+    "text":{"kind":"inline","text":"Hel"}
   },
   {
     "kind":"text_delta",
     "message_id":"i1",
-    "text":"lo"
+    "text":{"kind":"inline","text":"lo"}
   },
   {
     "kind":"message_completed",

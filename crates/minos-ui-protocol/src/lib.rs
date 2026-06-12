@@ -22,7 +22,7 @@ mod message;
 mod opencode;
 
 pub use error::TranslationError;
-pub use message::{MessageRole, ThreadEndReason, UiEventMessage};
+pub use message::{ArtifactRef, DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage};
 pub use minos_domain::AgentName as AgentKind;
 
 pub use claude::{translate as translate_claude, ClaudeTranslatorState};

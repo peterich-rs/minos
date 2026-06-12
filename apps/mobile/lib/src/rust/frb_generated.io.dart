@@ -89,6 +89,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentSummary dco_decode_agent_summary(dynamic raw);
 
   @protected
+  ArtifactRef dco_decode_artifact_ref(dynamic raw);
+
+  @protected
   AuthStateFrame dco_decode_auth_state_frame(dynamic raw);
 
   @protected
@@ -99,6 +102,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AgentName dco_decode_box_autoadd_agent_name(dynamic raw);
+
+  @protected
+  ArtifactRef dco_decode_box_autoadd_artifact_ref(dynamic raw);
 
   @protected
   AuthSummary dco_decode_box_autoadd_auth_summary(dynamic raw);
@@ -117,6 +123,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DeleteProjectRequest dco_decode_box_autoadd_delete_project_request(
     dynamic raw,
   );
+
+  @protected
+  DisplayPayload dco_decode_box_autoadd_display_payload(dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
@@ -201,6 +210,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DeleteProjectRequest dco_decode_delete_project_request(dynamic raw);
+
+  @protected
+  DisplayPayload dco_decode_display_payload(dynamic raw);
 
   @protected
   ErrorKind dco_decode_error_kind(dynamic raw);
@@ -361,6 +373,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AgentName? dco_decode_opt_box_autoadd_agent_name(dynamic raw);
+
+  @protected
+  ArtifactRef? dco_decode_opt_box_autoadd_artifact_ref(dynamic raw);
 
   @protected
   ChatMessageReplySummary?
@@ -526,6 +541,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentSummary sse_decode_agent_summary(SseDeserializer deserializer);
 
   @protected
+  ArtifactRef sse_decode_artifact_ref(SseDeserializer deserializer);
+
+  @protected
   AuthStateFrame sse_decode_auth_state_frame(SseDeserializer deserializer);
 
   @protected
@@ -536,6 +554,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AgentName sse_decode_box_autoadd_agent_name(SseDeserializer deserializer);
+
+  @protected
+  ArtifactRef sse_decode_box_autoadd_artifact_ref(SseDeserializer deserializer);
 
   @protected
   AuthSummary sse_decode_box_autoadd_auth_summary(SseDeserializer deserializer);
@@ -552,6 +573,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DeleteProjectRequest sse_decode_box_autoadd_delete_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DisplayPayload sse_decode_box_autoadd_display_payload(
     SseDeserializer deserializer,
   );
 
@@ -662,6 +688,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DeleteProjectRequest sse_decode_delete_project_request(
     SseDeserializer deserializer,
   );
+
+  @protected
+  DisplayPayload sse_decode_display_payload(SseDeserializer deserializer);
 
   @protected
   ErrorKind sse_decode_error_kind(SseDeserializer deserializer);
@@ -876,6 +905,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ArtifactRef? sse_decode_opt_box_autoadd_artifact_ref(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ChatMessageReplySummary?
   sse_decode_opt_box_autoadd_chat_message_reply_summary(
     SseDeserializer deserializer,
@@ -1074,6 +1108,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_agent_summary(AgentSummary self, SseSerializer serializer);
 
   @protected
+  void sse_encode_artifact_ref(ArtifactRef self, SseSerializer serializer);
+
+  @protected
   void sse_encode_auth_state_frame(
     AuthStateFrame self,
     SseSerializer serializer,
@@ -1088,6 +1125,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_agent_name(
     AgentName self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_artifact_ref(
+    ArtifactRef self,
     SseSerializer serializer,
   );
 
@@ -1112,6 +1155,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_delete_project_request(
     DeleteProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_display_payload(
+    DisplayPayload self,
     SseSerializer serializer,
   );
 
@@ -1253,6 +1302,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_delete_project_request(
     DeleteProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_display_payload(
+    DisplayPayload self,
     SseSerializer serializer,
   );
 
@@ -1520,6 +1575,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_agent_name(
     AgentName? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_artifact_ref(
+    ArtifactRef? self,
     SseSerializer serializer,
   );
 

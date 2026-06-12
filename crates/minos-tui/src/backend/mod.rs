@@ -1,9 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use minos_agent_runtime::{ManagerEvent, RawIngest, StartAgentOutcome};
+use minos_agent_runtime::{ManagerEvent, StartAgentOutcome};
 use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;
-use minos_protocol::LocalGroupChatMessage;
+use minos_protocol::{LocalGroupChatMessage, LocalIngestFrame};
 use serde_json::Value;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
@@ -84,7 +84,7 @@ pub trait AgentBackend: Send + Sync {
         limit: u32,
     ) -> Result<Vec<LocalGroupChatMessage>>;
 
-    async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest>;
+    async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame>;
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent>;
 

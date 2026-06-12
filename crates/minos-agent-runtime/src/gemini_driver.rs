@@ -16,6 +16,7 @@ use tracing::info;
 
 use crate::acp_client::AcpClient;
 use crate::config::RawIngest;
+use crate::manager::IngestSink;
 use minos_domain::AgentName;
 
 #[allow(dead_code)]
@@ -220,35 +221,35 @@ impl GeminiAcpInstance {
 pub fn spawn_acp_pump(
     client: Arc<AcpClient>,
     thread_id: String,
-    events_tx: tokio::sync::broadcast::Sender<RawIngest>,
+    events_tx: IngestSink,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match client.next_inbound().await {
                 Some(crate::acp_client::Inbound::Notification { method, params }) => {
-                    let _ = events_tx.send(RawIngest {
-                        agent: AgentName::Gemini,
-                        thread_id: thread_id.clone(),
-                        payload: serde_json::json!({
+                    events_tx.emit(RawIngest::from_json(
+                        AgentName::Gemini,
+                        thread_id.clone(),
+                        serde_json::json!({
                             "kind": "acp_notification",
                             "method": method,
                             "params": params,
                         }),
-                        ts_ms: chrono::Utc::now().timestamp_millis(),
-                    });
+                        chrono::Utc::now().timestamp_millis(),
+                    ));
                 }
                 Some(crate::acp_client::Inbound::ServerRequest { id, method, params }) => {
-                    let _ = events_tx.send(RawIngest {
-                        agent: AgentName::Gemini,
-                        thread_id: thread_id.clone(),
-                        payload: serde_json::json!({
+                    events_tx.emit(RawIngest::from_json(
+                        AgentName::Gemini,
+                        thread_id.clone(),
+                        serde_json::json!({
                             "kind": "acp_server_request",
                             "id": id,
                             "method": method,
                             "params": params,
                         }),
-                        ts_ms: chrono::Utc::now().timestamp_millis(),
-                    });
+                        chrono::Utc::now().timestamp_millis(),
+                    ));
                     if let Err(error) = reply_to_acp_server_request(&client, id, &method).await {
                         tracing::warn!(
                             target: "minos_agent_runtime::gemini_driver",
@@ -261,15 +262,15 @@ pub fn spawn_acp_pump(
                 }
                 Some(crate::acp_client::Inbound::Closed) => {
                     info!(target: "minos_agent_runtime::gemini_driver", thread_id = %thread_id, "gemini ACP stream closed");
-                    let _ = events_tx.send(RawIngest {
-                        agent: AgentName::Gemini,
-                        thread_id: thread_id.clone(),
-                        payload: serde_json::json!({
+                    events_tx.emit(RawIngest::from_json(
+                        AgentName::Gemini,
+                        thread_id.clone(),
+                        serde_json::json!({
                             "kind": "acp_closed",
                             "thread_id": thread_id,
                         }),
-                        ts_ms: chrono::Utc::now().timestamp_millis(),
-                    });
+                        chrono::Utc::now().timestamp_millis(),
+                    ));
                     break;
                 }
                 None => break,

@@ -163,21 +163,24 @@ impl Reconciliator {
             for row in rows {
                 let seq = u64::try_from(row.seq).unwrap_or(0);
                 all_seqs.push(seq);
-                let mut payload: serde_json::Value = serde_json::from_slice(&row.payload)?;
-                if let serde_json::Value::Object(map) = &mut payload {
-                    map.entry("seq")
-                        .or_insert_with(|| serde_json::Value::Number(row.seq.into()));
-                    map.entry("agent")
-                        .or_insert_with(|| serde_json::Value::String(agent_str.to_string()));
-                    map.entry("ts_ms")
-                        .or_insert_with(|| serde_json::Value::Number(row.ts_ms.into()));
-                }
+                let projection: serde_json::Value = serde_json::from_slice(&row.projection_json)?;
                 let topic = format!("agent_session:{}", row.thread_id);
-                let kind = payload
-                    .get("method")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("agent_event")
-                    .to_string();
+                let kind = "agent_event".to_string();
+                let payload = serde_json::json!({
+                    "version": 2,
+                    "seq": seq,
+                    "agent": agent_str,
+                    "thread_id": row.thread_id,
+                    "ts_ms": row.ts_ms,
+                    "body": {
+                        "kind": row.body_kind,
+                        "artifact_id": row.artifact_id,
+                        "size_bytes": row.artifact_size_bytes,
+                        "sha256": row.artifact_sha256,
+                        "media_type": row.artifact_media_type,
+                    },
+                    "projection": projection,
+                });
                 let frame = ClientFrame::HostStreamEvent {
                     topic,
                     kind,

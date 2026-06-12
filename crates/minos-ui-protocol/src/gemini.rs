@@ -1,5 +1,5 @@
 use crate::error::TranslationError;
-use crate::message::{MessageRole, ThreadEndReason, UiEventMessage};
+use crate::message::{DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -147,7 +147,10 @@ fn translate_user_message(state: &mut GeminiTranslatorState, raw: &Value) -> Vec
         started_at_ms: raw.get("createdAtMs").and_then(Value::as_i64).unwrap_or(0),
     });
     if !text.is_empty() {
-        events.push(UiEventMessage::TextDelta { message_id, text });
+        events.push(UiEventMessage::TextDelta {
+            message_id,
+            text: DisplayPayload::inline(text),
+        });
     }
     events
 }
@@ -217,7 +220,7 @@ fn translate_acp_notification(
                     if !text.is_empty() {
                         events.push(UiEventMessage::TextDelta {
                             message_id: mid,
-                            text,
+                            text: DisplayPayload::inline(text),
                         });
                     }
                 }
@@ -230,7 +233,7 @@ fn translate_acp_notification(
                     if !text.is_empty() {
                         events.push(UiEventMessage::ReasoningDelta {
                             message_id: mid,
-                            text,
+                            text: DisplayPayload::inline(text),
                         });
                     }
                 }
@@ -276,7 +279,9 @@ fn translate_acp_notification(
                     message_id: mid,
                     tool_call_id,
                     name: format!("{kind}: {title}"),
-                    args_json: serde_json::to_string(&update).unwrap_or_default(),
+                    args_json: DisplayPayload::inline(
+                        serde_json::to_string(&update).unwrap_or_default(),
+                    ),
                 });
                 Ok(events)
             }
@@ -316,7 +321,7 @@ fn translate_acp_notification(
                 state.tool_calls.remove(&tool_call_id);
                 Ok(vec![UiEventMessage::ToolCallCompleted {
                     tool_call_id,
-                    output: content,
+                    output: DisplayPayload::inline(content),
                     is_error: false,
                 }])
             } else {
@@ -340,7 +345,7 @@ fn translate_acp_notification(
                 let (mid, mut events) = ensure_assistant_message(state);
                 events.push(UiEventMessage::ReasoningDelta {
                     message_id: mid,
-                    text,
+                    text: DisplayPayload::inline(text),
                 });
                 Ok(events)
             }
@@ -410,7 +415,9 @@ fn translate_acp_server_request(
                     message_id: mid,
                     tool_call_id,
                     name: format!("{kind}: {title}"),
-                    args_json: serde_json::to_string(&tool_call).unwrap_or_default(),
+                    args_json: DisplayPayload::inline(
+                        serde_json::to_string(&tool_call).unwrap_or_default(),
+                    ),
                 });
                 Ok(events)
             }

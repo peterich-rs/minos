@@ -24,9 +24,11 @@ use crate::realtime::auth::{self, SubscriptionAuthError, SubscriptionDenied};
 use crate::realtime::subscription::ConnectionState;
 use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
 use crate::store::{
-    agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands, outbox_events,
+    agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands,
+    outbox_events, raw_events, threads,
 };
 use minos_protocol::realtime::{ClientFrame, ConnectionPrincipal, RealtimeTopic, ServerFrame};
+use minos_ui_protocol::UiEventMessage;
 
 const PUSH_CHANNEL_CAPACITY: usize = 256;
 const SUBSCRIBE_LIMIT_PER_REQUEST: usize = 32;
@@ -890,12 +892,88 @@ async fn on_host_stream_event(
         return Ok(());
     };
 
-    if payload.get("turn_id").and_then(Value::as_str).is_some()
+    if payload.get("version").and_then(Value::as_u64) == Some(2) {
+        handle_projected_ingest_host_stream_event(state, upgrade, &topic, session_id, payload)
+            .await?;
+    } else if payload.get("turn_id").and_then(Value::as_str).is_some()
         && payload.get("seq").and_then(Value::as_i64).is_some()
     {
         handle_formal_host_stream_event(state, upgrade, &topic, session_id, kind, payload).await?;
     } else {
         handle_raw_ingest_host_stream_event(state, upgrade, session_id, payload).await?;
+    }
+
+    Ok(())
+}
+
+async fn handle_projected_ingest_host_stream_event(
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    topic: &RealtimeTopic,
+    session_id: &str,
+    payload: Value,
+) -> Result<(), BackendError> {
+    let seq =
+        payload
+            .get("seq")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| BackendError::StoreDecode {
+                column: "host_stream.payload.seq".into(),
+                message: "missing seq".into(),
+            })?;
+    let agent = payload
+        .get("agent")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<AgentName>(value).ok())
+        .unwrap_or(AgentName::Codex);
+    let ts_ms = payload
+        .get("ts_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    let projection = payload
+        .get("projection")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<UiEventMessage>>(value).ok())
+        .unwrap_or_default();
+
+    let Some(session) = agent_sessions::get(&state.store, session_id).await? else {
+        return Ok(());
+    };
+    let expected_host_id = upgrade.device_id.to_string();
+    if session.host_device_id.as_deref() != Some(expected_host_id.as_str()) {
+        return Ok(());
+    }
+
+    threads::upsert(&state.store, session_id, agent, &expected_host_id, ts_ms).await?;
+    let Some(persisted_seq) =
+        raw_events::insert_assigning_seq(&state.store, session_id, seq, agent, &payload, ts_ms)
+            .await?
+    else {
+        return Ok(());
+    };
+
+    for ui in projection {
+        let payload = match serde_json::to_value(&ui) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::realtime::gateway",
+                    error = %error,
+                    session_id,
+                    "failed to encode projected ui event"
+                );
+                continue;
+            }
+        };
+        let frame = ServerFrame::StreamEvent {
+            topic: topic.topic_string(),
+            kind: "ui_event".to_string(),
+            seq: i64::try_from(persisted_seq).ok(),
+            payload,
+        };
+        for target in state.subscription_mgr.fanout_targets(topic) {
+            let _ = target.send(frame.clone());
+        }
     }
 
     Ok(())

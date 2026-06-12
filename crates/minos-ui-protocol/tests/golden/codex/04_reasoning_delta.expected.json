@@ -8,7 +8,7 @@
   {
     "kind":"reasoning_delta",
     "message_id":"i1",
-    "text":"Thinking…"
+    "text":{"kind":"inline","text":"Thinking…"}
   },
   {
     "kind":"message_completed",

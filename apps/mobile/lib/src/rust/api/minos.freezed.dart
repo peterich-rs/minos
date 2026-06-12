@@ -1019,6 +1019,380 @@ as int,
 }
 
 /// @nodoc
+mixin _$DisplayPayload {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DisplayPayload);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'DisplayPayload()';
+}
+
+
+}
+
+/// @nodoc
+class $DisplayPayloadCopyWith<$Res>  {
+$DisplayPayloadCopyWith(DisplayPayload _, $Res Function(DisplayPayload) __);
+}
+
+
+/// Adds pattern-matching-related methods to [DisplayPayload].
+extension DisplayPayloadPatterns on DisplayPayload {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( DisplayPayload_Inline value)?  inline,TResult Function( DisplayPayload_StreamingWindow value)?  streamingWindow,TResult Function( DisplayPayload_WindowedFinal value)?  windowedFinal,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case DisplayPayload_Inline() when inline != null:
+return inline(_that);case DisplayPayload_StreamingWindow() when streamingWindow != null:
+return streamingWindow(_that);case DisplayPayload_WindowedFinal() when windowedFinal != null:
+return windowedFinal(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( DisplayPayload_Inline value)  inline,required TResult Function( DisplayPayload_StreamingWindow value)  streamingWindow,required TResult Function( DisplayPayload_WindowedFinal value)  windowedFinal,}){
+final _that = this;
+switch (_that) {
+case DisplayPayload_Inline():
+return inline(_that);case DisplayPayload_StreamingWindow():
+return streamingWindow(_that);case DisplayPayload_WindowedFinal():
+return windowedFinal(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( DisplayPayload_Inline value)?  inline,TResult? Function( DisplayPayload_StreamingWindow value)?  streamingWindow,TResult? Function( DisplayPayload_WindowedFinal value)?  windowedFinal,}){
+final _that = this;
+switch (_that) {
+case DisplayPayload_Inline() when inline != null:
+return inline(_that);case DisplayPayload_StreamingWindow() when streamingWindow != null:
+return streamingWindow(_that);case DisplayPayload_WindowedFinal() when windowedFinal != null:
+return windowedFinal(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String text)?  inline,TResult Function( String head,  BigInt receivedBytes,  ArtifactRef? artifact)?  streamingWindow,TResult Function( String head,  String tail,  BigInt omittedBytes,  ArtifactRef artifact)?  windowedFinal,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case DisplayPayload_Inline() when inline != null:
+return inline(_that.text);case DisplayPayload_StreamingWindow() when streamingWindow != null:
+return streamingWindow(_that.head,_that.receivedBytes,_that.artifact);case DisplayPayload_WindowedFinal() when windowedFinal != null:
+return windowedFinal(_that.head,_that.tail,_that.omittedBytes,_that.artifact);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String text)  inline,required TResult Function( String head,  BigInt receivedBytes,  ArtifactRef? artifact)  streamingWindow,required TResult Function( String head,  String tail,  BigInt omittedBytes,  ArtifactRef artifact)  windowedFinal,}) {final _that = this;
+switch (_that) {
+case DisplayPayload_Inline():
+return inline(_that.text);case DisplayPayload_StreamingWindow():
+return streamingWindow(_that.head,_that.receivedBytes,_that.artifact);case DisplayPayload_WindowedFinal():
+return windowedFinal(_that.head,_that.tail,_that.omittedBytes,_that.artifact);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String text)?  inline,TResult? Function( String head,  BigInt receivedBytes,  ArtifactRef? artifact)?  streamingWindow,TResult? Function( String head,  String tail,  BigInt omittedBytes,  ArtifactRef artifact)?  windowedFinal,}) {final _that = this;
+switch (_that) {
+case DisplayPayload_Inline() when inline != null:
+return inline(_that.text);case DisplayPayload_StreamingWindow() when streamingWindow != null:
+return streamingWindow(_that.head,_that.receivedBytes,_that.artifact);case DisplayPayload_WindowedFinal() when windowedFinal != null:
+return windowedFinal(_that.head,_that.tail,_that.omittedBytes,_that.artifact);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class DisplayPayload_Inline extends DisplayPayload {
+  const DisplayPayload_Inline({required this.text}): super._();
+
+
+ final  String text;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$DisplayPayload_InlineCopyWith<DisplayPayload_Inline> get copyWith => _$DisplayPayload_InlineCopyWithImpl<DisplayPayload_Inline>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DisplayPayload_Inline&&(identical(other.text, text) || other.text == text));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,text);
+
+@override
+String toString() {
+  return 'DisplayPayload.inline(text: $text)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $DisplayPayload_InlineCopyWith<$Res> implements $DisplayPayloadCopyWith<$Res> {
+  factory $DisplayPayload_InlineCopyWith(DisplayPayload_Inline value, $Res Function(DisplayPayload_Inline) _then) = _$DisplayPayload_InlineCopyWithImpl;
+@useResult
+$Res call({
+ String text
+});
+
+
+
+
+}
+/// @nodoc
+class _$DisplayPayload_InlineCopyWithImpl<$Res>
+    implements $DisplayPayload_InlineCopyWith<$Res> {
+  _$DisplayPayload_InlineCopyWithImpl(this._self, this._then);
+
+  final DisplayPayload_Inline _self;
+  final $Res Function(DisplayPayload_Inline) _then;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? text = null,}) {
+  return _then(DisplayPayload_Inline(
+text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class DisplayPayload_StreamingWindow extends DisplayPayload {
+  const DisplayPayload_StreamingWindow({required this.head, required this.receivedBytes, this.artifact}): super._();
+
+
+ final  String head;
+ final  BigInt receivedBytes;
+ final  ArtifactRef? artifact;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$DisplayPayload_StreamingWindowCopyWith<DisplayPayload_StreamingWindow> get copyWith => _$DisplayPayload_StreamingWindowCopyWithImpl<DisplayPayload_StreamingWindow>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DisplayPayload_StreamingWindow&&(identical(other.head, head) || other.head == head)&&(identical(other.receivedBytes, receivedBytes) || other.receivedBytes == receivedBytes)&&(identical(other.artifact, artifact) || other.artifact == artifact));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,head,receivedBytes,artifact);
+
+@override
+String toString() {
+  return 'DisplayPayload.streamingWindow(head: $head, receivedBytes: $receivedBytes, artifact: $artifact)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $DisplayPayload_StreamingWindowCopyWith<$Res> implements $DisplayPayloadCopyWith<$Res> {
+  factory $DisplayPayload_StreamingWindowCopyWith(DisplayPayload_StreamingWindow value, $Res Function(DisplayPayload_StreamingWindow) _then) = _$DisplayPayload_StreamingWindowCopyWithImpl;
+@useResult
+$Res call({
+ String head, BigInt receivedBytes, ArtifactRef? artifact
+});
+
+
+
+
+}
+/// @nodoc
+class _$DisplayPayload_StreamingWindowCopyWithImpl<$Res>
+    implements $DisplayPayload_StreamingWindowCopyWith<$Res> {
+  _$DisplayPayload_StreamingWindowCopyWithImpl(this._self, this._then);
+
+  final DisplayPayload_StreamingWindow _self;
+  final $Res Function(DisplayPayload_StreamingWindow) _then;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? head = null,Object? receivedBytes = null,Object? artifact = freezed,}) {
+  return _then(DisplayPayload_StreamingWindow(
+head: null == head ? _self.head : head // ignore: cast_nullable_to_non_nullable
+as String,receivedBytes: null == receivedBytes ? _self.receivedBytes : receivedBytes // ignore: cast_nullable_to_non_nullable
+as BigInt,artifact: freezed == artifact ? _self.artifact : artifact // ignore: cast_nullable_to_non_nullable
+as ArtifactRef?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class DisplayPayload_WindowedFinal extends DisplayPayload {
+  const DisplayPayload_WindowedFinal({required this.head, required this.tail, required this.omittedBytes, required this.artifact}): super._();
+
+
+ final  String head;
+ final  String tail;
+ final  BigInt omittedBytes;
+ final  ArtifactRef artifact;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$DisplayPayload_WindowedFinalCopyWith<DisplayPayload_WindowedFinal> get copyWith => _$DisplayPayload_WindowedFinalCopyWithImpl<DisplayPayload_WindowedFinal>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DisplayPayload_WindowedFinal&&(identical(other.head, head) || other.head == head)&&(identical(other.tail, tail) || other.tail == tail)&&(identical(other.omittedBytes, omittedBytes) || other.omittedBytes == omittedBytes)&&(identical(other.artifact, artifact) || other.artifact == artifact));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,head,tail,omittedBytes,artifact);
+
+@override
+String toString() {
+  return 'DisplayPayload.windowedFinal(head: $head, tail: $tail, omittedBytes: $omittedBytes, artifact: $artifact)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $DisplayPayload_WindowedFinalCopyWith<$Res> implements $DisplayPayloadCopyWith<$Res> {
+  factory $DisplayPayload_WindowedFinalCopyWith(DisplayPayload_WindowedFinal value, $Res Function(DisplayPayload_WindowedFinal) _then) = _$DisplayPayload_WindowedFinalCopyWithImpl;
+@useResult
+$Res call({
+ String head, String tail, BigInt omittedBytes, ArtifactRef artifact
+});
+
+
+
+
+}
+/// @nodoc
+class _$DisplayPayload_WindowedFinalCopyWithImpl<$Res>
+    implements $DisplayPayload_WindowedFinalCopyWith<$Res> {
+  _$DisplayPayload_WindowedFinalCopyWithImpl(this._self, this._then);
+
+  final DisplayPayload_WindowedFinal _self;
+  final $Res Function(DisplayPayload_WindowedFinal) _then;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? head = null,Object? tail = null,Object? omittedBytes = null,Object? artifact = null,}) {
+  return _then(DisplayPayload_WindowedFinal(
+head: null == head ? _self.head : head // ignore: cast_nullable_to_non_nullable
+as String,tail: null == tail ? _self.tail : tail // ignore: cast_nullable_to_non_nullable
+as String,omittedBytes: null == omittedBytes ? _self.omittedBytes : omittedBytes // ignore: cast_nullable_to_non_nullable
+as BigInt,artifact: null == artifact ? _self.artifact : artifact // ignore: cast_nullable_to_non_nullable
+as ArtifactRef,
+  ));
+}
+
+
+}
+
+/// @nodoc
 mixin _$MinosError {
 
 
@@ -4211,7 +4585,7 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  String text)?  textDelta,TResult Function( String messageId,  String text)?  textReplace,TResult Function( String messageId,  String text)?  reasoningDelta,TResult Function( String messageId,  String text)?  reasoningReplace,TResult Function( String messageId,  String toolCallId,  String name,  String argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  String output,  bool isError)?  toolCallCompleted,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  DisplayPayload text)?  textDelta,TResult Function( String messageId,  DisplayPayload text)?  textReplace,TResult Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
@@ -4244,7 +4618,7 @@ return raw(_that.kind,_that.payloadJson);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  String text)  textDelta,required TResult Function( String messageId,  String text)  textReplace,required TResult Function( String messageId,  String text)  reasoningDelta,required TResult Function( String messageId,  String text)  reasoningReplace,required TResult Function( String messageId,  String toolCallId,  String name,  String argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  String output,  bool isError)  toolCallCompleted,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  DisplayPayload text)  textDelta,required TResult Function( String messageId,  DisplayPayload text)  textReplace,required TResult Function( String messageId,  DisplayPayload text)  reasoningDelta,required TResult Function( String messageId,  DisplayPayload text)  reasoningReplace,required TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  DisplayPayload output,  bool isError)  toolCallCompleted,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened():
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated():
@@ -4273,7 +4647,7 @@ return raw(_that.kind,_that.payloadJson);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  String text)?  textDelta,TResult? Function( String messageId,  String text)?  textReplace,TResult? Function( String messageId,  String text)?  reasoningDelta,TResult? Function( String messageId,  String text)?  reasoningReplace,TResult? Function( String messageId,  String toolCallId,  String name,  String argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  String output,  bool isError)?  toolCallCompleted,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  DisplayPayload text)?  textDelta,TResult? Function( String messageId,  DisplayPayload text)?  textReplace,TResult? Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult? Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult? Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
@@ -4661,7 +5035,7 @@ class UiEventMessage_TextDelta extends UiEventMessage {
 
 
  final  String messageId;
- final  String text;
+ final  DisplayPayload text;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
@@ -4693,11 +5067,11 @@ abstract mixin class $UiEventMessage_TextDeltaCopyWith<$Res> implements $UiEvent
   factory $UiEventMessage_TextDeltaCopyWith(UiEventMessage_TextDelta value, $Res Function(UiEventMessage_TextDelta) _then) = _$UiEventMessage_TextDeltaCopyWithImpl;
 @useResult
 $Res call({
- String messageId, String text
+ String messageId, DisplayPayload text
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get text;
 
 }
 /// @nodoc
@@ -4714,11 +5088,20 @@ class _$UiEventMessage_TextDeltaCopyWithImpl<$Res>
   return _then(UiEventMessage_TextDelta(
 messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
 as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
-as String,
+as DisplayPayload,
   ));
 }
 
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get text {
 
+  return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
+    return _then(_self.copyWith(text: value));
+  });
+}
 }
 
 /// @nodoc
@@ -4729,7 +5112,7 @@ class UiEventMessage_TextReplace extends UiEventMessage {
 
 
  final  String messageId;
- final  String text;
+ final  DisplayPayload text;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
@@ -4761,11 +5144,11 @@ abstract mixin class $UiEventMessage_TextReplaceCopyWith<$Res> implements $UiEve
   factory $UiEventMessage_TextReplaceCopyWith(UiEventMessage_TextReplace value, $Res Function(UiEventMessage_TextReplace) _then) = _$UiEventMessage_TextReplaceCopyWithImpl;
 @useResult
 $Res call({
- String messageId, String text
+ String messageId, DisplayPayload text
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get text;
 
 }
 /// @nodoc
@@ -4782,11 +5165,20 @@ class _$UiEventMessage_TextReplaceCopyWithImpl<$Res>
   return _then(UiEventMessage_TextReplace(
 messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
 as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
-as String,
+as DisplayPayload,
   ));
 }
 
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get text {
 
+  return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
+    return _then(_self.copyWith(text: value));
+  });
+}
 }
 
 /// @nodoc
@@ -4797,7 +5189,7 @@ class UiEventMessage_ReasoningDelta extends UiEventMessage {
 
 
  final  String messageId;
- final  String text;
+ final  DisplayPayload text;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
@@ -4829,11 +5221,11 @@ abstract mixin class $UiEventMessage_ReasoningDeltaCopyWith<$Res> implements $Ui
   factory $UiEventMessage_ReasoningDeltaCopyWith(UiEventMessage_ReasoningDelta value, $Res Function(UiEventMessage_ReasoningDelta) _then) = _$UiEventMessage_ReasoningDeltaCopyWithImpl;
 @useResult
 $Res call({
- String messageId, String text
+ String messageId, DisplayPayload text
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get text;
 
 }
 /// @nodoc
@@ -4850,11 +5242,20 @@ class _$UiEventMessage_ReasoningDeltaCopyWithImpl<$Res>
   return _then(UiEventMessage_ReasoningDelta(
 messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
 as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
-as String,
+as DisplayPayload,
   ));
 }
 
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get text {
 
+  return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
+    return _then(_self.copyWith(text: value));
+  });
+}
 }
 
 /// @nodoc
@@ -4865,7 +5266,7 @@ class UiEventMessage_ReasoningReplace extends UiEventMessage {
 
 
  final  String messageId;
- final  String text;
+ final  DisplayPayload text;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
@@ -4897,11 +5298,11 @@ abstract mixin class $UiEventMessage_ReasoningReplaceCopyWith<$Res> implements $
   factory $UiEventMessage_ReasoningReplaceCopyWith(UiEventMessage_ReasoningReplace value, $Res Function(UiEventMessage_ReasoningReplace) _then) = _$UiEventMessage_ReasoningReplaceCopyWithImpl;
 @useResult
 $Res call({
- String messageId, String text
+ String messageId, DisplayPayload text
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get text;
 
 }
 /// @nodoc
@@ -4918,11 +5319,20 @@ class _$UiEventMessage_ReasoningReplaceCopyWithImpl<$Res>
   return _then(UiEventMessage_ReasoningReplace(
 messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
 as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
-as String,
+as DisplayPayload,
   ));
 }
 
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get text {
 
+  return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
+    return _then(_self.copyWith(text: value));
+  });
+}
 }
 
 /// @nodoc
@@ -4935,7 +5345,7 @@ class UiEventMessage_ToolCallPlaced extends UiEventMessage {
  final  String messageId;
  final  String toolCallId;
  final  String name;
- final  String argsJson;
+ final  DisplayPayload argsJson;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
@@ -4967,11 +5377,11 @@ abstract mixin class $UiEventMessage_ToolCallPlacedCopyWith<$Res> implements $Ui
   factory $UiEventMessage_ToolCallPlacedCopyWith(UiEventMessage_ToolCallPlaced value, $Res Function(UiEventMessage_ToolCallPlaced) _then) = _$UiEventMessage_ToolCallPlacedCopyWithImpl;
 @useResult
 $Res call({
- String messageId, String toolCallId, String name, String argsJson
+ String messageId, String toolCallId, String name, DisplayPayload argsJson
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get argsJson;
 
 }
 /// @nodoc
@@ -4990,11 +5400,20 @@ messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nulla
 as String,toolCallId: null == toolCallId ? _self.toolCallId : toolCallId // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,argsJson: null == argsJson ? _self.argsJson : argsJson // ignore: cast_nullable_to_non_nullable
-as String,
+as DisplayPayload,
   ));
 }
 
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get argsJson {
 
+  return $DisplayPayloadCopyWith<$Res>(_self.argsJson, (value) {
+    return _then(_self.copyWith(argsJson: value));
+  });
+}
 }
 
 /// @nodoc
@@ -5005,7 +5424,7 @@ class UiEventMessage_ToolCallCompleted extends UiEventMessage {
 
 
  final  String toolCallId;
- final  String output;
+ final  DisplayPayload output;
  final  bool isError;
 
 /// Create a copy of UiEventMessage
@@ -5038,11 +5457,11 @@ abstract mixin class $UiEventMessage_ToolCallCompletedCopyWith<$Res> implements 
   factory $UiEventMessage_ToolCallCompletedCopyWith(UiEventMessage_ToolCallCompleted value, $Res Function(UiEventMessage_ToolCallCompleted) _then) = _$UiEventMessage_ToolCallCompletedCopyWithImpl;
 @useResult
 $Res call({
- String toolCallId, String output, bool isError
+ String toolCallId, DisplayPayload output, bool isError
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get output;
 
 }
 /// @nodoc
@@ -5059,12 +5478,21 @@ class _$UiEventMessage_ToolCallCompletedCopyWithImpl<$Res>
   return _then(UiEventMessage_ToolCallCompleted(
 toolCallId: null == toolCallId ? _self.toolCallId : toolCallId // ignore: cast_nullable_to_non_nullable
 as String,output: null == output ? _self.output : output // ignore: cast_nullable_to_non_nullable
-as String,isError: null == isError ? _self.isError : isError // ignore: cast_nullable_to_non_nullable
+as DisplayPayload,isError: null == isError ? _self.isError : isError // ignore: cast_nullable_to_non_nullable
 as bool,
   ));
 }
 
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get output {
 
+  return $DisplayPayloadCopyWith<$Res>(_self.output, (value) {
+    return _then(_self.copyWith(output: value));
+  });
+}
 }
 
 /// @nodoc

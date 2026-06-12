@@ -1,4 +1,5 @@
 use jsonrpsee::proc_macros::rpc;
+use minos_ui_protocol::UiEventMessage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,6 +63,22 @@ pub struct ReadThreadRawHistoryResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadArtifactRangeRequest {
+    pub thread_id: String,
+    pub artifact_id: String,
+    pub offset: u64,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadArtifactRangeResponse {
+    pub bytes: Vec<u8>,
+    pub offset: u64,
+    pub total_size: u64,
+    pub eof: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RespondOpencodePermissionRequest {
     pub thread_id: String,
     pub permission_id: String,
@@ -74,7 +91,8 @@ pub struct LocalIngestFrame {
     #[serde(default)]
     pub seq: u64,
     pub agent: minos_domain::AgentName,
-    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub ui_events: Vec<UiEventMessage>,
     pub ts_ms: i64,
 }
 
@@ -173,6 +191,12 @@ pub trait LocalDaemonRpc {
         &self,
         req: ReadGroupChatParams,
     ) -> jsonrpsee::core::RpcResult<ReadGroupChatResponse>;
+
+    #[method(name = "read_artifact_range")]
+    async fn read_artifact_range(
+        &self,
+        req: ReadArtifactRangeRequest,
+    ) -> jsonrpsee::core::RpcResult<ReadArtifactRangeResponse>;
 
     #[subscription(name = "subscribe_ingest", item = LocalIngestFrame)]
     async fn subscribe_ingest(&self) -> jsonrpsee::core::SubscriptionResult;

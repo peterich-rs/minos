@@ -9,9 +9,13 @@
 
 use crate::store::LocalStore;
 use anyhow::Result;
-use minos_agent_runtime::RawIngest;
+use minos_agent_runtime::{RawBody, RawIngest, INLINE_RAW_BODY_THRESHOLD};
 use minos_domain::AgentName;
 use minos_protocol::realtime::ClientFrame;
+use minos_ui_protocol::{
+    translate_claude, translate_codex, translate_gemini, translate_opencode, ClaudeTranslatorState,
+    CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState, UiEventMessage,
+};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -29,11 +33,17 @@ pub struct EventWriter {
     tx: mpsc::Sender<WriteJob>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CommittedIngest {
+    pub seq: u64,
+    pub projection: Vec<UiEventMessage>,
+}
+
 #[derive(Debug)]
 struct WriteJob {
     ingest: RawIngest,
     source: EventSource,
-    ack: tokio::sync::oneshot::Sender<Result<u64>>,
+    ack: tokio::sync::oneshot::Sender<Result<CommittedIngest>>,
 }
 
 impl EventWriter {
@@ -43,16 +53,20 @@ impl EventWriter {
         Self { tx }
     }
 
-    pub async fn write_live(&self, ingest: RawIngest) -> Result<u64> {
+    pub async fn write_live(&self, ingest: RawIngest) -> Result<CommittedIngest> {
         self.write_internal(ingest, EventSource::Live).await
     }
 
-    pub async fn write_recovery(&self, ingest: RawIngest) -> Result<u64> {
+    pub async fn write_recovery(&self, ingest: RawIngest) -> Result<CommittedIngest> {
         self.write_internal(ingest, EventSource::JsonlRecovery)
             .await
     }
 
-    async fn write_internal(&self, ingest: RawIngest, source: EventSource) -> Result<u64> {
+    async fn write_internal(
+        &self,
+        ingest: RawIngest,
+        source: EventSource,
+    ) -> Result<CommittedIngest> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.tx
             .send(WriteJob {
@@ -77,6 +91,7 @@ async fn writer_loop(
     const BATCH_WINDOW: Duration = Duration::from_millis(5);
 
     let mut buf: Vec<WriteJob> = Vec::with_capacity(BATCH_MAX);
+    let mut projector = ProjectionTranslator::default();
     while let Some(first) = rx.recv().await {
         buf.push(first);
         let deadline = Instant::now() + BATCH_WINDOW;
@@ -87,13 +102,14 @@ async fn writer_loop(
                 Ok(None) | Err(_) => break,
             }
         }
-        process_batch(&store, &relay_out, std::mem::take(&mut buf)).await;
+        process_batch(&store, &relay_out, &mut projector, std::mem::take(&mut buf)).await;
     }
 }
 
 async fn process_batch(
     store: &LocalStore,
     relay_out: &mpsc::Sender<ClientFrame>,
+    projector: &mut ProjectionTranslator,
     jobs: Vec<WriteJob>,
 ) {
     if jobs.is_empty() {
@@ -131,7 +147,7 @@ async fn process_batch(
             return;
         }
     };
-    let mut results: Vec<Result<u64>> = Vec::with_capacity(ready_jobs.len());
+    let mut results: Vec<Result<CommittedIngest>> = Vec::with_capacity(ready_jobs.len());
     let mut frames: Vec<ClientFrame> = Vec::with_capacity(ready_jobs.len());
     for job in &ready_jobs {
         let prev: Option<i64> =
@@ -154,19 +170,37 @@ async fn process_batch(
             continue;
         };
         let seq = (prev + 1) as u64;
-        let payload = match serde_json::to_vec(&job.ingest.payload) {
-            Ok(v) => v,
+        let stored_body = match prepare_raw_body(store, &job.ingest).await {
+            Ok(body) => body,
+            Err(e) => {
+                results.push(Err(e));
+                continue;
+            }
+        };
+        let projection =
+            projector.translate(&job.ingest, stored_body.inline_for_projection.as_deref());
+        let projection_json = match serde_json::to_vec(&projection) {
+            Ok(bytes) => bytes,
             Err(e) => {
                 results.push(Err(e.into()));
                 continue;
             }
         };
         if let Err(e) = sqlx::query(
-            "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO events( \
+                thread_id, seq, body_kind, body_inline, artifact_id, artifact_size_bytes, \
+                artifact_sha256, artifact_media_type, projection_json, ts_ms, source \
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&job.ingest.thread_id)
         .bind(seq as i64)
-        .bind(&payload)
+        .bind(stored_body.body_kind)
+        .bind(stored_body.body_inline)
+        .bind(stored_body.artifact_id)
+        .bind(stored_body.artifact_size_bytes)
+        .bind(stored_body.artifact_sha256)
+        .bind(stored_body.artifact_media_type)
+        .bind(projection_json)
         .bind(job.ingest.ts_ms)
         .bind(match job.source {
             EventSource::Live => "live",
@@ -201,19 +235,20 @@ async fn process_batch(
             results.push(Err(e.into()));
             continue;
         }
-        results.push(Ok(seq));
+        results.push(Ok(CommittedIngest {
+            seq,
+            projection: projection.clone(),
+        }));
         let topic = format!("agent_session:{}", job.ingest.thread_id);
         let kind = job
             .ingest
-            .payload
-            .get("method")
-            .and_then(|v| v.as_str())
-            .unwrap_or("agent_event")
-            .to_string();
+            .event_type
+            .clone()
+            .unwrap_or_else(|| "agent_event".to_string());
         frames.push(ClientFrame::HostStreamEvent {
             topic,
             kind,
-            payload: host_stream_payload(&job.ingest, seq),
+            payload: host_stream_payload(&job.ingest, seq, &projection),
         });
     }
     if let Err(e) = tx.commit().await {
@@ -227,6 +262,141 @@ async fn process_batch(
     }
     for frame in frames {
         let _ = relay_out.send(frame).await;
+    }
+}
+
+struct StoredRawBody {
+    body_kind: &'static str,
+    body_inline: Option<Vec<u8>>,
+    artifact_id: Option<String>,
+    artifact_size_bytes: Option<i64>,
+    artifact_sha256: Option<String>,
+    artifact_media_type: Option<String>,
+    inline_for_projection: Option<Vec<u8>>,
+}
+
+async fn prepare_raw_body(store: &LocalStore, ingest: &RawIngest) -> Result<StoredRawBody> {
+    match &ingest.body {
+        RawBody::InlineBytes { bytes, media_type } if bytes.len() >= INLINE_RAW_BODY_THRESHOLD => {
+            let artifact = store
+                .artifacts()
+                .write_bytes(&ingest.thread_id, bytes, media_type)
+                .await?;
+            sqlx::query(
+                "INSERT OR IGNORE INTO artifacts( \
+                    thread_id, artifact_id, size_bytes, sha256, media_type, created_at \
+                 ) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&artifact.thread_id)
+            .bind(&artifact.artifact_id)
+            .bind(artifact.size_bytes as i64)
+            .bind(&artifact.sha256)
+            .bind(&artifact.media_type)
+            .bind(ingest.ts_ms)
+            .execute(store.pool())
+            .await?;
+            Ok(StoredRawBody {
+                body_kind: "artifact",
+                body_inline: None,
+                artifact_id: Some(artifact.artifact_id),
+                artifact_size_bytes: Some(artifact.size_bytes as i64),
+                artifact_sha256: Some(artifact.sha256),
+                artifact_media_type: Some(artifact.media_type),
+                inline_for_projection: Some(bytes.clone()),
+            })
+        }
+        RawBody::InlineBytes { bytes, .. } => Ok(StoredRawBody {
+            body_kind: "inline",
+            body_inline: Some(bytes.clone()),
+            artifact_id: None,
+            artifact_size_bytes: None,
+            artifact_sha256: None,
+            artifact_media_type: None,
+            inline_for_projection: Some(bytes.clone()),
+        }),
+        RawBody::Artifact { artifact } => Ok(StoredRawBody {
+            body_kind: "artifact",
+            body_inline: None,
+            artifact_id: Some(artifact.artifact_id.clone()),
+            artifact_size_bytes: Some(artifact.size_bytes as i64),
+            artifact_sha256: Some(artifact.sha256.clone()),
+            artifact_media_type: Some(artifact.media_type.clone()),
+            inline_for_projection: None,
+        }),
+    }
+}
+
+#[derive(Default)]
+struct ProjectionTranslator {
+    codex: HashMap<String, CodexTranslatorState>,
+    claude: HashMap<String, ClaudeTranslatorState>,
+    gemini: HashMap<String, GeminiTranslatorState>,
+    opencode: HashMap<String, OpencodeTranslatorState>,
+}
+
+impl ProjectionTranslator {
+    fn translate(&mut self, ingest: &RawIngest, raw_bytes: Option<&[u8]>) -> Vec<UiEventMessage> {
+        let Some(raw_bytes) = raw_bytes else {
+            return vec![raw_projection_fallback(ingest)];
+        };
+        let payload = match serde_json::from_slice::<Value>(raw_bytes) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return vec![UiEventMessage::Error {
+                    code: "raw_projection_failed".into(),
+                    message: error.to_string(),
+                    message_id: None,
+                }];
+            }
+        };
+        let translated = match ingest.agent {
+            AgentName::Codex => {
+                let state = self
+                    .codex
+                    .entry(ingest.thread_id.clone())
+                    .or_insert_with(|| CodexTranslatorState::new(ingest.thread_id.clone()));
+                translate_codex(state, &payload)
+            }
+            AgentName::Claude => {
+                let state = self
+                    .claude
+                    .entry(ingest.thread_id.clone())
+                    .or_insert_with(|| ClaudeTranslatorState::new(ingest.thread_id.clone()));
+                translate_claude(state, &payload)
+            }
+            AgentName::Gemini => {
+                let state = self
+                    .gemini
+                    .entry(ingest.thread_id.clone())
+                    .or_insert_with(|| GeminiTranslatorState::new(ingest.thread_id.clone()));
+                translate_gemini(state, &payload)
+            }
+            AgentName::Opencode => {
+                let state = self
+                    .opencode
+                    .entry(ingest.thread_id.clone())
+                    .or_insert_with(|| OpencodeTranslatorState::new(ingest.thread_id.clone()));
+                translate_opencode(state, &payload)
+            }
+        };
+        match translated {
+            Ok(events) => events,
+            Err(error) => vec![UiEventMessage::Error {
+                code: "raw_projection_failed".into(),
+                message: error.to_string(),
+                message_id: None,
+            }],
+        }
+    }
+}
+
+fn raw_projection_fallback(ingest: &RawIngest) -> UiEventMessage {
+    UiEventMessage::Raw {
+        kind: ingest
+            .event_type
+            .clone()
+            .unwrap_or_else(|| "agent_event".to_string()),
+        payload_json: serde_json::to_string(&ingest.body).unwrap_or_default(),
     }
 }
 
@@ -250,76 +420,23 @@ async fn wait_for_thread_parent(store: &LocalStore, thread_id: &str) -> Result<(
     ))
 }
 
-fn host_stream_payload(ingest: &RawIngest, seq: u64) -> Value {
-    let mut payload = ingest.payload.clone();
-    if let Value::Object(map) = &mut payload {
-        map.entry("seq")
-            .or_insert_with(|| Value::Number(serde_json::Number::from(seq)));
-        map.entry("agent")
-            .or_insert_with(|| serde_json::to_value(ingest.agent).unwrap_or(Value::Null));
-        map.entry("ts_ms")
-            .or_insert_with(|| Value::Number(serde_json::Number::from(ingest.ts_ms)));
-    }
-    payload
+fn host_stream_payload(ingest: &RawIngest, seq: u64, projection: &[UiEventMessage]) -> Value {
+    serde_json::json!({
+        "version": 2,
+        "seq": seq,
+        "agent": ingest.agent,
+        "thread_id": ingest.thread_id,
+        "ts_ms": ingest.ts_ms,
+        "event_type": ingest.event_type,
+        "provider_session_id": ingest.provider_session_id,
+        "provider_event_id": ingest.provider_event_id,
+        "body": ingest.body,
+        "projection": projection,
+    })
 }
 
 pub(crate) fn provider_session_id_from_ingest(ingest: &RawIngest) -> Option<String> {
-    match ingest.agent {
-        AgentName::Claude => ingest
-            .payload
-            .get("session_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        AgentName::Opencode => opencode_session_id(&ingest.payload).map(str::to_string),
-        AgentName::Gemini => gemini_session_id(&ingest.payload).map(str::to_string),
-        AgentName::Codex => None,
-    }
-}
-
-fn gemini_session_id(payload: &Value) -> Option<&str> {
-    payload
-        .get("params")
-        .and_then(|params| params.get("sessionId"))
-        .and_then(Value::as_str)
-        .or_else(|| payload.get("sessionId").and_then(Value::as_str))
-}
-
-fn opencode_session_id(payload: &Value) -> Option<&str> {
-    let properties = payload.get("properties").unwrap_or(payload);
-    properties
-        .get("sessionID")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            properties
-                .get("info")
-                .and_then(|info| info.get("sessionID").or_else(|| info.get("id")))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| {
-            properties
-                .get("part")
-                .and_then(|part| part.get("sessionID"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| {
-            payload
-                .get("session")
-                .and_then(|session| session.get("id"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| {
-            payload
-                .get("message")
-                .and_then(|message| message.get("sessionID"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| {
-            payload
-                .get("part")
-                .and_then(|part| part.get("sessionID"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| payload.get("sessionID").and_then(Value::as_str))
+    ingest.provider_session_id.clone()
 }
 
 #[cfg(test)]
@@ -344,40 +461,40 @@ mod tests {
 
     #[test]
     fn provider_session_id_from_ingest_supports_non_codex_agents() {
-        let claude = RawIngest {
-            agent: AgentName::Claude,
-            thread_id: "thr-claude".into(),
-            payload: serde_json::json!({"type":"result","session_id":"claude-session"}),
-            ts_ms: 1,
-        };
+        let claude = RawIngest::from_json(
+            AgentName::Claude,
+            "thr-claude".into(),
+            serde_json::json!({"type":"result","session_id":"claude-session"}),
+            1,
+        );
         assert_eq!(
             provider_session_id_from_ingest(&claude).as_deref(),
             Some("claude-session")
         );
 
-        let gemini = RawIngest {
-            agent: AgentName::Gemini,
-            thread_id: "thr-gemini".into(),
-            payload: serde_json::json!({
+        let gemini = RawIngest::from_json(
+            AgentName::Gemini,
+            "thr-gemini".into(),
+            serde_json::json!({
                 "kind":"acp_notification",
                 "params":{"sessionId":"gemini-session"}
             }),
-            ts_ms: 1,
-        };
+            1,
+        );
         assert_eq!(
             provider_session_id_from_ingest(&gemini).as_deref(),
             Some("gemini-session")
         );
 
-        let opencode = RawIngest {
-            agent: AgentName::Opencode,
-            thread_id: "thr-opencode".into(),
-            payload: serde_json::json!({
+        let opencode = RawIngest::from_json(
+            AgentName::Opencode,
+            "thr-opencode".into(),
+            serde_json::json!({
                 "type":"message.part.updated",
                 "properties":{"part":{"sessionID":"opencode-session"}}
             }),
-            ts_ms: 1,
-        };
+            1,
+        );
         assert_eq!(
             provider_session_id_from_ingest(&opencode).as_deref(),
             Some("opencode-session")
@@ -403,12 +520,12 @@ mod tests {
         for i in 0..50 {
             let w = writer.clone();
             handles.push(tokio::spawn(async move {
-                w.write_live(RawIngest {
-                    agent: minos_agent_runtime::AgentKind::Codex,
-                    thread_id: "thr-B".into(),
-                    payload: serde_json::json!({"i": i}),
-                    ts_ms: i as i64,
-                })
+                w.write_live(RawIngest::from_json(
+                    minos_agent_runtime::AgentKind::Codex,
+                    "thr-B".into(),
+                    serde_json::json!({"i": i}),
+                    i as i64,
+                ))
                 .await
                 .unwrap()
             }));
@@ -448,14 +565,14 @@ mod tests {
         let writer = EventWriter::spawn(store.clone(), relay_tx);
 
         for i in 0..5 {
-            let ingest = RawIngest {
-                agent: minos_agent_runtime::AgentKind::Codex,
-                thread_id: "thr-A".into(),
-                payload: serde_json::json!({"i": i}),
-                ts_ms: i,
-            };
-            let seq = writer.write_live(ingest).await.unwrap();
-            assert_eq!(seq, (i + 1) as u64);
+            let ingest = RawIngest::from_json(
+                minos_agent_runtime::AgentKind::Codex,
+                "thr-A".into(),
+                serde_json::json!({"i": i}),
+                i,
+            );
+            let committed = writer.write_live(ingest).await.unwrap();
+            assert_eq!(committed.seq, (i + 1) as u64);
         }
 
         for _i in 0..5 {
@@ -490,12 +607,12 @@ mod tests {
             let writer = writer.clone();
             tokio::spawn(async move {
                 writer
-                    .write_live(RawIngest {
-                        agent: minos_agent_runtime::AgentKind::Codex,
-                        thread_id: "thr-delayed".into(),
-                        payload: serde_json::json!({"kind": "delayed-parent"}),
-                        ts_ms: 42,
-                    })
+                    .write_live(RawIngest::from_json(
+                        minos_agent_runtime::AgentKind::Codex,
+                        "thr-delayed".into(),
+                        serde_json::json!({"kind": "delayed-parent"}),
+                        42,
+                    ))
                     .await
             })
         };
@@ -503,12 +620,12 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         seed_thread(&store, "thr-delayed").await;
 
-        let seq = tokio::time::timeout(Duration::from_secs(3), pending)
+        let committed = tokio::time::timeout(Duration::from_secs(3), pending)
             .await
             .expect("write_live should finish after the parent row appears")
             .expect("writer task should not panic")
             .expect("delayed parent row should prevent FK failure");
-        assert_eq!(seq, 1);
+        assert_eq!(committed.seq, 1);
 
         let rows = store.read_events("thr-delayed", 1, 1).await.unwrap();
         assert_eq!(rows.len(), 1);

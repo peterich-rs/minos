@@ -10,12 +10,12 @@
     "message_id":"i1",
     "tool_call_id":"<uuid>",
     "name":"run_command",
-    "args_json":"{\"cmd\":\"false\"}"
+    "args_json":{"kind":"inline","text":"{\"cmd\":\"false\"}"}
   },
   {
     "kind":"tool_call_completed",
     "tool_call_id":"<uuid>",
-    "output":"exit 1",
+    "output":{"kind":"inline","text":"exit 1"},
     "is_error":true
   }
 ]

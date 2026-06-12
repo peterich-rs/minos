@@ -83,16 +83,16 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
     //     symptom: pre-fix, AgentGlue's bridge spammed
     //     "EventWriter.write_live failed; event dropped {error=... 787}"
     //     the moment codex sent its first frame.
-    let seq = writer
-        .write_live(RawIngest {
-            agent: AgentKind::Codex,
-            thread_id: resp.session_id.clone(),
-            payload: serde_json::json!({"kind": "smoke"}),
-            ts_ms: 1,
-        })
+    let committed = writer
+        .write_live(RawIngest::from_json(
+            AgentKind::Codex,
+            resp.session_id.clone(),
+            serde_json::json!({"kind": "smoke"}),
+            1,
+        ))
         .await
         .expect("write_live should not fail with FK 787 once the thread row exists");
-    assert_eq!(seq, 1);
+    assert_eq!(committed.seq, 1);
 
     // The new event row reflects the writer's commit.
     let rows = store.read_events(&resp.session_id, 1, 1).await.unwrap();

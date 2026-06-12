@@ -9,9 +9,11 @@
     clippy::cast_lossless
 )]
 
+pub mod artifacts;
 pub mod event_writer;
 pub mod migrations_loader;
 
+use artifacts::{ArtifactRange, ArtifactStore};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 use sqlx::SqlitePool;
@@ -21,10 +23,15 @@ use std::str::FromStr;
 #[derive(Clone)]
 pub struct LocalStore {
     pool: SqlitePool,
+    artifact_store: ArtifactStore,
 }
 
 impl LocalStore {
     pub async fn open(db_file: &Path) -> anyhow::Result<Self> {
+        let artifact_root = db_file
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("artifacts");
         let url = format!("sqlite://{}?mode=rwc", db_file.display());
         let opts = SqliteConnectOptions::from_str(&url)?
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
@@ -34,11 +41,18 @@ impl LocalStore {
             .connect_with(opts)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            artifact_store: ArtifactStore::new(artifact_root),
+        })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn artifacts(&self) -> &ArtifactStore {
+        &self.artifact_store
     }
 
     pub async fn list_threads(
@@ -94,7 +108,9 @@ impl LocalStore {
         to_seq: u64,
     ) -> anyhow::Result<Vec<EventRow>> {
         Ok(sqlx::query_as::<_, EventRow>(
-            "SELECT thread_id, seq, payload, ts_ms, source FROM events WHERE thread_id = ? AND seq BETWEEN ? AND ? ORDER BY seq ASC",
+            "SELECT thread_id, seq, body_kind, body_inline, artifact_id, artifact_size_bytes, \
+                    artifact_sha256, artifact_media_type, projection_json, ts_ms, source \
+             FROM events WHERE thread_id = ? AND seq BETWEEN ? AND ? ORDER BY seq ASC",
         )
         .bind(thread_id)
         .bind(from_seq as i64)
@@ -246,7 +262,22 @@ impl LocalStore {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.artifact_store
+            .delete_thread_artifacts(thread_id)
+            .await?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn read_artifact_range(
+        &self,
+        thread_id: &str,
+        artifact_id: &str,
+        offset: u64,
+        limit: u32,
+    ) -> anyhow::Result<ArtifactRange> {
+        self.artifact_store
+            .read_range(thread_id, artifact_id, offset, limit)
+            .await
     }
 
     // ── Project CRUD ──────────────────────────────────────────────────
@@ -444,7 +475,13 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
 pub struct EventRow {
     pub thread_id: String,
     pub seq: i64,
-    pub payload: Vec<u8>,
+    pub body_kind: String,
+    pub body_inline: Option<Vec<u8>>,
+    pub artifact_id: Option<String>,
+    pub artifact_size_bytes: Option<i64>,
+    pub artifact_sha256: Option<String>,
+    pub artifact_media_type: Option<String>,
+    pub projection_json: Vec<u8>,
     pub ts_ms: i64,
     pub source: String,
 }
@@ -567,9 +604,10 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO events(thread_id, seq, payload, ts_ms, source) VALUES ('thr-delete', 1, ?, 0, 'live')",
+            "INSERT INTO events(thread_id, seq, body_kind, body_inline, projection_json, ts_ms, source) VALUES ('thr-delete', 1, 'inline', ?, ?, 0, 'live')",
         )
         .bind(br#"{"method":"item/started"}"#.as_slice())
+        .bind(b"[]".as_slice())
         .execute(store.pool())
         .await
         .unwrap();

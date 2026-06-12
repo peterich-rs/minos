@@ -52,7 +52,9 @@ pub use minos_protocol::{
     SearchUsersResponse, SenderType, StartAgentResponse, ThreadSummary, UpdateProjectRequest,
     UserSummary, WriteHostSkillConfigResponse,
 };
-pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
+pub use minos_ui_protocol::{
+    ArtifactRef, DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage,
+};
 
 // ───────────────────────────── opaque client ─────────────────────────────
 
@@ -1242,6 +1244,35 @@ pub enum _ThreadEndReason {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(ArtifactRef))]
+pub struct _ArtifactRef {
+    pub thread_id: String,
+    pub artifact_id: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub media_type: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(DisplayPayload))]
+pub enum _DisplayPayload {
+    Inline {
+        text: String,
+    },
+    StreamingWindow {
+        head: String,
+        received_bytes: u64,
+        artifact: Option<ArtifactRef>,
+    },
+    WindowedFinal {
+        head: String,
+        tail: String,
+        omitted_bytes: u64,
+        artifact: ArtifactRef,
+    },
+}
+
+#[allow(dead_code)]
 #[frb(mirror(UiEventMessage))]
 pub enum _UiEventMessage {
     ThreadOpened {
@@ -1270,29 +1301,29 @@ pub enum _UiEventMessage {
     },
     TextDelta {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
     },
     TextReplace {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
     },
     ReasoningDelta {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
     },
     ReasoningReplace {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
     },
     ToolCallPlaced {
         message_id: String,
         tool_call_id: String,
         name: String,
-        args_json: String,
+        args_json: DisplayPayload,
     },
     ToolCallCompleted {
         tool_call_id: String,
-        output: String,
+        output: DisplayPayload,
         is_error: bool,
     },
     Error {

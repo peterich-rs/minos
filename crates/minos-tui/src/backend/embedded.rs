@@ -1,16 +1,19 @@
 use super::{AgentBackend, BackendConnectionState, BackendThreadSnapshot};
 use anyhow::Result;
 use async_trait::async_trait;
-use minos_agent_runtime::{AgentManager, InstanceCaps, ManagerEvent, RawIngest, StartAgentOutcome};
+use minos_agent_runtime::{AgentManager, InstanceCaps, ManagerEvent, StartAgentOutcome};
 use minos_cli_detect::{capture_user_shell_env, detect_all, RealCommandRunner};
 use minos_domain::AgentName;
 use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
 use minos_protocol::LocalGroupChatMessage;
+use minos_protocol::LocalIngestFrame;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::broadcast;
 
 use crate::event::{AppEvent, McpToolEvent};
+use crate::translation::AgentTranslationState;
 
 pub struct EmbeddedBackend {
     manager: Arc<AgentManager>,
@@ -168,8 +171,37 @@ impl AgentBackend for EmbeddedBackend {
         ))
     }
 
-    async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest> {
-        self.manager.ingest_stream()
+    async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame> {
+        let mut raw_rx = self.manager.ingest_stream();
+        let (tx, rx) = broadcast::channel(256);
+        tokio::spawn(async move {
+            let mut translators: HashMap<String, AgentTranslationState> = HashMap::new();
+            loop {
+                match raw_rx.recv().await {
+                    Ok(ingest) => {
+                        let Some(payload) = ingest.json_value() else {
+                            continue;
+                        };
+                        let translator = translators
+                            .entry(ingest.thread_id.clone())
+                            .or_insert_with(|| {
+                                AgentTranslationState::new(ingest.agent, ingest.thread_id.clone())
+                            });
+                        let ui_events = translator.translate(&payload);
+                        let _ = tx.send(LocalIngestFrame {
+                            thread_id: ingest.thread_id,
+                            seq: 0,
+                            agent: ingest.agent,
+                            ui_events,
+                            ts_ms: ingest.ts_ms,
+                        });
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        rx
     }
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent> {

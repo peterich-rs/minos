@@ -1,5 +1,5 @@
 use crate::error::TranslationError;
-use crate::message::{MessageRole, UiEventMessage};
+use crate::message::{DisplayPayload, MessageRole, UiEventMessage};
 use minos_domain::AgentName;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -112,7 +112,10 @@ fn translate_synthetic_user_message(
         state
             .pending_synthetic_user_texts
             .insert(normalize_user_text(&text));
-        events.push(UiEventMessage::TextDelta { message_id, text });
+        events.push(UiEventMessage::TextDelta {
+            message_id,
+            text: DisplayPayload::inline(text),
+        });
     }
 
     Some(events)
@@ -253,7 +256,7 @@ fn translate_message_updated(
                 if !content_text.is_empty() {
                     events.push(UiEventMessage::TextDelta {
                         message_id,
-                        text: content_text,
+                        text: DisplayPayload::inline(content_text),
                     });
                 }
             }
@@ -472,7 +475,7 @@ fn translate_inline_part(
                 if should_replace_streamed_part(message_id, part, delta, &text) {
                     return vec![UiEventMessage::TextReplace {
                         message_id: message_id.to_string(),
-                        text,
+                        text: DisplayPayload::inline(text),
                     }];
                 }
                 return Vec::new();
@@ -483,7 +486,7 @@ fn translate_inline_part(
             } else {
                 vec![UiEventMessage::TextDelta {
                     message_id: message_id.to_string(),
-                    text,
+                    text: DisplayPayload::inline(text),
                 }]
             }
         }
@@ -497,7 +500,7 @@ fn translate_inline_part(
                 if should_replace_streamed_part(message_id, part, delta, &text) {
                     return vec![UiEventMessage::ReasoningReplace {
                         message_id: message_id.to_string(),
-                        text,
+                        text: DisplayPayload::inline(text),
                     }];
                 }
                 return Vec::new();
@@ -508,7 +511,7 @@ fn translate_inline_part(
             } else {
                 vec![UiEventMessage::ReasoningDelta {
                     message_id: message_id.to_string(),
-                    text,
+                    text: DisplayPayload::inline(text),
                 }]
             }
         }
@@ -561,7 +564,8 @@ fn translate_tool_part(
                             .unwrap_or("")
                             .to_string(),
                         args_json: serde_json::to_string(part.get("args").unwrap_or(&Value::Null))
-                            .unwrap_or_default(),
+                            .map(DisplayPayload::inline)
+                            .unwrap_or_else(|_| DisplayPayload::inline(String::new())),
                     }]
                 }
             }
@@ -573,7 +577,8 @@ fn translate_tool_part(
                         .get("output")
                         .and_then(Value::as_str)
                         .unwrap_or("")
-                        .to_string(),
+                        .to_string()
+                        .into(),
                     is_error: part
                         .get("is_error")
                         .and_then(Value::as_bool)
@@ -604,7 +609,7 @@ fn translate_tool_part(
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string(),
-                    args_json: tool_args_json(part, &tool_state),
+                    args_json: DisplayPayload::inline(tool_args_json(part, &tool_state)),
                 }]
             }
         }
@@ -616,7 +621,8 @@ fn translate_tool_part(
                     .get("output")
                     .and_then(Value::as_str)
                     .unwrap_or("")
-                    .to_string(),
+                    .to_string()
+                    .into(),
                 is_error: false,
             }]
         }
@@ -628,7 +634,8 @@ fn translate_tool_part(
                     .get("error")
                     .and_then(Value::as_str)
                     .unwrap_or("")
-                    .to_string(),
+                    .to_string()
+                    .into(),
                 is_error: true,
             }]
         }
@@ -671,12 +678,12 @@ fn delta_to_ui_event(
     match (part_kind, field) {
         (TrackedPartKind::Reasoning, "text" | "") => Some(UiEventMessage::ReasoningDelta {
             message_id: message_id.to_string(),
-            text: delta,
+            text: DisplayPayload::inline(delta),
         }),
         (TrackedPartKind::Text | TrackedPartKind::Other, "text" | "") => {
             Some(UiEventMessage::TextDelta {
                 message_id: message_id.to_string(),
-                text: delta,
+                text: DisplayPayload::inline(delta),
             })
         }
         _ => None,

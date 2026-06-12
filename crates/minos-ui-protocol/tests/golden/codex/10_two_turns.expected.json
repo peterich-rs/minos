@@ -1,8 +1,8 @@
 [
   {"kind":"message_started","message_id":"a1","role":"assistant","started_at_ms":0},
-  {"kind":"text_delta","message_id":"a1","text":"one"},
+  {"kind":"text_delta","message_id":"a1","text":{"kind":"inline","text":"one"}},
   {"kind":"message_completed","message_id":"a1","finished_at_ms":2},
   {"kind":"message_started","message_id":"a2","role":"assistant","started_at_ms":0},
-  {"kind":"text_delta","message_id":"a2","text":"two"},
+  {"kind":"text_delta","message_id":"a2","text":{"kind":"inline","text":"two"}},
   {"kind":"message_completed","message_id":"a2","finished_at_ms":4}
 ]

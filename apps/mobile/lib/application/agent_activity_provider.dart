@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:minos/application/display_payload_preview.dart';
 import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/thread_events_provider.dart';
@@ -140,7 +141,7 @@ AgentActivitySnapshot? agentActivitySnapshotFromEvents({
         }
       case UiEventMessage_TextDelta(:final messageId, :final text):
       case UiEventMessage_TextReplace(:final messageId, :final text):
-        final preview = _statusPreview(text);
+        final preview = _statusPreview(text.renderPreview());
         setAssistantStatus(
           messageId,
           AgentActivitySnapshot(
@@ -152,7 +153,7 @@ AgentActivitySnapshot? agentActivitySnapshotFromEvents({
         );
       case UiEventMessage_ReasoningDelta(:final messageId, :final text):
       case UiEventMessage_ReasoningReplace(:final messageId, :final text):
-        final preview = _statusPreview(text);
+        final preview = _statusPreview(text.renderPreview());
         setAssistantStatus(
           messageId,
           AgentActivitySnapshot(

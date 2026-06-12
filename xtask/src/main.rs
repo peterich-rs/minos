@@ -320,7 +320,10 @@ async fn wait_for_codex_ok_token(
     tokio::time::timeout(Duration::from_mins(1), async move {
         loop {
             match events.recv().await {
-                Ok(RawIngest { payload, .. }) => {
+                Ok(event) => {
+                    let Some(payload) = event.json_value() else {
+                        continue;
+                    };
                     let method = payload.get("method").and_then(|v| v.as_str()).unwrap_or("");
                     if method == "item/agentMessage/delta" {
                         let delta = payload

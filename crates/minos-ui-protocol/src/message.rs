@@ -1,6 +1,97 @@
 use minos_domain::AgentName;
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactRef {
+    pub thread_id: String,
+    pub artifact_id: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub media_type: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DisplayPayload {
+    Inline {
+        text: String,
+    },
+    StreamingWindow {
+        head: String,
+        received_bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<ArtifactRef>,
+    },
+    WindowedFinal {
+        head: String,
+        tail: String,
+        omitted_bytes: u64,
+        artifact: ArtifactRef,
+    },
+}
+
+impl DisplayPayload {
+    #[must_use]
+    pub fn inline(text: impl Into<String>) -> Self {
+        Self::Inline { text: text.into() }
+    }
+
+    #[must_use]
+    pub fn render_preview(&self) -> String {
+        match self {
+            Self::Inline { text } => text.clone(),
+            Self::StreamingWindow { head, .. } => head.clone(),
+            Self::WindowedFinal {
+                head,
+                tail,
+                omitted_bytes,
+                ..
+            } => {
+                if *omitted_bytes == 0 {
+                    format!("{head}{tail}")
+                } else {
+                    format!("{head}\n\n[omitted {omitted_bytes} bytes]\n\n{tail}")
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Inline { text } => text.is_empty(),
+            Self::StreamingWindow { head, .. } => head.is_empty(),
+            Self::WindowedFinal { head, tail, .. } => head.is_empty() && tail.is_empty(),
+        }
+    }
+}
+
+impl From<String> for DisplayPayload {
+    fn from(text: String) -> Self {
+        Self::inline(text)
+    }
+}
+
+impl From<&str> for DisplayPayload {
+    fn from(text: &str) -> Self {
+        Self::inline(text)
+    }
+}
+
+impl PartialEq<str> for DisplayPayload {
+    fn eq(&self, other: &str) -> bool {
+        self.render_preview() == other
+    }
+}
+
+impl PartialEq<&str> for DisplayPayload {
+    fn eq(&self, other: &&str) -> bool {
+        self.render_preview() == *other
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UiEventMessage {
@@ -35,19 +126,19 @@ pub enum UiEventMessage {
     // ── Message content ──────────────
     TextDelta {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
     },
     TextReplace {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
     },
     ReasoningDelta {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
     },
     ReasoningReplace {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
     },
 
     // ── Tool calls ───────────────────
@@ -55,11 +146,11 @@ pub enum UiEventMessage {
         message_id: String,
         tool_call_id: String,
         name: String,
-        args_json: String,
+        args_json: DisplayPayload,
     },
     ToolCallCompleted {
         tool_call_id: String,
-        output: String,
+        output: DisplayPayload,
         is_error: bool,
     },
 
@@ -107,12 +198,12 @@ mod tests {
     fn text_delta_round_trip() {
         let ev = UiEventMessage::TextDelta {
             message_id: "msg_1".into(),
-            text: "Hello".into(),
+            text: DisplayPayload::inline("Hello"),
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(
             json,
-            r#"{"kind":"text_delta","message_id":"msg_1","text":"Hello"}"#
+            r#"{"kind":"text_delta","message_id":"msg_1","text":{"kind":"inline","text":"Hello"}}"#
         );
         let back: UiEventMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
@@ -165,7 +256,7 @@ mod tests {
             message_id: "msg_1".into(),
             tool_call_id: "tc_1".into(),
             name: "apply_patch".into(),
-            args_json: r#"{"diff":"..."}"#.into(),
+            args_json: DisplayPayload::inline(r#"{"diff":"..."}"#),
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: UiEventMessage = serde_json::from_str(&json).unwrap();

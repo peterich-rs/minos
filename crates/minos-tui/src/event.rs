@@ -1,11 +1,12 @@
 use crossterm::event::{KeyEvent, MouseEvent};
-use minos_agent_runtime::{ManagerEvent, RawIngest};
+use minos_agent_runtime::ManagerEvent;
 use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_domain::AgentName;
+use minos_protocol::LocalIngestFrame;
 use std::path::PathBuf;
 
 pub enum AppEvent {
-    Ingest(RawIngest),
+    Ingest(LocalIngestFrame),
     ManagerEvent(ManagerEvent),
     AgentStartedForPrompt {
         agent: AgentName,
@@ -31,7 +32,7 @@ pub struct McpToolEvent {
 }
 
 pub fn spawn_ingest_pump(
-    mut rx: tokio::sync::broadcast::Receiver<RawIngest>,
+    mut rx: tokio::sync::broadcast::Receiver<LocalIngestFrame>,
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
 ) {
     tokio::spawn(async move {

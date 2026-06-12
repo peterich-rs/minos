@@ -270,6 +270,7 @@ impl ChatState {
                 self.open_message_roles.insert(message_id, role);
             }
             UiEventMessage::TextDelta { message_id, text } => {
+                let text = text.render_preview();
                 if text.is_empty() {
                     return;
                 }
@@ -280,6 +281,7 @@ impl ChatState {
                 }
             }
             UiEventMessage::TextReplace { message_id, text } => {
+                let text = text.render_preview();
                 if let Some(item) = self.find_text_item_mut(&message_id) {
                     let replacement = if text.is_empty() {
                         Vec::new()
@@ -299,6 +301,7 @@ impl ChatState {
                 }
             }
             UiEventMessage::ReasoningDelta { message_id, text } => {
+                let text = text.render_preview();
                 if text.is_empty() {
                     return;
                 }
@@ -315,6 +318,7 @@ impl ChatState {
                 }
             }
             UiEventMessage::ReasoningReplace { message_id, text } => {
+                let text = text.render_preview();
                 if text.is_empty() {
                     self.items.retain(|item| {
                         !matches!(
@@ -344,6 +348,7 @@ impl ChatState {
                 name,
                 args_json,
             } => {
+                let args_json = args_json.render_preview();
                 let args_summary = summarize_tool_args(&name, &args_json);
                 let args_detail = compact_tool_args(&args_json)
                     .filter(|detail| !detail.is_empty() && detail != &args_summary);
@@ -382,6 +387,7 @@ impl ChatState {
                 output,
                 is_error,
             } => {
+                let output = output.render_preview();
                 if let Some(ChatItem::ToolCall {
                     output_summary,
                     output_detail,

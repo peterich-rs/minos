@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use minos_agent_runtime::{
     manager_event::ManagerEvent, state_machine::ThreadState, thread_handle::ThreadHandle,
+    IngestSink,
 };
 
 fn should_run() -> bool {
@@ -19,7 +20,8 @@ async fn claude_real_smoke_start_and_chat() {
         return;
     }
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(256);
+    let events_tx = IngestSink::new(256);
+    let mut events_rx = events_tx.subscribe();
     let (manager_tx, _) = tokio::sync::broadcast::channel::<ManagerEvent>(32);
     let threads = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     threads.lock().await.insert(
@@ -55,7 +57,8 @@ async fn claude_real_smoke_start_and_chat() {
     let timeout = tokio::time::timeout(Duration::from_secs(60), async {
         while let Ok(ingest) = events_rx.recv().await {
             if ingest
-                .payload
+                .json_value()
+                .expect("raw ingest should contain JSON payload")
                 .get("type")
                 .and_then(serde_json::Value::as_str)
                 == Some("result")
