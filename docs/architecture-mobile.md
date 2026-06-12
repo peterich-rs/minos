@@ -204,6 +204,7 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
 - 订阅实时 `UiEventFrame` 流
 - 基于 seq 水位线去重
 - `keepAlive: true`，导航离开不丢失状态
+- `UiEventMessage` 文本字段使用 `DisplayPayload`，Dart 通过 `display_payload_preview.dart` 渲染 inline/windowed preview；artifact 引用保留在线程归属内，后续完整展开走 range read API。
 
 ### Agent 配置文件
 
@@ -230,6 +231,7 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
 2. Hello: 接收 `conn_id` + `heartbeat_interval_ms`
 3. Subscribe: 订阅 topic 带 `resume_after` cursor
 4. 主循环: inbound `ServerFrame` / outbound `ClientFrame`
+5. Agent realtime: backend 推送 `StreamEvent { kind: "ui_event" }`，Rust 侧反序列化为 `UiEventMessage`，再经 FRB 传给 Dart。
 
 ### 重连策略
 
@@ -268,5 +270,5 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
             → 状态机转换
           → ThreadEvents [Dart]
             → 追加事件列表
-              → ThreadViewPage 重建 UI
+              → ThreadViewPage 渲染 DisplayPayload preview 并重建 UI
 ```

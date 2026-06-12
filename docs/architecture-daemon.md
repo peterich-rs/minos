@@ -157,10 +157,12 @@ Starting → Idle → Running { turn_started_at_ms }
 
 ### 事件持久化流程
 
-1. `AgentManager` 通过 broadcast channel 发出 `RawIngest`
-2. `AgentGlue` bridge 转发到 `EventWriter::write_live()`
-3. `EventWriter` 批量写入（5ms 窗口，最大 100 条），分配单调 `seq`
-4. SQLite 提交后，转发 `ClientFrame::HostStreamEvent` 到 relay outbound 队列
+1. `AgentManager` 发出 `RawIngest`。`RawIngest` 不再以 `serde_json::Value` 作为主数据面，而是携带 `RawBody::InlineBytes` 或 `RawBody::Artifact`。
+2. `AgentGlue` bridge 转发到 `EventWriter::write_live()`。
+3. `EventWriter` 批量写入（5ms 窗口，最大 100 条），在 SQLite 事务内分配每线程单调 `seq`。生产者不拥有 seq。
+4. 大于等于 `INLINE_RAW_BODY_THRESHOLD`（16 KiB）的 raw body 写入本地 `ArtifactStore`，SQLite `events` 行只保存 artifact metadata；小 body 以内联 bytes 保存。
+5. `EventWriter` 用 `minos-ui-protocol` translator 生成 `UiEventMessage` projection，并把 `projection_json` 与 raw body metadata 一起持久化。
+6. SQLite 提交后，daemon 本地订阅者收到 `LocalIngestFrame { seq, ui_events }`，relay 收到 V2 `ClientFrame::HostStreamEvent` payload（raw body metadata + projection）。
 
 ## 本地存储 (`src/store/`)
 
@@ -175,8 +177,18 @@ Starting → Idle → Running { turn_started_at_ms }
 - 单写者任务保证每线程单调 `seq`
 - 5ms 批量窗口提高吞吐
 - 等待父线程行存在（指数退避重试）
-- SQLite 提交后转发到 relay
+- SQLite 提交后转发到 relay 和本地 projection subscribers
+- 持久化 `body_kind/body_inline/artifact_*`，避免把大 JSON DOM 在通道中重复 clone
+- 持久化 `projection_json`，TUI replay 不再依赖重新读取完整 raw payload
 - 区分 `live` 和 `jsonl_recovery` 事件来源
+
+### ArtifactStore (`src/store/artifacts.rs`)
+
+- 根目录: daemon SQLite 所在目录下的 `artifacts/`
+- 布局: `artifacts/<thread_id>/<artifact_id>`
+- `artifact_id`: `art_<sha256>`
+- 生命周期: `delete_thread()` 删除线程行后同步删除该线程 artifact 目录
+- 读取: 本地 JSON-RPC `read_artifact_range(thread_id, artifact_id, offset, limit)` 返回 range bytes 与 total/eof
 
 ### 文件状态
 

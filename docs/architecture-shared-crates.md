@@ -111,7 +111,7 @@
 **路径**: `crates/minos-agent-runtime/`
 **特性**: 核心 runtime，spawn 和监督 CLI agent 子进程。
 
-**设计原则**: 不依赖 `minos-protocol` 或 `minos-ui-protocol`（薄管道设计）。
+**设计原则**: 不依赖 `minos-protocol` 的 relay/local RPC schema；只依赖 `minos-ui-protocol` 的 `ArtifactRef` 作为 raw body artifact 引用类型。
 
 ### 关键类型
 
@@ -121,7 +121,9 @@
 | `ThreadState` | Starting, Idle, Running, Suspended, Resuming, Closed |
 | `PauseReason` | UserInterrupt, CodexCrashed, DaemonRestart, InstanceReaped |
 | `CloseReason` | UserClose, TerminalError |
-| `RawIngest` | 原始事件转发类型 |
+| `RawIngest` | 原始事件转发类型，携带 `RawBody::InlineBytes` 或 `RawBody::Artifact`，不携带 `serde_json::Value` 主体 |
+| `RawBody` | raw bytes / artifact ref 数据面 |
+| `INLINE_RAW_BODY_THRESHOLD` | 16 KiB，大于等于该阈值由 daemon artifact store 接管 |
 | `CodexClient` | Codex app-server JSON-RPC WS 客户端 |
 | `ClaudeNdjsonSession` | Claude CLI NDJSON 流驱动 |
 | `GeminiAcpInstance` | Gemini CLI ACP 协议驱动 |
@@ -208,6 +210,8 @@
 | 类型 | 描述 |
 |------|------|
 | `UiEventMessage` | 15 变体枚举: ThreadOpened, ThreadClosed, MessageStarted, MessageCompleted, TextDelta, TextReplace, ReasoningDelta, ReasoningReplace, ToolCallPlaced, ToolCallCompleted, Error, Raw 等 |
+| `DisplayPayload` | UI 展示载荷: `Inline`, `StreamingWindow`, `WindowedFinal`。文本 delta、tool args/output 都通过它传递 preview/artifact 信息 |
+| `ArtifactRef` | artifact 归属和校验信息: `thread_id`, `artifact_id`, `size_bytes`, `sha256`, `media_type` |
 | `MessageRole` | User / Assistant / System |
 | `ThreadEndReason` | UserStopped / AgentDone / Crashed / Timeout / HostDisconnected |
 | `CodexTranslatorState` | 有状态 Codex 事件翻译器 |

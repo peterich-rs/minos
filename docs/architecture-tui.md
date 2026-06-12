@@ -125,21 +125,21 @@ minos-tui [OPTIONS]
 ### `AppEvent` 枚举
 
 ```
-AppEvent::Ingest(RawIngest)               // Agent 原始事件
+AppEvent::Ingest(LocalIngestFrame)         // seq + UiEventMessage projection
 AppEvent::ManagerEvent(ManagerEvent)       // 线程生命周期事件
 AppEvent::AgentStartedForPrompt { ... }    // 后台 agent 启动完成
 AppEvent::SendMessageFailed { ... }        // 异步发送错误
 AppEvent::Key(KeyEvent)                    // 键盘事件
-AppEvent::Mouse(MouseEvent)               // 鼠标事件
-AppEvent::Resize(u16, u16)                // 终端大小变化
-AppEvent::Tick                            // 200ms 定时器
+AppEvent::Mouse(MouseEvent)                // 鼠标事件
+AppEvent::Resize(u16, u16)                 // 终端大小变化
+AppEvent::Tick                             // 200ms 定时器
 ```
 
 ### 4 个事件泵
 
 1. **终端事件泵**（std 线程，250ms 轮询 crossterm）
 2. **Tick 泵**（tokio interval，200ms）
-3. **Ingest 泵**（转发 backend ingest broadcast → MPSC）
+3. **Ingest 泵**（转发 backend `LocalIngestFrame` broadcast → MPSC）
 4. **Manager Event 泵**（转发 backend manager events → MPSC）
 
 ## 核心状态 (`src/app.rs`)
@@ -162,11 +162,11 @@ App {
 
 ### 线程水化
 
-首次查看线程时，从 `read_thread_raw_history()` 加载历史，通过翻译管线重建 `ChatState.messages`。
+首次查看线程时，从 `read_thread_raw_history()` 加载历史 projection frame，按 `UiEventMessage` 重建 `ChatState.messages`。daemon backend 的 replay 不需要 TUI 重新解析 raw JSON；embedded backend 没有 daemon/EventWriter 时，会在进程内用同一套 translator 临时生成 projection。
 
 ### Ingest 去重
 
-使用 `{thread_id}:{payload_json}` 指纹 + seq 水位线防止重复处理。
+优先使用 `LocalIngestFrame.seq` + 每线程水位线去重。没有 seq 的 embedded/test frame 才使用 `ui_events` 序列化指纹作为兜底。
 
 ## 翻译管线 (`src/translation.rs`)
 
@@ -175,13 +175,15 @@ App {
 ```rust
 ChatState {
     thread_id, agent,
-    translation_state: AgentTranslationState,  // Agent 特定协议解析器
+    translation_state: AgentTranslationState,  // 仅 embedded/test raw path 使用
     messages: Vec<RenderedMessage>,
     pending_requests: Vec<PendingAgentRequest>,
     scroll_offset, auto_scroll, max_scroll,
     selection: Option<ChatSelection>,
 }
 ```
+
+`ChatState::apply_ui_event()` 只消费 `UiEventMessage`。`DisplayPayload` 在 TUI 层渲染为 preview 文本；raw body/artifact 全文不进入 `RenderedMessage`。
 
 ### `RenderedMessage`
 

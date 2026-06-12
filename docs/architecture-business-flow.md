@@ -242,18 +242,20 @@ TUI 支持多 agent 在群聊中协作:
 [Mac daemon]
   WS 接收 HostStreamEvent → AgentGlue → AgentManager
   → 写入 stdin / JSON-RPC 到 agent 子进程
-  → Agent 输出流 → RawIngest broadcast
-  → EventWriter 批量写入 SQLite + 转发 ClientFrame::HostStreamEvent
+  → Agent 输出流 → RawIngest(raw bytes / artifact ref)
+  → EventWriter 分配 seq、artifact 化大 raw body、生成 UiEventMessage projection
+  → SQLite 写入 events(body metadata + projection_json)
+  → 转发 V2 ClientFrame::HostStreamEvent
 
 [后端]
   接收 HostStreamEvent
-  → INSERT agent_turn_events
-  → 发布 StreamEvent 到 agent_session:<id> topic
+  → INSERT raw_events / agent_turn_events
+  → 发布 projection StreamEvent 到 agent_session:<id> topic
   → Client Gateway 推送到手机 WS
 
 [手机 Flutter UI]
-  UiEventFrame (TextDelta/ToolCallPlaced/etc.)
+  UiEventFrame (TextDelta/ToolCallPlaced/etc. with DisplayPayload)
   → ThreadEventsProvider 追加事件
-  → ThreadViewPage 重建
+  → ThreadViewPage 渲染 preview 并重建
   → 用户看到 agent 回复流式输出
 ```
