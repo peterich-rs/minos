@@ -469,13 +469,15 @@ fn translate_inline_part(
             }
 
             if state.parts_with_streamed_delta.contains(part_id) {
+                if should_replace_streamed_part(message_id, part, delta, &text) {
+                    return vec![UiEventMessage::TextReplace {
+                        message_id: message_id.to_string(),
+                        text,
+                    }];
+                }
                 return Vec::new();
             }
 
-            let text = delta
-                .or_else(|| part.get("text").and_then(Value::as_str))
-                .unwrap_or("")
-                .to_string();
             if text.is_empty() || message_id.is_empty() {
                 Vec::new()
             } else {
@@ -486,13 +488,21 @@ fn translate_inline_part(
             }
         }
         "reasoning" => {
-            if state.parts_with_streamed_delta.contains(part_id) {
-                return Vec::new();
-            }
             let text = delta
                 .or_else(|| part.get("text").and_then(Value::as_str))
                 .unwrap_or("")
                 .to_string();
+
+            if state.parts_with_streamed_delta.contains(part_id) {
+                if should_replace_streamed_part(message_id, part, delta, &text) {
+                    return vec![UiEventMessage::ReasoningReplace {
+                        message_id: message_id.to_string(),
+                        text,
+                    }];
+                }
+                return Vec::new();
+            }
+
             if text.is_empty() || message_id.is_empty() {
                 Vec::new()
             } else {
@@ -505,6 +515,20 @@ fn translate_inline_part(
         "tool" | "tool-call" => translate_tool_part(state, message_id, part),
         _ => Vec::new(),
     }
+}
+
+fn should_replace_streamed_part(
+    message_id: &str,
+    part: &Value,
+    delta: Option<&str>,
+    text: &str,
+) -> bool {
+    delta.is_none() && !message_id.is_empty() && !text.is_empty() && part_is_finished(part)
+}
+
+fn part_is_finished(part: &Value) -> bool {
+    let time = part.get("time").unwrap_or(&Value::Null);
+    time.get("end").is_some() || time.get("completed").is_some()
 }
 
 fn translate_tool_part(
@@ -859,7 +883,128 @@ mod tests {
             }"#),
         )
         .expect("translation should succeed");
-        assert!(final_part.is_empty());
+        assert!(matches!(
+            &final_part[0],
+            UiEventMessage::TextReplace { message_id, text }
+                if message_id == "msg_a1" && text == "Hello"
+        ));
+    }
+
+    #[test]
+    fn final_text_part_replaces_streamed_delta() {
+        let mut state = OpencodeTranslatorState::new("thr_replace".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_replace","sessionID":"sess_1","role":"assistant","time":{"created":1}}}
+            }"#),
+        )
+        .expect("translation should succeed");
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.updated",
+                "properties":{
+                    "part":{"id":"part_replace","sessionID":"sess_1","messageID":"msg_replace","type":"text","text":"","time":{"start":1}}
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        let delta = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.delta",
+                "properties":{
+                    "sessionID":"sess_1",
+                    "messageID":"msg_replace",
+                    "partID":"part_replace",
+                    "field":"text",
+                    "delta":"）.rs了鼠标CP去路 call。"
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+        assert!(matches!(
+            &delta[0],
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "msg_replace" && text == "）.rs了鼠标CP去路 call。"
+        ));
+
+        let final_part = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.updated",
+                "properties":{
+                    "part":{"id":"part_replace","sessionID":"sess_1","messageID":"msg_replace","type":"text","text":"我检查了 Minos TUI 的 opencode 翻译路径。","time":{"start":1,"end":2}}
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+        assert!(matches!(
+            &final_part[0],
+            UiEventMessage::TextReplace { message_id, text }
+                if message_id == "msg_replace" && text == "我检查了 Minos TUI 的 opencode 翻译路径。"
+        ));
+    }
+
+    #[test]
+    fn final_reasoning_part_replaces_streamed_delta() {
+        let mut state = OpencodeTranslatorState::new("thr_reasoning_replace".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_reasoning","sessionID":"sess_1","role":"assistant","time":{"created":1}}}
+            }"#),
+        )
+        .expect("translation should succeed");
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.updated",
+                "properties":{
+                    "part":{"id":"part_reasoning","sessionID":"sess_1","messageID":"msg_reasoning","type":"reasoning","text":"","time":{"start":1}}
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+        let delta = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.delta",
+                "properties":{
+                    "sessionID":"sess_1",
+                    "messageID":"msg_reasoning",
+                    "partID":"part_reasoning",
+                    "field":"text",
+                    "delta":"scratch"
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+        assert!(matches!(
+            &delta[0],
+            UiEventMessage::ReasoningDelta { message_id, text }
+                if message_id == "msg_reasoning" && text == "scratch"
+        ));
+
+        let final_part = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.updated",
+                "properties":{
+                    "part":{"id":"part_reasoning","sessionID":"sess_1","messageID":"msg_reasoning","type":"reasoning","text":"final reasoning","time":{"start":1,"end":2}}
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+        assert!(matches!(
+            &final_part[0],
+            UiEventMessage::ReasoningReplace { message_id, text }
+                if message_id == "msg_reasoning" && text == "final reasoning"
+        ));
     }
 
     #[test]
