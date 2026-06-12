@@ -3,6 +3,7 @@ use minos_ui_protocol::{
     ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, MessageRole,
     OpencodeTranslatorState, UiEventMessage,
 };
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 
 pub enum AgentTranslationState {
@@ -63,12 +64,52 @@ pub struct ChatState {
     pub thread_id: String,
     pub agent: AgentName,
     pub translation_state: AgentTranslationState,
-    pub messages: Vec<RenderedMessage>,
+    pub items: Vec<ChatItem>,
     pub pending_requests: Vec<PendingAgentRequest>,
+    open_message_ids: HashSet<String>,
+    open_message_roles: HashMap<String, MessageRole>,
     pub scroll_offset: u16,
     pub auto_scroll: bool,
     pub max_scroll: u16,
     pub selection: Option<ChatSelection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatItem {
+    UserMessage {
+        message_id: String,
+        text_parts: Vec<TextPart>,
+        is_streaming: bool,
+    },
+    AssistantText {
+        message_id: String,
+        text_parts: Vec<TextPart>,
+        is_streaming: bool,
+    },
+    Reasoning {
+        message_id: String,
+        text: String,
+        is_streaming: bool,
+    },
+    ToolCall {
+        message_id: String,
+        tool_call_id: String,
+        name: String,
+        args_summary: String,
+        args_detail: Option<String>,
+        output_summary: Option<String>,
+        output_detail: Option<String>,
+        is_error: bool,
+        is_expanded: bool,
+        is_streaming: bool,
+    },
+    SystemMessage {
+        text: String,
+    },
+    Error {
+        message_id: Option<String>,
+        text: String,
+    },
 }
 
 impl ChatState {
@@ -77,8 +118,10 @@ impl ChatState {
             translation_state: AgentTranslationState::new(agent, thread_id.clone()),
             thread_id,
             agent,
-            messages: Vec::new(),
+            items: Vec::new(),
             pending_requests: Vec::new(),
+            open_message_ids: HashSet::new(),
+            open_message_roles: HashMap::new(),
             scroll_offset: 0,
             auto_scroll: true,
             max_scroll: 0,
@@ -157,28 +200,32 @@ impl ChatState {
     }
 
     pub fn last_completed_assistant_text(&self) -> Option<(String, String)> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| matches!(message.role, MessageRole::Assistant) && !message.is_streaming)
-            .and_then(|message| {
-                rendered_message_text(message).map(|text| {
-                    let key = if message.message_id.is_empty() {
-                        format!("text:{text}")
-                    } else {
-                        message.message_id.clone()
-                    };
-                    (key, text)
-                })
+        self.items.iter().rev().find_map(|item| {
+            let ChatItem::AssistantText {
+                message_id,
+                text_parts,
+                is_streaming: false,
+            } = item
+            else {
+                return None;
+            };
+            text_parts_to_string(text_parts).map(|text| {
+                let key = if message_id.is_empty() {
+                    format!("text:{text}")
+                } else {
+                    message_id.clone()
+                };
+                (key, text)
             })
+        })
     }
 
-    pub fn finish_streaming_assistant_messages(&mut self) {
-        for message in &mut self.messages {
-            if matches!(message.role, MessageRole::Assistant) {
-                message.is_streaming = false;
-            }
+    pub fn finish_all_streaming(&mut self) {
+        for item in &mut self.items {
+            item.set_streaming(false);
         }
+        self.open_message_ids.clear();
+        self.open_message_roles.clear();
     }
 
     pub fn active_pending_request(&self) -> Option<&PendingAgentRequest> {
@@ -200,63 +247,76 @@ impl ChatState {
                 started_at_ms: _,
             } => {
                 if matches!(role, MessageRole::Assistant) {
-                    self.finish_streaming_assistant_messages();
+                    self.finish_all_streaming();
                 }
-                self.messages.push(RenderedMessage {
-                    message_id,
-                    role,
-                    text_parts: Vec::new(),
-                    tool_calls: Vec::new(),
-                    reasoning: None,
-                    is_streaming: true,
-                    error: None,
-                });
+                self.open_message_ids.insert(message_id.clone());
+                self.open_message_roles.insert(message_id, role);
             }
             UiEventMessage::TextDelta { message_id, text } => {
-                if let Some(msg) = self
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|m| m.message_id == message_id)
-                {
-                    append_text(msg, text);
+                if text.is_empty() {
+                    return;
+                }
+                if let Some(item) = self.find_text_item_mut(&message_id) {
+                    append_text_to_item(item, text);
+                } else {
+                    self.push_text_item(message_id, text, true);
                 }
             }
             UiEventMessage::TextReplace { message_id, text } => {
-                if let Some(msg) = self
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|m| m.message_id == message_id)
-                {
-                    msg.text_parts = if text.is_empty() {
+                if let Some(item) = self.find_text_item_mut(&message_id) {
+                    let replacement = if text.is_empty() {
                         Vec::new()
                     } else {
                         vec![TextPart::Plain(text)]
                     };
+                    match item {
+                        ChatItem::UserMessage { text_parts, .. }
+                        | ChatItem::AssistantText { text_parts, .. } => {
+                            *text_parts = replacement;
+                        }
+                        _ => {}
+                    }
+                } else if !text.is_empty() {
+                    self.push_text_item(message_id, text, false);
                 }
             }
             UiEventMessage::ReasoningDelta { message_id, text } => {
-                if let Some(msg) = self
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|m| m.message_id == message_id)
+                if text.is_empty() {
+                    return;
+                }
+                if let Some(ChatItem::Reasoning { text: existing, .. }) =
+                    self.find_reasoning_item_mut(&message_id)
                 {
-                    msg.reasoning = Some(match msg.reasoning.take() {
-                        Some(existing) => existing + &text,
-                        None => text,
+                    existing.push_str(&text);
+                } else {
+                    self.items.push(ChatItem::Reasoning {
+                        message_id,
+                        text,
+                        is_streaming: true,
                     });
                 }
             }
             UiEventMessage::ReasoningReplace { message_id, text } => {
-                if let Some(msg) = self
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|m| m.message_id == message_id)
+                if text.is_empty() {
+                    self.items.retain(|item| {
+                        !matches!(
+                            item,
+                            ChatItem::Reasoning {
+                                message_id: item_message_id,
+                                ..
+                            } if item_message_id == &message_id
+                        )
+                    });
+                } else if let Some(ChatItem::Reasoning { text: existing, .. }) =
+                    self.find_reasoning_item_mut(&message_id)
                 {
-                    msg.reasoning = (!text.is_empty()).then_some(text);
+                    *existing = text;
+                } else {
+                    self.items.push(ChatItem::Reasoning {
+                        message_id,
+                        text,
+                        is_streaming: false,
+                    });
                 }
             }
             UiEventMessage::ToolCallPlaced {
@@ -265,36 +325,37 @@ impl ChatState {
                 name,
                 args_json,
             } => {
-                if let Some(msg) = self
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|m| m.message_id == message_id)
+                let args_summary = summarize_tool_args(&name, &args_json);
+                let args_detail = compact_tool_args(&args_json)
+                    .filter(|detail| !detail.is_empty() && detail != &args_summary);
+                let is_expanded = is_diff_like(&args_json);
+                if let Some(ChatItem::ToolCall {
+                    name: existing_name,
+                    args_summary: existing_summary,
+                    args_detail: existing_detail,
+                    is_expanded: existing_expanded,
+                    is_streaming,
+                    ..
+                }) = self.find_tool_call_item_mut(&tool_call_id)
                 {
-                    let args_summary = summarize_tool_args(&name, &args_json);
-                    let args_detail = compact_tool_args(&args_json)
-                        .filter(|detail| !detail.is_empty() && detail != &args_summary);
-                    if let Some(existing) = msg
-                        .tool_calls
-                        .iter_mut()
-                        .find(|tc| tc.tool_call_id == tool_call_id)
-                    {
-                        existing.name = name;
-                        existing.args_summary = args_summary;
-                        existing.args_detail = args_detail;
-                        existing.is_expanded |= is_diff_like(&args_json);
-                    } else {
-                        msg.tool_calls.push(ToolCallBlock {
-                            tool_call_id,
-                            name,
-                            args_summary,
-                            args_detail,
-                            output_summary: None,
-                            output_detail: None,
-                            is_error: false,
-                            is_expanded: is_diff_like(&args_json),
-                        });
-                    }
+                    *existing_name = name;
+                    *existing_summary = args_summary;
+                    *existing_detail = args_detail;
+                    *existing_expanded |= is_expanded;
+                    *is_streaming = true;
+                } else {
+                    self.items.push(ChatItem::ToolCall {
+                        message_id,
+                        tool_call_id,
+                        name,
+                        args_summary,
+                        args_detail,
+                        output_summary: None,
+                        output_detail: None,
+                        is_error: false,
+                        is_expanded,
+                        is_streaming: true,
+                    });
                 }
             }
             UiEventMessage::ToolCallCompleted {
@@ -302,30 +363,31 @@ impl ChatState {
                 output,
                 is_error,
             } => {
-                for msg in self.messages.iter_mut().rev() {
-                    if let Some(tc) = msg
-                        .tool_calls
-                        .iter_mut()
-                        .find(|tc| tc.tool_call_id == tool_call_id)
-                    {
-                        tc.output_summary = Some(summarize_tool_output(&output));
-                        tc.output_detail = tool_output_detail(&output);
-                        if is_diff_like(&output) {
-                            tc.is_expanded = true;
-                        }
-                        tc.is_error = is_error;
-                        break;
+                if let Some(ChatItem::ToolCall {
+                    output_summary,
+                    output_detail,
+                    is_error: existing_error,
+                    is_expanded,
+                    is_streaming,
+                    ..
+                }) = self.find_tool_call_item_mut(&tool_call_id)
+                {
+                    *output_summary = Some(summarize_tool_output(&output));
+                    *output_detail = tool_output_detail(&output);
+                    if is_diff_like(&output) {
+                        *is_expanded = true;
                     }
+                    *existing_error = is_error;
+                    *is_streaming = false;
                 }
             }
             UiEventMessage::MessageCompleted { message_id, .. } => {
-                if let Some(msg) = self
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|m| m.message_id == message_id)
-                {
-                    msg.is_streaming = false;
+                self.open_message_ids.remove(&message_id);
+                self.open_message_roles.remove(&message_id);
+                for item in &mut self.items {
+                    if item.message_id() == Some(message_id.as_str()) {
+                        item.set_streaming(false);
+                    }
                 }
             }
             UiEventMessage::Error {
@@ -333,23 +395,11 @@ impl ChatState {
                 message_id,
                 ..
             } => {
-                if let Some(msg) = message_id
-                    .and_then(|mid| self.messages.iter_mut().rev().find(|m| m.message_id == mid))
-                {
-                    msg.error = Some(message);
-                    msg.is_streaming = false;
-                } else {
-                    self.finish_streaming_assistant_messages();
-                    self.messages.push(RenderedMessage {
-                        message_id: String::new(),
-                        role: MessageRole::System,
-                        text_parts: vec![TextPart::Plain(message)],
-                        tool_calls: Vec::new(),
-                        reasoning: None,
-                        is_streaming: false,
-                        error: Some(String::from("error")),
-                    });
-                }
+                self.finish_all_streaming();
+                self.items.push(ChatItem::Error {
+                    message_id,
+                    text: message,
+                });
             }
             UiEventMessage::Raw { kind, payload_json } => {
                 if self.apply_raw_request_event(&kind, &payload_json) {
@@ -363,18 +413,58 @@ impl ChatState {
             }
             UiEventMessage::ThreadOpened { .. } | UiEventMessage::ThreadTitleUpdated { .. } => {}
             UiEventMessage::ThreadClosed { reason, .. } => {
-                self.finish_streaming_assistant_messages();
-                self.messages.push(RenderedMessage {
-                    message_id: String::new(),
-                    role: MessageRole::System,
-                    text_parts: vec![TextPart::Plain(format!("Thread closed: {reason:?}"))],
-                    tool_calls: Vec::new(),
-                    reasoning: None,
-                    is_streaming: false,
-                    error: None,
+                self.finish_all_streaming();
+                self.items.push(ChatItem::SystemMessage {
+                    text: format!("Thread closed: {reason:?}"),
                 });
             }
         }
+    }
+
+    fn push_text_item(&mut self, message_id: String, text: String, is_streaming: bool) {
+        let role = self.infer_role(&message_id);
+        let item = match role {
+            MessageRole::User => ChatItem::UserMessage {
+                message_id: message_id.clone(),
+                text_parts: vec![TextPart::Plain(text)],
+                is_streaming,
+            },
+            MessageRole::Assistant | MessageRole::System => ChatItem::AssistantText {
+                message_id: message_id.clone(),
+                text_parts: vec![TextPart::Plain(text)],
+                is_streaming,
+            },
+        };
+        self.open_message_ids.remove(&message_id);
+        self.items.push(item);
+    }
+
+    fn find_text_item_mut(&mut self, message_id: &str) -> Option<&mut ChatItem> {
+        self.items.iter_mut().rev().find(|item| {
+            matches!(
+                item,
+                ChatItem::UserMessage { .. } | ChatItem::AssistantText { .. }
+            ) && item.message_id() == Some(message_id)
+        })
+    }
+
+    fn find_reasoning_item_mut(&mut self, message_id: &str) -> Option<&mut ChatItem> {
+        self.items.iter_mut().rev().find(|item| {
+            matches!(item, ChatItem::Reasoning { .. }) && item.message_id() == Some(message_id)
+        })
+    }
+
+    fn find_tool_call_item_mut(&mut self, tool_call_id: &str) -> Option<&mut ChatItem> {
+        self.items.iter_mut().rev().find(|item| {
+            matches!(item, ChatItem::ToolCall { tool_call_id: id, .. } if id == tool_call_id)
+        })
+    }
+
+    fn infer_role(&self, message_id: &str) -> MessageRole {
+        self.open_message_roles
+            .get(message_id)
+            .copied()
+            .unwrap_or(MessageRole::Assistant)
     }
 
     fn apply_raw_request_event(&mut self, kind: &str, payload_json: &str) -> bool {
@@ -395,9 +485,9 @@ impl ChatState {
                         value.get("request_id").and_then(serde_json::Value::as_str)
                     {
                         self.resolve_pending_request(request_id);
-                        self.messages.push(RenderedMessage::system(format!(
-                            "Request timed out: {request_id}"
-                        )));
+                        self.items.push(ChatItem::SystemMessage {
+                            text: format!("Request timed out: {request_id}"),
+                        });
                         return true;
                     }
                 }
@@ -433,58 +523,62 @@ impl ChatState {
         }
         let prompt = request.prompt.clone();
         self.pending_requests.push(request);
-        self.messages.push(RenderedMessage::system(prompt));
+        self.items.push(ChatItem::SystemMessage { text: prompt });
     }
 }
 
-impl RenderedMessage {
-    fn system(text: String) -> Self {
-        Self {
-            message_id: String::new(),
-            role: MessageRole::System,
-            text_parts: vec![TextPart::Plain(text)],
-            tool_calls: Vec::new(),
-            reasoning: None,
-            is_streaming: false,
-            error: None,
+impl ChatItem {
+    fn message_id(&self) -> Option<&str> {
+        match self {
+            ChatItem::UserMessage { message_id, .. }
+            | ChatItem::AssistantText { message_id, .. }
+            | ChatItem::Reasoning { message_id, .. }
+            | ChatItem::ToolCall { message_id, .. } => Some(message_id),
+            ChatItem::SystemMessage { .. } | ChatItem::Error { .. } => None,
+        }
+    }
+
+    fn set_streaming(&mut self, value: bool) {
+        match self {
+            ChatItem::UserMessage { is_streaming, .. }
+            | ChatItem::AssistantText { is_streaming, .. }
+            | ChatItem::Reasoning { is_streaming, .. }
+            | ChatItem::ToolCall { is_streaming, .. } => *is_streaming = value,
+            ChatItem::SystemMessage { .. } | ChatItem::Error { .. } => {}
         }
     }
 }
 
-fn rendered_message_text(message: &RenderedMessage) -> Option<String> {
-    let mut parts = Vec::new();
-    for part in &message.text_parts {
+fn text_parts_to_string(parts: &[TextPart]) -> Option<String> {
+    let mut result = Vec::new();
+    for part in parts {
         match part {
             TextPart::Plain(text) => {
                 if !text.trim().is_empty() {
-                    parts.push(text.trim().to_owned());
+                    result.push(text.trim().to_owned());
                 }
             }
             TextPart::Code { code, .. } => {
                 if !code.trim().is_empty() {
-                    parts.push(code.trim().to_owned());
+                    result.push(code.trim().to_owned());
                 }
             }
         }
     }
 
-    if parts.is_empty() {
-        message
-            .error
-            .as_deref()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(str::to_owned)
-    } else {
-        Some(parts.join("\n"))
-    }
+    (!result.is_empty()).then(|| result.join("\n"))
 }
 
-fn append_text(msg: &mut RenderedMessage, text: String) {
-    if let Some(TextPart::Plain(last)) = msg.text_parts.last_mut() {
-        last.push_str(&text);
-    } else {
-        msg.text_parts.push(TextPart::Plain(text));
+fn append_text_to_item(item: &mut ChatItem, text: String) {
+    match item {
+        ChatItem::UserMessage { text_parts, .. } | ChatItem::AssistantText { text_parts, .. } => {
+            if let Some(TextPart::Plain(last)) = text_parts.last_mut() {
+                last.push_str(&text);
+            } else {
+                text_parts.push(TextPart::Plain(text));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -751,16 +845,6 @@ fn array_len_for_keys(value: &serde_json::Value, keys: &[&str]) -> Option<usize>
             .find_map(|child| array_len_for_keys(child, keys)),
         _ => None,
     }
-}
-
-pub struct RenderedMessage {
-    pub message_id: String,
-    pub role: MessageRole,
-    pub text_parts: Vec<TextPart>,
-    pub tool_calls: Vec<ToolCallBlock>,
-    pub reasoning: Option<String>,
-    pub is_streaming: bool,
-    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1135,7 +1219,7 @@ impl ChatSelection {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextPart {
     Plain(String),
     #[allow(dead_code)]
@@ -1145,21 +1229,14 @@ pub enum TextPart {
     },
 }
 
-pub struct ToolCallBlock {
-    pub tool_call_id: String,
-    pub name: String,
-    pub args_summary: String,
-    pub args_detail: Option<String>,
-    pub output_summary: Option<String>,
-    pub output_detail: Option<String>,
-    pub is_error: bool,
-    pub is_expanded: bool,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use minos_domain::AgentName;
+
+    fn plain_parts(text: &str) -> Vec<TextPart> {
+        vec![TextPart::Plain(text.into())]
+    }
 
     #[test]
     fn chat_state_message_started_then_text_delta() {
@@ -1169,8 +1246,8 @@ mod tests {
             role: MessageRole::User,
             started_at_ms: 0,
         }]);
-        assert_eq!(cs.messages.len(), 1);
-        assert!(cs.messages[0].is_streaming);
+        assert!(cs.items.is_empty());
+        assert!(cs.open_message_ids.contains("m1"));
 
         cs.apply_ui_events(vec![UiEventMessage::TextDelta {
             message_id: "m1".into(),
@@ -1180,16 +1257,70 @@ mod tests {
             message_id: "m1".into(),
             text: "world".into(),
         }]);
-        assert_eq!(
-            cs.messages[0].text_parts,
-            vec![TextPart::Plain("hello world".into())]
-        );
+        assert_eq!(cs.items.len(), 1);
+        match &cs.items[0] {
+            ChatItem::UserMessage {
+                text_parts,
+                is_streaming,
+                ..
+            } => {
+                assert_eq!(*text_parts, plain_parts("hello world"));
+                assert!(*is_streaming);
+            }
+            other => panic!("expected UserMessage, got {other:?}"),
+        }
+        assert!(!cs.open_message_ids.contains("m1"));
 
         cs.apply_ui_events(vec![UiEventMessage::MessageCompleted {
             message_id: "m1".into(),
             finished_at_ms: 1,
         }]);
-        assert!(!cs.messages[0].is_streaming);
+        match &cs.items[0] {
+            ChatItem::UserMessage { is_streaming, .. } => assert!(!*is_streaming),
+            other => panic!("expected UserMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assistant_text_reasoning_and_tool_appear_in_arrival_order() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::ReasoningDelta {
+                message_id: "m1".into(),
+                text: "let me think".into(),
+            },
+            UiEventMessage::ToolCallPlaced {
+                message_id: "m1".into(),
+                tool_call_id: "tc1".into(),
+                name: "read_file".into(),
+                args_json: r#"{"path":"foo.rs"}"#.into(),
+            },
+            UiEventMessage::TextDelta {
+                message_id: "m1".into(),
+                text: "answer".into(),
+            },
+            UiEventMessage::MessageCompleted {
+                message_id: "m1".into(),
+                finished_at_ms: 1,
+            },
+        ]);
+
+        assert!(matches!(cs.items[0], ChatItem::Reasoning { .. }));
+        assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
+        assert!(matches!(cs.items[2], ChatItem::AssistantText { .. }));
+        for item in &cs.items {
+            match item {
+                ChatItem::Reasoning { is_streaming, .. }
+                | ChatItem::ToolCall { is_streaming, .. }
+                | ChatItem::AssistantText { is_streaming, .. } => assert!(!*is_streaming),
+                other => panic!("unexpected item {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -1206,20 +1337,39 @@ mod tests {
             name: "write_file".into(),
             args_json: r#"{"path":"foo.rs"}"#.into(),
         }]);
-        assert_eq!(cs.messages[0].tool_calls.len(), 1);
-        assert_eq!(cs.messages[0].tool_calls[0].name, "write_file");
-        assert_eq!(cs.messages[0].tool_calls[0].args_summary, "file=foo.rs");
+        assert_eq!(cs.items.len(), 1);
+        match &cs.items[0] {
+            ChatItem::ToolCall {
+                name,
+                args_summary,
+                is_streaming,
+                ..
+            } => {
+                assert_eq!(name, "write_file");
+                assert_eq!(args_summary, "file=foo.rs");
+                assert!(*is_streaming);
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
 
         cs.apply_ui_events(vec![UiEventMessage::ToolCallCompleted {
             tool_call_id: "tc1".into(),
             output: "ok".into(),
             is_error: false,
         }]);
-        assert_eq!(
-            cs.messages[0].tool_calls[0].output_summary.as_deref(),
-            Some("ok")
-        );
-        assert!(!cs.messages[0].tool_calls[0].is_error);
+        match &cs.items[0] {
+            ChatItem::ToolCall {
+                output_summary,
+                is_error,
+                is_streaming,
+                ..
+            } => {
+                assert_eq!(output_summary.as_deref(), Some("ok"));
+                assert!(!*is_error);
+                assert!(!*is_streaming);
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1243,12 +1393,15 @@ mod tests {
             args_json: r#"{"command":"ls -la"}"#.into(),
         }]);
 
-        assert_eq!(cs.messages[0].tool_calls.len(), 1);
-        assert!(cs.messages[0].tool_calls[0].args_summary.contains("ls -la"));
+        assert_eq!(cs.items.len(), 1);
+        match &cs.items[0] {
+            ChatItem::ToolCall { args_summary, .. } => assert!(args_summary.contains("ls -la")),
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 
     #[test]
-    fn codex_raw_events_render_final_text_and_keep_tool_on_original_message() {
+    fn codex_raw_events_render_final_text_and_tool_as_separate_items() {
         let mut cs = ChatState::new("thr".into(), AgentName::Codex);
         for raw in [
             serde_json::json!({"method":"item/started","params":{
@@ -1279,17 +1432,19 @@ mod tests {
             cs.apply_ui_events(events);
         }
 
-        assert_eq!(cs.messages.len(), 2);
-        assert_eq!(
-            cs.messages[0].text_parts,
-            vec![TextPart::Plain("partial final answer".into())]
-        );
-        assert_eq!(cs.messages[0].tool_calls.len(), 1);
-        assert_eq!(
-            cs.messages[0].tool_calls[0].output_summary.as_deref(),
-            Some("ok")
-        );
-        assert!(cs.messages[1].tool_calls.is_empty());
+        assert_eq!(cs.items.len(), 2);
+        match &cs.items[0] {
+            ChatItem::AssistantText { text_parts, .. } => {
+                assert_eq!(*text_parts, plain_parts("partial final answer"));
+            }
+            other => panic!("expected AssistantText, got {other:?}"),
+        }
+        match &cs.items[1] {
+            ChatItem::ToolCall { output_summary, .. } => {
+                assert_eq!(output_summary.as_deref(), Some("ok"));
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1309,10 +1464,15 @@ mod tests {
             text: "partial answer with final sentence".into(),
         }]);
 
-        assert_eq!(
-            cs.messages[0].text_parts,
-            vec![TextPart::Plain("partial answer with final sentence".into())]
-        );
+        match &cs.items[0] {
+            ChatItem::AssistantText { text_parts, .. } => {
+                assert_eq!(
+                    *text_parts,
+                    plain_parts("partial answer with final sentence")
+                );
+            }
+            other => panic!("expected AssistantText, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1332,7 +1492,10 @@ mod tests {
             text: "final thinking".into(),
         }]);
 
-        assert_eq!(cs.messages[0].reasoning.as_deref(), Some("final thinking"));
+        match &cs.items[0] {
+            ChatItem::Reasoning { text, .. } => assert_eq!(text, "final thinking"),
+            other => panic!("expected Reasoning, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1375,7 +1538,7 @@ mod tests {
             payload_json: r#"{"content":"fn main() { println!(\"large source\"); }"}"#.into(),
         }]);
 
-        assert!(cs.messages.is_empty());
+        assert!(cs.items.is_empty());
     }
 
     #[test]
@@ -1411,7 +1574,8 @@ mod tests {
                 decline_response: "reject_once".into()
             }
         );
-        assert_eq!(cs.messages.len(), 1);
+        assert_eq!(cs.items.len(), 1);
+        assert!(matches!(cs.items[0], ChatItem::SystemMessage { .. }));
     }
 
     #[test]
@@ -1447,7 +1611,7 @@ mod tests {
         }]);
 
         assert!(cs.pending_requests.is_empty());
-        assert_eq!(cs.messages.len(), 1);
+        assert_eq!(cs.items.len(), 1);
     }
 
     #[test]
@@ -1471,12 +1635,16 @@ mod tests {
             },
         ]);
 
-        assert!(!cs.messages[0].is_streaming);
-        assert!(cs.messages[1].is_streaming);
+        assert_eq!(cs.items.len(), 1);
+        match &cs.items[0] {
+            ChatItem::AssistantText { is_streaming, .. } => assert!(!*is_streaming),
+            other => panic!("expected AssistantText, got {other:?}"),
+        }
+        assert!(cs.open_message_ids.contains("m2"));
     }
 
     #[test]
-    fn error_finishes_targeted_streaming_assistant() {
+    fn error_pushes_error_item_and_finishes_streaming() {
         let mut cs = ChatState::new("t1".into(), AgentName::Codex);
 
         cs.apply_ui_events(vec![
@@ -1485,6 +1653,10 @@ mod tests {
                 role: MessageRole::Assistant,
                 started_at_ms: 0,
             },
+            UiEventMessage::TextDelta {
+                message_id: "m1".into(),
+                text: "partial".into(),
+            },
             UiEventMessage::Error {
                 code: "failed".into(),
                 message: "tool failed".into(),
@@ -1492,8 +1664,83 @@ mod tests {
             },
         ]);
 
-        assert!(!cs.messages[0].is_streaming);
-        assert_eq!(cs.messages[0].error.as_deref(), Some("tool failed"));
+        assert_eq!(cs.items.len(), 2);
+        match &cs.items[0] {
+            ChatItem::AssistantText { is_streaming, .. } => assert!(!*is_streaming),
+            other => panic!("expected AssistantText, got {other:?}"),
+        }
+        match &cs.items[1] {
+            ChatItem::Error { message_id, text } => {
+                assert_eq!(message_id.as_deref(), Some("m1"));
+                assert_eq!(text, "tool failed");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn thread_closed_pushes_system_message_and_finishes_streaming() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "m1".into(),
+                text: "partial".into(),
+            },
+            UiEventMessage::ThreadClosed {
+                thread_id: "t1".into(),
+                reason: minos_ui_protocol::ThreadEndReason::UserStopped,
+                closed_at_ms: 1,
+            },
+        ]);
+
+        match &cs.items[0] {
+            ChatItem::AssistantText { is_streaming, .. } => assert!(!*is_streaming),
+            other => panic!("expected AssistantText, got {other:?}"),
+        }
+        match &cs.items[1] {
+            ChatItem::SystemMessage { text } => assert!(text.contains("Thread closed")),
+            other => panic!("expected SystemMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn last_completed_assistant_text_ignores_streaming_items() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "m1".into(),
+                text: "first".into(),
+            },
+            UiEventMessage::MessageCompleted {
+                message_id: "m1".into(),
+                finished_at_ms: 1,
+            },
+            UiEventMessage::MessageStarted {
+                message_id: "m2".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 2,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "m2".into(),
+                text: "second streaming".into(),
+            },
+        ]);
+
+        assert_eq!(
+            cs.last_completed_assistant_text(),
+            Some(("m1".into(), "first".into()))
+        );
     }
 
     #[test]

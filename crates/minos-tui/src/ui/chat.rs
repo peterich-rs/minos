@@ -1,5 +1,4 @@
-use crate::translation::{ChatSelection, ChatState, RenderedMessage, TextPart};
-use minos_ui_protocol::MessageRole;
+use crate::translation::{ChatItem, ChatSelection, ChatState, TextPart};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -39,10 +38,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, chat: &mut ChatState, focused: boo
         return;
     }
 
-    let mut lines = visual_lines(
-        build_lines(chat.messages.as_slice(), inner.width),
-        inner.width,
-    );
+    let mut lines = visual_lines(build_lines(chat.items.as_slice(), inner.width), inner.width);
     let max_scroll = lines
         .len()
         .saturating_sub(usize::from(inner.height))
@@ -66,14 +62,14 @@ pub fn selected_text(chat: &ChatState, width: u16) -> Option<String> {
         return None;
     }
 
-    let lines = visual_lines(build_lines(chat.messages.as_slice(), width), width);
+    let lines = visual_lines(build_lines(chat.items.as_slice(), width), width);
     selected_text_from_lines(lines.as_slice(), selection)
 }
 
-fn build_lines(messages: &[RenderedMessage], separator_width: u16) -> Vec<Line<'static>> {
+fn build_lines(items: &[ChatItem], separator_width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    for (idx, msg) in messages.iter().enumerate() {
+    for (idx, item) in items.iter().enumerate() {
         if idx > 0 {
             lines.push(Line::from(Span::styled(
                 "─".repeat(usize::from(separator_width.max(1))),
@@ -81,70 +77,89 @@ fn build_lines(messages: &[RenderedMessage], separator_width: u16) -> Vec<Line<'
             )));
         }
 
-        let (label_text, label_style) = match msg.role {
-            MessageRole::User => ("[You]", USER_LABEL),
-            MessageRole::Assistant => ("[Agent]", ASSISTANT_LABEL),
-            MessageRole::System => ("[System]", REASONING_STYLE),
-        };
-        lines.push(Line::from(Span::styled(label_text, label_style)));
-
-        for part in &msg.text_parts {
-            match part {
-                TextPart::Plain(text) => {
-                    push_markdown_lines(&mut lines, text, Style::default());
-                }
-                TextPart::Code { lang, code } => {
-                    push_code_block(&mut lines, lang, code);
+        match item {
+            ChatItem::UserMessage {
+                text_parts,
+                is_streaming,
+                ..
+            } => {
+                lines.push(Line::from(Span::styled("[You]", USER_LABEL)));
+                push_text_parts(&mut lines, text_parts, Style::default());
+                if *is_streaming {
+                    lines.push(Line::from(Span::styled("▓", STREAMING_CURSOR)));
                 }
             }
-        }
-
-        if let Some(reasoning) = &msg.reasoning {
-            lines.push(Line::from(Span::styled("Thinking", REASONING_STYLE)));
-            push_markdown_lines(&mut lines, reasoning, REASONING_STYLE);
-        }
-
-        for tc in &msg.tool_calls {
-            let status_label = if tc.output_summary.is_none() {
-                Span::styled("running", ratatui::style::Style::default())
-            } else if tc.is_error {
-                Span::styled("failed", TOOL_ERROR)
-            } else {
-                Span::styled("done", TOOL_SUCCESS)
-            };
-            let mut tc_spans = vec![
-                Span::raw("Tool "),
-                Span::styled(tc.name.clone(), TOOL_NAME_STYLE),
-                Span::raw(" · "),
-                status_label,
-            ];
-            if !tc.args_summary.is_empty() {
-                tc_spans.push(Span::raw(format!(" {}", tc.args_summary)));
-            }
-            if tc.is_expanded {
-                let mut emitted_detail = false;
-                lines.push(Line::from(tc_spans.clone()));
-                if let Some(args) = &tc.args_detail {
-                    emitted_detail = true;
-                    push_tool_detail_lines(&mut lines, "args", args);
-                }
-                if let Some(output) = tc.output_detail.as_ref().or(tc.output_summary.as_ref()) {
-                    emitted_detail = true;
-                    push_tool_detail_lines(&mut lines, "out", output);
-                }
-                if emitted_detail {
-                    continue;
+            ChatItem::AssistantText {
+                text_parts,
+                is_streaming,
+                ..
+            } => {
+                lines.push(Line::from(Span::styled("[Agent]", ASSISTANT_LABEL)));
+                push_text_parts(&mut lines, text_parts, Style::default());
+                if *is_streaming {
+                    lines.push(Line::from(Span::styled("▓", STREAMING_CURSOR)));
                 }
             }
-            lines.push(Line::from(tc_spans));
-        }
-
-        if let Some(err) = &msg.error {
-            lines.push(Line::from(Span::styled(err.clone(), ERROR_STYLE)));
-        }
-
-        if msg.is_streaming && matches!(msg.role, MessageRole::Assistant) {
-            lines.push(Line::from(Span::styled("▓", STREAMING_CURSOR)));
+            ChatItem::Reasoning {
+                text, is_streaming, ..
+            } => {
+                lines.push(Line::from(Span::styled("Thinking", REASONING_STYLE)));
+                push_markdown_lines(&mut lines, text, REASONING_STYLE);
+                if *is_streaming {
+                    lines.push(Line::from(Span::styled("▓", STREAMING_CURSOR)));
+                }
+            }
+            ChatItem::ToolCall {
+                name,
+                args_summary,
+                args_detail,
+                output_summary,
+                output_detail,
+                is_error,
+                is_expanded,
+                is_streaming,
+                ..
+            } => {
+                let status_label = if *is_streaming || output_summary.is_none() {
+                    Span::styled("running", ratatui::style::Style::default())
+                } else if *is_error {
+                    Span::styled("failed", TOOL_ERROR)
+                } else {
+                    Span::styled("done", TOOL_SUCCESS)
+                };
+                let mut tc_spans = vec![
+                    Span::raw("Tool "),
+                    Span::styled(name.clone(), TOOL_NAME_STYLE),
+                    Span::raw(" · "),
+                    status_label,
+                ];
+                if !args_summary.is_empty() {
+                    tc_spans.push(Span::raw(format!(" {}", args_summary)));
+                }
+                if *is_expanded {
+                    let mut emitted_detail = false;
+                    lines.push(Line::from(tc_spans.clone()));
+                    if let Some(args) = args_detail {
+                        emitted_detail = true;
+                        push_tool_detail_lines(&mut lines, "args", args);
+                    }
+                    if let Some(output) = output_detail.as_ref().or(output_summary.as_ref()) {
+                        emitted_detail = true;
+                        push_tool_detail_lines(&mut lines, "out", output);
+                    }
+                    if emitted_detail {
+                        continue;
+                    }
+                }
+                lines.push(Line::from(tc_spans));
+            }
+            ChatItem::SystemMessage { text } => {
+                lines.push(Line::from(Span::styled("[System]", REASONING_STYLE)));
+                push_markdown_lines(&mut lines, text, Style::default());
+            }
+            ChatItem::Error { text, .. } => {
+                lines.push(Line::from(Span::styled(text.clone(), ERROR_STYLE)));
+            }
         }
     }
 
@@ -156,6 +171,19 @@ fn build_lines(messages: &[RenderedMessage], separator_width: u16) -> Vec<Line<'
     }
 
     lines
+}
+
+fn push_text_parts(lines: &mut Vec<Line<'static>>, text_parts: &[TextPart], base_style: Style) {
+    for part in text_parts {
+        match part {
+            TextPart::Plain(text) => {
+                push_markdown_lines(lines, text, base_style);
+            }
+            TextPart::Code { lang, code } => {
+                push_code_block(lines, lang, code);
+            }
+        }
+    }
 }
 
 fn push_markdown_lines(lines: &mut Vec<Line<'static>>, text: &str, base_style: Style) {
@@ -508,18 +536,22 @@ fn short_thread_id(thread_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::translation::{ChatSelectionPoint, ToolCallBlock};
+    use crate::translation::ChatSelectionPoint;
     use minos_domain::AgentName;
 
-    fn message(role: MessageRole, text: &str, is_streaming: bool) -> RenderedMessage {
-        RenderedMessage {
+    fn user_item(text: &str, is_streaming: bool) -> ChatItem {
+        ChatItem::UserMessage {
             message_id: "m1".into(),
-            role,
             text_parts: vec![TextPart::Plain(text.into())],
-            tool_calls: Vec::<ToolCallBlock>::new(),
-            reasoning: None,
             is_streaming,
-            error: None,
+        }
+    }
+
+    fn assistant_item(text: &str, is_streaming: bool) -> ChatItem {
+        ChatItem::AssistantText {
+            message_id: "m1".into(),
+            text_parts: vec![TextPart::Plain(text.into())],
+            is_streaming,
         }
     }
 
@@ -531,15 +563,15 @@ mod tests {
     }
 
     #[test]
-    fn user_streaming_message_does_not_render_cursor() {
-        let lines = build_lines(&[message(MessageRole::User, "sent", true)], 80);
+    fn user_streaming_item_renders_cursor() {
+        let lines = build_lines(&[user_item("sent", true)], 80);
 
-        assert!(!lines.iter().any(|line| line_text(line).contains('▓')));
+        assert!(lines.iter().any(|line| line_text(line).contains('▓')));
     }
 
     #[test]
-    fn assistant_streaming_message_renders_cursor() {
-        let lines = build_lines(&[message(MessageRole::Assistant, "thinking", true)], 80);
+    fn assistant_streaming_item_renders_cursor() {
+        let lines = build_lines(&[assistant_item("thinking", true)], 80);
 
         assert!(lines.iter().any(|line| line_text(line).contains('▓')));
     }
@@ -547,8 +579,7 @@ mod tests {
     #[test]
     fn markdown_headings_lists_inline_code_and_fences_render_structurally() {
         let lines = build_lines(
-            &[message(
-                MessageRole::Assistant,
+            &[assistant_item(
                 "# Plan\n- run `cargo test`\n```rust\nfn main() {}\n```",
                 false,
             )],
@@ -564,10 +595,17 @@ mod tests {
 
     #[test]
     fn reasoning_renders_as_thinking_with_markdown() {
-        let mut msg = message(MessageRole::Assistant, "final answer", false);
-        msg.reasoning = Some("# Inspect\n- read `app.rs`".into());
-
-        let lines = build_lines(&[msg], 80);
+        let lines = build_lines(
+            &[
+                ChatItem::Reasoning {
+                    message_id: "m1".into(),
+                    text: "# Inspect\n- read `app.rs`".into(),
+                    is_streaming: false,
+                },
+                assistant_item("final answer", false),
+            ],
+            80,
+        );
         let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| line == "Thinking"));
@@ -578,8 +616,7 @@ mod tests {
     #[test]
     fn diff_lines_get_diff_styles_without_treating_markdown_bullets_as_diff() {
         let lines = build_lines(
-            &[message(
-                MessageRole::Assistant,
+            &[assistant_item(
                 "- markdown bullet\n```diff\n@@ -1 +1\n-old\n+new\n```",
                 false,
             )],
@@ -601,11 +638,7 @@ mod tests {
     #[test]
     fn non_diff_code_blocks_do_not_color_markdown_lists_as_diff() {
         let lines = build_lines(
-            &[message(
-                MessageRole::Assistant,
-                "```text\n- markdown bullet\n```",
-                false,
-            )],
+            &[assistant_item("```text\n- markdown bullet\n```", false)],
             80,
         );
 
@@ -617,10 +650,33 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_item_renders_status_and_summary() {
+        let lines = build_lines(
+            &[ChatItem::ToolCall {
+                message_id: "m1".into(),
+                tool_call_id: "tc1".into(),
+                name: "read_file".into(),
+                args_summary: "file=src/main.rs".into(),
+                args_detail: None,
+                output_summary: Some("ok".into()),
+                output_detail: None,
+                is_error: false,
+                is_expanded: false,
+                is_streaming: false,
+            }],
+            80,
+        );
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+
+        assert!(rendered
+            .iter()
+            .any(|line| line.contains("Tool read_file") && line.contains("done")));
+    }
+
+    #[test]
     fn selected_text_copies_after_wrapping_model() {
         let mut chat = ChatState::new("t1".into(), AgentName::Codex);
-        chat.messages
-            .push(message(MessageRole::User, "hello\nworld", false));
+        chat.items.push(user_item("hello\nworld", false));
         chat.selection = Some(ChatSelection {
             anchor: ChatSelectionPoint { row: 1, col: 1 },
             focus: ChatSelectionPoint { row: 2, col: 2 },

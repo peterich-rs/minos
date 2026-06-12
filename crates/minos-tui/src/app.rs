@@ -15,7 +15,7 @@ use tracing::debug;
 use crate::backend::AgentBackend;
 use crate::event::AppEvent;
 use crate::group_chat::GroupChatStore;
-use crate::translation::{ChatSelectionPoint, ChatState, PendingAgentRequestKind};
+use crate::translation::{ChatItem, ChatSelectionPoint, ChatState, PendingAgentRequestKind};
 use crate::ui::{
     room_list::RoomEntry, AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState,
 };
@@ -375,7 +375,7 @@ impl App {
                 }
                 if is_terminal_for_stream {
                     if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
-                        chat.finish_streaming_assistant_messages();
+                        chat.finish_all_streaming();
                     }
                 }
                 self.record_agent_group_result_if_done(&thread_id).await;
@@ -391,7 +391,7 @@ impl App {
                     entry.state = ThreadState::Closed { reason };
                 }
                 if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
-                    chat.finish_streaming_assistant_messages();
+                    chat.finish_all_streaming();
                 }
                 self.record_agent_group_result_if_done(&thread_id).await;
                 true
@@ -408,7 +408,7 @@ impl App {
                         };
                     }
                     if let Some(chat) = self.ui.chat_states.get_mut(&tid) {
-                        chat.finish_streaming_assistant_messages();
+                        chat.finish_all_streaming();
                     }
                 }
                 true
@@ -1364,9 +1364,9 @@ impl App {
 
     fn toggle_tool_expansion(&mut self) -> bool {
         if let Some(chat) = self.ui.current_chat_mut() {
-            for msg in &mut chat.messages {
-                for tc in &mut msg.tool_calls {
-                    tc.is_expanded = !tc.is_expanded;
+            for item in &mut chat.items {
+                if let ChatItem::ToolCall { is_expanded, .. } = item {
+                    *is_expanded = !*is_expanded;
                 }
             }
             return true;
@@ -3701,7 +3701,10 @@ mod tests {
             .await
         );
 
-        assert!(!app.ui.chat_states["thread-codex-1234"].messages[0].is_streaming);
+        match &app.ui.chat_states["thread-codex-1234"].items[0] {
+            ChatItem::AssistantText { is_streaming, .. } => assert!(!*is_streaming),
+            other => panic!("expected AssistantText, got {other:?}"),
+        }
     }
 
     #[tokio::test]
