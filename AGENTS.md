@@ -16,6 +16,18 @@ Minos 是一个远程 AI 编码控制系统：Mac 运行 host 端，通过手机
 | [docs/architecture-shared-crates.md](docs/architecture-shared-crates.md) | 12 个共享 crate：domain、protocol、transport、pairing、cli-detect、agent-runtime、chat-store、acp-protocol、codex-protocol、ui-protocol、ffi-uniffi、ffi-frb |
 | [docs/architecture-business-flow.md](docs/architecture-business-flow.md) | 完整业务流程：注册 → 配对 → 实时连接 → Agent 会话 → 流式交互 → 审批 → 重连恢复 |
 
+# Development-State Compatibility Policy
+
+Minos 当前处于主动开发阶段，没有需要支持的历史发布版本。所有代码、schema、协议、数据库结构和文档都应以最新目标架构为准。
+
+## High Priority Rule
+- Do not add backward-compatibility layers, dual-read/dual-write paths, legacy migrations, feature flags for old protocol shapes, or adapter code for obsolete in-repo versions unless the user explicitly requests compatibility.
+- Prefer clean breaking changes over compatibility scaffolding when changing internal APIs, wire schemas, storage schemas, or generated bindings.
+- When a data model changes, update the canonical schema/migration/tests directly to the new shape instead of preserving old rows or old payload formats.
+- Remove obsolete code paths, tests, fixtures, and documentation during the same change when they no longer match the latest architecture.
+- Review feedback that asks for old-version migration or compatibility should be treated as out of scope by default; document that the project intentionally targets latest-only development state.
+- Keep implementation plans focused on the final desired architecture, not incremental legacy support, unless a task explicitly names a released version or compatibility requirement.
+
 # Workflow Orchestration
 
 ## 1. Plan Mode Default
