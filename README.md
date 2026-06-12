@@ -114,6 +114,13 @@ Keychain, so pairing should not trigger login-keychain password prompts. When
 you pass `--minos-home`, the CLI now forwards that override into the daemon's
 SQLite/workspaces runtime instead of only affecting `local-state.json`.
 
+Agent teamwork uses the `minos-teamwork-mcp` sidecar. Runtime lookup checks
+`MINOS_TEAMWORK_MCP_BIN`, then a sibling binary next to the running executable,
+then `PATH`; if no executable is found, MCP injection is skipped and the agent
+session continues without teamwork tools. For source builds, either build the
+sidecar with `cargo build -p minos-chat-store --bin minos-teamwork-mcp` or set
+`MINOS_TEAMWORK_MCP_BIN=/abs/path/to/minos-teamwork-mcp`.
+
 ## Mobile app (iOS)
 
 The Flutter app lives in `apps/mobile/`. Flutter is pinned to `3.41.6` via `apps/mobile/.fvmrc` and managed through [fvm](https://fvm.app).

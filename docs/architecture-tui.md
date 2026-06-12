@@ -12,7 +12,6 @@
 
 ```
 minos-tui [OPTIONS]
-minos-tui chat-mcp [OPTIONS]   (隐藏子命令，MCP 服务器)
 ```
 
 | 参数 | 用途 |
@@ -61,7 +60,7 @@ minos-tui chat-mcp [OPTIONS]   (隐藏子命令，MCP 服务器)
 ### `EmbeddedBackend`
 
 - 直接使用 `minos_agent_runtime::AgentManager`（进程内）
-- 配置 chat MCP 集成（启动 `minos-tui chat-mcp` 子进程）
+- 配置 teamwork MCP 集成（注入独立 `minos-teamwork-mcp` sidecar）
 - 不支持线程恢复和原始历史读取
 
 ### `DaemonBackend`

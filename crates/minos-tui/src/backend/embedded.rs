@@ -34,21 +34,7 @@ impl EmbeddedBackend {
                 .map_or(0, |d| d.as_nanos());
             minos_home.join("run").join(format!("mcp-{id}.sock"))
         };
-        let mcp_result = match std::env::current_exe() {
-            Ok(current_exe) => config.enable_mcp_with_command(
-                current_exe,
-                vec!["minos-teamwork-mcp".into()],
-                socket_path,
-            ),
-            Err(error) => {
-                tracing::warn!(
-                    target: "minos_tui::backend::embedded",
-                    error = %error,
-                    "failed to resolve current executable for MCP; falling back to PATH"
-                );
-                config.enable_default_mcp()
-            }
-        };
+        let mcp_result = config.enable_default_mcp_with_socket_path(socket_path);
         if let Some(mcp) = config.mcp.as_mut() {
             mcp.permissions = mcp_permissions;
         }

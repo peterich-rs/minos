@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::backend::BackendKind;
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -22,9 +22,6 @@ mod ui;
 #[derive(Parser, Debug)]
 #[command(name = "minos-tui", about = "Minos Agent TUI - local debug console")]
 struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
-
     #[arg(short, long)]
     agent: Option<String>,
 
@@ -69,48 +66,6 @@ struct Cli {
 
     #[arg(long)]
     mcp_disable_react_to_message: bool,
-}
-
-#[derive(Subcommand, Debug)]
-enum Command {
-    #[command(name = "minos-teamwork-mcp", hide = true)]
-    MinosTeamworkMcp(MinosTeamworkMcpArgs),
-}
-
-#[derive(Parser, Debug)]
-struct MinosTeamworkMcpArgs {
-    #[arg(long)]
-    socket_path: std::path::PathBuf,
-
-    #[arg(long)]
-    room_id: String,
-
-    #[arg(long)]
-    source_agent: Option<String>,
-
-    #[arg(long)]
-    disable_list_room_messages: bool,
-
-    #[arg(long)]
-    disable_delegate_to_agent: bool,
-
-    #[arg(long)]
-    disable_get_delegation_status: bool,
-
-    #[arg(long)]
-    disable_cancel_delegation: bool,
-
-    #[arg(long)]
-    disable_ask_user_question: bool,
-
-    #[arg(long)]
-    disable_check_user_feedback: bool,
-
-    #[arg(long)]
-    disable_post_room_update: bool,
-
-    #[arg(long)]
-    disable_react_to_message: bool,
 }
 
 fn parse_agent_name(s: &str) -> Result<AgentName> {
@@ -226,33 +181,6 @@ fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    if let Some(Command::MinosTeamworkMcp(args)) = cli.command {
-        let source_agent = args
-            .source_agent
-            .as_deref()
-            .map(parse_agent_name)
-            .transpose()?;
-        let socket_path = args.socket_path;
-        return minos_chat_store::mcp_server::serve_stdio(
-            minos_chat_store::mcp_server::McpServerConfig {
-                socket_path,
-                room_id: args.room_id,
-                source_agent,
-                permissions: minos_chat_store::mcp_server::McpToolPermissions {
-                    list_room_messages: !args.disable_list_room_messages,
-                    delegate_to_agent: !args.disable_delegate_to_agent,
-                    get_delegation_status: !args.disable_get_delegation_status,
-                    cancel_delegation: !args.disable_cancel_delegation,
-                    ask_user_question: !args.disable_ask_user_question,
-                    check_user_feedback: !args.disable_check_user_feedback,
-                    post_room_update: !args.disable_post_room_update,
-                    react_to_message: !args.disable_react_to_message,
-                },
-            },
-        )
-        .await;
-    }
-
     validate_backend_args(&cli)?;
     let workspace = std::fs::canonicalize(&cli.workspace).unwrap_or_else(|_| cli.workspace.clone());
     let log_path = logging::resolve_log_path(&workspace, cli.log_file.clone());
@@ -348,7 +276,6 @@ mod tests {
 
     fn test_cli(backend: BackendKind) -> Cli {
         Cli {
-            command: None,
             agent: None,
             workspace: ".".into(),
             readonly: false,

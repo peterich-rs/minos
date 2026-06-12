@@ -15,8 +15,9 @@ minos-tui logging initialized path=/tmp/minos-tui.log
 That log line does not prove MCP startup failure. In the repo, MCP is already
 wired in several places:
 
-- `crates/minos-tui/src/backend/embedded.rs` starts embedded agents with the
-  current Minos binary plus the hidden `minos-teamwork-mcp` subcommand.
+- `crates/minos-agent-runtime/src/config.rs` locates the `minos-teamwork-mcp`
+  sidecar with `MINOS_TEAMWORK_MCP_BIN`, then the current executable's sibling
+  directory, then `PATH`.
 - `crates/minos-chat-store/src/mcp_server.rs` implements `minos-teamwork-mcp`
   with `list_room_messages`, `delegate_to_agent`, and `post_room_update`.
 - `crates/minos-daemon/src/agent.rs` enables the default `minos-teamwork-mcp`
