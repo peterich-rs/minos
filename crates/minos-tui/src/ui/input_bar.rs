@@ -478,31 +478,14 @@ fn render_inline_agent_picker(
         .take(4)
         .filter_map(|index| candidates.get(*index))
         .map(|candidate| {
-            let (status_label, status_style) = match &candidate.kind {
-                AgentMentionCandidateKind::Installed { status } => match status {
-                    AgentStatus::Ok => (
-                        "install".to_owned(),
-                        ratatui::style::Style::new().fg(ratatui::style::Color::Green),
-                    ),
-                    AgentStatus::Missing => (
-                        "missing".to_owned(),
-                        ratatui::style::Style::new().fg(ratatui::style::Color::Red),
-                    ),
-                    AgentStatus::Error { reason } => (
-                        format!("error: {reason}"),
-                        ratatui::style::Style::new().fg(ratatui::style::Color::Red),
-                    ),
-                },
-                AgentMentionCandidateKind::Existing { .. } => (
-                    "session".to_owned(),
-                    ratatui::style::Style::new().fg(ratatui::style::Color::Cyan),
-                ),
-            };
-
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("@{:<16}", candidate.token), INPUT_PROMPT),
-                Span::styled(status_label, status_style),
-            ]))
+            let mut spans = vec![Span::styled(
+                format!("@{:<16}", candidate.token),
+                INPUT_PROMPT,
+            )];
+            if let Some((status_label, status_style)) = agent_picker_status_label(candidate) {
+                spans.push(Span::styled(status_label, status_style));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -518,6 +501,28 @@ fn render_inline_agent_picker(
         .highlight_symbol("› ")
         .highlight_style(HIGHLIGHTED);
     f.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn agent_picker_status_label(
+    candidate: &AgentMentionCandidate,
+) -> Option<(String, ratatui::style::Style)> {
+    match &candidate.kind {
+        AgentMentionCandidateKind::Installed { status } => match status {
+            AgentStatus::Ok => Some((
+                "install".to_owned(),
+                ratatui::style::Style::new().fg(ratatui::style::Color::Green),
+            )),
+            AgentStatus::Missing => Some((
+                "missing".to_owned(),
+                ratatui::style::Style::new().fg(ratatui::style::Color::Red),
+            )),
+            AgentStatus::Error { reason } => Some((
+                format!("error: {reason}"),
+                ratatui::style::Style::new().fg(ratatui::style::Color::Red),
+            )),
+        },
+        AgentMentionCandidateKind::Existing { .. } => None,
+    }
 }
 
 fn active_agent_range(content: &str, cursor_pos: usize) -> Option<Range<usize>> {
@@ -809,5 +814,21 @@ mod tests {
         state.cursor_pos = state.content.len();
 
         assert_eq!(required_height(&state, 40), 10);
+    }
+
+    #[test]
+    fn existing_agent_candidate_has_no_session_status_label() {
+        let installed = AgentMentionCandidate::installed(AgentName::Codex, AgentStatus::Ok);
+        let existing = AgentMentionCandidate::existing(
+            AgentName::Codex,
+            "thread-codex-1234".into(),
+            "thread-c".into(),
+        );
+
+        assert_eq!(
+            agent_picker_status_label(&installed).map(|(label, _)| label),
+            Some("install".to_owned())
+        );
+        assert!(agent_picker_status_label(&existing).is_none());
     }
 }

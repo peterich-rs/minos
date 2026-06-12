@@ -144,13 +144,18 @@ impl UiState {
             .iter()
             .map(|agent| AgentMentionCandidate::installed(agent.name, agent.status.clone()))
             .collect();
-        candidates.extend(self.threads.iter().map(|thread| {
-            AgentMentionCandidate::existing(
-                thread.agent,
-                thread.thread_id.clone(),
-                short_thread_id(&thread.thread_id),
-            )
-        }));
+        candidates.extend(
+            self.threads
+                .iter()
+                .filter(|thread| !matches!(thread.state, ThreadState::Closed { .. }))
+                .map(|thread| {
+                    AgentMentionCandidate::existing(
+                        thread.agent,
+                        thread.thread_id.clone(),
+                        short_thread_id(&thread.thread_id),
+                    )
+                }),
+        );
         candidates
     }
 }
