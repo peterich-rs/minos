@@ -74,7 +74,7 @@ pub struct ChatState {
     pub selection: Option<ChatSelection>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ChatItem {
     UserMessage {
         message_id: String,
@@ -200,24 +200,41 @@ impl ChatState {
     }
 
     pub fn last_completed_assistant_text(&self) -> Option<(String, String)> {
-        self.items.iter().rev().find_map(|item| {
-            let ChatItem::AssistantText {
-                message_id,
-                text_parts,
-                is_streaming: false,
-            } = item
-            else {
-                return None;
-            };
-            text_parts_to_string(text_parts).map(|text| {
-                let key = if message_id.is_empty() {
-                    format!("text:{text}")
-                } else {
-                    message_id.clone()
-                };
-                (key, text)
-            })
-        })
+        for (idx, item) in self.items.iter().enumerate().rev() {
+            match item {
+                ChatItem::AssistantText {
+                    message_id,
+                    text_parts,
+                    is_streaming: false,
+                } => {
+                    if let Some(text) = text_parts_to_string(text_parts) {
+                        let key = if message_id.is_empty() {
+                            format!("text:{text}")
+                        } else {
+                            message_id.clone()
+                        };
+                        return Some((key, text));
+                    }
+                }
+                ChatItem::Error { message_id, text } => {
+                    let text = text.trim();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    if let Some(message_id) = message_id {
+                        if let Some(result) =
+                            assistant_text_before_error(&self.items[..idx], message_id)
+                        {
+                            return Some(result);
+                        }
+                        return Some((format!("error:{message_id}"), text.to_owned()));
+                    }
+                    return Some((format!("error:{text}"), text.to_owned()));
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     pub fn finish_all_streaming(&mut self) {
@@ -277,7 +294,8 @@ impl ChatState {
                         _ => {}
                     }
                 } else if !text.is_empty() {
-                    self.push_text_item(message_id, text, false);
+                    let is_streaming = self.open_message_ids.contains(&message_id);
+                    self.push_text_item(message_id, text, is_streaming);
                 }
             }
             UiEventMessage::ReasoningDelta { message_id, text } => {
@@ -312,10 +330,11 @@ impl ChatState {
                 {
                     *existing = text;
                 } else {
+                    let is_streaming = self.open_message_ids.contains(&message_id);
                     self.items.push(ChatItem::Reasoning {
                         message_id,
                         text,
-                        is_streaming: false,
+                        is_streaming,
                     });
                 }
             }
@@ -435,7 +454,6 @@ impl ChatState {
                 is_streaming,
             },
         };
-        self.open_message_ids.remove(&message_id);
         self.items.push(item);
     }
 
@@ -464,7 +482,14 @@ impl ChatState {
         self.open_message_roles
             .get(message_id)
             .copied()
-            .unwrap_or(MessageRole::Assistant)
+            .unwrap_or_else(|| {
+                warn!(
+                    target: "minos_tui::translation",
+                    message_id,
+                    "message role missing; defaulting to assistant"
+                );
+                MessageRole::Assistant
+            })
     }
 
     fn apply_raw_request_event(&mut self, kind: &str, payload_json: &str) -> bool {
@@ -547,6 +572,22 @@ impl ChatItem {
             ChatItem::SystemMessage { .. } | ChatItem::Error { .. } => {}
         }
     }
+}
+
+fn assistant_text_before_error(items: &[ChatItem], message_id: &str) -> Option<(String, String)> {
+    items.iter().rev().find_map(|item| {
+        let ChatItem::AssistantText {
+            message_id: item_message_id,
+            text_parts,
+            is_streaming: false,
+        } = item
+        else {
+            return None;
+        };
+        (item_message_id == message_id)
+            .then(|| text_parts_to_string(text_parts).map(|text| (item_message_id.clone(), text)))
+            .flatten()
+    })
 }
 
 fn text_parts_to_string(parts: &[TextPart]) -> Option<String> {
@@ -1269,7 +1310,7 @@ mod tests {
             }
             other => panic!("expected UserMessage, got {other:?}"),
         }
-        assert!(!cs.open_message_ids.contains("m1"));
+        assert!(cs.open_message_ids.contains("m1"));
 
         cs.apply_ui_events(vec![UiEventMessage::MessageCompleted {
             message_id: "m1".into(),
@@ -1279,6 +1320,7 @@ mod tests {
             ChatItem::UserMessage { is_streaming, .. } => assert!(!*is_streaming),
             other => panic!("expected UserMessage, got {other:?}"),
         }
+        assert!(!cs.open_message_ids.contains("m1"));
     }
 
     #[test]
@@ -1476,6 +1518,36 @@ mod tests {
     }
 
     #[test]
+    fn text_replace_without_delta_creates_streaming_item_for_open_message() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::TextReplace {
+                message_id: "m1".into(),
+                text: "authoritative answer".into(),
+            },
+        ]);
+
+        assert_eq!(cs.items.len(), 1);
+        match &cs.items[0] {
+            ChatItem::AssistantText {
+                text_parts,
+                is_streaming,
+                ..
+            } => {
+                assert_eq!(*text_parts, plain_parts("authoritative answer"));
+                assert!(*is_streaming);
+            }
+            other => panic!("expected AssistantText, got {other:?}"),
+        }
+        assert!(cs.open_message_ids.contains("m1"));
+    }
+
+    #[test]
     fn reasoning_replace_uses_completed_reasoning_as_authoritative() {
         let mut cs = ChatState::new("t1".into(), AgentName::Codex);
         cs.apply_ui_events(vec![UiEventMessage::MessageStarted {
@@ -1494,6 +1566,33 @@ mod tests {
 
         match &cs.items[0] {
             ChatItem::Reasoning { text, .. } => assert_eq!(text, "final thinking"),
+            other => panic!("expected Reasoning, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reasoning_replace_without_delta_creates_streaming_item_for_open_message() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::ReasoningReplace {
+                message_id: "m1".into(),
+                text: "final thinking".into(),
+            },
+        ]);
+
+        assert_eq!(cs.items.len(), 1);
+        match &cs.items[0] {
+            ChatItem::Reasoning {
+                text, is_streaming, ..
+            } => {
+                assert_eq!(text, "final thinking");
+                assert!(*is_streaming);
+            }
             other => panic!("expected Reasoning, got {other:?}"),
         }
     }
@@ -1740,6 +1839,54 @@ mod tests {
         assert_eq!(
             cs.last_completed_assistant_text(),
             Some(("m1".into(), "first".into()))
+        );
+    }
+
+    #[test]
+    fn last_completed_assistant_text_falls_back_to_targeted_error_without_text() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::Error {
+                code: "failed".into(),
+                message: "tool failed".into(),
+                message_id: Some("m1".into()),
+            },
+        ]);
+
+        assert_eq!(
+            cs.last_completed_assistant_text(),
+            Some(("error:m1".into(), "tool failed".into()))
+        );
+    }
+
+    #[test]
+    fn last_completed_assistant_text_prefers_text_before_targeted_error() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "m1".into(),
+                text: "partial answer".into(),
+            },
+            UiEventMessage::Error {
+                code: "failed".into(),
+                message: "tool failed".into(),
+                message_id: Some("m1".into()),
+            },
+        ]);
+
+        assert_eq!(
+            cs.last_completed_assistant_text(),
+            Some(("m1".into(), "partial answer".into()))
         );
     }
 
