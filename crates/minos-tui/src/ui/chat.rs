@@ -738,4 +738,68 @@ mod tests {
 
         assert_eq!(selected_text(&chat, 80).as_deref(), Some("ello\nwor"));
     }
+
+    #[test]
+    fn counting_sink_matches_vec_sink_line_count() {
+        let items = vec![
+            ChatItem::AssistantText {
+                message_id: "m1".into(),
+                text_parts: vec![TextPart::Plain(
+                    "# Heading\n\nA long line that will definitely wrap at width 20: the quick brown fox jumps over the lazy dog repeatedly\n```\ncode line\ncode line 2\n```".into(),
+                )],
+                is_streaming: false,
+            },
+            ChatItem::ToolCall {
+                message_id: "m1".into(),
+                tool_call_id: "tc1".into(),
+                name: "bash".into(),
+                args_summary: "ls -la".into(),
+                args_detail: Some("detailed args".into()),
+                output_summary: Some("file1.txt\nfile2.txt".into()),
+                output_detail: None,
+                is_error: false,
+                is_expanded: true,
+                is_streaming: false,
+            },
+        ];
+
+        for width in [10u16, 20, 40, 80] {
+            // Build via VecSink, then wrap to count visual lines
+            let mut vec_sink = VecSink(Vec::new());
+            for (idx, item) in items.iter().enumerate() {
+                if idx > 0 {
+                    vec_sink.push_line(separator_line(width));
+                }
+                build_item_lines(&mut vec_sink, item);
+            }
+            let actual_count = visual_lines(vec_sink.0, width).len();
+
+            // Build via CountingSink
+            let mut counting_sink = CountingSink { width, count: 0 };
+            for (idx, item) in items.iter().enumerate() {
+                if idx > 0 {
+                    counting_sink.push_line(separator_line(width));
+                }
+                build_item_lines(&mut counting_sink, item);
+            }
+
+            assert_eq!(
+                counting_sink.count, actual_count,
+                "CountingSink mismatch at width {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn counting_sink_counts_soft_wrapped_visual_lines() {
+        let text = "abcdefghijklmno"; // 15 chars, wraps to 2 rows at width 10
+        let mut vec_sink = VecSink(Vec::new());
+        vec_sink.push_line(Line::from(Span::raw(text)));
+        let wrapped = visual_lines(vec_sink.0, 10);
+        assert_eq!(wrapped.len(), 2);
+
+        let mut counting_sink = CountingSink { width: 10, count: 0 };
+        counting_sink.push_line(Line::from(Span::raw(text)));
+        assert_eq!(counting_sink.count, 2);
+    }
 }
