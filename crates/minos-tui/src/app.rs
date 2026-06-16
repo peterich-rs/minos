@@ -16,7 +16,7 @@ use crate::backend::AgentBackend;
 use crate::event::AppEvent;
 use crate::group_chat::GroupChatStore;
 use crate::translation::{
-    ChatItem, ChatSelectionPoint, ChatState, PendingAgentRequestKind, PendingQuestionSpec,
+    ChatSelectionPoint, ChatState, PendingAgentRequestKind, PendingQuestionSpec,
 };
 use crate::ui::{
     room_list::RoomEntry, AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState,
@@ -2954,6 +2954,7 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::backend::{BackendConnectionState, BackendThreadSnapshot};
+    use crate::translation::ChatItem;
     use anyhow::Result;
     use async_trait::async_trait;
     use crossterm::event::{KeyEventState, MouseEvent, MouseEventKind};

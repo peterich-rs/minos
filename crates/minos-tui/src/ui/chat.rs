@@ -13,6 +13,53 @@ use super::theme::{
     TOOL_ERROR, TOOL_NAME_STYLE, TOOL_SUCCESS, USER_LABEL,
 };
 
+trait LineSink {
+    fn push_line(&mut self, line: Line<'static>);
+}
+
+struct VecSink(Vec<Line<'static>>);
+impl LineSink for VecSink {
+    fn push_line(&mut self, line: Line<'static>) {
+        self.0.push(line);
+    }
+}
+
+struct VecSinkRef<'a>(&'a mut Vec<Line<'static>>);
+impl<'a> LineSink for VecSinkRef<'a> {
+    fn push_line(&mut self, line: Line<'static>) {
+        self.0.push(line);
+    }
+}
+
+struct CountingSink {
+    width: u16,
+    count: usize,
+}
+impl LineSink for CountingSink {
+    fn push_line(&mut self, line: Line<'static>) {
+        self.count += visual_line_count(&line, self.width);
+    }
+}
+
+fn visual_line_count(line: &Line<'static>, width: u16) -> usize {
+    let width = usize::from(width.max(1));
+    let mut rows = 1usize;
+    let mut current_width = 0usize;
+
+    for span in &line.spans {
+        for ch in span.content.chars() {
+            let ch_width = char_width(ch);
+            if current_width > 0 && ch_width > 0 && current_width + ch_width > width {
+                rows += 1;
+                current_width = 0;
+            }
+            current_width = current_width.saturating_add(ch_width);
+        }
+    }
+
+    rows
+}
+
 pub fn render_chat(f: &mut Frame, area: Rect, chat: &mut ChatState, focused: bool) {
     let title = format!(
         "Chat: {} #{}{}",
@@ -67,126 +114,133 @@ pub fn selected_text(chat: &ChatState, width: u16) -> Option<String> {
 }
 
 fn build_lines(items: &[ChatItem], separator_width: u16) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut sink = VecSink(Vec::new());
 
     for (idx, item) in items.iter().enumerate() {
         if idx > 0 {
-            lines.push(Line::from(Span::styled(
-                "─".repeat(usize::from(separator_width.max(1))),
-                ratatui::style::Style::new().fg(BORDER_FG),
-            )));
+            sink.push_line(separator_line(separator_width));
         }
-
-        match item {
-            ChatItem::UserMessage {
-                text_parts,
-                is_streaming,
-                ..
-            } => {
-                lines.push(Line::from(Span::styled("[You]", USER_LABEL)));
-                push_text_parts(&mut lines, text_parts, Style::default());
-                if *is_streaming {
-                    lines.push(Line::from(Span::styled("▓", STREAMING_CURSOR)));
-                }
-            }
-            ChatItem::AssistantText {
-                text_parts,
-                is_streaming,
-                ..
-            } => {
-                lines.push(Line::from(Span::styled("[Agent]", ASSISTANT_LABEL)));
-                push_text_parts(&mut lines, text_parts, Style::default());
-                if *is_streaming {
-                    lines.push(Line::from(Span::styled("▓", STREAMING_CURSOR)));
-                }
-            }
-            ChatItem::Reasoning {
-                text, is_streaming, ..
-            } => {
-                lines.push(Line::from(Span::styled("Thinking", REASONING_STYLE)));
-                push_markdown_lines(&mut lines, text, REASONING_STYLE);
-                if *is_streaming {
-                    lines.push(Line::from(Span::styled("▓", STREAMING_CURSOR)));
-                }
-            }
-            ChatItem::ToolCall {
-                name,
-                args_summary,
-                args_detail,
-                output_summary,
-                output_detail,
-                is_error,
-                is_expanded,
-                is_streaming,
-                ..
-            } => {
-                let status_label = if *is_streaming || output_summary.is_none() {
-                    Span::styled("running", ratatui::style::Style::default())
-                } else if *is_error {
-                    Span::styled("failed", TOOL_ERROR)
-                } else {
-                    Span::styled("done", TOOL_SUCCESS)
-                };
-                let mut tc_spans = vec![
-                    Span::raw("Tool "),
-                    Span::styled(name.clone(), TOOL_NAME_STYLE),
-                    Span::raw(" · "),
-                    status_label,
-                ];
-                if !args_summary.is_empty() {
-                    tc_spans.push(Span::raw(format!(" {}", args_summary)));
-                }
-                if *is_expanded {
-                    let mut emitted_detail = false;
-                    lines.push(Line::from(tc_spans.clone()));
-                    if let Some(args) = args_detail {
-                        emitted_detail = true;
-                        push_tool_detail_lines(&mut lines, "args", args);
-                    }
-                    if let Some(output) = output_detail.as_ref().or(output_summary.as_ref()) {
-                        emitted_detail = true;
-                        push_tool_detail_lines(&mut lines, "out", output);
-                    }
-                    if emitted_detail {
-                        continue;
-                    }
-                }
-                lines.push(Line::from(tc_spans));
-            }
-            ChatItem::SystemMessage { text } => {
-                lines.push(Line::from(Span::styled("[System]", REASONING_STYLE)));
-                push_markdown_lines(&mut lines, text, Style::default());
-            }
-            ChatItem::Error { text, .. } => {
-                lines.push(Line::from(Span::styled(text.clone(), ERROR_STYLE)));
-            }
-        }
+        build_item_lines(&mut sink, item);
     }
 
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
+    if sink.0.is_empty() {
+        sink.push_line(Line::from(Span::styled(
             "No messages yet. Press `n` to start another agent, then type below.",
             REASONING_STYLE,
         )));
     }
 
-    lines
+    sink.0
 }
 
-fn push_text_parts(lines: &mut Vec<Line<'static>>, text_parts: &[TextPart], base_style: Style) {
+fn separator_line(separator_width: u16) -> Line<'static> {
+    Line::from(Span::styled(
+        "─".repeat(usize::from(separator_width.max(1))),
+        ratatui::style::Style::new().fg(BORDER_FG),
+    ))
+}
+
+fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
+    match item {
+        ChatItem::UserMessage {
+            text_parts,
+            is_streaming,
+            ..
+        } => {
+            sink.push_line(Line::from(Span::styled("[You]", USER_LABEL)));
+            push_text_parts(sink, text_parts, Style::default());
+            if *is_streaming {
+                sink.push_line(Line::from(Span::styled("▓", STREAMING_CURSOR)));
+            }
+        }
+        ChatItem::AssistantText {
+            text_parts,
+            is_streaming,
+            ..
+        } => {
+            sink.push_line(Line::from(Span::styled("[Agent]", ASSISTANT_LABEL)));
+            push_text_parts(sink, text_parts, Style::default());
+            if *is_streaming {
+                sink.push_line(Line::from(Span::styled("▓", STREAMING_CURSOR)));
+            }
+        }
+        ChatItem::Reasoning {
+            text, is_streaming, ..
+        } => {
+            sink.push_line(Line::from(Span::styled("Thinking", REASONING_STYLE)));
+            push_markdown_lines(sink, text, REASONING_STYLE);
+            if *is_streaming {
+                sink.push_line(Line::from(Span::styled("▓", STREAMING_CURSOR)));
+            }
+        }
+        ChatItem::ToolCall {
+            name,
+            args_summary,
+            args_detail,
+            output_summary,
+            output_detail,
+            is_error,
+            is_expanded,
+            is_streaming,
+            ..
+        } => {
+            let status_label = if *is_streaming || output_summary.is_none() {
+                Span::styled("running", ratatui::style::Style::default())
+            } else if *is_error {
+                Span::styled("failed", TOOL_ERROR)
+            } else {
+                Span::styled("done", TOOL_SUCCESS)
+            };
+            let mut tc_spans = vec![
+                Span::raw("Tool "),
+                Span::styled(name.clone(), TOOL_NAME_STYLE),
+                Span::raw(" · "),
+                status_label,
+            ];
+            if !args_summary.is_empty() {
+                tc_spans.push(Span::raw(format!(" {}", args_summary)));
+            }
+            if *is_expanded {
+                let mut emitted_detail = false;
+                sink.push_line(Line::from(tc_spans.clone()));
+                if let Some(args) = args_detail {
+                    emitted_detail = true;
+                    push_tool_detail_lines(sink, "args", args);
+                }
+                if let Some(output) = output_detail.as_ref().or(output_summary.as_ref()) {
+                    emitted_detail = true;
+                    push_tool_detail_lines(sink, "out", output);
+                }
+                if emitted_detail {
+                    return;
+                }
+            }
+            sink.push_line(Line::from(tc_spans));
+        }
+        ChatItem::SystemMessage { text } => {
+            sink.push_line(Line::from(Span::styled("[System]", REASONING_STYLE)));
+            push_markdown_lines(sink, text, Style::default());
+        }
+        ChatItem::Error { text, .. } => {
+            sink.push_line(Line::from(Span::styled(text.clone(), ERROR_STYLE)));
+        }
+    }
+}
+
+fn push_text_parts<S: LineSink>(sink: &mut S, text_parts: &[TextPart], base_style: Style) {
     for part in text_parts {
         match part {
             TextPart::Plain(text) => {
-                push_markdown_lines(lines, text, base_style);
+                push_markdown_lines(sink, text, base_style);
             }
             TextPart::Code { lang, code } => {
-                push_code_block(lines, lang, code);
+                push_code_block(sink, lang, code);
             }
         }
     }
 }
 
-fn push_markdown_lines(lines: &mut Vec<Line<'static>>, text: &str, base_style: Style) {
+fn push_markdown_lines<S: LineSink>(sink: &mut S, text: &str, base_style: Style) {
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code = String::new();
@@ -194,7 +248,7 @@ fn push_markdown_lines(lines: &mut Vec<Line<'static>>, text: &str, base_style: S
     for raw_line in text.split('\n') {
         if let Some(lang) = raw_line.trim_start().strip_prefix("```") {
             if in_code {
-                push_code_block(lines, &code_lang, code.trim_end_matches('\n'));
+                push_code_block(sink, &code_lang, code.trim_end_matches('\n'));
                 code.clear();
                 code_lang.clear();
                 in_code = false;
@@ -211,11 +265,11 @@ fn push_markdown_lines(lines: &mut Vec<Line<'static>>, text: &str, base_style: S
             continue;
         }
 
-        lines.push(markdown_line(raw_line, base_style));
+        sink.push_line(markdown_line(raw_line, base_style));
     }
 
     if in_code {
-        push_code_block(lines, &code_lang, code.trim_end_matches('\n'));
+        push_code_block(sink, &code_lang, code.trim_end_matches('\n'));
     }
 }
 
@@ -284,14 +338,14 @@ fn inline_markdown_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
     spans
 }
 
-fn push_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code: &str) {
+fn push_code_block<S: LineSink>(sink: &mut S, lang: &str, code: &str) {
     let label = if lang.trim().is_empty() {
         "code"
     } else {
         lang.trim()
     };
     let diff_block = is_diff_block(label, code);
-    lines.push(Line::from(Span::styled(
+    sink.push_line(Line::from(Span::styled(
         format!("┌─ {label} ─"),
         ratatui::style::Style::new().fg(BORDER_FG),
     )));
@@ -301,23 +355,23 @@ fn push_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code: &str) {
         } else {
             super::theme::MARKDOWN_CODE
         };
-        lines.push(Line::from(vec![
+        sink.push_line(Line::from(vec![
             Span::styled("│ ", ratatui::style::Style::new().fg(BORDER_FG)),
             Span::styled(code_line.to_owned(), style),
         ]));
     }
-    lines.push(Line::from(Span::styled(
+    sink.push_line(Line::from(Span::styled(
         "└──",
         ratatui::style::Style::new().fg(BORDER_FG),
     )));
 }
 
-fn push_tool_detail_lines(lines: &mut Vec<Line<'static>>, label: &str, text: &str) {
-    lines.push(Line::from(Span::styled(
+fn push_tool_detail_lines<S: LineSink>(sink: &mut S, label: &str, text: &str) {
+    sink.push_line(Line::from(Span::styled(
         format!("  {label}:"),
         ratatui::style::Style::new().fg(BORDER_FG),
     )));
-    push_markdown_lines(lines, text, Style::default());
+    push_markdown_lines(sink, text, Style::default());
 }
 
 fn is_markdown_rule(line: &str) -> bool {
