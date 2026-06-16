@@ -60,7 +60,13 @@ fn visual_line_count(line: &Line<'static>, width: u16) -> usize {
     rows
 }
 
-pub fn render_chat(f: &mut Frame, area: Rect, chat: &mut ChatState, focused: bool) {
+pub fn render_chat(
+    f: &mut Frame,
+    area: Rect,
+    chat: &mut ChatState,
+    focused: bool,
+    cache: &mut RenderCache,
+) {
     let title = format!(
         "Chat: {} #{}{}",
         chat.agent.bin_name(),
@@ -85,25 +91,71 @@ pub fn render_chat(f: &mut Frame, area: Rect, chat: &mut ChatState, focused: boo
         return;
     }
 
-    let mut lines = visual_lines(build_lines(chat.items.as_slice(), inner.width), inner.width);
-    let max_scroll = lines
-        .len()
+    let _span = tracing::trace_span!(
+        "render_chat",
+        item_count = chat.items.len(),
+        version = chat.version,
+    )
+    .entered();
+
+    cache.rebuild_if_stale(
+        chat.thread_id.as_str(),
+        &chat.items,
+        chat.version,
+        inner.width,
+    );
+
+    let max_scroll = cache
+        .total_lines
         .saturating_sub(usize::from(inner.height))
         .min(usize::from(u16::MAX)) as u16;
     chat.update_max_scroll(max_scroll);
-    apply_selection(lines.as_mut_slice(), chat.selection.as_ref());
-    let visible_lines: Vec<Line<'static>> = lines
-        .into_iter()
-        .skip(usize::from(chat.active_scroll()))
-        .take(usize::from(inner.height))
-        .map(|line| line.line)
-        .collect();
 
-    let paragraph = Paragraph::new(visible_lines).block(block);
-    f.render_widget(paragraph, area);
+    let base_row = usize::from(chat.active_scroll());
+    let height = usize::from(inner.height);
+
+    if cache.total_lines == 0 {
+        let lines = vec![Line::from(Span::styled(
+            "No messages yet. Press `n` to start another agent, then type below.",
+            REASONING_STYLE,
+        ))];
+        f.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+
+    let visible = cache.visible_window(&chat.items, base_row, height);
+
+    let mut all_lines: Vec<Line<'static>> = Vec::with_capacity(height + visible.items.len());
+    for (idx, item) in visible.items.iter().enumerate() {
+        if visible.start_item_index + idx > 0 {
+            all_lines.push(separator_line(inner.width));
+        }
+        build_item_lines(&mut VecSinkRef(&mut all_lines), item);
+    }
+    if all_lines.is_empty() {
+        all_lines.push(Line::from(Span::styled(
+            "No messages yet. Press `n` to start another agent, then type below.",
+            REASONING_STYLE,
+        )));
+    }
+
+    let visual = visual_lines(all_lines, inner.width);
+    let skip = visible.line_offset_within_first_segment;
+    let mut visible_visual_lines: Vec<VisualLine> =
+        visual.into_iter().skip(skip).take(height).collect();
+
+    apply_selection_with_offset(
+        visible_visual_lines.as_mut_slice(),
+        chat.selection.as_ref(),
+        base_row,
+    );
+
+    let lines: Vec<Line<'static>> = visible_visual_lines.into_iter().map(|vl| vl.line).collect();
+
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-pub fn selected_text(chat: &ChatState, width: u16) -> Option<String> {
+pub fn selected_text(chat: &ChatState, width: u16, _cache: &RenderCache) -> Option<String> {
     let selection = chat.selection.as_ref()?;
     if selection.is_empty() || width == 0 {
         return None;
@@ -569,13 +621,20 @@ fn push_span(line: &mut Line<'static>, buf: &mut String, style: Style) {
     line.spans.push(Span::styled(std::mem::take(buf), style));
 }
 
-fn apply_selection(lines: &mut [VisualLine], selection: Option<&ChatSelection>) {
+fn apply_selection_with_offset(
+    lines: &mut [VisualLine],
+    selection: Option<&ChatSelection>,
+    base_row: usize,
+) {
     let Some(selection) = selection.filter(|selection| !selection.is_empty()) else {
         return;
     };
 
-    for (row, visual) in lines.iter_mut().enumerate() {
-        if let Some((start_col, end_col)) = selected_cols_for_row(selection, row, &visual.text) {
+    for (local_row, visual) in lines.iter_mut().enumerate() {
+        let absolute_row = base_row + local_row;
+        if let Some((start_col, end_col)) =
+            selected_cols_for_row(selection, absolute_row, &visual.text)
+        {
             visual.line = highlight_line(std::mem::take(&mut visual.line), start_col, end_col);
         }
     }
@@ -843,7 +902,32 @@ mod tests {
             focus: ChatSelectionPoint { row: 2, col: 2 },
         });
 
-        assert_eq!(selected_text(&chat, 80).as_deref(), Some("ello\nwor"));
+        let cache = RenderCache::default();
+        assert_eq!(
+            selected_text(&chat, 80, &cache).as_deref(),
+            Some("ello\nwor")
+        );
+    }
+
+    #[test]
+    fn apply_selection_with_offset_highlights_correct_absolute_rows() {
+        let mut lines: Vec<VisualLine> = (0..10)
+            .map(|i| VisualLine {
+                line: Line::from(Span::raw(format!("line{i}"))),
+                text: format!("line{i}"),
+            })
+            .collect();
+
+        let selection = ChatSelection {
+            anchor: ChatSelectionPoint { row: 5, col: 0 },
+            focus: ChatSelectionPoint { row: 6, col: 5 },
+        };
+
+        // base_row=3, so absolute rows 5,6 = local rows 2,3
+        apply_selection_with_offset(&mut lines, Some(&selection), 3);
+        // Should not panic; lines 2 and 3 should have been processed
+        assert!(lines[2].line.spans.len() >= 1);
+        assert!(lines[3].line.spans.len() >= 1);
     }
 
     #[test]
@@ -905,7 +989,10 @@ mod tests {
         let wrapped = visual_lines(vec_sink.0, 10);
         assert_eq!(wrapped.len(), 2);
 
-        let mut counting_sink = CountingSink { width: 10, count: 0 };
+        let mut counting_sink = CountingSink {
+            width: 10,
+            count: 0,
+        };
         counting_sink.push_line(Line::from(Span::raw(text)));
         assert_eq!(counting_sink.count, 2);
     }

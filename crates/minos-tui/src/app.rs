@@ -1203,14 +1203,14 @@ impl App {
     fn handle_chat_selection_mouse(&mut self, mouse: MouseEvent) -> bool {
         let content_area = chat_content_area(self.ui.panel_areas.agent_chat);
         let selected_text = {
-            let Some(chat) = self.ui.current_chat_mut() else {
+            let Some((chat, cache)) = self.ui.current_chat_and_cache_mut() else {
                 return false;
             };
             let point =
                 chat_selection_point(content_area, chat.active_scroll(), mouse.column, mouse.row);
             chat.update_selection(point);
             if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
-                let text = crate::ui::chat::selected_text(chat, content_area.width);
+                let text = crate::ui::chat::selected_text(chat, content_area.width, cache);
                 if text.is_none() {
                     chat.clear_selection();
                 }

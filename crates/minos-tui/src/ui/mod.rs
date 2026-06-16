@@ -8,6 +8,7 @@ pub mod theme;
 pub mod thread_list;
 
 use crate::translation::ChatState;
+use crate::ui::chat::RenderCache;
 use crate::ui::input_bar::{AgentMentionCandidate, InputState};
 use crate::ui::room_list::RoomEntry;
 use crate::ui::status_bar::StatusBarState;
@@ -60,6 +61,7 @@ pub struct UiState {
     pub error_flash: Option<(String, Instant)>,
     pub panel_areas: PanelAreas,
     pub delete_confirm: Option<DeleteConfirmState>,
+    pub render_cache: RenderCache,
 }
 
 pub struct AgentPickerState {
@@ -110,6 +112,7 @@ impl UiState {
             error_flash: None,
             panel_areas: PanelAreas::default(),
             delete_confirm: None,
+            render_cache: RenderCache::default(),
         }
     }
 
@@ -127,6 +130,14 @@ impl UiState {
     pub fn current_chat(&self) -> Option<&ChatState> {
         let id = self.selected_thread.and_then(|i| self.threads.get(i))?;
         self.chat_states.get(&id.thread_id)
+    }
+
+    /// Returns the active chat alongside the shared render cache, using a split
+    /// borrow so callers can mutate both in the same scope.
+    pub fn current_chat_and_cache_mut(&mut self) -> Option<(&mut ChatState, &mut RenderCache)> {
+        let id = self.selected_thread.and_then(|i| self.threads.get(i))?;
+        let chat = self.chat_states.get_mut(&id.thread_id)?;
+        Some((chat, &mut self.render_cache))
     }
 
     pub fn set_error(&mut self, msg: String) {
@@ -443,8 +454,8 @@ fn render_detail_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut
         matches!(state.focus, Focus::AgentList),
     );
     let agent_chat_focused = matches!(state.focus, Focus::AgentChat);
-    if let Some(chat) = state.current_chat_mut() {
-        chat::render_chat(f, columns[2], chat, agent_chat_focused);
+    if let Some((chat, cache)) = state.current_chat_and_cache_mut() {
+        chat::render_chat(f, columns[2], chat, agent_chat_focused, cache);
     } else {
         render_agent_chat_placeholder(f, columns[2], agent_chat_focused);
     }

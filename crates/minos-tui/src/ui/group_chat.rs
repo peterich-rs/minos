@@ -18,6 +18,9 @@ pub fn render_group_chat(
     state: &mut GroupChatState,
     focused: bool,
 ) {
+    let _span =
+        tracing::trace_span!("render_group_chat", message_count = state.messages.len(),).entered();
+
     let block = super::theme::border_block()
         .title(title)
         .border_style(if focused {
