@@ -15,7 +15,9 @@ use tracing::debug;
 use crate::backend::AgentBackend;
 use crate::event::AppEvent;
 use crate::group_chat::GroupChatStore;
-use crate::translation::{ChatItem, ChatSelectionPoint, ChatState, PendingAgentRequestKind};
+use crate::translation::{
+    ChatItem, ChatSelectionPoint, ChatState, PendingAgentRequestKind, PendingQuestionSpec,
+};
 use crate::ui::{
     room_list::RoomEntry, AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState,
 };
@@ -37,6 +39,7 @@ pub struct App {
     recorded_agent_results: HashMap<String, String>,
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<AppEvent>>,
     last_daemon_history_sync: Option<Instant>,
+    last_group_result_retry: Option<Instant>,
 }
 
 impl App {
@@ -70,6 +73,7 @@ impl App {
             recorded_agent_results: HashMap::new(),
             event_tx: None,
             last_daemon_history_sync: None,
+            last_group_result_retry: None,
         }
     }
 
@@ -140,6 +144,7 @@ impl App {
                 true
             }
             AppEvent::Key(key) => self.handle_key(key).await,
+            AppEvent::Paste(text) => self.handle_paste(text),
             AppEvent::Mouse(mouse) => self.handle_mouse(mouse).await,
             AppEvent::Tick => self.handle_tick().await,
             AppEvent::Resize(_, _) => true,
@@ -161,6 +166,9 @@ impl App {
             .status
             .update_backend_state(self.backend.connection_state());
         if self.refresh_group_chat_from_backend().await {
+            redraw = true;
+        }
+        if self.retry_pending_agent_group_results_if_due().await {
             redraw = true;
         }
         redraw
@@ -336,6 +344,34 @@ impl App {
         let from_seq = self.thread_watermarks.get(thread_id).copied();
         self.replay_thread_history_from(thread_id, from_seq, false)
             .await
+    }
+
+    async fn retry_pending_agent_group_results_if_due(&mut self) -> bool {
+        let now = Instant::now();
+        if self
+            .last_group_result_retry
+            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(2))
+        {
+            return false;
+        }
+        self.last_group_result_retry = Some(now);
+
+        let thread_ids: Vec<String> = self
+            .ui
+            .threads
+            .iter()
+            .filter(|thread| thread_is_done(&thread.state))
+            .map(|thread| thread.thread_id.clone())
+            .collect();
+        if thread_ids.is_empty() {
+            return false;
+        }
+
+        let before = self.ui.group_chat.messages.len();
+        for thread_id in thread_ids {
+            self.record_agent_group_result_if_done(&thread_id).await;
+        }
+        self.ui.group_chat.messages.len() != before
     }
 
     async fn hydrate_thread_if_needed(&mut self, thread_id: &str) -> bool {
@@ -546,6 +582,26 @@ impl App {
             Focus::RoomChat => self.handle_room_chat_key(key).await,
             Focus::AgentList => self.handle_agent_list_key(key).await,
             Focus::AgentChat => self.handle_agent_chat_key(key).await,
+        }
+    }
+
+    fn handle_paste(&mut self, text: String) -> bool {
+        let text = normalize_pasted_text(text.as_str());
+        if text.is_empty() {
+            return false;
+        }
+
+        match self.ui.focus {
+            Focus::RoomInput => {
+                self.ui.room_input.insert_str(text.as_str());
+                self.sync_input_agent_picker();
+                true
+            }
+            Focus::AgentInput => {
+                self.ui.agent_input.insert_str(text.as_str());
+                true
+            }
+            _ => false,
         }
     }
 
@@ -1445,14 +1501,11 @@ impl App {
 
     fn toggle_tool_expansion(&mut self) -> bool {
         if let Some(chat) = self.ui.current_chat_mut() {
-            for item in &mut chat.items {
-                if let ChatItem::ToolCall { is_expanded, .. } = item {
-                    *is_expanded = !*is_expanded;
-                }
-            }
-            return true;
+            chat.toggle_tool_expansion();
+            true
+        } else {
+            false
         }
-        false
     }
 
     fn current_thread_is_interruptible(&self) -> bool {
@@ -1623,6 +1676,7 @@ impl App {
             PendingAgentRequestKind::OpencodePermission { permission_id, .. } => {
                 permission_id.clone()
             }
+            PendingAgentRequestKind::OpencodeQuestion { question_id, .. } => question_id.clone(),
         };
 
         let result = match pending {
@@ -1658,6 +1712,15 @@ impl App {
                 );
                 self.backend
                     .respond_opencode_permission(&thread_id, &permission_id, &response)
+                    .await
+            }
+            PendingAgentRequestKind::OpencodeQuestion {
+                question_id,
+                questions,
+            } => {
+                let answers = opencode_question_answers(questions.as_slice(), text.as_str());
+                self.backend
+                    .respond_opencode_question(&thread_id, &question_id, answers)
                     .await
             }
         };
@@ -1771,7 +1834,11 @@ impl App {
                         });
                     }
                     Err(error) => {
-                        let error = format!("Failed to start {}: {error}", agent.bin_name());
+                        let error = format!(
+                            "Failed to start {}: {}",
+                            agent.bin_name(),
+                            format_error_chain(&error)
+                        );
                         tracing::warn!(
                             target: "minos_tui::app",
                             error = %error,
@@ -1892,7 +1959,11 @@ impl App {
                     self.ensure_thread_visible(thread_id.clone(), agent, outcome.cwd);
                     Ok(thread_id)
                 }
-                Err(error) => Err(format!("Failed to start {}: {error}", agent.bin_name())),
+                Err(error) => Err(format!(
+                    "Failed to start {}: {}",
+                    agent.bin_name(),
+                    format_error_chain(&error)
+                )),
             },
             AgentStatus::Missing => Err(format!("{} is not installed on PATH", agent.bin_name())),
             AgentStatus::Error { reason } => {
@@ -2433,9 +2504,10 @@ impl App {
         else {
             return;
         };
-        self.append_group_chat_message(message).await;
-        self.recorded_agent_results
-            .insert(thread_id.to_owned(), message_key);
+        if self.append_group_chat_message(message).await {
+            self.recorded_agent_results
+                .insert(thread_id.to_owned(), message_key);
+        }
     }
 
     fn group_chat_has_agent_result(&self, thread_id: &str, text: &str) -> bool {
@@ -2470,9 +2542,9 @@ impl App {
         })
     }
 
-    async fn append_group_chat_message(&mut self, message: LocalGroupChatMessage) {
+    async fn append_group_chat_message(&mut self, message: LocalGroupChatMessage) -> bool {
         match self.append_group_chat_message_result(message).await {
-            Ok(_) => {}
+            Ok(_) => true,
             Err(error) => {
                 tracing::warn!(
                     target: "minos_tui::app",
@@ -2481,6 +2553,7 @@ impl App {
                 );
                 self.ui
                     .set_error(format!("Failed to record group chat message: {error}"));
+                false
             }
         }
     }
@@ -2503,6 +2576,10 @@ fn is_text_input_key(key: KeyEvent) -> bool {
 
 fn is_input_focus(focus: Focus) -> bool {
     matches!(focus, Focus::RoomInput | Focus::AgentInput)
+}
+
+fn normalize_pasted_text(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn thread_can_receive_message(state: &ThreadState) -> bool {
@@ -2659,6 +2736,74 @@ fn opencode_permission_response(
     } else {
         decline_response.to_owned()
     }
+}
+
+fn opencode_question_answers(questions: &[PendingQuestionSpec], text: &str) -> Vec<Vec<String>> {
+    if questions.is_empty() {
+        return vec![vec![text.trim().to_owned()]];
+    }
+
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    questions
+        .iter()
+        .enumerate()
+        .map(|(index, question)| {
+            let answer_text = if questions.len() > 1 {
+                lines.get(index).copied().unwrap_or_else(|| text.trim())
+            } else {
+                text.trim()
+            };
+            parse_opencode_question_answer(question, answer_text)
+        })
+        .collect()
+}
+
+fn parse_opencode_question_answer(question: &PendingQuestionSpec, text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let tokens = if question.multiple {
+        trimmed
+            .split(|ch| [',', ';'].contains(&ch))
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>()
+    } else {
+        vec![trimmed]
+    };
+    if tokens.is_empty() {
+        return vec![trimmed.to_owned()];
+    }
+
+    let mut answers = Vec::new();
+    for token in tokens {
+        if let Some(label) = resolve_opencode_question_option(question, token) {
+            answers.push(label);
+        } else {
+            answers.push(token.to_owned());
+        }
+    }
+    answers
+}
+
+fn resolve_opencode_question_option(question: &PendingQuestionSpec, token: &str) -> Option<String> {
+    if let Ok(index) = token.parse::<usize>() {
+        if (1..=question.options.len()).contains(&index) {
+            return Some(question.options[index - 1].label.clone());
+        }
+    }
+
+    question
+        .options
+        .iter()
+        .find(|option| option.label.eq_ignore_ascii_case(token))
+        .map(|option| option.label.clone())
 }
 
 fn is_affirmative(text: &str) -> bool {
@@ -2828,6 +2973,7 @@ mod tests {
         sent_messages: Mutex<Vec<(String, String)>>,
         approval_decisions: Mutex<Vec<(String, String, serde_json::Value)>>,
         opencode_permission_responses: Mutex<Vec<(String, String, String)>>,
+        opencode_question_responses: Mutex<Vec<(String, String, Vec<Vec<String>>)>>,
         group_chat_pages: Mutex<VecDeque<Vec<LocalGroupChatMessage>>>,
         next_thread: Mutex<usize>,
         interrupted: Mutex<Vec<String>>,
@@ -2857,6 +3003,7 @@ mod tests {
                 sent_messages: Mutex::new(Vec::new()),
                 approval_decisions: Mutex::new(Vec::new()),
                 opencode_permission_responses: Mutex::new(Vec::new()),
+                opencode_question_responses: Mutex::new(Vec::new()),
                 group_chat_pages: Mutex::new(VecDeque::new()),
                 next_thread: Mutex::new(0),
                 interrupted: Mutex::new(Vec::new()),
@@ -2973,6 +3120,19 @@ mod tests {
                     permission_id.to_owned(),
                     response.to_owned(),
                 ));
+            Ok(())
+        }
+
+        async fn respond_opencode_question(
+            &self,
+            thread_id: &str,
+            question_id: &str,
+            answers: Vec<Vec<String>>,
+        ) -> Result<()> {
+            self.opencode_question_responses
+                .lock()
+                .expect("opencode question responses lock")
+                .push((thread_id.to_owned(), question_id.to_owned(), answers));
             Ok(())
         }
 
@@ -3266,6 +3426,57 @@ mod tests {
         );
         assert_eq!(app.ui.room_input.cursor_pos, 0);
         assert_eq!(app.ui.room_input.content, "hello brave ");
+    }
+
+    #[tokio::test]
+    async fn room_input_paste_inserts_multiline_text_without_submitting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+        let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Codex)]));
+        let mut app =
+            App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+        app.ui
+            .status
+            .update_agents(vec![ok_agent(AgentName::Codex)]);
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-codex-1234".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+        });
+        app.ui.chat_states.insert(
+            "thread-codex-1234".into(),
+            ChatState::new("thread-codex-1234".into(), AgentName::Codex),
+        );
+        app.select_thread(0);
+        app.ui.focus = Focus::RoomInput;
+
+        assert!(
+            app.handle_event(AppEvent::Paste("first\r\nsecond\nthird".into()))
+                .await
+        );
+
+        assert_eq!(app.ui.room_input.content, "first\nsecond\nthird");
+        assert_eq!(app.ui.room_input.cursor_pos, "first\nsecond\nthird".len());
+        assert!(backend
+            .sent_messages
+            .lock()
+            .expect("sent messages lock")
+            .is_empty());
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert_eq!(
+            backend
+                .sent_messages
+                .lock()
+                .expect("sent messages lock")
+                .as_slice(),
+            &[(
+                "thread-codex-1234".to_owned(),
+                "first\nsecond\nthird".to_owned()
+            )]
+        );
     }
 
     #[tokio::test]
@@ -3803,6 +4014,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_input_answers_opencode_question_with_selected_option() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-opencode-1234".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+        });
+        let mut chat = ChatState::new("thread-opencode-1234".into(), AgentName::Opencode);
+        chat.apply_ui_events(vec![UiEventMessage::Raw {
+            kind: "opencode/question.asked".into(),
+            payload_json: serde_json::json!({
+                "type": "question.asked",
+                "properties": {
+                    "id": "que-1",
+                    "questions": [{
+                        "header": "Core",
+                        "question": "Pick a direction",
+                        "options": [
+                            {"label": "Fast", "description": "Ship quickly"},
+                            {"label": "Robust", "description": "Prefer durability"}
+                        ]
+                    }]
+                }
+            })
+            .to_string(),
+        }]);
+        app.ui
+            .chat_states
+            .insert("thread-opencode-1234".into(), chat);
+        app.select_thread(0);
+        app.ui.focus = Focus::AgentInput;
+        app.ui.agent_input.content = "2".into();
+        app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
+
+        assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+        assert!(app.ui.group_chat.messages.is_empty());
+        let responses = backend
+            .opencode_question_responses
+            .lock()
+            .expect("question responses lock");
+        assert_eq!(
+            responses.as_slice(),
+            &[(
+                "thread-opencode-1234".to_owned(),
+                "que-1".to_owned(),
+                vec![vec!["Robust".to_owned()]]
+            )]
+        );
+        assert!(app
+            .ui
+            .chat_states
+            .get("thread-opencode-1234")
+            .expect("chat state")
+            .pending_requests
+            .is_empty());
+    }
+
+    #[tokio::test]
     async fn room_can_invite_second_agent_after_first_routed_prompt() {
         let temp = tempfile::tempdir().expect("tempdir");
         let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
@@ -3994,6 +4268,71 @@ mod tests {
         assert_eq!(message.text, "The module handles auth.");
         assert_eq!(message.agent, Some(AgentName::Gemini));
         assert_eq!(message.thread_short_id.as_deref(), Some("thread-g"));
+    }
+
+    #[tokio::test]
+    async fn failed_agent_group_result_append_is_retried_on_tick() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let failing_store = GroupChatStore::failing();
+        let backend = Arc::new(TestBackend::new());
+        let mut app =
+            App::with_group_chat_store(backend, false, PathBuf::from("/tmp"), failing_store);
+        app.ui.threads.push(ThreadEntry {
+            thread_id: "thread-gemini-1234".into(),
+            agent: AgentName::Gemini,
+            workspace: PathBuf::from("/tmp/ws"),
+            state: ThreadState::Running {
+                turn_started_at_ms: 0,
+            },
+        });
+        let mut chat = ChatState::new("thread-gemini-1234".into(), AgentName::Gemini);
+        chat.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "assistant-1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 1,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "assistant-1".into(),
+                text: "The module handles auth.".into(),
+            },
+            UiEventMessage::MessageCompleted {
+                message_id: "assistant-1".into(),
+                finished_at_ms: 2,
+            },
+        ]);
+        app.ui.chat_states.insert("thread-gemini-1234".into(), chat);
+
+        assert!(
+            app.handle_event(AppEvent::ManagerEvent(ManagerEvent::ThreadStateChanged {
+                thread_id: "thread-gemini-1234".into(),
+                old: ThreadState::Running {
+                    turn_started_at_ms: 0,
+                },
+                new: ThreadState::Idle,
+                at_ms: 3,
+            }))
+            .await
+        );
+
+        assert!(app.ui.group_chat.messages.is_empty());
+        assert!(!app
+            .recorded_agent_results
+            .contains_key("thread-gemini-1234"));
+
+        app.group_chat_store = GroupChatStore::at_path(temp.path().join("group.sqlite"));
+        assert!(app.handle_event(AppEvent::Tick).await);
+
+        assert_eq!(app.ui.group_chat.messages.len(), 1);
+        let message = &app.ui.group_chat.messages[0];
+        assert_eq!(message.kind, LocalGroupChatMessageKind::AgentResult);
+        assert_eq!(message.text, "The module handles auth.");
+        assert_eq!(
+            app.recorded_agent_results
+                .get("thread-gemini-1234")
+                .map(String::as_str),
+            Some("assistant-1")
+        );
     }
 
     #[tokio::test]
