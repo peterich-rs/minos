@@ -476,14 +476,21 @@ impl RenderCache {
     }
 
     fn rebuild(&mut self, items: &[ChatItem], width: u16) {
+        // item_starts[idx] = absolute visual line where item idx's rendered segment begins.
+        // For idx > 0, the separator IS the first line of the segment.
+        // This matches render_chat which pushes [separator, content...].
         let mut item_starts = Vec::with_capacity(items.len());
         let mut current_start = 0usize;
 
         for (idx, item) in items.iter().enumerate() {
             if idx > 0 {
+                // Separator before this item — it's the first line of this segment
+                item_starts.push(current_start);
                 current_start += 1; // separator line
+            } else {
+                item_starts.push(current_start);
             }
-            item_starts.push(current_start);
+
             let mut sink = CountingSink { width, count: 0 };
             build_item_lines(&mut sink, item);
             current_start += sink.count;
@@ -1084,5 +1091,51 @@ mod tests {
         let items: Vec<ChatItem> = vec![];
         let window = cache.visible_window(&items, 0, 10);
         assert!(window.items.is_empty());
+    }
+
+    #[test]
+    fn render_cache_separator_offset_matches_full_build() {
+        // 3 items, each producing [Agent] label + content = 2 content lines.
+        // Full build: [Agent, hello, sep, Agent, world, sep, Agent, line3] = 8 visual lines.
+        // item_starts should be [0, 2, 5] where item 1 start includes its separator.
+        let items = vec![
+            ChatItem::AssistantText {
+                message_id: "m1".into(),
+                text_parts: vec![TextPart::Plain("hello".into())],
+                is_streaming: false,
+            },
+            ChatItem::AssistantText {
+                message_id: "m2".into(),
+                text_parts: vec![TextPart::Plain("world".into())],
+                is_streaming: false,
+            },
+            ChatItem::AssistantText {
+                message_id: "m3".into(),
+                text_parts: vec![TextPart::Plain("line3".into())],
+                is_streaming: false,
+            },
+        ];
+
+        let mut cache = RenderCache::default();
+        cache.rebuild_if_stale("t1", &items, 1, 80);
+
+        // Cross-check total_lines against full build
+        let full_lines = build_lines(&items, 80);
+        let full_visual = visual_lines(full_lines, 80);
+        assert_eq!(
+            cache.total_lines,
+            full_visual.len(),
+            "cache total_lines must match full build visual line count"
+        );
+
+        // Cross-check item_starts: each item_start should point to where
+        // [separator?, content...] begins in the full build
+        assert_eq!(cache.item_starts, vec![0, 2, 5]);
+
+        // Scroll to item 1's content (row 3 = [Agent] for item 1)
+        // item_starts[1] = 2 (separator), line_offset = 3 - 2 = 1
+        let window = cache.visible_window(&items, 3, 2);
+        assert_eq!(window.start_item_index, 1);
+        assert_eq!(window.line_offset_within_first_segment, 1);
     }
 }
