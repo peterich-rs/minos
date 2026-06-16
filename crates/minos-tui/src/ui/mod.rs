@@ -412,10 +412,15 @@ fn render_overview_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &m
         matches!(state.focus, Focus::AgentList),
     );
     let mention_candidates = state.room_agent_mention_candidates();
+    let room_title = if state.room_input.multiline {
+        "Chat Room Input [multi]"
+    } else {
+        "Chat Room Input"
+    };
     input_bar::render_input_bar(
         f,
         input_area,
-        "Chat Room Input",
+        room_title,
         "Type @ to choose an agent or send to the room",
         &state.room_input,
         mention_candidates.as_slice(),
@@ -474,10 +479,15 @@ fn render_detail_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut
     }
 
     let mention_candidates = state.room_agent_mention_candidates();
+    let room_title = if state.room_input.multiline {
+        "Chat Room Input [multi]"
+    } else {
+        "Chat Room Input"
+    };
     input_bar::render_input_bar(
         f,
         inputs[0],
-        "Chat Room Input",
+        room_title,
         "Type @ to choose an agent or send to the room",
         &state.room_input,
         mention_candidates.as_slice(),
@@ -487,14 +497,16 @@ fn render_detail_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut
         .current_chat()
         .and_then(ChatState::active_pending_request)
         .is_some();
+    let agent_title = match (pending_agent_request, state.agent_input.multiline) {
+        (true, true) => "Agent Input: Reply Required [multi]",
+        (true, false) => "Agent Input: Reply Required",
+        (false, true) => "Agent Input [multi]",
+        (false, false) => "Agent Input",
+    };
     input_bar::render_input_bar(
         f,
         inputs[1],
-        if pending_agent_request {
-            "Agent Input: Reply Required"
-        } else {
-            "Agent Input"
-        },
+        agent_title,
         if pending_agent_request {
             "Reply to the pending agent request"
         } else {

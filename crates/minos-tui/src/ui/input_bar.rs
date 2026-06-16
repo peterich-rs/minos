@@ -193,6 +193,7 @@ pub struct InputState {
     pub focused: bool,
     pub readonly: bool,
     pub cursor_style: CursorStyle,
+    pub multiline: bool,
     pub picker: InputPicker,
     pub history: PromptHistory,
 }
@@ -206,6 +207,7 @@ impl InputState {
             focused: true,
             readonly,
             cursor_style: CursorStyle::default(),
+            multiline: false,
             picker: InputPicker::None,
             history: PromptHistory::new(),
         }
@@ -216,6 +218,10 @@ impl InputState {
             CursorStyle::Bar => CursorStyle::Block,
             CursorStyle::Block => CursorStyle::Bar,
         };
+    }
+
+    pub fn toggle_multiline(&mut self) {
+        self.multiline = !self.multiline;
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -1613,5 +1619,15 @@ mod tests {
         assert_eq!(state.cursor_style, CursorStyle::Block);
         state.toggle_cursor_style();
         assert_eq!(state.cursor_style, CursorStyle::Bar);
+    }
+
+    #[test]
+    fn multiline_toggle_flips_mode() {
+        let mut state = InputState::new(false);
+        assert!(!state.multiline);
+        state.toggle_multiline();
+        assert!(state.multiline);
+        state.toggle_multiline();
+        assert!(!state.multiline);
     }
 }

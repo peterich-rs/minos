@@ -612,11 +612,19 @@ impl App {
 
     async fn handle_room_input_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.ui.room_input.toggle_multiline();
+                true
+            }
             KeyCode::Enter => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.ui.room_input.insert_char('\n');
-                    self.sync_input_agent_picker();
-                    true
+                    if self.ui.room_input.multiline {
+                        self.submit_room_input().await
+                    } else {
+                        self.ui.room_input.insert_char('\n');
+                        self.sync_input_agent_picker();
+                        true
+                    }
                 } else if self.ui.room_input.has_path_picker() {
                     let re_trigger = !self.ui.room_input.accept_path_completion();
                     if re_trigger {
@@ -628,6 +636,10 @@ impl App {
                     self.ui
                         .room_input
                         .accept_agent_completion(candidates.as_slice());
+                    self.sync_input_agent_picker();
+                    true
+                } else if self.ui.room_input.multiline {
+                    self.ui.room_input.insert_char('\n');
                     self.sync_input_agent_picker();
                     true
                 } else {
@@ -690,6 +702,11 @@ impl App {
                     'b' => self.ui.room_input.move_left(),
                     'e' => self.ui.room_input.move_line_end(),
                     'f' => self.ui.room_input.move_right(),
+                    'j' => {
+                        self.ui.room_input.insert_char('\n');
+                        self.sync_input_agent_picker();
+                        return true;
+                    }
                     'k' => self.ui.room_input.delete_to_line_end(),
                     'u' => self.ui.room_input.delete_to_line_start(),
                     'w' => self.ui.room_input.delete_prev_word(),
@@ -871,15 +888,26 @@ impl App {
 
     async fn handle_agent_input_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.ui.agent_input.toggle_multiline();
+                true
+            }
             KeyCode::Enter => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.ui.agent_input.insert_char('\n');
-                    true
+                    if self.ui.agent_input.multiline {
+                        self.submit_agent_input().await
+                    } else {
+                        self.ui.agent_input.insert_char('\n');
+                        true
+                    }
                 } else if self.ui.agent_input.has_path_picker() {
                     let re_trigger = !self.ui.agent_input.accept_path_completion();
                     if re_trigger {
                         self.ui.agent_input.sync_path_picker(&self.workspace);
                     }
+                    true
+                } else if self.ui.agent_input.multiline {
+                    self.ui.agent_input.insert_char('\n');
                     true
                 } else {
                     self.submit_agent_input().await
@@ -917,6 +945,10 @@ impl App {
                     'b' => self.ui.agent_input.move_left(),
                     'e' => self.ui.agent_input.move_line_end(),
                     'f' => self.ui.agent_input.move_right(),
+                    'j' => {
+                        self.ui.agent_input.insert_char('\n');
+                        return true;
+                    }
                     'k' => self.ui.agent_input.delete_to_line_end(),
                     'u' => self.ui.agent_input.delete_to_line_start(),
                     'w' => self.ui.agent_input.delete_prev_word(),
