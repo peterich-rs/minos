@@ -1115,7 +1115,7 @@ pub fn visual_cursor_row(content: &str, cursor_pos: usize, width: u16) -> usize 
 /// row containing the final character (or `0` for empty/single-line input).
 /// Used to detect when the cursor is on the bottom row so ↓ can fall through
 /// to history navigation.
-pub fn visual_row_count(content: &str, width: u16) -> usize {
+pub fn last_visual_row(content: &str, width: u16) -> usize {
     let width = usize::from(width.max(1));
     let mut row = 0usize;
     let mut col_width = 0usize;
@@ -1454,25 +1454,25 @@ mod tests {
     }
 
     #[test]
-    fn visual_row_count_counts_soft_wrapped_rows() {
+    fn last_visual_row_returns_last_row_index_for_soft_wrapped() {
         // 15 chars at width 5 → 3 visual rows (indices 0, 1, 2).
-        assert_eq!(visual_row_count("abcdefghijklmno", 5), 2);
+        assert_eq!(last_visual_row("abcdefghijklmno", 5), 2);
     }
 
     #[test]
-    fn visual_row_count_single_line_short_text_is_zero() {
-        assert_eq!(visual_row_count("hello", 80), 0);
+    fn last_visual_row_returns_zero_for_single_line() {
+        assert_eq!(last_visual_row("hello", 80), 0);
     }
 
     #[test]
-    fn visual_row_count_counts_explicit_newlines() {
+    fn last_visual_row_returns_last_row_for_explicit_newlines() {
         // "hello\nworld" at width 80 → row 0, then \n → row 1, "world" stays → returns 1.
-        assert_eq!(visual_row_count("hello\nworld", 80), 1);
+        assert_eq!(last_visual_row("hello\nworld", 80), 1);
     }
 
     #[test]
-    fn visual_row_count_empty_string_is_zero() {
-        assert_eq!(visual_row_count("", 80), 0);
+    fn last_visual_row_returns_zero_for_empty_string() {
+        assert_eq!(last_visual_row("", 80), 0);
     }
 
     #[test]

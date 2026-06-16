@@ -155,6 +155,9 @@ pub fn render_chat(
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// Extracts selected text. Uses full-rebuild (not the cache) because copy is
+/// infrequent and the selection range may span items unpredictably. The cache
+/// parameter is reserved for a future optimization that localizes the build.
 pub fn selected_text(chat: &ChatState, width: u16, _cache: &RenderCache) -> Option<String> {
     let selection = chat.selection.as_ref()?;
     if selection.is_empty() || width == 0 {

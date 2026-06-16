@@ -802,7 +802,7 @@ impl App {
                     .width
                     .saturating_sub(2)
                     .max(1);
-                let total_rows = input_bar::visual_row_count(
+                let last_row = input_bar::last_visual_row(
                     self.ui.room_input.content.as_str(),
                     width,
                 );
@@ -811,7 +811,7 @@ impl App {
                     self.ui.room_input.cursor_pos,
                     width,
                 );
-                if current_row >= total_rows {
+                if current_row >= last_row {
                     let entry = self
                         .ui
                         .room_input
@@ -1026,7 +1026,7 @@ impl App {
                     .width
                     .saturating_sub(2)
                     .max(1);
-                let total_rows = input_bar::visual_row_count(
+                let last_row = input_bar::last_visual_row(
                     self.ui.agent_input.content.as_str(),
                     width,
                 );
@@ -1035,7 +1035,7 @@ impl App {
                     self.ui.agent_input.cursor_pos,
                     width,
                 );
-                if current_row >= total_rows {
+                if current_row >= last_row {
                     let entry = self
                         .ui
                         .agent_input
