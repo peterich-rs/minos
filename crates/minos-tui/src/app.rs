@@ -1360,10 +1360,11 @@ impl App {
             };
         }
 
-        if rect_contains(self.ui.panel_areas.room_input, mouse.column, mouse.row) {
+        if rect_contains(self.ui.input_metrics[0].outer, mouse.column, mouse.row) {
             return match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.ui.focus = Focus::RoomInput;
+                    self.handle_input_click(0, mouse.column, mouse.row);
                     self.sync_input_agent_picker();
                     true
                 }
@@ -1371,10 +1372,11 @@ impl App {
             };
         }
 
-        if rect_contains(self.ui.panel_areas.agent_input, mouse.column, mouse.row) {
+        if rect_contains(self.ui.input_metrics[1].outer, mouse.column, mouse.row) {
             return match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.ui.focus = Focus::AgentInput;
+                    self.handle_input_click(1, mouse.column, mouse.row);
                     true
                 }
                 _ => false,
@@ -1447,6 +1449,28 @@ impl App {
             }
         }
         true
+    }
+
+    fn handle_input_click(&mut self, input_index: usize, column: u16, row: u16) {
+        let metrics = self.ui.input_metrics[input_index];
+        if !rect_contains(metrics.editor_area, column, row) {
+            return;
+        }
+        let visual_row =
+            usize::from(row.saturating_sub(metrics.editor_area.y)) + metrics.start_row;
+        let visual_col = usize::from(column.saturating_sub(metrics.editor_area.x));
+        let input = match input_index {
+            0 => &mut self.ui.room_input,
+            _ => &mut self.ui.agent_input,
+        };
+        let offset = crate::ui::input_bar::byte_offset_for_visual_position(
+            &input.content,
+            visual_row,
+            visual_col,
+            metrics.width,
+        );
+        input.cursor_pos = offset;
+        input.preferred_column = None;
     }
 
     async fn close_current_thread(&mut self) -> bool {

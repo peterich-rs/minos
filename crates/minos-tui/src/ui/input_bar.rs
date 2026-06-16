@@ -17,6 +17,18 @@ use super::theme::{
 const CURSOR_GLYPH: &str = "▎";
 const MAX_EDITOR_ROWS: u16 = 8;
 
+/// Layout metrics captured during `render_input_bar` so that mouse click
+/// handlers can map screen coordinates back to byte offsets in the editor
+/// content.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InputLayoutMetrics {
+    pub outer: Rect,
+    pub editor_area: Rect,
+    pub width: u16,
+    pub start_row: usize,
+    pub visible_rows: usize,
+}
+
 pub struct InputAgentPickerState {
     pub candidate_indices: Vec<usize>,
     pub selected: usize,
@@ -628,6 +640,7 @@ pub fn render_input_bar(
     empty_hint: &str,
     state: &InputState,
     candidates: &[AgentMentionCandidate],
+    metrics: &mut InputLayoutMetrics,
 ) {
     let block = border_block().title(title).border_style(if state.focused {
         FOCUSED_BORDER
@@ -638,6 +651,13 @@ pub fn render_input_bar(
     f.render_widget(block, area);
 
     if inner.width == 0 || inner.height == 0 {
+        *metrics = InputLayoutMetrics {
+            outer: area,
+            editor_area: Rect::default(),
+            width: 0,
+            start_row: 0,
+            visible_rows: 0,
+        };
         return;
     }
 
@@ -682,6 +702,14 @@ pub fn render_input_bar(
 
     let paragraph = Paragraph::new(lines);
     f.render_widget(paragraph, input_area);
+
+    *metrics = InputLayoutMetrics {
+        outer: area,
+        editor_area: input_area,
+        width: input_area.width,
+        start_row,
+        visible_rows,
+    };
 }
 
 fn render_inline_agent_picker(
@@ -1007,6 +1035,44 @@ fn wrapped_row_for_cursor(content: &str, cursor_pos: usize, width: u16) -> usize
     }
 
     row
+}
+
+/// Maps a visual `(target_row, target_col)` position — as produced by a mouse
+/// click — back to the nearest byte offset in `content`. Wrapping matches the
+/// display logic in `wrap_styled_text`.
+pub fn byte_offset_for_visual_position(
+    content: &str,
+    target_row: usize,
+    target_col: usize,
+    width: u16,
+) -> usize {
+    let width = usize::from(width.max(1));
+    let mut row = 0usize;
+    let mut col_width = 0usize;
+
+    for (byte_idx, ch) in content.char_indices() {
+        if row == target_row && col_width >= target_col {
+            return byte_idx;
+        }
+        if ch == '\n' {
+            if row == target_row {
+                return byte_idx;
+            }
+            row += 1;
+            col_width = 0;
+            continue;
+        }
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if col_width > 0 && ch_width > 0 && col_width + ch_width > width {
+            row += 1;
+            col_width = 0;
+            if row > target_row {
+                return byte_idx;
+            }
+        }
+        col_width = col_width.saturating_add(ch_width);
+    }
+    content.len()
 }
 
 fn prev_boundary(content: &str, cursor_pos: usize) -> Option<usize> {
@@ -1384,5 +1450,39 @@ mod tests {
         let completed = state.accept_path_completion();
         assert!(!completed); // dir → caller should re-sync
         assert!(state.content.ends_with("src/sub/"));
+    }
+
+    #[test]
+    fn byte_offset_for_visual_position_clamps_to_line_end() {
+        let content = "hello world";
+        let offset = byte_offset_for_visual_position(content, 0, 100, 80);
+        assert_eq!(offset, content.len());
+    }
+
+    #[test]
+    fn byte_offset_for_visual_position_handles_multiline() {
+        let content = "hello\nworld";
+        let offset = byte_offset_for_visual_position(content, 1, 0, 80);
+        assert_eq!(offset, 6);
+    }
+
+    #[test]
+    fn byte_offset_for_visual_position_single_line_basic() {
+        let content = "hello";
+        assert_eq!(byte_offset_for_visual_position(content, 0, 0, 80), 0);
+        assert_eq!(byte_offset_for_visual_position(content, 0, 2, 80), 2);
+        assert_eq!(byte_offset_for_visual_position(content, 0, 5, 80), 5);
+    }
+
+    #[test]
+    fn byte_offset_for_visual_position_multiline_mid_row() {
+        let content = "hello\nworld";
+        assert_eq!(byte_offset_for_visual_position(content, 1, 3, 80), 9);
+    }
+
+    #[test]
+    fn byte_offset_for_visual_position_past_last_row_clamps_to_end() {
+        let content = "hello\nworld";
+        assert_eq!(byte_offset_for_visual_position(content, 5, 0, 80), content.len());
     }
 }

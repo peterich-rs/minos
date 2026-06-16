@@ -9,7 +9,7 @@ pub mod thread_list;
 
 use crate::translation::ChatState;
 use crate::ui::chat::RenderCache;
-use crate::ui::input_bar::{AgentMentionCandidate, InputState};
+use crate::ui::input_bar::{AgentMentionCandidate, InputLayoutMetrics, InputState};
 use crate::ui::room_list::RoomEntry;
 use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::ThreadState;
@@ -61,6 +61,7 @@ pub struct UiState {
     pub error_flash: Option<(String, Instant)>,
     pub flash_copied: Option<Instant>,
     pub panel_areas: PanelAreas,
+    pub input_metrics: [InputLayoutMetrics; 2],
     pub delete_confirm: Option<DeleteConfirmState>,
     pub render_cache: RenderCache,
 }
@@ -113,6 +114,7 @@ impl UiState {
             error_flash: None,
             flash_copied: None,
             panel_areas: PanelAreas::default(),
+            input_metrics: [InputLayoutMetrics::default(); 2],
             delete_confirm: None,
             render_cache: RenderCache::default(),
         }
@@ -417,6 +419,7 @@ fn render_overview_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &m
         "Type @ to choose an agent or send to the room",
         &state.room_input,
         mention_candidates.as_slice(),
+        &mut state.input_metrics[0],
     );
 }
 
@@ -478,6 +481,7 @@ fn render_detail_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut
         "Type @ to choose an agent or send to the room",
         &state.room_input,
         mention_candidates.as_slice(),
+        &mut state.input_metrics[0],
     );
     let pending_agent_request = state
         .current_chat()
@@ -498,6 +502,7 @@ fn render_detail_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut
         },
         &state.agent_input,
         &[],
+        &mut state.input_metrics[1],
     );
 }
 
