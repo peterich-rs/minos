@@ -674,6 +674,13 @@ impl App {
                 self.sync_input_agent_picker();
                 changed
             }
+            KeyCode::Char('b')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.ui.room_input.toggle_cursor_style();
+                true
+            }
             KeyCode::Char(c)
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
@@ -894,6 +901,13 @@ impl App {
                 self.ui.agent_input.move_to_end()
             }
             KeyCode::End => self.ui.agent_input.move_line_end(),
+            KeyCode::Char('b')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.ui.agent_input.toggle_cursor_style();
+                true
+            }
             KeyCode::Char(c)
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>

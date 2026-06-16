@@ -14,7 +14,6 @@ use super::theme::{
     border_block, BORDER_FG, FOCUSED_BORDER, HIGHLIGHTED, INPUT_PROMPT, REASONING_STYLE,
 };
 
-const CURSOR_GLYPH: &str = "▎";
 const MAX_EDITOR_ROWS: u16 = 8;
 
 /// Layout metrics captured during `render_input_bar` so that mouse click
@@ -27,6 +26,16 @@ pub struct InputLayoutMetrics {
     pub width: u16,
     pub start_row: usize,
     pub visible_rows: usize,
+}
+
+/// Visual style for the focused input cursor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CursorStyle {
+    /// Thin bar inserted before the cursor character (`│`).
+    #[default]
+    Bar,
+    /// Block that reverses the character at the cursor position.
+    Block,
 }
 
 pub struct InputAgentPickerState {
@@ -183,6 +192,7 @@ pub struct InputState {
     pub preferred_column: Option<usize>,
     pub focused: bool,
     pub readonly: bool,
+    pub cursor_style: CursorStyle,
     pub picker: InputPicker,
     pub history: PromptHistory,
 }
@@ -195,9 +205,17 @@ impl InputState {
             preferred_column: None,
             focused: true,
             readonly,
+            cursor_style: CursorStyle::default(),
             picker: InputPicker::None,
             history: PromptHistory::new(),
         }
+    }
+
+    pub fn toggle_cursor_style(&mut self) {
+        self.cursor_style = match self.cursor_style {
+            CursorStyle::Bar => CursorStyle::Block,
+            CursorStyle::Block => CursorStyle::Bar,
+        };
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -915,32 +933,133 @@ fn build_editor_lines(state: &InputState, width: u16, empty_hint: &str) -> Edito
         };
     }
 
-    let display = match (state.content.is_empty(), state.focused) {
-        (true, true) => (CURSOR_GLYPH.to_owned(), Style::default()),
-        (true, false) => (empty_hint.to_owned(), REASONING_STYLE),
-        (false, true) => (
-            insert_cursor_marker(state.content.as_str(), state.cursor_pos),
-            Style::default(),
-        ),
-        (false, false) => (state.content.clone(), Style::default()),
-    };
+    let reversed = Style::new().add_modifier(ratatui::style::Modifier::REVERSED);
 
-    let lines = wrap_styled_text(display.0.as_str(), width, display.1);
-    let cursor_row = if state.focused {
-        wrapped_row_for_cursor(state.content.as_str(), state.cursor_pos, width)
-    } else {
-        0
-    };
+    if state.content.is_empty() {
+        if state.focused {
+            let line = match state.cursor_style {
+                CursorStyle::Bar => Line::from(Span::styled("│", reversed)),
+                CursorStyle::Block => Line::from(Span::styled(" ", reversed)),
+            };
+            return EditorLines {
+                lines: vec![line],
+                cursor_row: 0,
+            };
+        }
+        return EditorLines {
+            lines: vec![Line::from(Span::styled(
+                empty_hint.to_owned(),
+                REASONING_STYLE,
+            ))],
+            cursor_row: 0,
+        };
+    }
+
+    if !state.focused {
+        let lines = wrap_styled_text(state.content.as_str(), width, Style::default());
+        return EditorLines { lines, cursor_row: 0 };
+    }
+
+    // Focused with content: wrap text, then apply cursor style.
+    let cursor_row =
+        wrapped_row_for_cursor(state.content.as_str(), state.cursor_pos, width);
+    let mut lines = wrap_styled_text(state.content.as_str(), width, Style::default());
+    if let Some(line) = lines.get_mut(cursor_row) {
+        apply_cursor_to_line(
+            line,
+            state.content.as_str(),
+            state.cursor_pos,
+            width,
+            state.cursor_style,
+        );
+    }
 
     EditorLines { lines, cursor_row }
 }
 
-fn insert_cursor_marker(content: &str, cursor_pos: usize) -> String {
-    let mut rendered = String::with_capacity(content.len() + CURSOR_GLYPH.len());
-    rendered.push_str(&content[..cursor_pos]);
-    rendered.push_str(CURSOR_GLYPH);
-    rendered.push_str(&content[cursor_pos..]);
-    rendered
+/// Applies the visual cursor style to a single wrapped `Line`. `line` must be
+/// one of the lines produced by `wrap_styled_text` (a single styled span whose
+/// content is the visible text for that row). `content`/`cursor_pos`/`width`
+/// describe the full editor content so the cursor's character column within
+/// this visual row can be computed.
+fn apply_cursor_to_line(
+    line: &mut Line<'static>,
+    content: &str,
+    cursor_pos: usize,
+    width: u16,
+    cursor_style: CursorStyle,
+) {
+    let reversed = Style::new().add_modifier(ratatui::style::Modifier::REVERSED);
+    let width = usize::from(width.max(1));
+
+    let text = match line.spans.first() {
+        Some(span) => span.content.clone().into_owned(),
+        None => return,
+    };
+
+    // Walk the full content to find the character column of the cursor within
+    // its visual row (the same row whose text `line` displays).
+    let mut col = 0usize;
+    let mut cursor_char_col: Option<usize> = None;
+    for (byte_idx, ch) in content.char_indices() {
+        if byte_idx == cursor_pos {
+            cursor_char_col = Some(col);
+            break;
+        }
+        if ch == '\n' {
+            // Newline ends the current visual row; cursor is on a later row.
+            break;
+        }
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if col > 0 && ch_width > 0 && col + ch_width > width {
+            col = 0;
+        }
+        col += ch_width;
+    }
+
+    let Some(cursor_col) = cursor_char_col else {
+        return;
+    };
+
+    let char_text: Vec<char> = text.chars().collect();
+    let split_at = cursor_col.min(char_text.len());
+
+    let before: String = char_text[..split_at].iter().collect();
+    let cursor_char: String = if split_at < char_text.len() {
+        char_text[split_at..=split_at].iter().collect()
+    } else {
+        String::new()
+    };
+    let after: String = if split_at + 1 < char_text.len() {
+        char_text[split_at + 1..].iter().collect()
+    } else {
+        String::new()
+    };
+
+    let mut new_spans = Vec::new();
+    if !before.is_empty() {
+        new_spans.push(Span::raw(before));
+    }
+    match cursor_style {
+        CursorStyle::Bar => {
+            new_spans.push(Span::styled("│", reversed));
+            if !cursor_char.is_empty() {
+                new_spans.push(Span::raw(cursor_char));
+            }
+        }
+        CursorStyle::Block => {
+            if cursor_char.is_empty() {
+                new_spans.push(Span::styled(" ", reversed));
+            } else {
+                new_spans.push(Span::styled(cursor_char, reversed));
+            }
+        }
+    }
+    if !after.is_empty() {
+        new_spans.push(Span::raw(after));
+    }
+
+    line.spans = new_spans;
 }
 
 fn wrap_styled_text(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
@@ -1484,5 +1603,15 @@ mod tests {
     fn byte_offset_for_visual_position_past_last_row_clamps_to_end() {
         let content = "hello\nworld";
         assert_eq!(byte_offset_for_visual_position(content, 5, 0, 80), content.len());
+    }
+
+    #[test]
+    fn cursor_style_toggle_flips_between_bar_and_block() {
+        let mut state = InputState::new(false);
+        assert_eq!(state.cursor_style, CursorStyle::Bar);
+        state.toggle_cursor_style();
+        assert_eq!(state.cursor_style, CursorStyle::Block);
+        state.toggle_cursor_style();
+        assert_eq!(state.cursor_style, CursorStyle::Bar);
     }
 }
