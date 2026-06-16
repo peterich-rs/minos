@@ -617,6 +617,12 @@ impl App {
                     self.ui.room_input.insert_char('\n');
                     self.sync_input_agent_picker();
                     true
+                } else if self.ui.room_input.has_path_picker() {
+                    let re_trigger = !self.ui.room_input.accept_path_completion();
+                    if re_trigger {
+                        self.ui.room_input.sync_path_picker(&self.workspace);
+                    }
+                    true
                 } else if self.ui.room_input.has_agent_picker() {
                     let candidates = self.ui.room_agent_mention_candidates();
                     self.ui
@@ -717,6 +723,14 @@ impl App {
                 self.sync_input_agent_picker();
                 true
             }
+            KeyCode::Up if self.ui.room_input.has_path_picker() => {
+                self.ui.room_input.select_previous_path();
+                true
+            }
+            KeyCode::Down if self.ui.room_input.has_path_picker() => {
+                self.ui.room_input.select_next_path();
+                true
+            }
             KeyCode::Up if self.ui.room_input.has_agent_picker() => {
                 self.ui.room_input.select_previous_agent();
                 true
@@ -808,11 +822,32 @@ impl App {
                 true
             }
             KeyCode::Tab => {
-                self.cycle_focus();
-                true
+                if self.ui.room_input.has_path_picker() {
+                    let re_trigger = !self.ui.room_input.accept_path_completion();
+                    if re_trigger {
+                        self.ui.room_input.sync_path_picker(&self.workspace);
+                    }
+                    true
+                } else if self.ui.room_input.has_agent_picker() {
+                    true
+                } else if input_bar::active_path_range(
+                    self.ui.room_input.content.as_str(),
+                    self.ui.room_input.cursor_pos,
+                )
+                .is_some()
+                {
+                    self.ui.room_input.sync_path_picker(&self.workspace);
+                    true
+                } else {
+                    self.cycle_focus();
+                    true
+                }
             }
             KeyCode::Esc => {
-                if self.ui.room_input.has_agent_picker() {
+                if self.ui.room_input.has_path_picker() {
+                    self.ui.room_input.clear_path_picker();
+                    true
+                } else if self.ui.room_input.has_agent_picker() {
                     self.ui.room_input.clear_agent_picker();
                     true
                 } else if self.ui.room_input.history.is_browsing() {
@@ -832,6 +867,12 @@ impl App {
             KeyCode::Enter => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
                     self.ui.agent_input.insert_char('\n');
+                    true
+                } else if self.ui.agent_input.has_path_picker() {
+                    let re_trigger = !self.ui.agent_input.accept_path_completion();
+                    if re_trigger {
+                        self.ui.agent_input.sync_path_picker(&self.workspace);
+                    }
                     true
                 } else {
                     self.submit_agent_input().await
@@ -892,6 +933,14 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.ui.agent_input.backspace();
+                true
+            }
+            KeyCode::Up if self.ui.agent_input.has_path_picker() => {
+                self.ui.agent_input.select_previous_path();
+                true
+            }
+            KeyCode::Down if self.ui.agent_input.has_path_picker() => {
+                self.ui.agent_input.select_next_path();
                 true
             }
             KeyCode::Up => {
@@ -970,11 +1019,30 @@ impl App {
                 true
             }
             KeyCode::Tab => {
-                self.cycle_focus();
-                true
+                if self.ui.agent_input.has_path_picker() {
+                    let re_trigger = !self.ui.agent_input.accept_path_completion();
+                    if re_trigger {
+                        self.ui.agent_input.sync_path_picker(&self.workspace);
+                    }
+                    true
+                } else if input_bar::active_path_range(
+                    self.ui.agent_input.content.as_str(),
+                    self.ui.agent_input.cursor_pos,
+                )
+                .is_some()
+                {
+                    self.ui.agent_input.sync_path_picker(&self.workspace);
+                    true
+                } else {
+                    self.cycle_focus();
+                    true
+                }
             }
             KeyCode::Esc => {
-                if self.ui.agent_input.history.is_browsing() {
+                if self.ui.agent_input.has_path_picker() {
+                    self.ui.agent_input.clear_path_picker();
+                    true
+                } else if self.ui.agent_input.history.is_browsing() {
                     let draft = self.ui.agent_input.history.cancel().to_owned();
                     self.ui.agent_input.load_history_entry(draft.as_str());
                     true
