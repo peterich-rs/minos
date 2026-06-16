@@ -374,6 +374,113 @@ fn push_tool_detail_lines<S: LineSink>(sink: &mut S, label: &str, text: &str) {
     push_markdown_lines(sink, text, Style::default());
 }
 
+pub struct RenderCache {
+    indexed_thread_id: Option<String>,
+    item_starts: Vec<usize>,
+    total_lines: usize,
+    indexed_version: u64,
+    indexed_width: u16,
+}
+
+impl Default for RenderCache {
+    fn default() -> Self {
+        Self {
+            indexed_thread_id: None,
+            item_starts: Vec::new(),
+            total_lines: 0,
+            indexed_version: 0,
+            indexed_width: 0,
+        }
+    }
+}
+
+pub struct VisibleWindow<'a> {
+    pub items: &'a [ChatItem],
+    pub start_item_index: usize,
+    pub line_offset_within_first_segment: usize,
+}
+
+impl RenderCache {
+    pub fn rebuild_if_stale(
+        &mut self,
+        thread_id: &str,
+        items: &[ChatItem],
+        version: u64,
+        width: u16,
+    ) {
+        if self.is_valid(thread_id, version, width) {
+            return;
+        }
+        self.rebuild(items, width);
+        self.indexed_version = version;
+        self.indexed_width = width;
+        self.indexed_thread_id = Some(thread_id.to_owned());
+    }
+
+    pub(crate) fn is_valid(&self, thread_id: &str, version: u64, width: u16) -> bool {
+        self.indexed_thread_id.as_deref() == Some(thread_id)
+            && self.indexed_version == version
+            && self.indexed_width == width
+    }
+
+    fn rebuild(&mut self, items: &[ChatItem], width: u16) {
+        let mut item_starts = Vec::with_capacity(items.len());
+        let mut current_start = 0usize;
+
+        for (idx, item) in items.iter().enumerate() {
+            if idx > 0 {
+                current_start += 1; // separator line
+            }
+            item_starts.push(current_start);
+            let mut sink = CountingSink { width, count: 0 };
+            build_item_lines(&mut sink, item);
+            current_start += sink.count;
+        }
+
+        self.item_starts = item_starts;
+        self.total_lines = current_start;
+    }
+
+    pub fn visible_window<'a>(
+        &self,
+        items: &'a [ChatItem],
+        base_row: usize,
+        height: usize,
+    ) -> VisibleWindow<'a> {
+        if self.item_starts.is_empty() || items.is_empty() {
+            return VisibleWindow {
+                items: &[],
+                start_item_index: 0,
+                line_offset_within_first_segment: 0,
+            };
+        }
+
+        let end_row = base_row + height;
+
+        // Find first item whose start <= base_row
+        let start_item_index = self.item_starts.partition_point(|&start| start <= base_row);
+        let start_item_index = start_item_index.saturating_sub(1);
+
+        // Find last item that starts before end_row
+        let end_item_index = self
+            .item_starts
+            .partition_point(|&start| start < end_row)
+            .min(self.item_starts.len());
+
+        let item_count = end_item_index.saturating_sub(start_item_index).max(1);
+        let item_count = item_count.min(items.len().saturating_sub(start_item_index));
+
+        let item_start_abs = self.item_starts[start_item_index];
+        let line_offset_within_first_segment = base_row.saturating_sub(item_start_abs);
+
+        VisibleWindow {
+            items: &items[start_item_index..start_item_index + item_count],
+            start_item_index,
+            line_offset_within_first_segment,
+        }
+    }
+}
+
 fn is_markdown_rule(line: &str) -> bool {
     line.len() >= 3 && line.chars().all(|ch| matches!(ch, '-' | '*' | '_'))
 }
@@ -801,5 +908,94 @@ mod tests {
         let mut counting_sink = CountingSink { width: 10, count: 0 };
         counting_sink.push_line(Line::from(Span::raw(text)));
         assert_eq!(counting_sink.count, 2);
+    }
+
+    #[test]
+    fn render_cache_rebuilds_on_version_change() {
+        let mut cache = RenderCache::default();
+        let items = vec![ChatItem::AssistantText {
+            message_id: "m1".into(),
+            text_parts: vec![TextPart::Plain("hello world".into())],
+            is_streaming: false,
+        }];
+        cache.rebuild_if_stale("t1", &items, 1, 80);
+        assert!(cache.is_valid("t1", 1, 80));
+        assert!(!cache.is_valid("t1", 2, 80));
+        cache.rebuild_if_stale("t1", &items, 2, 80);
+        assert!(cache.is_valid("t1", 2, 80));
+    }
+
+    #[test]
+    fn render_cache_rebuilds_on_width_change() {
+        let mut cache = RenderCache::default();
+        let items = vec![ChatItem::AssistantText {
+            message_id: "m1".into(),
+            text_parts: vec![TextPart::Plain("hello world".into())],
+            is_streaming: false,
+        }];
+        cache.rebuild_if_stale("t1", &items, 1, 80);
+        assert!(cache.is_valid("t1", 1, 80));
+        assert!(!cache.is_valid("t1", 1, 40));
+    }
+
+    #[test]
+    fn render_cache_rebuilds_on_thread_id_change() {
+        let mut cache = RenderCache::default();
+        let items = vec![ChatItem::AssistantText {
+            message_id: "m1".into(),
+            text_parts: vec![TextPart::Plain("hello world".into())],
+            is_streaming: false,
+        }];
+        cache.rebuild_if_stale("t1", &items, 1, 80);
+        assert!(cache.is_valid("t1", 1, 80));
+        assert!(!cache.is_valid("t2", 1, 80));
+    }
+
+    #[test]
+    fn visible_window_returns_items_covering_scroll_range() {
+        let items = vec![
+            ChatItem::AssistantText {
+                message_id: "m1".into(),
+                text_parts: vec![TextPart::Plain("line1".into())],
+                is_streaming: false,
+            },
+            ChatItem::AssistantText {
+                message_id: "m2".into(),
+                text_parts: vec![TextPart::Plain("line2".into())],
+                is_streaming: false,
+            },
+            ChatItem::AssistantText {
+                message_id: "m3".into(),
+                text_parts: vec![TextPart::Plain("line3".into())],
+                is_streaming: false,
+            },
+        ];
+        let mut cache = RenderCache::default();
+        cache.rebuild_if_stale("t1", &items, 1, 80);
+        let window = cache.visible_window(&items, 3, 3);
+        assert!(window.start_item_index <= 2);
+        assert!(!window.items.is_empty());
+    }
+
+    #[test]
+    fn visible_window_handles_scroll_at_boundary() {
+        let items = vec![ChatItem::AssistantText {
+            message_id: "m1".into(),
+            text_parts: vec![TextPart::Plain("line1".into())],
+            is_streaming: false,
+        }];
+        let mut cache = RenderCache::default();
+        cache.rebuild_if_stale("t1", &items, 1, 80);
+        let window = cache.visible_window(&items, 0, 10);
+        assert_eq!(window.start_item_index, 0);
+        assert_eq!(window.line_offset_within_first_segment, 0);
+    }
+
+    #[test]
+    fn visible_window_handles_empty_items() {
+        let cache = RenderCache::default();
+        let items: Vec<ChatItem> = vec![];
+        let window = cache.visible_window(&items, 0, 10);
+        assert!(window.items.is_empty());
     }
 }
