@@ -19,7 +19,8 @@ use crate::translation::{
     ChatSelectionPoint, ChatState, PendingAgentRequestKind, PendingQuestionSpec,
 };
 use crate::ui::{
-    room_list::RoomEntry, AgentPickerState, DeleteConfirmState, Focus, ThreadEntry, UiState,
+    input_bar, room_list::RoomEntry, AgentPickerState, DeleteConfirmState, Focus, ThreadEntry,
+    UiState,
 };
 
 enum MessageTarget {
@@ -721,14 +722,72 @@ impl App {
                 true
             }
             KeyCode::Up => {
-                let changed = self.ui.room_input.move_up();
-                self.sync_input_agent_picker();
-                changed
+                let width = self
+                    .ui
+                    .panel_areas
+                    .room_input
+                    .width
+                    .saturating_sub(2)
+                    .max(1);
+                let visual_row = input_bar::visual_cursor_row(
+                    self.ui.room_input.content.as_str(),
+                    self.ui.room_input.cursor_pos,
+                    width,
+                );
+                if visual_row == 0 {
+                    let draft = self.ui.room_input.content.clone();
+                    let entry = self
+                        .ui
+                        .room_input
+                        .history
+                        .previous(draft.as_str())
+                        .map(str::to_owned);
+                    if let Some(entry) = entry {
+                        self.ui.room_input.load_history_entry(entry.as_str());
+                    }
+                    true
+                } else {
+                    let changed = self.ui.room_input.move_up();
+                    self.sync_input_agent_picker();
+                    changed
+                }
             }
             KeyCode::Down => {
-                let changed = self.ui.room_input.move_down();
-                self.sync_input_agent_picker();
-                changed
+                let width = self
+                    .ui
+                    .panel_areas
+                    .room_input
+                    .width
+                    .saturating_sub(2)
+                    .max(1);
+                let total_rows = input_bar::visual_row_count(
+                    self.ui.room_input.content.as_str(),
+                    width,
+                );
+                let current_row = input_bar::visual_cursor_row(
+                    self.ui.room_input.content.as_str(),
+                    self.ui.room_input.cursor_pos,
+                    width,
+                );
+                if current_row >= total_rows {
+                    let entry = self
+                        .ui
+                        .room_input
+                        .history
+                        .next()
+                        .map(str::to_owned);
+                    if let Some(entry) = entry {
+                        self.ui.room_input.load_history_entry(entry.as_str());
+                    } else if self.ui.room_input.history.is_browsing() {
+                        let draft = self.ui.room_input.history.cancel().to_owned();
+                        self.ui.room_input.load_history_entry(draft.as_str());
+                    }
+                    true
+                } else {
+                    let changed = self.ui.room_input.move_down();
+                    self.sync_input_agent_picker();
+                    changed
+                }
             }
             KeyCode::Delete
                 if key
@@ -751,6 +810,10 @@ impl App {
             KeyCode::Esc => {
                 if self.ui.room_input.has_agent_picker() {
                     self.ui.room_input.clear_agent_picker();
+                    true
+                } else if self.ui.room_input.history.is_browsing() {
+                    let draft = self.ui.room_input.history.cancel().to_owned();
+                    self.ui.room_input.load_history_entry(draft.as_str());
                     true
                 } else {
                     self.handle_escape()
@@ -827,8 +890,70 @@ impl App {
                 self.ui.agent_input.backspace();
                 true
             }
-            KeyCode::Up => self.ui.agent_input.move_up(),
-            KeyCode::Down => self.ui.agent_input.move_down(),
+            KeyCode::Up => {
+                let width = self
+                    .ui
+                    .panel_areas
+                    .agent_input
+                    .width
+                    .saturating_sub(2)
+                    .max(1);
+                let visual_row = input_bar::visual_cursor_row(
+                    self.ui.agent_input.content.as_str(),
+                    self.ui.agent_input.cursor_pos,
+                    width,
+                );
+                if visual_row == 0 {
+                    let draft = self.ui.agent_input.content.clone();
+                    let entry = self
+                        .ui
+                        .agent_input
+                        .history
+                        .previous(draft.as_str())
+                        .map(str::to_owned);
+                    if let Some(entry) = entry {
+                        self.ui.agent_input.load_history_entry(entry.as_str());
+                    }
+                    true
+                } else {
+                    self.ui.agent_input.move_up()
+                }
+            }
+            KeyCode::Down => {
+                let width = self
+                    .ui
+                    .panel_areas
+                    .agent_input
+                    .width
+                    .saturating_sub(2)
+                    .max(1);
+                let total_rows = input_bar::visual_row_count(
+                    self.ui.agent_input.content.as_str(),
+                    width,
+                );
+                let current_row = input_bar::visual_cursor_row(
+                    self.ui.agent_input.content.as_str(),
+                    self.ui.agent_input.cursor_pos,
+                    width,
+                );
+                if current_row >= total_rows {
+                    let entry = self
+                        .ui
+                        .agent_input
+                        .history
+                        .next()
+                        .map(str::to_owned);
+                    if let Some(entry) = entry {
+                        self.ui.agent_input.load_history_entry(entry.as_str());
+                    } else if self.ui.agent_input.history.is_browsing() {
+                        let draft = self.ui.agent_input.history.cancel().to_owned();
+                        self.ui.agent_input.load_history_entry(draft.as_str());
+                    }
+                    true
+                } else {
+                    self.ui.agent_input.move_down()
+                }
+            }
             KeyCode::Delete
                 if key
                     .modifiers
@@ -844,7 +969,15 @@ impl App {
                 self.cycle_focus();
                 true
             }
-            KeyCode::Esc => self.handle_escape(),
+            KeyCode::Esc => {
+                if self.ui.agent_input.history.is_browsing() {
+                    let draft = self.ui.agent_input.history.cancel().to_owned();
+                    self.ui.agent_input.load_history_entry(draft.as_str());
+                    true
+                } else {
+                    self.handle_escape()
+                }
+            }
             _ => false,
         }
     }
@@ -1583,6 +1716,7 @@ impl App {
             self.ui.room_input.take_input();
             return true;
         }
+        self.ui.room_input.history.record(text.as_str());
 
         if let Some((target, body)) = parse_agent_routing(text.as_str()) {
             self.ui.room_input.take_input();
@@ -1630,6 +1764,7 @@ impl App {
             self.ui.agent_input.take_input();
             return true;
         }
+        self.ui.agent_input.history.record(text.as_str());
 
         let Some(thread) = self
             .ui

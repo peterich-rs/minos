@@ -23,6 +23,96 @@ pub struct InputAgentPickerState {
     pub replace_range: Range<usize>,
 }
 
+/// Prompt history for an input bar, browsable with Up/Down arrow keys.
+///
+/// `entries` stores submitted prompts in chronological order. `cursor` is
+/// `Some(index)` while the user is browsing history (pointing at the entry
+/// currently loaded into the input). `draft` holds the in-progress text the
+/// user had typed before browsing, so Esc or ↓-past-end restores it.
+pub struct PromptHistory {
+    pub entries: Vec<String>,
+    pub cursor: Option<usize>,
+    pub draft: String,
+}
+
+impl PromptHistory {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            cursor: None,
+            draft: String::new(),
+        }
+    }
+
+    /// Records a submitted prompt. Blank (whitespace-only) entries are ignored
+    /// so the history stays useful. Always resets browsing state.
+    pub fn record(&mut self, entry: &str) {
+        if !entry.trim().is_empty() {
+            self.entries.push(entry.to_owned());
+        }
+        self.cursor = None;
+        self.draft.clear();
+    }
+
+    /// Moves the browse cursor one entry older and returns that entry.
+    ///
+    /// On the first call (cursor is `None`) the current input text is captured
+    /// into `draft` so it can be restored later, and the cursor jumps to the
+    /// most recent entry. Returns `None` if there is no history, or if the
+    /// cursor is already at the oldest entry — callers should treat `None` as
+    /// "stay put" (clamped at the top).
+    pub fn previous(&mut self, current_draft: &str) -> Option<&str> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        match self.cursor {
+            None => {
+                self.draft = current_draft.to_owned();
+                let idx = self.entries.len() - 1;
+                self.cursor = Some(idx);
+                Some(self.entries[idx].as_str())
+            }
+            Some(0) => None,
+            Some(idx) => {
+                let new_idx = idx - 1;
+                self.cursor = Some(new_idx);
+                Some(self.entries[new_idx].as_str())
+            }
+        }
+    }
+
+    /// Moves the browse cursor one entry newer. Returns `None` and clears
+    /// browsing when moving past the most recent entry (the caller should
+    /// restore the draft in that case, or call [`cancel`]).
+    pub fn next(&mut self) -> Option<&str> {
+        let idx = self.cursor?;
+        let new_idx = idx + 1;
+        if new_idx >= self.entries.len() {
+            self.cursor = None;
+            return None;
+        }
+        self.cursor = Some(new_idx);
+        Some(self.entries[new_idx].as_str())
+    }
+
+    /// Cancels browsing, clears the cursor, and returns the saved draft.
+    pub fn cancel(&mut self) -> &str {
+        self.cursor = None;
+        &self.draft
+    }
+
+    /// Returns `true` while the user is browsing history entries.
+    pub fn is_browsing(&self) -> bool {
+        self.cursor.is_some()
+    }
+}
+
+impl Default for PromptHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentMentionCandidate {
     pub token: String,
@@ -61,6 +151,7 @@ pub struct InputState {
     pub focused: bool,
     pub readonly: bool,
     pub agent_picker: Option<InputAgentPickerState>,
+    pub history: PromptHistory,
 }
 
 impl InputState {
@@ -72,6 +163,7 @@ impl InputState {
             focused: true,
             readonly,
             agent_picker: None,
+            history: PromptHistory::new(),
         }
     }
 
@@ -81,6 +173,15 @@ impl InputState {
         }
         self.content.insert(self.cursor_pos, c);
         self.cursor_pos += c.len_utf8();
+        self.preferred_column = None;
+    }
+
+    pub fn insert_str(&mut self, text: &str) {
+        if self.readonly || text.is_empty() {
+            return;
+        }
+        self.content.insert_str(self.cursor_pos, text);
+        self.cursor_pos += text.len();
         self.preferred_column = None;
     }
 
@@ -282,6 +383,7 @@ impl InputState {
         self.cursor_pos = 0;
         self.preferred_column = None;
         self.agent_picker = None;
+        self.history.cursor = None;
         taken
     }
 
@@ -391,6 +493,14 @@ impl InputState {
             .replace_range(picker.replace_range.clone(), replacement.as_str());
         self.cursor_pos = picker.replace_range.start + replacement.len();
         true
+    }
+
+    /// Replaces the input content with `entry`, placing the cursor at the end
+    /// and clearing any preferred column. Used when loading a history entry.
+    pub fn load_history_entry(&mut self, entry: &str) {
+        self.content = entry.to_owned();
+        self.cursor_pos = self.content.len();
+        self.preferred_column = None;
     }
 }
 
@@ -641,6 +751,36 @@ fn wrap_styled_text(text: &str, width: u16, style: Style) -> Vec<Line<'static>> 
     lines
 }
 
+/// Returns the 0-indexed visual row the cursor currently sits on, accounting
+/// for soft-wrapping at `width` and explicit `\n` line breaks.
+pub fn visual_cursor_row(content: &str, cursor_pos: usize, width: u16) -> usize {
+    wrapped_row_for_cursor(content, cursor_pos, width)
+}
+
+/// Returns the index of the last visual row for `content` at `width`, i.e. the
+/// row containing the final character (or `0` for empty/single-line input).
+/// Used to detect when the cursor is on the bottom row so ↓ can fall through
+/// to history navigation.
+pub fn visual_row_count(content: &str, width: u16) -> usize {
+    let width = usize::from(width.max(1));
+    let mut row = 0usize;
+    let mut col_width = 0usize;
+    for ch in content.chars() {
+        if ch == '\n' {
+            row += 1;
+            col_width = 0;
+            continue;
+        }
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if col_width > 0 && ch_width > 0 && col_width + ch_width > width {
+            row += 1;
+            col_width = 0;
+        }
+        col_width = col_width.saturating_add(ch_width);
+    }
+    row
+}
+
 fn wrapped_row_for_cursor(content: &str, cursor_pos: usize, width: u16) -> usize {
     let width = usize::from(width.max(1));
     let mut row = 0usize;
@@ -830,5 +970,140 @@ mod tests {
             Some("install".to_owned())
         );
         assert!(agent_picker_status_label(&existing).is_none());
+    }
+
+    #[test]
+    fn prompt_history_prev_loads_last_entry() {
+        let mut h = PromptHistory::new();
+        h.record("first");
+        h.record("second");
+        assert_eq!(h.previous(""), Some("second"));
+    }
+
+    #[test]
+    fn prompt_history_prev_walks_backward_then_clamps() {
+        let mut h = PromptHistory::new();
+        h.record("a");
+        h.record("b");
+        h.record("c");
+        assert_eq!(h.previous(""), Some("c"));
+        assert_eq!(h.previous(""), Some("b"));
+        assert_eq!(h.previous(""), Some("a"));
+        // At oldest entry — returns None (clamp); cursor stays at index 0.
+        assert_eq!(h.previous(""), None);
+        assert!(h.is_browsing());
+    }
+
+    #[test]
+    fn prompt_history_next_past_end_returns_none_and_clears_browsing() {
+        let mut h = PromptHistory::new();
+        h.record("entry");
+        let _ = h.previous("my draft");
+        assert!(h.is_browsing());
+        assert_eq!(h.next(), None);
+        assert!(!h.is_browsing());
+    }
+
+    #[test]
+    fn prompt_history_cancel_restores_draft_and_clears_browsing() {
+        let mut h = PromptHistory::new();
+        h.record("entry");
+        let _ = h.previous("original draft");
+        assert!(h.is_browsing());
+        assert_eq!(h.cancel(), "original draft");
+        assert!(!h.is_browsing());
+    }
+
+    #[test]
+    fn prompt_history_cancel_without_browsing_returns_empty_draft() {
+        let mut h = PromptHistory::new();
+        h.record("entry");
+        assert!(!h.is_browsing());
+        assert_eq!(h.cancel(), "");
+    }
+
+    #[test]
+    fn prompt_history_record_clears_browsing_state() {
+        let mut h = PromptHistory::new();
+        h.record("a");
+        let _ = h.previous("draft");
+        assert!(h.is_browsing());
+        h.record("b");
+        assert!(!h.is_browsing());
+    }
+
+    #[test]
+    fn prompt_history_ignores_blank_submissions() {
+        let mut h = PromptHistory::new();
+        h.record("   ");
+        h.record("");
+        h.record("\t\n");
+        assert_eq!(h.entries.len(), 0);
+        assert_eq!(h.previous("current"), None);
+    }
+
+    #[test]
+    fn prompt_history_empty_returns_none_from_previous() {
+        let mut h = PromptHistory::new();
+        assert_eq!(h.previous("anything"), None);
+        assert!(!h.is_browsing());
+    }
+
+    #[test]
+    fn prompt_history_next_walks_forward_through_entries() {
+        let mut h = PromptHistory::new();
+        h.record("a");
+        h.record("b");
+        h.record("c");
+        assert_eq!(h.previous(""), Some("c"));
+        assert_eq!(h.previous(""), Some("b"));
+        assert_eq!(h.next(), Some("c"));
+        assert_eq!(h.next(), None);
+    }
+
+    #[test]
+    fn visual_row_count_counts_soft_wrapped_rows() {
+        // 15 chars at width 5 → 3 visual rows (indices 0, 1, 2).
+        assert_eq!(visual_row_count("abcdefghijklmno", 5), 2);
+    }
+
+    #[test]
+    fn visual_row_count_single_line_short_text_is_zero() {
+        assert_eq!(visual_row_count("hello", 80), 0);
+    }
+
+    #[test]
+    fn visual_row_count_counts_explicit_newlines() {
+        // "hello\nworld" at width 80 → row 0, then \n → row 1, "world" stays → returns 1.
+        assert_eq!(visual_row_count("hello\nworld", 80), 1);
+    }
+
+    #[test]
+    fn visual_row_count_empty_string_is_zero() {
+        assert_eq!(visual_row_count("", 80), 0);
+    }
+
+    #[test]
+    fn visual_cursor_row_at_start_is_zero() {
+        assert_eq!(visual_cursor_row("hello world", 0, 80), 0);
+    }
+
+    #[test]
+    fn visual_cursor_row_after_newline_is_one() {
+        let content = "hello\nworld";
+        let pos = "hello\n".len();
+        assert_eq!(visual_cursor_row(content, pos, 80), 1);
+    }
+
+    #[test]
+    fn visual_cursor_row_after_soft_wrap_is_one() {
+        // 5 chars fill row 0; the 6th char 'f' triggers a wrap to row 1.
+        let content = "abcdefghijklmno";
+        // cursor at byte 6 (start of 'g', i.e. after 'f' has wrapped) → row 1.
+        assert_eq!(visual_cursor_row(content, 6, 5), 1);
+        // cursor at byte 11 (start of 'l', after 'k' wrapped) → row 2.
+        assert_eq!(visual_cursor_row(content, 11, 5), 2);
+        // cursor at byte 5 (boundary) is still on row 0 — no wrap processed yet.
+        assert_eq!(visual_cursor_row(content, 5, 5), 0);
     }
 }
