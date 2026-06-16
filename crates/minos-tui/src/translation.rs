@@ -68,10 +68,12 @@ pub struct ChatState {
     pub pending_requests: Vec<PendingAgentRequest>,
     open_message_ids: HashSet<String>,
     open_message_roles: HashMap<String, MessageRole>,
+    completed_assistant_message_ids: HashSet<String>,
     pub scroll_offset: u16,
     pub auto_scroll: bool,
     pub max_scroll: u16,
     pub selection: Option<ChatSelection>,
+    pub version: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -122,10 +124,12 @@ impl ChatState {
             pending_requests: Vec::new(),
             open_message_ids: HashSet::new(),
             open_message_roles: HashMap::new(),
+            completed_assistant_message_ids: HashSet::new(),
             scroll_offset: 0,
             auto_scroll: true,
             max_scroll: 0,
             selection: None,
+            version: 0,
         }
     }
 
@@ -206,7 +210,7 @@ impl ChatState {
                     message_id,
                     text_parts,
                     is_streaming: false,
-                } => {
+                } if self.completed_assistant_message_ids.contains(message_id) => {
                     if let Some(text) = text_parts_to_string(text_parts) {
                         let key = if message_id.is_empty() {
                             format!("text:{text}")
@@ -243,6 +247,16 @@ impl ChatState {
         }
         self.open_message_ids.clear();
         self.open_message_roles.clear();
+        self.version += 1;
+    }
+
+    pub fn toggle_tool_expansion(&mut self) {
+        for item in &mut self.items {
+            if let ChatItem::ToolCall { is_expanded, .. } = item {
+                *is_expanded = !*is_expanded;
+            }
+        }
+        self.version += 1;
     }
 
     pub fn active_pending_request(&self) -> Option<&PendingAgentRequest> {
@@ -257,6 +271,7 @@ impl ChatState {
     }
 
     fn apply_ui_event(&mut self, event: UiEventMessage) {
+        self.version += 1;
         match event {
             UiEventMessage::MessageStarted {
                 message_id,
@@ -407,6 +422,10 @@ impl ChatState {
                 }
             }
             UiEventMessage::MessageCompleted { message_id, .. } => {
+                if self.message_is_assistant(&message_id) {
+                    self.completed_assistant_message_ids
+                        .insert(message_id.clone());
+                }
                 self.open_message_ids.remove(&message_id);
                 self.open_message_roles.remove(&message_id);
                 for item in &mut self.items {
@@ -498,6 +517,15 @@ impl ChatState {
             })
     }
 
+    fn message_is_assistant(&self, message_id: &str) -> bool {
+        self.open_message_roles
+            .get(message_id)
+            .is_some_and(|role| matches!(role, MessageRole::Assistant | MessageRole::System))
+            || self.items.iter().any(|item| {
+                matches!(item, ChatItem::AssistantText { message_id: item_message_id, .. } if item_message_id.as_str() == message_id)
+            })
+    }
+
     fn apply_raw_request_event(&mut self, kind: &str, payload_json: &str) -> bool {
         match kind {
             "approval/request" => {
@@ -539,6 +567,26 @@ impl ChatState {
                 };
                 self.push_pending_request_message(request);
                 true
+            }
+            "opencode/question.asked" => {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(payload_json) else {
+                    return false;
+                };
+                let Some(request) = PendingAgentRequest::from_opencode_question(&value) else {
+                    return false;
+                };
+                self.push_pending_request_message(request);
+                true
+            }
+            "opencode/question.replied" | "opencode/question.rejected" => {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(payload_json) else {
+                    return false;
+                };
+                if let Some(question_id) = opencode_question_reply_id(&value) {
+                    self.resolve_pending_request(&question_id);
+                    return true;
+                }
+                false
             }
             _ => false,
         }
@@ -915,6 +963,25 @@ pub enum PendingAgentRequestKind {
         approve_response: String,
         decline_response: String,
     },
+    OpencodeQuestion {
+        question_id: String,
+        questions: Vec<PendingQuestionSpec>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingQuestionSpec {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<PendingQuestionOption>,
+    pub multiple: bool,
+    pub custom: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingQuestionOption {
+    pub label: String,
+    pub description: String,
 }
 
 impl PendingAgentRequest {
@@ -923,6 +990,7 @@ impl PendingAgentRequest {
             PendingAgentRequestKind::CodexUserInput { request_id, .. }
             | PendingAgentRequestKind::CodexApproval { request_id, .. } => request_id,
             PendingAgentRequestKind::OpencodePermission { permission_id, .. } => permission_id,
+            PendingAgentRequestKind::OpencodeQuestion { question_id, .. } => question_id,
         }
     }
 
@@ -981,6 +1049,30 @@ impl PendingAgentRequest {
                     .unwrap_or_else(|| "accept".to_owned()),
                 decline_response: find_permission_option_response(value, false)
                     .unwrap_or_else(|| "reject".to_owned()),
+            },
+        })
+    }
+
+    fn from_opencode_question(value: &serde_json::Value) -> Option<Self> {
+        let properties = value.get("properties").unwrap_or(value);
+        let question_id = properties
+            .get("id")
+            .or_else(|| properties.get("requestID"))
+            .or_else(|| value.get("id"))
+            .and_then(serde_json::Value::as_str)?
+            .to_owned();
+        let raw_questions = properties
+            .get("questions")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let questions = parse_pending_questions(&raw_questions);
+        let prompt = format_pending_question_prompt("Opencode asks:", &questions);
+        Some(Self {
+            prompt,
+            kind: PendingAgentRequestKind::OpencodeQuestion {
+                question_id,
+                questions,
             },
         })
     }
@@ -1114,49 +1206,8 @@ fn format_user_input_prompt(questions: &[serde_json::Value]) -> String {
         return "Agent asks for input. Type your answer in Agent Input.".into();
     }
 
-    let mut lines = vec!["Agent asks for input:".to_owned()];
-    for question in questions {
-        let header = question
-            .get("header")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let text = question
-            .get("question")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("Question");
-        let id = question
-            .get("id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        if header.is_empty() {
-            lines.push(format!("- {text} [{id}]"));
-        } else {
-            lines.push(format!("- {header}: {text} [{id}]"));
-        }
-        if let Some(options) = question
-            .get("options")
-            .and_then(serde_json::Value::as_array)
-        {
-            for option in options {
-                let label = option
-                    .get("label")
-                    .or_else(|| option.get("value"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
-                let description = option
-                    .get("description")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
-                if !label.is_empty() && !description.is_empty() {
-                    lines.push(format!("  - {label}: {description}"));
-                } else if !label.is_empty() {
-                    lines.push(format!("  - {label}"));
-                }
-            }
-        }
-    }
-    lines.push("Reply in Agent Input; Shift+Enter inserts a newline.".into());
-    lines.join("\n")
+    let parsed = parse_pending_questions(questions);
+    format_pending_question_prompt("Agent asks for input:", &parsed)
 }
 
 fn format_approval_prompt(method: &str, params: &serde_json::Value) -> String {
@@ -1175,6 +1226,120 @@ fn format_approval_prompt(method: &str, params: &serde_json::Value) -> String {
     } else {
         format!("Approval required: {method}\n{summary}\nType yes to approve, anything else to decline.")
     }
+}
+
+fn parse_pending_questions(questions: &[serde_json::Value]) -> Vec<PendingQuestionSpec> {
+    questions
+        .iter()
+        .enumerate()
+        .map(|(index, question)| {
+            let header = question
+                .get("header")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_owned();
+            let text = question
+                .get("question")
+                .or_else(|| question.get("text"))
+                .or_else(|| question.get("prompt"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Question {}", index + 1));
+            let options = question
+                .get("options")
+                .and_then(serde_json::Value::as_array)
+                .map(|options| {
+                    options
+                        .iter()
+                        .filter_map(|option| {
+                            let label = option
+                                .get("label")
+                                .or_else(|| option.get("value"))
+                                .or_else(|| option.get("id"))
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("")
+                                .trim()
+                                .to_owned();
+                            if label.is_empty() {
+                                return None;
+                            }
+                            let description = option
+                                .get("description")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("")
+                                .trim()
+                                .to_owned();
+                            Some(PendingQuestionOption { label, description })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            PendingQuestionSpec {
+                header,
+                question: text,
+                options,
+                multiple: question
+                    .get("multiple")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                custom: question
+                    .get("custom")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            }
+        })
+        .collect()
+}
+
+fn format_pending_question_prompt(prefix: &str, questions: &[PendingQuestionSpec]) -> String {
+    if questions.is_empty() {
+        return format!("{prefix}\nReply in Agent Input; Shift+Enter inserts a newline.");
+    }
+
+    let mut lines = vec![prefix.to_owned()];
+    for (question_index, question) in questions.iter().enumerate() {
+        let label = if question.header.is_empty() {
+            format!("Question {}", question_index + 1)
+        } else {
+            question.header.clone()
+        };
+        lines.push(format!("- {label}: {}", question.question));
+        for (option_index, option) in question.options.iter().enumerate() {
+            if option.description.is_empty() {
+                lines.push(format!("  {}. {}", option_index + 1, option.label));
+            } else {
+                lines.push(format!(
+                    "  {}. {}: {}",
+                    option_index + 1,
+                    option.label,
+                    option.description
+                ));
+            }
+        }
+        if question.multiple {
+            lines.push("  Select multiple with comma-separated numbers or labels.".into());
+        }
+        if question.custom {
+            lines.push("  Custom text is allowed.".into());
+        }
+    }
+    lines.push("Reply in Agent Input; use one line per question.".into());
+    lines.join("\n")
+}
+
+fn opencode_question_reply_id(value: &serde_json::Value) -> Option<String> {
+    let properties = value.get("properties").unwrap_or(value);
+    properties
+        .get("requestID")
+        .or_else(|| properties.get("request_id"))
+        .or_else(|| properties.get("id"))
+        .or_else(|| value.get("requestID"))
+        .or_else(|| value.get("request_id"))
+        .or_else(|| value.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
 }
 
 fn find_string_by_keys(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
@@ -1720,6 +1885,57 @@ mod tests {
     }
 
     #[test]
+    fn opencode_question_asked_creates_pending_request_with_options() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
+
+        cs.apply_ui_events(vec![UiEventMessage::Raw {
+            kind: "opencode/question.asked".into(),
+            payload_json: serde_json::json!({
+                "type": "question.asked",
+                "properties": {
+                    "id": "que-1",
+                    "questions": [{
+                        "header": "Core",
+                        "question": "Pick a direction",
+                        "options": [
+                            {"label": "Fast", "description": "Ship quickly"},
+                            {"label": "Robust", "description": "Prefer durability"}
+                        ]
+                    }]
+                }
+            })
+            .to_string(),
+        }]);
+
+        assert_eq!(cs.pending_requests.len(), 1);
+        assert_eq!(cs.pending_requests[0].id(), "que-1");
+        assert!(cs.pending_requests[0].prompt.contains("1. Fast"));
+        assert_eq!(
+            cs.pending_requests[0].kind,
+            PendingAgentRequestKind::OpencodeQuestion {
+                question_id: "que-1".into(),
+                questions: vec![PendingQuestionSpec {
+                    header: "Core".into(),
+                    question: "Pick a direction".into(),
+                    options: vec![
+                        PendingQuestionOption {
+                            label: "Fast".into(),
+                            description: "Ship quickly".into(),
+                        },
+                        PendingQuestionOption {
+                            label: "Robust".into(),
+                            description: "Prefer durability".into(),
+                        },
+                    ],
+                    multiple: false,
+                    custom: false,
+                }]
+            }
+        );
+        assert!(matches!(cs.items[0], ChatItem::SystemMessage { .. }));
+    }
+
+    #[test]
     fn new_assistant_message_finishes_previous_streaming_assistant() {
         let mut cs = ChatState::new("t1".into(), AgentName::Codex);
 
@@ -1746,6 +1962,30 @@ mod tests {
             other => panic!("expected AssistantText, got {other:?}"),
         }
         assert!(cs.open_message_ids.contains("m2"));
+    }
+
+    #[test]
+    fn last_completed_assistant_text_ignores_text_finished_only_by_next_message_start() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
+
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::TextDelta {
+                message_id: "m1".into(),
+                text: "intermediate".into(),
+            },
+            UiEventMessage::MessageStarted {
+                message_id: "m2".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 1,
+            },
+        ]);
+
+        assert_eq!(cs.last_completed_assistant_text(), None);
     }
 
     #[test]
@@ -1913,5 +2153,32 @@ mod tests {
         cs.scroll_down(10);
         assert!(cs.auto_scroll);
         assert_eq!(cs.active_scroll(), 40);
+    }
+
+    #[test]
+    fn toggle_tool_expansion_bumps_version() {
+        let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+        cs.apply_ui_events(vec![
+            UiEventMessage::MessageStarted {
+                message_id: "m1".into(),
+                role: MessageRole::Assistant,
+                started_at_ms: 0,
+            },
+            UiEventMessage::ToolCallPlaced {
+                message_id: "m1".into(),
+                tool_call_id: "tc1".into(),
+                name: "bash".into(),
+                args_json: r#"{"command":"ls"}"#.into(),
+            },
+        ]);
+        let version_before = cs.version;
+
+        cs.toggle_tool_expansion();
+        assert!(cs.version > version_before);
+
+        match &cs.items[0] {
+            ChatItem::ToolCall { is_expanded, .. } => assert!(*is_expanded),
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 }
