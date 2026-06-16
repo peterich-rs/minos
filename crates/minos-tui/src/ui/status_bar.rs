@@ -31,7 +31,7 @@ impl StatusBarState {
     }
 }
 
-pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState) {
+pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState, flash_active: bool) {
     let mut spans: Vec<Span> = Vec::new();
 
     match &state.backend_state {
@@ -58,6 +58,12 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState) {
         };
         let label = format!(" {} {} ", desc.name.bin_name(), icon);
         spans.push(Span::styled(label, style));
+    }
+    if flash_active {
+        spans.push(Span::styled(
+            "  ✓ Copied",
+            ratatui::style::Style::new().fg(ratatui::style::Color::Green),
+        ));
     }
     spans.push(Span::raw(
         "  n new-agent  @agent route  Tab focus  Enter inspect/send  Esc back/close-detail  wheel/PgUp/PgDn scroll  Ctrl+C interrupt  Ctrl+Q quit",

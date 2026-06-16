@@ -59,6 +59,7 @@ pub struct UiState {
     pub agent_detail_visible: bool,
     pub focus: Focus,
     pub error_flash: Option<(String, Instant)>,
+    pub flash_copied: Option<Instant>,
     pub panel_areas: PanelAreas,
     pub delete_confirm: Option<DeleteConfirmState>,
     pub render_cache: RenderCache,
@@ -110,6 +111,7 @@ impl UiState {
             agent_detail_visible: false,
             focus: Focus::RoomList,
             error_flash: None,
+            flash_copied: None,
             panel_areas: PanelAreas::default(),
             delete_confirm: None,
             render_cache: RenderCache::default(),
@@ -142,6 +144,14 @@ impl UiState {
 
     pub fn set_error(&mut self, msg: String) {
         self.error_flash = Some((msg, Instant::now()));
+    }
+
+    pub fn flash_copied(&mut self) {
+        self.flash_copied = Some(Instant::now());
+    }
+
+    pub fn is_flash_copied_active(&self) -> bool {
+        self.flash_copied.is_some_and(|instant| instant.elapsed().as_secs() < 2)
     }
 
     pub fn current_room(&self) -> Option<&RoomEntry> {
@@ -335,7 +345,7 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
         ])
         .split(f.area());
 
-    status_bar::render_status_bar(f, outer[0], &state.status);
+    status_bar::render_status_bar(f, outer[0], &state.status, state.is_flash_copied_active());
 
     if state.agent_detail_visible {
         render_detail_mode(f, outer[1], outer[2], state);

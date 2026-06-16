@@ -552,6 +552,10 @@ impl App {
                 KeyCode::Char('c') => {
                     return self.handle_ctrl_c().await;
                 }
+                KeyCode::Char('v') => match paste_from_clipboard() {
+                    Ok(text) => return self.handle_paste(text),
+                    Err(_) => {}
+                },
                 KeyCode::Char('d') => {
                     return self.close_current_thread().await;
                 }
@@ -1146,6 +1150,21 @@ impl App {
     }
 
     async fn handle_ctrl_c(&mut self) -> bool {
+        if matches!(self.ui.focus, Focus::AgentChat) {
+            if let Some(chat) = self.ui.current_chat() {
+                if chat.selection.is_some() {
+                    let width = self.ui.panel_areas.agent_chat.width.saturating_sub(2);
+                    if let Some(text) =
+                        crate::ui::chat::selected_text(chat, width, &self.ui.render_cache)
+                    {
+                        let _ = copy_to_clipboard(&text);
+                        self.ui.flash_copied();
+                    }
+                    return true;
+                }
+            }
+        }
+
         if self.current_thread_is_interruptible() {
             if let Some(thread_id) = self.ui.current_thread_id().map(String::from) {
                 if let Err(error) = self.backend.interrupt_thread(&thread_id).await {
@@ -3065,6 +3084,56 @@ fn run_clipboard_command(program: &str, args: &[&str], text: &str) -> std::io::R
     Ok(child.wait()?.success())
 }
 
+#[cfg(not(test))]
+fn paste_from_clipboard() -> anyhow::Result<String> {
+    #[cfg(target_os = "macos")]
+    const COMMANDS: &[(&str, &[&str])] = &[("pbpaste", &[])];
+    #[cfg(target_os = "linux")]
+    const COMMANDS: &[(&str, &[&str])] = &[
+        ("wl-paste", &[]),
+        ("xclip", &["-selection", "clipboard", "-o"]),
+        ("xsel", &["--clipboard", "--output"]),
+    ];
+    #[cfg(target_os = "windows")]
+    const COMMANDS: &[(&str, &[&str])] = &[
+        ("powershell", &["-NoProfile", "-Command", "Get-Clipboard"]),
+    ];
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    const COMMANDS: &[(&str, &[&str])] = &[];
+
+    let mut last_error = None;
+    for (program, args) in COMMANDS {
+        match run_paste_command(program, args) {
+            Ok(output) if !output.is_empty() => return Ok(normalize_pasted_text(&output)),
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => last_error = Some(error.into()),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no clipboard command available")))
+}
+
+#[cfg(not(test))]
+fn run_paste_command(program: &str, args: &[&str]) -> std::io::Result<String> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()?;
+    String::from_utf8(output.stdout)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "non-utf8 clipboard"))
+}
+
+#[cfg(test)]
+fn paste_from_clipboard() -> anyhow::Result<String> {
+    TEST_CLIPBOARD
+        .lock()
+        .expect("test clipboard lock")
+        .last()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("clipboard empty"))
+}
+
 fn clicked_thread_index(
     area: ratatui::layout::Rect,
     list_state: &ratatui::widgets::ListState,
@@ -3467,6 +3536,27 @@ mod tests {
             .lock()
             .expect("interrupt list lock")
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn ctrl_v_pastes_from_clipboard() {
+        let backend = Arc::new(TestBackend::new());
+        let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+        app.ui.focus = Focus::AgentInput;
+
+        super::TEST_CLIPBOARD
+            .lock()
+            .expect("test clipboard lock")
+            .push("hello from clipboard".to_owned());
+        let key = press_with_modifiers(KeyCode::Char('v'), KeyModifiers::CONTROL);
+        let redraw = app.handle_key(key).await;
+
+        assert!(redraw);
+        assert_eq!(app.ui.agent_input.content, "hello from clipboard");
+        super::TEST_CLIPBOARD
+            .lock()
+            .expect("test clipboard lock")
+            .clear();
     }
 
     #[tokio::test]
