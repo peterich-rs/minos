@@ -1,3 +1,4 @@
+use crate::render::Renderable;
 use ratatui::{
     layout::Rect,
     text::{Line, Span},
@@ -10,6 +11,46 @@ use super::theme::{BORDER_FG, FOCUSED_BORDER, HIGHLIGHTED, THREAD_IDLE};
 pub struct RoomEntry {
     pub room_id: String,
     pub title: String,
+}
+
+pub struct RoomListRenderable<'a> {
+    rooms: &'a [RoomEntry],
+    selected: Option<usize>,
+    list_state: &'a mut ListState,
+    focused: bool,
+}
+
+impl<'a> RoomListRenderable<'a> {
+    pub fn new(
+        rooms: &'a [RoomEntry],
+        selected: Option<usize>,
+        list_state: &'a mut ListState,
+        focused: bool,
+    ) -> Self {
+        Self {
+            rooms,
+            selected,
+            list_state,
+            focused,
+        }
+    }
+}
+
+impl Renderable for RoomListRenderable<'_> {
+    fn render(&mut self, f: &mut Frame, area: Rect) {
+        render_room_list(
+            f,
+            area,
+            self.rooms,
+            self.selected,
+            self.list_state,
+            self.focused,
+        );
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        u16::try_from(self.rooms.len().saturating_add(2)).unwrap_or(u16::MAX)
+    }
 }
 
 pub fn render_room_list(

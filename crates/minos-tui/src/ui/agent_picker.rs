@@ -1,3 +1,4 @@
+use crate::render::Renderable;
 use minos_domain::{AgentDescriptor, AgentStatus};
 use ratatui::{
     layout::{Constraint, Direction, Flex, Layout, Rect},
@@ -8,8 +9,34 @@ use ratatui::{
 
 use super::{theme, AgentPickerState};
 
-pub fn render_agent_picker(f: &mut Frame, agents: &[AgentDescriptor], state: &AgentPickerState) {
-    let area = centered_rect(f.area(), 60, 16);
+pub struct AgentPickerRenderable<'a> {
+    agents: &'a [AgentDescriptor],
+    state: &'a AgentPickerState,
+}
+
+impl<'a> AgentPickerRenderable<'a> {
+    pub fn new(agents: &'a [AgentDescriptor], state: &'a AgentPickerState) -> Self {
+        Self { agents, state }
+    }
+}
+
+impl Renderable for AgentPickerRenderable<'_> {
+    fn render(&mut self, f: &mut Frame, area: Rect) {
+        render_agent_picker_in_area(f, area, self.agents, self.state);
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        16
+    }
+}
+
+fn render_agent_picker_in_area(
+    f: &mut Frame,
+    root: Rect,
+    agents: &[AgentDescriptor],
+    state: &AgentPickerState,
+) {
+    let area = centered_rect(root, 60, 16);
     f.render_widget(Clear, area);
 
     let sections = Layout::default()

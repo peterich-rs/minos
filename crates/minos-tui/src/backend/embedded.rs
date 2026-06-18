@@ -108,6 +108,18 @@ impl AgentBackend for EmbeddedBackend {
             .map_err(Into::into)
     }
 
+    async fn respond_opencode_question(
+        &self,
+        thread_id: &str,
+        question_id: &str,
+        answers: Vec<Vec<String>>,
+    ) -> Result<()> {
+        self.manager
+            .respond_opencode_question(thread_id, question_id, answers)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn interrupt_thread(&self, thread_id: &str) -> Result<()> {
         self.manager
             .interrupt_thread(thread_id)

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use minos_domain::AgentName;
@@ -15,6 +16,13 @@ pub mod teamwork_mcp;
 
 const DEFAULT_LIMIT: u32 = 100;
 const MAX_LIMIT: u32 = 500;
+const OPEN_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(25),
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+];
 
 #[derive(Debug, Clone)]
 pub struct ChatStore {
@@ -151,10 +159,28 @@ impl ChatStore {
             })?;
         }
 
+        for (attempt, delay) in OPEN_RETRY_DELAYS.iter().enumerate() {
+            match Self::open_once(db_path).await {
+                Ok(store) => return Ok(store),
+                Err(error) if is_sqlite_busy_error(&error) => {
+                    if attempt == OPEN_RETRY_DELAYS.len() - 1 {
+                        return Err(error);
+                    }
+                    tokio::time::sleep(*delay).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Self::open_once(db_path).await
+    }
+
+    async fn open_once(db_path: &Path) -> Result<Self> {
         let url = format!("sqlite://{}?mode=rwc", db_path.display());
         let opts = SqliteConnectOptions::from_str(&url)?
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(10));
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
             .connect_with(opts)
@@ -269,6 +295,135 @@ impl ChatStore {
             .await?;
 
         tx.commit().await?;
+
+        Ok(ChatMessage {
+            seq,
+            message_id,
+            room_id: room_id.to_owned(),
+            created_at_ms,
+            sender_role,
+            event_type: input.event_type,
+            text: input.text,
+            agent: input.agent,
+            thread_id: input.thread_id,
+            thread_short_id: input.thread_short_id,
+            workspace_root: input.workspace_root,
+        })
+    }
+
+    pub async fn upsert_message_by_id(
+        &self,
+        room_id: &str,
+        input: NewChatMessage,
+    ) -> Result<ChatMessage> {
+        let Some(message_id) = input.message_id.clone().filter(|id| !id.trim().is_empty()) else {
+            return self.append_message(room_id, input).await;
+        };
+
+        let mut tx = self.pool.begin().await?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let update_at_ms = if input.created_at_ms == 0 {
+            now
+        } else {
+            input.created_at_ms
+        };
+        let existing = sqlx::query(
+            "SELECT message_seq, created_at_ms FROM chat_messages \
+             WHERE room_id = ? AND message_id = ?",
+        )
+        .bind(room_id)
+        .bind(&message_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let sender_role = input.event_type.sender_role();
+
+        let (seq_i64, created_at_ms) = if let Some(row) = existing {
+            let seq_i64: i64 = row.get("message_seq");
+            let created_at_ms: i64 = row.get("created_at_ms");
+            sqlx::query(
+                "UPDATE chat_messages SET \
+                    sender_role = ?, event_type = ?, body = ?, agent = ?, thread_id = ?, \
+                    thread_short_id = ?, workspace_root = ? \
+                 WHERE room_id = ? AND message_id = ?",
+            )
+            .bind(sender_role.as_db())
+            .bind(input.event_type.as_db())
+            .bind(&input.text)
+            .bind(input.agent.map(|agent| agent.bin_name().to_owned()))
+            .bind(input.thread_id.as_deref())
+            .bind(input.thread_short_id.as_deref())
+            .bind(input.workspace_root.as_deref())
+            .bind(room_id)
+            .bind(&message_id)
+            .execute(&mut *tx)
+            .await?;
+            (seq_i64, created_at_ms)
+        } else {
+            let seq_i64: i64 =
+                sqlx::query_scalar("SELECT COALESCE(MAX(message_seq), 0) + 1 FROM chat_messages")
+                    .fetch_one(&mut *tx)
+                    .await?;
+            sqlx::query(
+                "INSERT INTO chat_messages( \
+                    message_seq, message_id, room_id, created_at_ms, sender_role, event_type, \
+                    body, agent, thread_id, thread_short_id, workspace_root \
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(seq_i64)
+            .bind(&message_id)
+            .bind(room_id)
+            .bind(update_at_ms)
+            .bind(sender_role.as_db())
+            .bind(input.event_type.as_db())
+            .bind(&input.text)
+            .bind(input.agent.map(|agent| agent.bin_name().to_owned()))
+            .bind(input.thread_id.as_deref())
+            .bind(input.thread_short_id.as_deref())
+            .bind(input.workspace_root.as_deref())
+            .execute(&mut *tx)
+            .await?;
+            (seq_i64, update_at_ms)
+        };
+
+        if let (Some(agent), Some(thread_id), Some(thread_short_id), Some(workspace_root)) = (
+            input.agent,
+            input.thread_id.as_deref(),
+            input.thread_short_id.as_deref(),
+            input.workspace_root.as_deref(),
+        ) {
+            sqlx::query(
+                "INSERT INTO chat_agent_sessions( \
+                    room_id, thread_id, agent, thread_short_id, workspace_root, \
+                    first_seen_at_ms, last_seen_at_ms, first_message_seq, last_message_seq \
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(room_id, thread_id) DO UPDATE SET \
+                    agent = excluded.agent, \
+                    thread_short_id = excluded.thread_short_id, \
+                    workspace_root = excluded.workspace_root, \
+                    last_seen_at_ms = excluded.last_seen_at_ms, \
+                    last_message_seq = excluded.last_message_seq",
+            )
+            .bind(room_id)
+            .bind(thread_id)
+            .bind(agent.bin_name())
+            .bind(thread_short_id)
+            .bind(workspace_root)
+            .bind(update_at_ms)
+            .bind(update_at_ms)
+            .bind(seq_i64)
+            .bind(seq_i64)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        sqlx::query("UPDATE chat_rooms SET updated_at_ms = ? WHERE room_id = ?")
+            .bind(update_at_ms)
+            .bind(room_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        let seq = u64::try_from(seq_i64).context("chat message seq overflow")?;
 
         Ok(ChatMessage {
             seq,
@@ -1042,6 +1197,18 @@ pub fn room_title_for_workspace(workspace: &Path) -> String {
     }
 }
 
+fn is_sqlite_busy_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("database is locked")
+            || message.contains("database table is locked")
+            || message.contains("SQLITE_BUSY")
+            || message.contains("SQLITE_LOCKED")
+            || message.contains("(code: 5)")
+            || message.contains("(code: 6)")
+    })
+}
+
 fn resolve_minos_home() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("MINOS_HOME") {
         return Ok(path.into());
@@ -1246,6 +1413,56 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].agent, AgentName::Gemini);
         assert_eq!(sessions[0].thread_id, "thread-gemini");
+    }
+
+    #[tokio::test]
+    async fn upsert_message_by_id_updates_existing_row_without_advancing_seq() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ChatStore::open(&tmp.path().join("chat.sqlite"))
+            .await
+            .unwrap();
+        store
+            .ensure_room("room-main", "main", "/tmp/ws")
+            .await
+            .unwrap();
+
+        let first = store
+            .upsert_message_by_id(
+                "room-main",
+                NewChatMessage {
+                    message_id: Some("agent-result:thread-1:msg-1".into()),
+                    created_at_ms: 10,
+                    event_type: ChatMessageType::AgentResult,
+                    text: "Hel".into(),
+                    agent: Some(AgentName::Codex),
+                    thread_id: Some("thread-1".into()),
+                    thread_short_id: Some("thread-1".into()),
+                    workspace_root: Some("/tmp/ws".into()),
+                },
+            )
+            .await
+            .unwrap();
+        let second = store
+            .upsert_message_by_id(
+                "room-main",
+                NewChatMessage {
+                    message_id: Some("agent-result:thread-1:msg-1".into()),
+                    created_at_ms: 20,
+                    event_type: ChatMessageType::AgentResult,
+                    text: "Hello".into(),
+                    agent: Some(AgentName::Codex),
+                    thread_id: Some("thread-1".into()),
+                    thread_short_id: Some("thread-1".into()),
+                    workspace_root: Some("/tmp/ws".into()),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(second.seq, first.seq);
+        assert_eq!(second.created_at_ms, first.created_at_ms);
+        assert_eq!(second.text, "Hello");
+        assert_eq!(store.count_messages("room-main").await.unwrap(), 1);
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 pub mod agent_picker;
 pub mod chat;
+pub mod delete_confirm;
 pub mod group_chat;
 pub mod input_bar;
 pub mod room_list;
@@ -7,8 +8,13 @@ pub mod status_bar;
 pub mod theme;
 pub mod thread_list;
 
+use crate::focus::{FocusManager, PaneId};
+use crate::render::{Column, Renderable, Row};
 use crate::translation::ChatState;
 use crate::ui::chat::RenderCache;
+use crate::ui::chat::{AgentChatRenderable, AgentChatTarget};
+pub use crate::ui::delete_confirm::DeleteConfirmState;
+use crate::ui::group_chat::GroupChatRenderCache;
 use crate::ui::input_bar::{AgentMentionCandidate, InputLayoutMetrics, InputState};
 use crate::ui::room_list::RoomEntry;
 use crate::ui::status_bar::StatusBarState;
@@ -16,9 +22,8 @@ use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
 use minos_protocol::LocalGroupChatMessage;
 use ratatui::{
-    layout::{Constraint, Direction, Flex, Layout, Rect},
-    text::{Line, Span},
-    widgets::{Block, Clear, ListState, Paragraph, Wrap},
+    layout::{Constraint, Direction, Layout, Rect},
+    widgets::ListState,
     Frame,
 };
 
@@ -31,16 +36,6 @@ pub struct ThreadEntry {
     pub agent: AgentName,
     pub workspace: PathBuf,
     pub state: ThreadState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
-    RoomList,
-    RoomChat,
-    AgentList,
-    AgentChat,
-    RoomInput,
-    AgentInput,
 }
 
 pub struct UiState {
@@ -57,7 +52,7 @@ pub struct UiState {
     pub room_input: InputState,
     pub agent_input: InputState,
     pub agent_detail_visible: bool,
-    pub focus: Focus,
+    pub focus: FocusManager,
     pub error_flash: Option<(String, Instant)>,
     pub flash_copied: Option<Instant>,
     pub panel_areas: PanelAreas,
@@ -70,18 +65,13 @@ pub struct AgentPickerState {
     pub selected: usize,
 }
 
-pub struct DeleteConfirmState {
-    pub thread_id: String,
-    pub agent: AgentName,
-    pub workspace: PathBuf,
-    pub selected_index: usize,
-}
-
 pub struct GroupChatState {
     pub messages: Vec<LocalGroupChatMessage>,
     pub scroll_offset: u16,
     pub auto_scroll: bool,
     pub max_scroll: u16,
+    pub version: u64,
+    pub render_cache: GroupChatRenderCache,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -110,7 +100,7 @@ impl UiState {
             room_input: InputState::new(readonly),
             agent_input: InputState::new(readonly),
             agent_detail_visible: false,
-            focus: Focus::RoomList,
+            focus: FocusManager::new(false),
             error_flash: None,
             flash_copied: None,
             panel_areas: PanelAreas::default(),
@@ -153,7 +143,8 @@ impl UiState {
     }
 
     pub fn is_flash_copied_active(&self) -> bool {
-        self.flash_copied.is_some_and(|instant| instant.elapsed().as_secs() < 2)
+        self.flash_copied
+            .is_some_and(|instant| instant.elapsed().as_secs() < 2)
     }
 
     pub fn current_room(&self) -> Option<&RoomEntry> {
@@ -190,25 +181,55 @@ impl GroupChatState {
             scroll_offset: 0,
             auto_scroll: true,
             max_scroll: 0,
+            version: 0,
+            render_cache: GroupChatRenderCache::default(),
         }
     }
 
     pub fn replace_messages(&mut self, messages: Vec<LocalGroupChatMessage>) {
-        self.messages = sorted_dedup_messages(messages);
-        self.scroll_to_bottom();
+        let messages = sorted_dedup_messages(messages);
+        if self.messages != messages {
+            self.messages = messages;
+            self.bump_version();
+            self.scroll_to_bottom();
+        }
     }
 
     pub fn push_message(&mut self, message: LocalGroupChatMessage) {
-        self.merge_messages(std::iter::once(message));
-        self.scroll_to_bottom();
+        if self.merge_messages(std::iter::once(message)) {
+            self.scroll_to_bottom();
+        }
     }
 
-    pub fn merge_messages<I>(&mut self, messages: I)
+    pub fn merge_messages<I>(&mut self, messages: I) -> bool
     where
         I: IntoIterator<Item = LocalGroupChatMessage>,
     {
-        self.messages.extend(messages);
-        self.messages = sorted_dedup_messages(std::mem::take(&mut self.messages));
+        let mut changed = false;
+        for message in messages {
+            let key = message_key(&message);
+            match self
+                .messages
+                .iter_mut()
+                .find(|existing| message_key(existing) == key)
+            {
+                Some(existing) if *existing == message => {}
+                Some(existing) => {
+                    *existing = message;
+                    changed = true;
+                }
+                None => {
+                    self.messages.push(message);
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            sort_messages(&mut self.messages);
+            self.bump_version();
+        }
+        changed
     }
 
     pub fn last_seq(&self) -> u64 {
@@ -260,25 +281,279 @@ impl GroupChatState {
         self.auto_scroll = true;
         self.scroll_offset = 0;
     }
+
+    fn bump_version(&mut self) {
+        self.version = self.version.wrapping_add(1);
+    }
 }
 
 fn sorted_dedup_messages(messages: Vec<LocalGroupChatMessage>) -> Vec<LocalGroupChatMessage> {
     let mut keyed = HashMap::<String, LocalGroupChatMessage>::new();
     for message in messages {
-        let key = if message.message_id.is_empty() {
-            format!(
-                "seq:{}:{}:{}",
-                message.seq, message.created_at_ms, message.text
-            )
-        } else {
-            message.message_id.clone()
-        };
-        keyed.insert(key, message);
+        keyed.insert(message_key(&message), message);
     }
 
     let mut messages: Vec<_> = keyed.into_values().collect();
-    messages.sort_by_key(|message| (message.seq, message.created_at_ms));
+    sort_messages(&mut messages);
     messages
+}
+
+fn message_key(message: &LocalGroupChatMessage) -> String {
+    if message.message_id.is_empty() {
+        format!(
+            "seq:{}:{}:{}",
+            message.seq, message.created_at_ms, message.text
+        )
+    } else {
+        message.message_id.clone()
+    }
+}
+
+fn sort_messages(messages: &mut [LocalGroupChatMessage]) {
+    messages.sort_by_key(|message| (message.seq, message.created_at_ms));
+}
+
+pub fn render_ui(f: &mut Frame, state: &mut UiState) {
+    state.room_input.focused = state.focus.is(PaneId::RoomInput);
+    state.agent_input.focused = state.focus.is(PaneId::AgentInput);
+
+    if state.agent_detail_visible {
+        render_detail_tree(f, state);
+    } else {
+        render_overview_tree(f, state);
+    }
+
+    if let Some(picker) = state.agent_picker.as_ref() {
+        let mut overlay =
+            agent_picker::AgentPickerRenderable::new(state.status.agents.as_slice(), picker);
+        overlay.render(f, f.area());
+    }
+
+    if let Some(confirm) = state.delete_confirm.as_ref() {
+        let mut overlay = delete_confirm::DeleteConfirmRenderable::new(confirm);
+        overlay.render(f, f.area());
+    }
+}
+
+fn render_overview_tree(f: &mut Frame, state: &mut UiState) {
+    let room_title = state
+        .current_room()
+        .map(|room| format!("Chat Room: {}", room.title))
+        .unwrap_or_else(|| "Chat Room".to_owned());
+    let mention_candidates = state.room_agent_mention_candidates();
+    let room_input_title = room_input_title(&state.room_input);
+    let flash_active = state.is_flash_copied_active();
+    let root = f.area();
+    let input_height = input_bar::required_height(&state.room_input, root.width);
+    let [_, middle, input_area] = root_sections(root, input_height);
+    let columns = Row::areas_for(middle, &[20, 55, 25]);
+
+    state.panel_areas = PanelAreas {
+        room_list: columns[0],
+        room_chat: columns[1],
+        agent_list: columns[2],
+        agent_chat: Rect::default(),
+        room_input: input_area,
+        agent_input: Rect::default(),
+    };
+    state.input_metrics[1] = InputLayoutMetrics::default();
+
+    let main_row = Row::new(
+        vec![
+            Box::new(room_list::RoomListRenderable::new(
+                &state.rooms,
+                state.selected_room,
+                &mut state.room_list_state,
+                state.focus.is(PaneId::RoomList),
+            )),
+            Box::new(group_chat::GroupChatRenderable::new(
+                room_title,
+                &mut state.group_chat,
+                state.focus.is(PaneId::GroupChat),
+            )),
+            Box::new(thread_list::ThreadListRenderable::new(
+                "Agents",
+                &state.threads,
+                state.selected_thread,
+                &mut state.agent_list_state,
+                state.focus.is(PaneId::AgentList),
+            )),
+        ],
+        vec![20, 55, 25],
+    );
+    let input = input_bar::InputBarRenderable::new(
+        room_input_title,
+        "Type @ to choose an agent or send to the room",
+        &state.room_input,
+        mention_candidates.as_slice(),
+        &mut state.input_metrics[0],
+    );
+    let mut tree = Column::with_fill(
+        vec![
+            Box::new(status_bar::StatusBarRenderable::new(
+                &state.status,
+                flash_active,
+            )),
+            Box::new(main_row),
+            Box::new(input),
+        ],
+        1,
+    );
+    tree.render(f, root);
+    if let Some(position) = tree.cursor_pos(root) {
+        f.set_cursor_position(position);
+    }
+}
+
+fn render_detail_tree(f: &mut Frame, state: &mut UiState) {
+    let room_title = state
+        .current_room()
+        .map(|room| format!("Chat Room: {}", room.title))
+        .unwrap_or_else(|| "Chat Room".to_owned());
+    let mention_candidates = state.room_agent_mention_candidates();
+    let pending_agent_request = state
+        .current_chat()
+        .and_then(ChatState::active_pending_request)
+        .is_some();
+    let selected_thread_id = state.current_thread_id().map(str::to_owned);
+    let room_input_title = room_input_title(&state.room_input);
+    let agent_input_title = agent_input_title(pending_agent_request, state.agent_input.multiline);
+    let flash_active = state.is_flash_copied_active();
+    let agent_input_hint = if pending_agent_request {
+        "Reply to the pending agent request"
+    } else {
+        "Talk directly to the selected agent"
+    };
+    let root = f.area();
+    let input_widths = Row::areas_for(
+        Rect {
+            x: root.x,
+            y: root.y,
+            width: root.width,
+            height: 0,
+        },
+        &[65, 35],
+    );
+    let input_height = input_bar::required_height(&state.room_input, input_widths[0].width).max(
+        input_bar::required_height(&state.agent_input, input_widths[1].width),
+    );
+    let [_, middle, input_area] = root_sections(root, input_height);
+    let columns = Row::areas_for(middle, &[45, 20, 35]);
+    let inputs = Row::areas_for(input_area, &[65, 35]);
+
+    state.panel_areas = PanelAreas {
+        room_list: Rect::default(),
+        room_chat: columns[0],
+        agent_list: columns[1],
+        agent_chat: columns[2],
+        room_input: inputs[0],
+        agent_input: inputs[1],
+    };
+
+    let agent_chat_target = if let Some(thread_id) = selected_thread_id.as_deref() {
+        if let Some(chat) = state.chat_states.get_mut(thread_id) {
+            AgentChatTarget::Chat {
+                chat,
+                cache: &mut state.render_cache,
+            }
+        } else {
+            AgentChatTarget::Empty
+        }
+    } else {
+        AgentChatTarget::Empty
+    };
+
+    let [room_metrics, agent_metrics] = &mut state.input_metrics;
+    let main_row = Row::new(
+        vec![
+            Box::new(group_chat::GroupChatRenderable::new(
+                room_title,
+                &mut state.group_chat,
+                state.focus.is(PaneId::GroupChat),
+            )),
+            Box::new(thread_list::ThreadListRenderable::new(
+                "Agents",
+                &state.threads,
+                state.selected_thread,
+                &mut state.agent_list_state,
+                state.focus.is(PaneId::AgentList),
+            )),
+            Box::new(AgentChatRenderable::new(
+                agent_chat_target,
+                state.focus.is(PaneId::AgentChat),
+            )),
+        ],
+        vec![45, 20, 35],
+    );
+    let input_row = Row::new(
+        vec![
+            Box::new(input_bar::InputBarRenderable::new(
+                room_input_title,
+                "Type @ to choose an agent or send to the room",
+                &state.room_input,
+                mention_candidates.as_slice(),
+                room_metrics,
+            )),
+            Box::new(input_bar::InputBarRenderable::new(
+                agent_input_title,
+                agent_input_hint,
+                &state.agent_input,
+                &[],
+                agent_metrics,
+            )),
+        ],
+        vec![65, 35],
+    );
+    let mut tree = Column::with_fill(
+        vec![
+            Box::new(status_bar::StatusBarRenderable::new(
+                &state.status,
+                flash_active,
+            )),
+            Box::new(main_row),
+            Box::new(input_row),
+        ],
+        1,
+    );
+    tree.render(f, root);
+    if let Some(position) = tree.cursor_pos(root) {
+        f.set_cursor_position(position);
+    }
+}
+
+fn root_sections(area: Rect, input_height: u16) -> [Rect; 3] {
+    let available_height = area.height.saturating_sub(1);
+    let input_height = input_height.min(available_height);
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(input_height.max(1)),
+        ])
+        .split(area);
+    [outer[0], outer[1], outer[2]]
+}
+
+fn room_input_title(state: &InputState) -> &'static str {
+    if state.multiline {
+        "Chat Room Input [multi]"
+    } else {
+        "Chat Room Input"
+    }
+}
+
+fn agent_input_title(pending_agent_request: bool, multiline: bool) -> &'static str {
+    match (pending_agent_request, multiline) {
+        (true, true) => "Agent Input: Reply Required [multi]",
+        (true, false) => "Agent Input: Reply Required",
+        (false, true) => "Agent Input [multi]",
+        (false, false) => "Agent Input",
+    }
+}
+
+fn short_thread_id(thread_id: &str) -> String {
+    thread_id[..8.min(thread_id.len())].to_owned()
 }
 
 #[cfg(test)]
@@ -321,270 +596,16 @@ mod tests {
         assert_eq!(state.messages[0].message_id, "older");
         assert_eq!(state.messages[1].message_id, "newer");
     }
-}
 
-pub fn render_ui(f: &mut Frame, state: &mut UiState) {
-    state.room_input.focused = matches!(state.focus, Focus::RoomInput);
-    state.agent_input.focused = matches!(state.focus, Focus::AgentInput);
+    #[test]
+    fn group_chat_merge_duplicate_keeps_version() {
+        let mut state = GroupChatState::new();
+        let message = group_message(1, "m1", "same message");
 
-    let available_height = f.area().height.saturating_sub(1);
-    let room_input_height = input_bar::required_height(&state.room_input, f.area().width);
-    let detail_agent_width = f.area().width.saturating_mul(35) / 100;
-    let agent_input_height = input_bar::required_height(&state.agent_input, detail_agent_width);
-    let input_height = if state.agent_detail_visible {
-        room_input_height.max(agent_input_height)
-    } else {
-        room_input_height
+        assert!(state.merge_messages(vec![message.clone()]));
+        let version = state.version;
+
+        assert!(!state.merge_messages(vec![message]));
+        assert_eq!(state.version, version);
     }
-    .min(available_height);
-
-    let outer = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(input_height.max(1)),
-        ])
-        .split(f.area());
-
-    status_bar::render_status_bar(f, outer[0], &state.status, state.is_flash_copied_active());
-
-    if state.agent_detail_visible {
-        render_detail_mode(f, outer[1], outer[2], state);
-    } else {
-        render_overview_mode(f, outer[1], outer[2], state);
-    }
-
-    if let Some(picker) = state.agent_picker.as_ref() {
-        agent_picker::render_agent_picker(f, state.status.agents.as_slice(), picker);
-    }
-
-    if let Some(confirm) = state.delete_confirm.as_ref() {
-        render_delete_confirm(f, confirm);
-    }
-}
-
-fn render_overview_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut UiState) {
-    let room_title = state
-        .current_room()
-        .map(|room| format!("Chat Room: {}", room.title))
-        .unwrap_or_else(|| "Chat Room".to_owned());
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(55),
-            Constraint::Percentage(25),
-        ])
-        .split(middle);
-
-    state.panel_areas = PanelAreas {
-        room_list: columns[0],
-        room_chat: columns[1],
-        agent_list: columns[2],
-        agent_chat: Rect::default(),
-        room_input: input_area,
-        agent_input: Rect::default(),
-    };
-
-    room_list::render_room_list(
-        f,
-        columns[0],
-        &state.rooms,
-        state.selected_room,
-        &mut state.room_list_state,
-        matches!(state.focus, Focus::RoomList),
-    );
-    group_chat::render_group_chat(
-        f,
-        columns[1],
-        room_title.as_str(),
-        &mut state.group_chat,
-        matches!(state.focus, Focus::RoomChat),
-    );
-    thread_list::render_thread_list(
-        f,
-        columns[2],
-        "Agents",
-        &state.threads,
-        state.selected_thread,
-        &mut state.agent_list_state,
-        matches!(state.focus, Focus::AgentList),
-    );
-    let mention_candidates = state.room_agent_mention_candidates();
-    let room_title = if state.room_input.multiline {
-        "Chat Room Input [multi]"
-    } else {
-        "Chat Room Input"
-    };
-    input_bar::render_input_bar(
-        f,
-        input_area,
-        room_title,
-        "Type @ to choose an agent or send to the room",
-        &state.room_input,
-        mention_candidates.as_slice(),
-        &mut state.input_metrics[0],
-    );
-}
-
-fn render_detail_mode(f: &mut Frame, middle: Rect, input_area: Rect, state: &mut UiState) {
-    let room_title = state
-        .current_room()
-        .map(|room| format!("Chat Room: {}", room.title))
-        .unwrap_or_else(|| "Chat Room".to_owned());
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(45),
-            Constraint::Percentage(20),
-            Constraint::Percentage(35),
-        ])
-        .split(middle);
-    let inputs = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(input_area);
-
-    state.panel_areas = PanelAreas {
-        room_list: Rect::default(),
-        room_chat: columns[0],
-        agent_list: columns[1],
-        agent_chat: columns[2],
-        room_input: inputs[0],
-        agent_input: inputs[1],
-    };
-
-    group_chat::render_group_chat(
-        f,
-        columns[0],
-        room_title.as_str(),
-        &mut state.group_chat,
-        matches!(state.focus, Focus::RoomChat),
-    );
-    thread_list::render_thread_list(
-        f,
-        columns[1],
-        "Agents",
-        &state.threads,
-        state.selected_thread,
-        &mut state.agent_list_state,
-        matches!(state.focus, Focus::AgentList),
-    );
-    let agent_chat_focused = matches!(state.focus, Focus::AgentChat);
-    if let Some((chat, cache)) = state.current_chat_and_cache_mut() {
-        chat::render_chat(f, columns[2], chat, agent_chat_focused, cache);
-    } else {
-        render_agent_chat_placeholder(f, columns[2], agent_chat_focused);
-    }
-
-    let mention_candidates = state.room_agent_mention_candidates();
-    let room_title = if state.room_input.multiline {
-        "Chat Room Input [multi]"
-    } else {
-        "Chat Room Input"
-    };
-    input_bar::render_input_bar(
-        f,
-        inputs[0],
-        room_title,
-        "Type @ to choose an agent or send to the room",
-        &state.room_input,
-        mention_candidates.as_slice(),
-        &mut state.input_metrics[0],
-    );
-    let pending_agent_request = state
-        .current_chat()
-        .and_then(ChatState::active_pending_request)
-        .is_some();
-    let agent_title = match (pending_agent_request, state.agent_input.multiline) {
-        (true, true) => "Agent Input: Reply Required [multi]",
-        (true, false) => "Agent Input: Reply Required",
-        (false, true) => "Agent Input [multi]",
-        (false, false) => "Agent Input",
-    };
-    input_bar::render_input_bar(
-        f,
-        inputs[1],
-        agent_title,
-        if pending_agent_request {
-            "Reply to the pending agent request"
-        } else {
-            "Talk directly to the selected agent"
-        },
-        &state.agent_input,
-        &[],
-        &mut state.input_metrics[1],
-    );
-}
-
-fn short_thread_id(thread_id: &str) -> String {
-    thread_id[..8.min(thread_id.len())].to_owned()
-}
-
-fn render_agent_chat_placeholder(f: &mut Frame, area: Rect, focused: bool) {
-    let paragraph = ratatui::widgets::Paragraph::new(
-        "No agent selected\n\nChoose an agent from the list to inspect its detailed transcript.",
-    )
-    .block(
-        theme::border_block()
-            .title("Agent Detail")
-            .border_style(if focused {
-                theme::FOCUSED_BORDER
-            } else {
-                ratatui::style::Style::new().fg(theme::BORDER_FG)
-            }),
-    );
-    f.render_widget(paragraph, area);
-}
-
-fn render_delete_confirm(f: &mut Frame, state: &DeleteConfirmState) {
-    let area = centered_rect(f.area(), 64, 8);
-    f.render_widget(Clear, area);
-
-    let tid_short = &state.thread_id[..8.min(state.thread_id.len())];
-    let workspace = state
-        .workspace
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
-    let lines = vec![
-        Line::from("Delete this local thread?"),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("Thread "),
-            Span::styled(tid_short.to_owned(), theme::HIGHLIGHTED),
-            Span::raw(format!(
-                "  Agent {}  Workspace {}",
-                state.agent.bin_name(),
-                workspace
-            )),
-        ]),
-        Line::from(""),
-        Line::from("Enter/Y confirm    Esc/N cancel"),
-    ];
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::bordered()
-                .title("Confirm Delete")
-                .border_style(theme::FOCUSED_BORDER),
-        )
-        .wrap(Wrap { trim: true });
-    f.render_widget(paragraph, area);
-}
-
-fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let [vertical] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(height.min(area.height))])
-        .flex(Flex::Center)
-        .areas(area);
-
-    let [horizontal] = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(width.min(area.width))])
-        .flex(Flex::Center)
-        .areas(vertical);
-
-    horizontal
 }

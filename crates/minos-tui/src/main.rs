@@ -2,26 +2,39 @@ use std::sync::Arc;
 
 use crate::backend::BackendKind;
 use anyhow::Result;
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
 };
+use minos_daemon::local_rpc::LocalRpcConfig;
 use minos_domain::AgentName;
 use ratatui::DefaultTerminal;
 
+mod action;
+mod agent_route;
 mod app;
 mod backend;
+mod effect;
 mod event;
+mod focus;
+mod frame;
 mod group_chat;
+mod input;
 mod logging;
+mod render;
 mod skills;
+mod state;
 mod translation;
 mod ui;
+mod update;
 
 #[derive(Parser, Debug)]
 #[command(name = "minos-tui", about = "Minos Agent TUI - local debug console")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<SidecarCommand>,
+
     #[arg(short, long)]
     agent: Option<String>,
 
@@ -66,6 +79,74 @@ struct Cli {
 
     #[arg(long)]
     mcp_disable_react_to_message: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum SidecarCommand {
+    #[command(name = "__minos-teamwork-mcp", hide = true)]
+    MinosTeamworkMcp(McpSidecarArgs),
+}
+
+#[derive(Args, Debug)]
+struct McpSidecarArgs {
+    #[arg(long)]
+    socket_path: std::path::PathBuf,
+
+    #[arg(long)]
+    room_id: String,
+
+    #[arg(long)]
+    source_agent: Option<String>,
+
+    #[arg(long)]
+    disable_list_room_messages: bool,
+
+    #[arg(long)]
+    disable_delegate_to_agent: bool,
+
+    #[arg(long)]
+    disable_get_delegation_status: bool,
+
+    #[arg(long)]
+    disable_cancel_delegation: bool,
+
+    #[arg(long)]
+    disable_ask_user_question: bool,
+
+    #[arg(long)]
+    disable_check_user_feedback: bool,
+
+    #[arg(long)]
+    disable_post_room_update: bool,
+
+    #[arg(long)]
+    disable_react_to_message: bool,
+}
+
+impl McpSidecarArgs {
+    async fn serve(self) -> Result<()> {
+        let source_agent = self
+            .source_agent
+            .as_deref()
+            .map(parse_agent_name)
+            .transpose()?;
+        minos_chat_store::mcp_server::serve_stdio(minos_chat_store::mcp_server::McpServerConfig {
+            socket_path: self.socket_path,
+            room_id: self.room_id,
+            source_agent,
+            permissions: minos_chat_store::mcp_server::McpToolPermissions {
+                list_room_messages: !self.disable_list_room_messages,
+                delegate_to_agent: !self.disable_delegate_to_agent,
+                get_delegation_status: !self.disable_get_delegation_status,
+                cancel_delegation: !self.disable_cancel_delegation,
+                ask_user_question: !self.disable_ask_user_question,
+                check_user_feedback: !self.disable_check_user_feedback,
+                post_room_update: !self.disable_post_room_update,
+                react_to_message: !self.disable_react_to_message,
+            },
+        })
+        .await
+    }
 }
 
 fn parse_agent_name(s: &str) -> Result<AgentName> {
@@ -164,15 +245,101 @@ fn resolve_daemon_url(override_url: Option<String>) -> Result<String> {
     })
 }
 
+fn relay_config_from_env() -> minos_daemon::RelayConfig {
+    let backend_url = std::env::var("MINOS_BACKEND_URL")
+        .ok()
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        })
+        .unwrap_or_default();
+    minos_daemon::RelayConfig::new(backend_url)
+}
+
+fn default_mac_name() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Minos Host".into())
+}
+
+async fn start_managed_daemon_for_tui() -> Result<Arc<minos_daemon::DaemonHandle>> {
+    let minos_home = minos_daemon::paths::minos_home()?;
+    let local_state_path = minos_home.join("local-state.json");
+    let local_state = minos_daemon::LocalState::load_or_init(&local_state_path)?;
+    let discovery_path = minos_daemon::paths::run_dir()?.join("tui-daemon-rpc.json");
+    let group_chat_db_path = minos_home.join("daemon.sqlite");
+    let local_rpc_config = LocalRpcConfig {
+        addr: "127.0.0.1:0".parse()?,
+        discovery_path: discovery_path.clone(),
+        group_chat_db_path,
+    };
+    let handle = minos_daemon::DaemonHandle::start_with_local_rpc(
+        relay_config_from_env(),
+        local_state.self_device_id,
+        None,
+        None,
+        default_mac_name(),
+        Some(local_rpc_config),
+    )
+    .await?;
+    tracing::info!(
+        target: "minos_tui",
+        discovery_path = %discovery_path.display(),
+        "started managed daemon for TUI"
+    );
+    Ok(handle)
+}
+
+async fn connect_or_start_daemon_backend(
+    override_url: Option<String>,
+) -> Result<(
+    Arc<dyn crate::backend::AgentBackend>,
+    Option<Arc<minos_daemon::DaemonHandle>>,
+)> {
+    let explicit_url = override_url.is_some();
+    match resolve_daemon_url(override_url.clone()) {
+        Ok(url) => match crate::backend::DaemonBackend::connect(&url).await {
+            Ok(backend) => return Ok((Arc::new(backend), None)),
+            Err(error) if explicit_url => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_tui",
+                    error = %error,
+                    "failed to connect to discovered daemon; starting managed daemon"
+                );
+            }
+        },
+        Err(error) if explicit_url => return Err(error),
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_tui",
+                error = %error,
+                "daemon discovery unavailable; starting managed daemon"
+            );
+        }
+    }
+
+    let handle = start_managed_daemon_for_tui().await?;
+    let url = resolve_daemon_url(None)?;
+    let backend = crate::backend::DaemonBackend::connect(&url).await?;
+    Ok((Arc::new(backend), Some(handle)))
+}
+
 fn setup_terminal() -> Result<DefaultTerminal> {
     let mut terminal = ratatui::try_init()?;
-    execute!(std::io::stdout(), EnableMouseCapture)?;
+    execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
     terminal.clear()?;
     Ok(terminal)
 }
 
 fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
-    execute!(std::io::stdout(), DisableMouseCapture)?;
+    execute!(
+        std::io::stdout(),
+        DisableBracketedPaste,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     ratatui::try_restore()?;
     Ok(())
@@ -180,7 +347,12 @@ fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if let Some(command) = cli.command.take() {
+        match command {
+            SidecarCommand::MinosTeamworkMcp(args) => return args.serve().await,
+        }
+    }
     validate_backend_args(&cli)?;
     let workspace = std::fs::canonicalize(&cli.workspace).unwrap_or_else(|_| cli.workspace.clone());
     let log_path = logging::resolve_log_path(&workspace, cli.log_file.clone());
@@ -204,25 +376,31 @@ async fn main() -> Result<()> {
     }
 
     let max_instances = cli.max_instances.unwrap_or(3);
-    let backend: Arc<dyn crate::backend::AgentBackend> = match cli.backend {
-        BackendKind::Embedded => Arc::new(
-            crate::backend::EmbeddedBackend::new(
-                workspace.clone(),
-                max_instances,
-                std::time::Duration::from_secs(300),
-                mcp_permissions,
-            )
-            .await?,
+    let (backend, managed_daemon): (
+        Arc<dyn crate::backend::AgentBackend>,
+        Option<Arc<minos_daemon::DaemonHandle>>,
+    ) = match cli.backend {
+        BackendKind::Embedded => (
+            Arc::new(
+                crate::backend::EmbeddedBackend::new(
+                    workspace.clone(),
+                    max_instances,
+                    std::time::Duration::from_secs(300),
+                    mcp_permissions,
+                )
+                .await?,
+            ),
+            None,
         ),
-        BackendKind::Daemon => Arc::new(
-            crate::backend::DaemonBackend::connect(&resolve_daemon_url(cli.daemon_url)?).await?,
-        ),
+        BackendKind::Daemon => connect_or_start_daemon_backend(cli.daemon_url.clone()).await?,
     };
 
     let mut app = app::App::new(backend.clone(), cli.readonly, workspace.clone());
     app.init().await?;
 
     let mut terminal = setup_terminal()?;
+    let (frame_requester, mut frame_rx) = frame::frame_channel();
+    app.set_frame_requester(frame_requester);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx.clone());
@@ -245,16 +423,22 @@ async fn main() -> Result<()> {
     terminal.draw(|f| {
         ui::render_ui(f, app.ui());
     })?;
-
     loop {
-        if let Some(event) = rx.recv().await {
-            if app.handle_event(event).await {
+        tokio::select! {
+            event = rx.recv() => {
+                let Some(event) = event else {
+                    break;
+                };
+                let _ = app.handle_event(event).await;
+            }
+            frame = frame_rx.recv() => {
+                if frame.is_none() {
+                    break;
+                }
                 terminal.draw(|f| {
                     ui::render_ui(f, app.ui());
                 })?;
             }
-        } else {
-            break;
         }
 
         if app.should_quit() {
@@ -264,6 +448,9 @@ async fn main() -> Result<()> {
 
     app.shutdown().await;
     restore_terminal(&mut terminal)?;
+    if let Some(handle) = managed_daemon {
+        handle.stop().await?;
+    }
 
     Ok(())
 }
@@ -276,6 +463,7 @@ mod tests {
 
     fn test_cli(backend: BackendKind) -> Cli {
         Cli {
+            command: None,
             agent: None,
             workspace: ".".into(),
             readonly: false,

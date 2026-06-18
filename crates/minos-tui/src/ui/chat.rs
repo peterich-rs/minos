@@ -1,3 +1,4 @@
+use crate::render::Renderable;
 use crate::translation::{ChatItem, ChatSelection, ChatState, TextPart};
 use ratatui::{
     layout::Rect,
@@ -12,6 +13,9 @@ use super::theme::{
     ASSISTANT_LABEL, BORDER_FG, ERROR_STYLE, FOCUSED_BORDER, REASONING_STYLE, STREAMING_CURSOR,
     TOOL_ERROR, TOOL_NAME_STYLE, TOOL_SUCCESS, USER_LABEL,
 };
+
+mod cache;
+pub use cache::RenderCache;
 
 trait LineSink {
     fn push_line(&mut self, line: Line<'static>);
@@ -31,16 +35,19 @@ impl<'a> LineSink for VecSinkRef<'a> {
     }
 }
 
+#[cfg(test)]
 struct CountingSink {
     width: u16,
     count: usize,
 }
+#[cfg(test)]
 impl LineSink for CountingSink {
     fn push_line(&mut self, line: Line<'static>) {
         self.count += visual_line_count(&line, self.width);
     }
 }
 
+#[cfg(test)]
 fn visual_line_count(line: &Line<'static>, width: u16) -> usize {
     let width = usize::from(width.max(1));
     let mut rows = 1usize;
@@ -58,6 +65,63 @@ fn visual_line_count(line: &Line<'static>, width: u16) -> usize {
     }
 
     rows
+}
+
+pub enum AgentChatTarget<'a> {
+    Chat {
+        chat: &'a mut ChatState,
+        cache: &'a mut RenderCache,
+    },
+    Empty,
+}
+
+pub struct AgentChatRenderable<'a> {
+    target: AgentChatTarget<'a>,
+    focused: bool,
+}
+
+impl<'a> AgentChatRenderable<'a> {
+    pub fn new(target: AgentChatTarget<'a>, focused: bool) -> Self {
+        Self { target, focused }
+    }
+}
+
+impl Renderable for AgentChatRenderable<'_> {
+    fn render(&mut self, f: &mut Frame, area: Rect) {
+        match &mut self.target {
+            AgentChatTarget::Chat { chat, cache } => {
+                render_chat(f, area, chat, self.focused, cache);
+            }
+            AgentChatTarget::Empty => {
+                render_agent_chat_placeholder(f, area, self.focused);
+            }
+        }
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        match &self.target {
+            AgentChatTarget::Chat { chat, .. } => {
+                u16::try_from(chat.items.len().saturating_add(2)).unwrap_or(u16::MAX)
+            }
+            AgentChatTarget::Empty => 4,
+        }
+    }
+}
+
+pub fn render_agent_chat_placeholder(f: &mut Frame, area: Rect, focused: bool) {
+    let paragraph = Paragraph::new(
+        "No agent selected\n\nChoose an agent from the list to inspect its detailed transcript.",
+    )
+    .block(
+        super::theme::border_block()
+            .title("Agent Detail")
+            .border_style(if focused {
+                FOCUSED_BORDER
+            } else {
+                ratatui::style::Style::new().fg(BORDER_FG)
+            }),
+    );
+    f.render_widget(paragraph, area);
 }
 
 pub fn render_chat(
@@ -106,7 +170,7 @@ pub fn render_chat(
     );
 
     let max_scroll = cache
-        .total_lines
+        .total_lines()
         .saturating_sub(usize::from(inner.height))
         .min(usize::from(u16::MAX)) as u16;
     chat.update_max_scroll(max_scroll);
@@ -114,7 +178,7 @@ pub fn render_chat(
     let base_row = usize::from(chat.active_scroll());
     let height = usize::from(inner.height);
 
-    if cache.total_lines == 0 {
+    if cache.total_lines() == 0 {
         let lines = vec![Line::from(Span::styled(
             "No messages yet. Press `n` to start another agent, then type below.",
             REASONING_STYLE,
@@ -123,26 +187,16 @@ pub fn render_chat(
         return;
     }
 
-    let visible = cache.visible_window(&chat.items, base_row, height);
-
-    let mut all_lines: Vec<Line<'static>> = Vec::with_capacity(height + visible.items.len());
-    for (idx, item) in visible.items.iter().enumerate() {
-        if visible.start_item_index + idx > 0 {
-            all_lines.push(separator_line(inner.width));
-        }
-        build_item_lines(&mut VecSinkRef(&mut all_lines), item);
+    let mut visible_visual_lines = cache.visible_visual_lines(base_row, height);
+    if visible_visual_lines.is_empty() {
+        visible_visual_lines.push(VisualLine {
+            line: Line::from(Span::styled(
+                "No messages yet. Press `n` to start another agent, then type below.",
+                REASONING_STYLE,
+            )),
+            text: "No messages yet. Press `n` to start another agent, then type below.".to_owned(),
+        });
     }
-    if all_lines.is_empty() {
-        all_lines.push(Line::from(Span::styled(
-            "No messages yet. Press `n` to start another agent, then type below.",
-            REASONING_STYLE,
-        )));
-    }
-
-    let visual = visual_lines(all_lines, inner.width);
-    let skip = visible.line_offset_within_first_segment;
-    let mut visible_visual_lines: Vec<VisualLine> =
-        visual.into_iter().skip(skip).take(height).collect();
 
     apply_selection_with_offset(
         visible_visual_lines.as_mut_slice(),
@@ -186,6 +240,15 @@ fn build_lines(items: &[ChatItem], separator_width: u16) -> Vec<Line<'static>> {
     }
 
     sink.0
+}
+
+fn build_segment_visual_lines(item_index: usize, item: &ChatItem, width: u16) -> Vec<VisualLine> {
+    let mut lines = Vec::new();
+    if item_index > 0 {
+        lines.push(separator_line(width));
+    }
+    build_item_lines(&mut VecSinkRef(&mut lines), item);
+    visual_lines(lines, width)
 }
 
 fn separator_line(separator_width: u16) -> Line<'static> {
@@ -429,120 +492,6 @@ fn push_tool_detail_lines<S: LineSink>(sink: &mut S, label: &str, text: &str) {
     push_markdown_lines(sink, text, Style::default());
 }
 
-pub struct RenderCache {
-    indexed_thread_id: Option<String>,
-    item_starts: Vec<usize>,
-    total_lines: usize,
-    indexed_version: u64,
-    indexed_width: u16,
-}
-
-impl Default for RenderCache {
-    fn default() -> Self {
-        Self {
-            indexed_thread_id: None,
-            item_starts: Vec::new(),
-            total_lines: 0,
-            indexed_version: 0,
-            indexed_width: 0,
-        }
-    }
-}
-
-pub struct VisibleWindow<'a> {
-    pub items: &'a [ChatItem],
-    pub start_item_index: usize,
-    pub line_offset_within_first_segment: usize,
-}
-
-impl RenderCache {
-    pub fn rebuild_if_stale(
-        &mut self,
-        thread_id: &str,
-        items: &[ChatItem],
-        version: u64,
-        width: u16,
-    ) {
-        if self.is_valid(thread_id, version, width) {
-            return;
-        }
-        self.rebuild(items, width);
-        self.indexed_version = version;
-        self.indexed_width = width;
-        self.indexed_thread_id = Some(thread_id.to_owned());
-    }
-
-    pub(crate) fn is_valid(&self, thread_id: &str, version: u64, width: u16) -> bool {
-        self.indexed_thread_id.as_deref() == Some(thread_id)
-            && self.indexed_version == version
-            && self.indexed_width == width
-    }
-
-    fn rebuild(&mut self, items: &[ChatItem], width: u16) {
-        // item_starts[idx] = absolute visual line where item idx's rendered segment begins.
-        // For idx > 0, the separator IS the first line of the segment.
-        // This matches render_chat which pushes [separator, content...].
-        let mut item_starts = Vec::with_capacity(items.len());
-        let mut current_start = 0usize;
-
-        for (idx, item) in items.iter().enumerate() {
-            if idx > 0 {
-                // Separator before this item — it's the first line of this segment
-                item_starts.push(current_start);
-                current_start += 1; // separator line
-            } else {
-                item_starts.push(current_start);
-            }
-
-            let mut sink = CountingSink { width, count: 0 };
-            build_item_lines(&mut sink, item);
-            current_start += sink.count;
-        }
-
-        self.item_starts = item_starts;
-        self.total_lines = current_start;
-    }
-
-    pub fn visible_window<'a>(
-        &self,
-        items: &'a [ChatItem],
-        base_row: usize,
-        height: usize,
-    ) -> VisibleWindow<'a> {
-        if self.item_starts.is_empty() || items.is_empty() {
-            return VisibleWindow {
-                items: &[],
-                start_item_index: 0,
-                line_offset_within_first_segment: 0,
-            };
-        }
-
-        let end_row = base_row + height;
-
-        // Find first item whose start <= base_row
-        let start_item_index = self.item_starts.partition_point(|&start| start <= base_row);
-        let start_item_index = start_item_index.saturating_sub(1);
-
-        // Find last item that starts before end_row
-        let end_item_index = self
-            .item_starts
-            .partition_point(|&start| start < end_row)
-            .min(self.item_starts.len());
-
-        let item_count = end_item_index.saturating_sub(start_item_index).max(1);
-        let item_count = item_count.min(items.len().saturating_sub(start_item_index));
-
-        let item_start_abs = self.item_starts[start_item_index];
-        let line_offset_within_first_segment = base_row.saturating_sub(item_start_abs);
-
-        VisibleWindow {
-            items: &items[start_item_index..start_item_index + item_count],
-            start_item_index,
-            line_offset_within_first_segment,
-        }
-    }
-}
-
 fn is_markdown_rule(line: &str) -> bool {
     line.len() >= 3 && line.chars().all(|ch| matches!(ch, '-' | '*' | '_'))
 }
@@ -764,381 +713,5 @@ fn short_thread_id(thread_id: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::translation::ChatSelectionPoint;
-    use minos_domain::AgentName;
-
-    fn user_item(text: &str, is_streaming: bool) -> ChatItem {
-        ChatItem::UserMessage {
-            message_id: "m1".into(),
-            text_parts: vec![TextPart::Plain(text.into())],
-            is_streaming,
-        }
-    }
-
-    fn assistant_item(text: &str, is_streaming: bool) -> ChatItem {
-        ChatItem::AssistantText {
-            message_id: "m1".into(),
-            text_parts: vec![TextPart::Plain(text.into())],
-            is_streaming,
-        }
-    }
-
-    fn line_text(line: &Line<'_>) -> String {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect()
-    }
-
-    #[test]
-    fn user_streaming_item_renders_cursor() {
-        let lines = build_lines(&[user_item("sent", true)], 80);
-
-        assert!(lines.iter().any(|line| line_text(line).contains('▓')));
-    }
-
-    #[test]
-    fn assistant_streaming_item_renders_cursor() {
-        let lines = build_lines(&[assistant_item("thinking", true)], 80);
-
-        assert!(lines.iter().any(|line| line_text(line).contains('▓')));
-    }
-
-    #[test]
-    fn markdown_headings_lists_inline_code_and_fences_render_structurally() {
-        let lines = build_lines(
-            &[assistant_item(
-                "# Plan\n- run `cargo test`\n```rust\nfn main() {}\n```",
-                false,
-            )],
-            80,
-        );
-
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
-        assert!(rendered.iter().any(|line| line == "Plan"));
-        assert!(rendered.iter().any(|line| line.contains("• run ")));
-        assert!(rendered.iter().any(|line| line.contains("┌─ rust ─")));
-        assert!(rendered.iter().any(|line| line.contains("fn main() {}")));
-    }
-
-    #[test]
-    fn reasoning_renders_as_thinking_with_markdown() {
-        let lines = build_lines(
-            &[
-                ChatItem::Reasoning {
-                    message_id: "m1".into(),
-                    text: "# Inspect\n- read `app.rs`".into(),
-                    is_streaming: false,
-                },
-                assistant_item("final answer", false),
-            ],
-            80,
-        );
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
-
-        assert!(rendered.iter().any(|line| line == "Thinking"));
-        assert!(rendered.iter().any(|line| line == "Inspect"));
-        assert!(rendered.iter().any(|line| line.contains("• read ")));
-    }
-
-    #[test]
-    fn diff_lines_get_diff_styles_without_treating_markdown_bullets_as_diff() {
-        let lines = build_lines(
-            &[assistant_item(
-                "- markdown bullet\n```diff\n@@ -1 +1\n-old\n+new\n```",
-                false,
-            )],
-            80,
-        );
-
-        let bullet = lines
-            .iter()
-            .find(|line| line_text(line).contains("markdown bullet"))
-            .expect("bullet line");
-        assert!(line_text(bullet).starts_with("• "));
-        let added = lines
-            .iter()
-            .find(|line| line_text(line).contains("+new"))
-            .expect("added diff line");
-        assert_eq!(added.spans[1].style, super::super::theme::DIFF_ADD);
-    }
-
-    #[test]
-    fn non_diff_code_blocks_do_not_color_markdown_lists_as_diff() {
-        let lines = build_lines(
-            &[assistant_item("```text\n- markdown bullet\n```", false)],
-            80,
-        );
-
-        let bullet = lines
-            .iter()
-            .find(|line| line_text(line).contains("- markdown bullet"))
-            .expect("code line");
-        assert_eq!(bullet.spans[1].style, super::super::theme::MARKDOWN_CODE);
-    }
-
-    #[test]
-    fn tool_call_item_renders_status_and_summary() {
-        let lines = build_lines(
-            &[ChatItem::ToolCall {
-                message_id: "m1".into(),
-                tool_call_id: "tc1".into(),
-                name: "read_file".into(),
-                args_summary: "file=src/main.rs".into(),
-                args_detail: None,
-                output_summary: Some("ok".into()),
-                output_detail: None,
-                is_error: false,
-                is_expanded: false,
-                is_streaming: false,
-            }],
-            80,
-        );
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
-
-        assert!(rendered
-            .iter()
-            .any(|line| line.contains("Tool read_file") && line.contains("done")));
-    }
-
-    #[test]
-    fn selected_text_copies_after_wrapping_model() {
-        let mut chat = ChatState::new("t1".into(), AgentName::Codex);
-        chat.items.push(user_item("hello\nworld", false));
-        chat.selection = Some(ChatSelection {
-            anchor: ChatSelectionPoint { row: 1, col: 1 },
-            focus: ChatSelectionPoint { row: 2, col: 2 },
-        });
-
-        let cache = RenderCache::default();
-        assert_eq!(
-            selected_text(&chat, 80, &cache).as_deref(),
-            Some("ello\nwor")
-        );
-    }
-
-    #[test]
-    fn apply_selection_with_offset_highlights_correct_absolute_rows() {
-        let mut lines: Vec<VisualLine> = (0..10)
-            .map(|i| VisualLine {
-                line: Line::from(Span::raw(format!("line{i}"))),
-                text: format!("line{i}"),
-            })
-            .collect();
-
-        let selection = ChatSelection {
-            anchor: ChatSelectionPoint { row: 5, col: 0 },
-            focus: ChatSelectionPoint { row: 6, col: 5 },
-        };
-
-        // base_row=3, so absolute rows 5,6 = local rows 2,3
-        apply_selection_with_offset(&mut lines, Some(&selection), 3);
-        // Should not panic; lines 2 and 3 should have been processed
-        assert!(lines[2].line.spans.len() >= 1);
-        assert!(lines[3].line.spans.len() >= 1);
-    }
-
-    #[test]
-    fn counting_sink_matches_vec_sink_line_count() {
-        let items = vec![
-            ChatItem::AssistantText {
-                message_id: "m1".into(),
-                text_parts: vec![TextPart::Plain(
-                    "# Heading\n\nA long line that will definitely wrap at width 20: the quick brown fox jumps over the lazy dog repeatedly\n```\ncode line\ncode line 2\n```".into(),
-                )],
-                is_streaming: false,
-            },
-            ChatItem::ToolCall {
-                message_id: "m1".into(),
-                tool_call_id: "tc1".into(),
-                name: "bash".into(),
-                args_summary: "ls -la".into(),
-                args_detail: Some("detailed args".into()),
-                output_summary: Some("file1.txt\nfile2.txt".into()),
-                output_detail: None,
-                is_error: false,
-                is_expanded: true,
-                is_streaming: false,
-            },
-        ];
-
-        for width in [10u16, 20, 40, 80] {
-            // Build via VecSink, then wrap to count visual lines
-            let mut vec_sink = VecSink(Vec::new());
-            for (idx, item) in items.iter().enumerate() {
-                if idx > 0 {
-                    vec_sink.push_line(separator_line(width));
-                }
-                build_item_lines(&mut vec_sink, item);
-            }
-            let actual_count = visual_lines(vec_sink.0, width).len();
-
-            // Build via CountingSink
-            let mut counting_sink = CountingSink { width, count: 0 };
-            for (idx, item) in items.iter().enumerate() {
-                if idx > 0 {
-                    counting_sink.push_line(separator_line(width));
-                }
-                build_item_lines(&mut counting_sink, item);
-            }
-
-            assert_eq!(
-                counting_sink.count, actual_count,
-                "CountingSink mismatch at width {width}"
-            );
-        }
-    }
-
-    #[test]
-    fn counting_sink_counts_soft_wrapped_visual_lines() {
-        let text = "abcdefghijklmno"; // 15 chars, wraps to 2 rows at width 10
-        let mut vec_sink = VecSink(Vec::new());
-        vec_sink.push_line(Line::from(Span::raw(text)));
-        let wrapped = visual_lines(vec_sink.0, 10);
-        assert_eq!(wrapped.len(), 2);
-
-        let mut counting_sink = CountingSink {
-            width: 10,
-            count: 0,
-        };
-        counting_sink.push_line(Line::from(Span::raw(text)));
-        assert_eq!(counting_sink.count, 2);
-    }
-
-    #[test]
-    fn render_cache_rebuilds_on_version_change() {
-        let mut cache = RenderCache::default();
-        let items = vec![ChatItem::AssistantText {
-            message_id: "m1".into(),
-            text_parts: vec![TextPart::Plain("hello world".into())],
-            is_streaming: false,
-        }];
-        cache.rebuild_if_stale("t1", &items, 1, 80);
-        assert!(cache.is_valid("t1", 1, 80));
-        assert!(!cache.is_valid("t1", 2, 80));
-        cache.rebuild_if_stale("t1", &items, 2, 80);
-        assert!(cache.is_valid("t1", 2, 80));
-    }
-
-    #[test]
-    fn render_cache_rebuilds_on_width_change() {
-        let mut cache = RenderCache::default();
-        let items = vec![ChatItem::AssistantText {
-            message_id: "m1".into(),
-            text_parts: vec![TextPart::Plain("hello world".into())],
-            is_streaming: false,
-        }];
-        cache.rebuild_if_stale("t1", &items, 1, 80);
-        assert!(cache.is_valid("t1", 1, 80));
-        assert!(!cache.is_valid("t1", 1, 40));
-    }
-
-    #[test]
-    fn render_cache_rebuilds_on_thread_id_change() {
-        let mut cache = RenderCache::default();
-        let items = vec![ChatItem::AssistantText {
-            message_id: "m1".into(),
-            text_parts: vec![TextPart::Plain("hello world".into())],
-            is_streaming: false,
-        }];
-        cache.rebuild_if_stale("t1", &items, 1, 80);
-        assert!(cache.is_valid("t1", 1, 80));
-        assert!(!cache.is_valid("t2", 1, 80));
-    }
-
-    #[test]
-    fn visible_window_returns_items_covering_scroll_range() {
-        let items = vec![
-            ChatItem::AssistantText {
-                message_id: "m1".into(),
-                text_parts: vec![TextPart::Plain("line1".into())],
-                is_streaming: false,
-            },
-            ChatItem::AssistantText {
-                message_id: "m2".into(),
-                text_parts: vec![TextPart::Plain("line2".into())],
-                is_streaming: false,
-            },
-            ChatItem::AssistantText {
-                message_id: "m3".into(),
-                text_parts: vec![TextPart::Plain("line3".into())],
-                is_streaming: false,
-            },
-        ];
-        let mut cache = RenderCache::default();
-        cache.rebuild_if_stale("t1", &items, 1, 80);
-        let window = cache.visible_window(&items, 3, 3);
-        assert!(window.start_item_index <= 2);
-        assert!(!window.items.is_empty());
-    }
-
-    #[test]
-    fn visible_window_handles_scroll_at_boundary() {
-        let items = vec![ChatItem::AssistantText {
-            message_id: "m1".into(),
-            text_parts: vec![TextPart::Plain("line1".into())],
-            is_streaming: false,
-        }];
-        let mut cache = RenderCache::default();
-        cache.rebuild_if_stale("t1", &items, 1, 80);
-        let window = cache.visible_window(&items, 0, 10);
-        assert_eq!(window.start_item_index, 0);
-        assert_eq!(window.line_offset_within_first_segment, 0);
-    }
-
-    #[test]
-    fn visible_window_handles_empty_items() {
-        let cache = RenderCache::default();
-        let items: Vec<ChatItem> = vec![];
-        let window = cache.visible_window(&items, 0, 10);
-        assert!(window.items.is_empty());
-    }
-
-    #[test]
-    fn render_cache_separator_offset_matches_full_build() {
-        // 3 items, each producing [Agent] label + content = 2 content lines.
-        // Full build: [Agent, hello, sep, Agent, world, sep, Agent, line3] = 8 visual lines.
-        // item_starts should be [0, 2, 5] where item 1 start includes its separator.
-        let items = vec![
-            ChatItem::AssistantText {
-                message_id: "m1".into(),
-                text_parts: vec![TextPart::Plain("hello".into())],
-                is_streaming: false,
-            },
-            ChatItem::AssistantText {
-                message_id: "m2".into(),
-                text_parts: vec![TextPart::Plain("world".into())],
-                is_streaming: false,
-            },
-            ChatItem::AssistantText {
-                message_id: "m3".into(),
-                text_parts: vec![TextPart::Plain("line3".into())],
-                is_streaming: false,
-            },
-        ];
-
-        let mut cache = RenderCache::default();
-        cache.rebuild_if_stale("t1", &items, 1, 80);
-
-        // Cross-check total_lines against full build
-        let full_lines = build_lines(&items, 80);
-        let full_visual = visual_lines(full_lines, 80);
-        assert_eq!(
-            cache.total_lines,
-            full_visual.len(),
-            "cache total_lines must match full build visual line count"
-        );
-
-        // Cross-check item_starts: each item_start should point to where
-        // [separator?, content...] begins in the full build
-        assert_eq!(cache.item_starts, vec![0, 2, 5]);
-
-        // Scroll to item 1's content (row 3 = [Agent] for item 1)
-        // item_starts[1] = 2 (separator), line_offset = 3 - 2 = 1
-        let window = cache.visible_window(&items, 3, 2);
-        assert_eq!(window.start_item_index, 1);
-        assert_eq!(window.line_offset_within_first_segment, 1);
-    }
-}
+#[path = "chat_tests.rs"]
+mod tests;

@@ -19,6 +19,7 @@ minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-cli-detect = { path = "../minos-cli-detect", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-daemon = { path = "../minos-daemon", version = "0.1.0" }
 ratatui = "0.29"
 crossterm = "0.28"
 tokio = { workspace = true }

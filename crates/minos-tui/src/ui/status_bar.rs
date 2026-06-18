@@ -1,4 +1,5 @@
 use crate::backend::BackendConnectionState;
+use crate::render::Renderable;
 use minos_domain::{AgentDescriptor, AgentStatus};
 use ratatui::{
     layout::Rect,
@@ -28,6 +29,30 @@ impl StatusBarState {
 
     pub fn update_backend_state(&mut self, state: BackendConnectionState) {
         self.backend_state = state;
+    }
+}
+
+pub struct StatusBarRenderable<'a> {
+    state: &'a StatusBarState,
+    flash_active: bool,
+}
+
+impl<'a> StatusBarRenderable<'a> {
+    pub fn new(state: &'a StatusBarState, flash_active: bool) -> Self {
+        Self {
+            state,
+            flash_active,
+        }
+    }
+}
+
+impl Renderable for StatusBarRenderable<'_> {
+    fn render(&mut self, f: &mut Frame, area: Rect) {
+        render_status_bar(f, area, self.state, self.flash_active);
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        1
     }
 }
 

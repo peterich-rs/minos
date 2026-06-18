@@ -14,7 +14,8 @@ use minos_protocol::{
     InterruptThreadRequest, ListClisResponse, LocalGroupChatMessage, LocalIngestFrame,
     LocalManagerEvent, LocalThreadSnapshot, PauseReason as ProtoPauseReason, ReadGroupChatParams,
     ReadThreadParams, ReadThreadRawHistoryResponse, RespondOpencodePermissionRequest,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState,
+    RespondOpencodeQuestionRequest, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    ThreadState as ProtoThreadState,
 };
 use serde_json::Value;
 use std::path::PathBuf;
@@ -246,6 +247,24 @@ impl AgentBackend for DaemonBackend {
             .request::<(), _>("minos_local_respond_opencode_permission", [request])
             .await
             .context("RPC minos_local_respond_opencode_permission failed")?;
+        Ok(())
+    }
+
+    async fn respond_opencode_question(
+        &self,
+        thread_id: &str,
+        question_id: &str,
+        answers: Vec<Vec<String>>,
+    ) -> Result<()> {
+        let request = RespondOpencodeQuestionRequest {
+            thread_id: thread_id.to_owned(),
+            question_id: question_id.to_owned(),
+            answers,
+        };
+        self.client
+            .request::<(), _>("minos_local_respond_opencode_question", [request])
+            .await
+            .context("RPC minos_local_respond_opencode_question failed")?;
         Ok(())
     }
 

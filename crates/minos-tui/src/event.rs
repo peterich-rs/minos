@@ -20,6 +20,7 @@ pub enum AppEvent {
     },
     McpToolCall(McpToolEvent),
     Key(KeyEvent),
+    Paste(String),
     Mouse(MouseEvent),
     #[allow(dead_code)]
     Resize(u16, u16),
@@ -80,6 +81,11 @@ pub fn spawn_terminal_pump(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
                     Ok(true) => match crossterm::event::read() {
                         Ok(crossterm::event::Event::Key(key)) => {
                             if tx.send(AppEvent::Key(key)).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(crossterm::event::Event::Paste(text)) => {
+                            if tx.send(AppEvent::Paste(text)).is_err() {
                                 break;
                             }
                         }

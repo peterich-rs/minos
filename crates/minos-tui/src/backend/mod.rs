@@ -59,6 +59,13 @@ pub trait AgentBackend: Send + Sync {
         response: &str,
     ) -> Result<()>;
 
+    async fn respond_opencode_question(
+        &self,
+        thread_id: &str,
+        question_id: &str,
+        answers: Vec<Vec<String>>,
+    ) -> Result<()>;
+
     async fn interrupt_thread(&self, thread_id: &str) -> Result<()>;
 
     async fn close_thread(&self, thread_id: &str) -> Result<()>;

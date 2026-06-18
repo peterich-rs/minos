@@ -1,3 +1,4 @@
+use crate::render::Renderable;
 use crate::ui::ThreadEntry;
 use minos_agent_runtime::state_machine::status_str;
 use minos_domain::AgentName;
@@ -18,6 +19,50 @@ fn agent_label(agent: AgentName) -> &'static str {
         AgentName::Claude => "claude",
         AgentName::Gemini => "gemini",
         AgentName::Opencode => "opencode",
+    }
+}
+
+pub struct ThreadListRenderable<'a> {
+    title: &'a str,
+    threads: &'a [ThreadEntry],
+    selected: Option<usize>,
+    list_state: &'a mut ListState,
+    focused: bool,
+}
+
+impl<'a> ThreadListRenderable<'a> {
+    pub fn new(
+        title: &'a str,
+        threads: &'a [ThreadEntry],
+        selected: Option<usize>,
+        list_state: &'a mut ListState,
+        focused: bool,
+    ) -> Self {
+        Self {
+            title,
+            threads,
+            selected,
+            list_state,
+            focused,
+        }
+    }
+}
+
+impl Renderable for ThreadListRenderable<'_> {
+    fn render(&mut self, f: &mut Frame, area: Rect) {
+        render_thread_list(
+            f,
+            area,
+            self.title,
+            self.threads,
+            self.selected,
+            self.list_state,
+            self.focused,
+        );
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        u16::try_from(self.threads.len().saturating_add(2)).unwrap_or(u16::MAX)
     }
 }
 

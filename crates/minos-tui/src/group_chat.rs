@@ -14,6 +14,8 @@ pub struct GroupChatStore {
     room_id: String,
     room_title: String,
     workspace_root: String,
+    #[cfg(test)]
+    fail_appends: bool,
 }
 
 impl GroupChatStore {
@@ -38,6 +40,19 @@ impl GroupChatStore {
             room_id: "room-test".into(),
             room_title: "test".into(),
             workspace_root: "/tmp/test".into(),
+            fail_appends: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn failing() -> Self {
+        Self {
+            db_path: None,
+            legacy_jsonl_path: None,
+            room_id: "room-test".into(),
+            room_title: "test".into(),
+            workspace_root: "/tmp/test".into(),
+            fail_appends: true,
         }
     }
 
@@ -48,6 +63,8 @@ impl GroupChatStore {
             room_id: "room-disabled".into(),
             room_title: "disabled".into(),
             workspace_root: String::new(),
+            #[cfg(test)]
+            fail_appends: false,
         }
     }
 
@@ -101,6 +118,11 @@ impl GroupChatStore {
         &self,
         message: LocalGroupChatMessage,
     ) -> anyhow::Result<LocalGroupChatMessage> {
+        #[cfg(test)]
+        if self.fail_appends {
+            anyhow::bail!("injected group chat append failure");
+        }
+
         let Some(store) = self.open().await? else {
             let mut message = message;
             if message.message_id.is_empty() {
@@ -111,6 +133,29 @@ impl GroupChatStore {
         self.migrate_legacy_jsonl_if_needed(&store).await?;
         let message = store
             .append_message(&self.room_id, NewChatMessage::from(message))
+            .await?;
+        Ok(message.into())
+    }
+
+    pub async fn upsert(
+        &self,
+        message: LocalGroupChatMessage,
+    ) -> anyhow::Result<LocalGroupChatMessage> {
+        #[cfg(test)]
+        if self.fail_appends {
+            anyhow::bail!("injected group chat append failure");
+        }
+
+        let Some(store) = self.open().await? else {
+            let mut message = message;
+            if message.message_id.is_empty() {
+                message.message_id = "volatile-group-message".into();
+            }
+            return Ok(message);
+        };
+        self.migrate_legacy_jsonl_if_needed(&store).await?;
+        let message = store
+            .upsert_message_by_id(&self.room_id, NewChatMessage::from(message))
             .await?;
         Ok(message.into())
     }
