@@ -101,7 +101,8 @@
 2. WebSocket 升级: `/ws/host?ticket=<ticket>`
 3. 自动订阅 `host:<installation_id>` topic
 4. 接收 host 命令（start_agent, approval_decision 等）
-5. 回送: `host_command_ack`, `host_command_result`, `HostStreamEvent`
+5. 回送命令结果: `host_command_ack`, `host_command_result`
+6. Agent 输出上行: 在线发送 `HostIngestLiveBatch`；断线重连后先发送 `HostGapManifest`，历史正文由后端通过 `PullIngestRange` 主动拉取。
 
 ### 连接策略
 
@@ -134,10 +135,12 @@
 
 ### Agent 执行与流式传输
 
-1. daemon 运行 agent，通过 `/ws/host` 回传 `HostStreamEvent`
+1. daemon 运行 agent，将 `RawIngest` 降为 canonical `IngestChunk`，预分配 host-local `seq`。
+2. daemon 同时批量写本地 SQLite，并在 WS 在线时通过 `/ws/host` 发送 `HostIngestLiveBatch`。本地写库不等待 relay outbound queue。
 2. 后端:
-   - INSERT 到 `agent_turn_events(turn_id, event_seq, kind, payload_json)`
-   - 通过 Redis pub/sub 发布 ephemeral `StreamEvent`
+   - 按 `(host_device_id, thread_id, seq)` 幂等写入 `raw_events`
+   - 同 key 同 checksum 视为重复；同 key 不同 checksum 是不变量错误
+   - 将 chunk 内 projection 发布为 `StreamEvent`
    - Client gateway 推送到订阅客户端
 3. Agent 轮次完成时:
    - daemon 回送 `host_command_result`
@@ -154,6 +157,16 @@
    - 后端转换审批状态，创建 `host_command`（method=`approval.decision`）通知 host
 3. 超时: `ApprovalTimeoutJob` 检测过期 deadline → 自动解析为 Timeout
 4. 断连: `StaleSessionSweeperJob` 检测所有账户安装离线 → 解析为 Disconnected
+
+### opencode question 流程
+
+1. opencode 需要用户在多个选项中选择或填写答案时发出 `question.asked`
+2. daemon 将该事件作为 `Raw(kind="opencode/question.asked")` projection 上行，TUI/mobile 展示问题与选项
+3. 用户提交答案:
+   - TUI daemon 模式调用 `minos_local_respond_opencode_question`
+   - mobile 调用 `POST /v1/agent-sessions/respond-opencode-question`
+4. 后端把 mobile 请求转换为 host command `minos_respond_opencode_question`
+5. daemon 调用 `AgentManager.respond_opencode_question()`，opencode driver POST `/question/{requestID}/reply`，body 为 `{ "answers": [[...]] }`
 
 ### 读取历史（冷回放）
 
@@ -214,10 +227,12 @@ TUI 支持多 agent 在群聊中协作:
 ### Host daemon 重连
 
 - 指数退避（1s → 30s 封顶）
-- Reconciliator 处理 `IngestCheckpoint`：
-  - 比较后端 `last_seq_per_thread` 与本地 `threads.last_seq`
-  - 从本地 SQLite 回放缺失事件
-  - 本地有缺口时从 JSONL 恢复
+- WS 断线期间 Agent 继续输出，本地 SQLite 继续写入；上传通道不保留正文 payload backlog，只记录 backend ack 水位和本地 dirty range。
+- WS 重连并订阅 `host:<id>` 后，host 先发 `HostGapManifest` metadata：
+  - 每个 thread 的 `backend_acked_seq`、`local_from_seq..local_to_seq`
+  - bytes、event_count、first/last timestamp、running 状态
+- 后端记录“history partial, available_on_host=true”，并立即按 manifest range 通过同一条 host WS 发送 `PullIngestRange`。
+- host 从本地 SQLite 读取 range，回 `HostIngestPullResponse`；后端持久化后只按连续 raw event 前缀发送 `PullAck`。
 
 ---
 
@@ -240,18 +255,20 @@ TUI 支持多 agent 在群聊中协作:
   → Host Gateway 推送到 daemon WS
 
 [Mac daemon]
-  WS 接收 HostStreamEvent → AgentGlue → AgentManager
+  WS 接收 host_command → AgentGlue → AgentManager
   → 写入 stdin / JSON-RPC 到 agent 子进程
   → Agent 输出流 → RawIngest(raw bytes / artifact ref)
-  → EventWriter 分配 seq、artifact 化大 raw body、生成 UiEventMessage projection
-  → SQLite 写入 events(body metadata + projection_json)
-  → 转发 V2 ClientFrame::HostStreamEvent
+  → IngestCoalescer 分配 seq、生成 projection/checksum/IngestChunk
+  → EventWriter 批量写 SQLite events(body metadata + projection_json)
+  → LiveUploadWorker 在线发送 ClientFrame::HostIngestLiveBatch
+  → 断线时只记录 gap，重连发送 HostGapManifest
 
 [后端]
-  接收 HostStreamEvent
-  → INSERT raw_events / agent_turn_events
+  接收 HostIngestLiveBatch
+  → 幂等 INSERT raw_events
   → 发布 projection StreamEvent 到 agent_session:<id> topic
   → Client Gateway 推送到手机 WS
+  → 需要历史缺口时发送 PullIngestRange，host 回 HostIngestPullResponse
 
 [手机 Flutter UI]
   UiEventFrame (TextDelta/ToolCallPlaced/etc. with DisplayPayload)

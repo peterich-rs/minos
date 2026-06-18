@@ -38,6 +38,7 @@ lib/
     thread_commands.dart             # 命令门面
     root_route_decision.dart         # 根路由决策
   ui/                                # 功能组织 UI
+    core/widgets/                    # 共享交互组件（审批、Agent question sheet 等）
     features/
       shell/                         # 应用壳（Tab 导航）
       chat/                          # Agent 对话
@@ -134,6 +135,7 @@ Rust crate (minos-mobile::MobileClient)
 - **社交**: `conversations`, `sendChatMessage`, `friends`, `friendRequests`, `searchUsers`
 - **项目**: `createProject`, `listProjects`, `updateProject`, `deleteProject`
 - **线程**: `listThreads`, `readThread`, `sendUserMessage`, `interruptThread`, `closeThread`
+- **Agent 请求**: `sendApprovalDecision`, `respondOpencodeQuestion`
 - **实时**: `subscribeState`, `subscribeUiEvents`, `subscribeSocialEvents`
 - **生命周期**: `notifyForegrounded`, `notifyBackgrounded`
 
@@ -205,6 +207,7 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
 - 基于 seq 水位线去重
 - `keepAlive: true`，导航离开不丢失状态
 - `UiEventMessage` 文本字段使用 `DisplayPayload`，Dart 通过 `display_payload_preview.dart` 渲染 inline/windowed preview；artifact 引用保留在线程归属内，后续完整展开走 range read API。
+- `Raw(kind="opencode/question.asked")` 由 `ThreadViewPage` 解析为 `AgentQuestionRequestData`，通过 `agent_question_sheet.dart` 展示问题和选项；提交后走 `ThreadCommands.respondOpencodeQuestion()` → `ThreadRepository` → `MinosCore` → FRB → `MobileClient.respond_opencode_question()` → `POST /v1/agent-sessions/respond-opencode-question`。
 
 ### Agent 配置文件
 
@@ -271,4 +274,18 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
           → ThreadEvents [Dart]
             → 追加事件列表
               → ThreadViewPage 渲染 DisplayPayload preview 并重建 UI
+```
+
+### Agent question 数据流
+
+```
+opencode question.asked
+  → daemon projection Raw(kind="opencode/question.asked")
+  → backend StreamEvent → mobile UiEventFrame
+  → ThreadViewPage.showAgentQuestionSheet()
+  → 用户选择/输入答案
+  → ThreadCommands.respondOpencodeQuestion()
+  → POST /v1/agent-sessions/respond-opencode-question
+  → host command minos_respond_opencode_question
+  → daemon AgentGlue → AgentManager → opencode POST /question/{requestID}/reply
 ```

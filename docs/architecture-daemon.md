@@ -120,8 +120,12 @@ DaemonInner {
 
 桥接三个关注点：
 1. **`AgentManager`**（来自 `minos-agent-runtime`）：多工作区 CLI 实例管理
-2. **`EventWriter`**：单写者 SQLite + relay 转发
+2. **`IngestCoalescer` + `EventWriter`**：预分配 seq/projection，单写者 SQLite 本地持久化
 3. **Watch channel**：镜像最新线程状态
+
+Codex app-server 启动分两段超时：initialize handshake 默认 5 秒，`thread/start` 默认 30 秒。后者独立配置为 `AgentRuntimeConfig.thread_start_timeout`，因为线程创建会受 workspace 初始化、skills/MCP 注入和 Codex 冷启动状态影响。
+
+Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先使用 `MINOS_TEAMWORK_MCP_BIN` 或同目录 `minos-teamwork-mcp`；找不到时，`minos-daemon __minos-teamwork-mcp` hidden 子命令可直接作为 stdio MCP server。TUI 托管 daemon 时当前可执行文件是 `minos-tui`，同一逻辑会回落到 `minos-tui __minos-teamwork-mcp`，因此 `minos-tui --backend daemon` 不要求用户额外构建 MCP bin。
 
 ### 支持的 Agent
 
@@ -137,6 +141,7 @@ DaemonInner {
 | `dispatch_message()` | 自动 start-or-resume + send |
 | `resolve_approval()` | 响应审批请求 |
 | `respond_opencode_permission()` | 响应 opencode 权限请求 |
+| `respond_opencode_question()` | 回答 opencode question 请求 |
 | `interrupt_thread()` | 中断运行中的线程 |
 | `close_thread()` | 优雅关闭线程 |
 | `delete_thread()` | 删除线程 + 事件 |
@@ -158,29 +163,39 @@ Starting → Idle → Running { turn_started_at_ms }
 ### 事件持久化流程
 
 1. `AgentManager` 发出 `RawIngest`。`RawIngest` 不再以 `serde_json::Value` 作为主数据面，而是携带 `RawBody::InlineBytes` 或 `RawBody::Artifact`。
-2. `AgentGlue` bridge 转发到 `EventWriter::write_live()`。
-3. `EventWriter` 批量写入（5ms 窗口，最大 100 条），在 SQLite 事务内分配每线程单调 `seq`。生产者不拥有 seq。
+2. `AgentGlue` bridge 先交给 `IngestCoalescer`，按线程读取本地 `last_seq`，在本地/live fanout 之前生成稳定 `seq`、projection、checksum 和 canonical `IngestChunk`。
+3. `AgentGlue` 将同一个 `IngestChunk` 分两路处理：`EventWriter::write_chunk()` 批量写 SQLite；`IngestSyncHandle::submit_live()` 非阻塞尝试实时上传。
 4. 大于等于 `INLINE_RAW_BODY_THRESHOLD`（16 KiB）的 raw body 写入本地 `ArtifactStore`，SQLite `events` 行只保存 artifact metadata；小 body 以内联 bytes 保存。
-5. `EventWriter` 用 `minos-ui-protocol` translator 生成 `UiEventMessage` projection，并把 `projection_json` 与 raw body metadata 一起持久化。
-6. SQLite 提交后，daemon 本地订阅者收到 `LocalIngestFrame { seq, ui_events }`，relay 收到 V2 `ClientFrame::HostStreamEvent` payload（raw body metadata + projection）。
+5. `EventWriter` 只负责本地事务提交和 `projection_json` 持久化，不再构造 relay frame，也不 await relay outbound queue。
+6. SQLite 提交后，daemon 本地订阅者收到 `LocalIngestFrame { seq, ui_events }`。WS 在线时，live sync worker 发送 `ClientFrame::HostIngestLiveBatch`；WS 断开或 live 队列满时只记录 dirty range，不保留 payload backlog。
 
 ## 本地存储 (`src/store/`)
 
-### SQLite Schema（3 个 migration）
+### SQLite Schema（5 个 migration）
 
 - **0001**: `schema_version`, `workspaces`, `threads`, `events` 表
 - **0002**: `projects` 表，`threads` 增加 `project_id`
 - **0003**: `chat_rooms`, `chat_messages`, `chat_agent_sessions`, `chat_mcp_commands`
+- **0004**: teamwork MCP 状态
+- **0005**: `ingest_sync_state`，记录 backend ack 水位和 host 本地 dirty range
 
 ### `EventWriter` (`src/store/event_writer.rs`)
 
 - 单写者任务保证每线程单调 `seq`
 - 5ms 批量窗口提高吞吐
 - 等待父线程行存在（指数退避重试）
-- SQLite 提交后转发到 relay 和本地 projection subscribers
+- 只写本地 SQLite，不转发 relay，不受 WS 背压影响
 - 持久化 `body_kind/body_inline/artifact_*`，避免把大 JSON DOM 在通道中重复 clone
 - 持久化 `projection_json`，TUI replay 不再依赖重新读取完整 raw payload
 - 区分 `live` 和 `jsonl_recovery` 事件来源
+
+### Ingest Sync (`src/ingest_sync.rs`)
+
+- 在线时按 5ms/50 条窗口把 live `IngestChunk` 打包为 `HostIngestLiveBatch`，使用非阻塞 enqueue；队列满时标记 dirty range。
+- 断线期间 Agent 继续输出并写本地 SQLite，上传通道不堆正文 payload，只更新 `ingest_sync_state`。
+- 重连并订阅 host topic 后发送 `HostGapManifest`，只包含 thread、seq range、bytes、event_count、时间范围和 running 状态。
+- backend 接受 `HostGapManifest` 后通过同一条 WS 发送 `PullIngestRange`，host 从 SQLite 读取 range 后回 `HostIngestPullResponse`。
+- 收到 `HostIngestAck` / `PullAck` 后推进本地 backend ack 水位。
 
 ### ArtifactStore (`src/store/artifacts.rs`)
 
@@ -200,15 +215,7 @@ Starting → Idle → Running { turn_started_at_ms }
 ## JSONL 恢复 (`src/jsonl_recover.rs`)
 
 - 读取 `~/.codex/sessions/{codex_session_id}.jsonl` 恢复缺失事件
-- 由 `Reconciliator` 在检测到间隙时触发
-
-## Reconciliator (`src/reconciliator.rs`)
-
-- 处理后端的 `IngestCheckpoint` 帧
-- 比较后端的 `last_seq_per_thread` 与本地 `threads.last_seq`
-- 从本地 DB 回放缺失事件到 relay
-- 本地 DB 有缺口时委托给 `jsonl_recover`
-- 优先处理活跃线程（running > idle > suspended）
+- 当前作为显式本地修复工具保留；生产同步安全机制是 `HostGapManifest` + `PullIngestRange`，不是旧 checkpoint reconciler。
 
 ## 配对 QR 生成 (`src/relay_pairing.rs`)
 
@@ -224,7 +231,7 @@ Starting → Idle → Running { turn_started_at_ms }
 
 `RpcServerImpl` 实现 `MinosRpcServer` trait，路由后端转发的命令。
 
-支持的方法: `health`, `list_clis`, `list_host_skills`, `write_host_skill_config`, `start_agent`, `send_user_message`, `approval_decision`, `interrupt_thread`, `close_thread`, `list_threads`, `get_thread`
+支持的方法: `health`, `list_clis`, `list_host_skills`, `write_host_skill_config`, `start_agent`, `send_user_message`, `approval_decision`, `respond_opencode_question`, `interrupt_thread`, `close_thread`, `list_threads`, `get_thread`
 
 ### `invoke_host_command()` — 分发函数
 
@@ -234,7 +241,7 @@ Starting → Idle → Running { turn_started_at_ms }
 
 `LocalRpcImpl` 实现 `LocalDaemonRpcServer` trait，服务 TUI。
 
-额外方法: `delete_thread`, `resume_thread`, `read_thread_raw_history`, `read_group_chat`
+额外方法: `delete_thread`, `resume_thread`, `respond_opencode_question`, `read_thread_raw_history`, `read_group_chat`
 订阅: `subscribe_ingest()` 和 `subscribe_manager_events()`
 
 ### 发现机制
@@ -249,10 +256,11 @@ main.rs
         ├── RelayClient (relay_client.rs)
         │     ├── RelayHttpClient (relay_http.rs) — HTTP 控制面
         │     ├── RpcServerImpl (rpc_server.rs) — 路由转发命令
-        │     └── Reconciliator (reconciliator.rs) — 检查点对账
+        │     └── IngestSyncHandle (ingest_sync.rs) — ack/pull/manifest 路由
         ├── AgentGlue (agent.rs)
         │     ├── AgentManager (minos-agent-runtime) — CLI 进程管理
-        │     ├── EventWriter (store/event_writer.rs) — SQLite 写入 + relay 转发
+        │     ├── IngestCoalescer (ingest_coalescer.rs) — seq/projection/chunk 生成
+        │     ├── EventWriter (store/event_writer.rs) — SQLite 本地写入
         │     └── LocalStore (store/mod.rs) — SQLite 连接池
         ├── LocalRpcImpl (local_rpc.rs) — TUI JSON-RPC 服务器
         ├── Subscription (subscription.rs) — UniFFI observer 桥接

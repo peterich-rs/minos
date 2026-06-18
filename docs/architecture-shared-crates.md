@@ -117,6 +117,7 @@
 
 | 类型 | 描述 |
 |------|------|
+| `AgentRuntimeConfig` | runtime 配置。Codex initialize handshake 默认 5 秒，`thread/start` 默认 30 秒（`thread_start_timeout`），避免冷启动或 workspace 初始化偏慢时误判失败。Teamwork MCP command 优先使用 `MINOS_TEAMWORK_MCP_BIN` / 同目录 `minos-teamwork-mcp`，开发态可回落到 `minos-tui` 或 `minos-daemon` 的 `__minos-teamwork-mcp` hidden sidecar |
 | `AgentManager` | 多工作区 agent 管理器。每个工作区一个 `AppServerInstance`，N 个 `ThreadHandle` |
 | `ThreadState` | Starting, Idle, Running, Suspended, Resuming, Closed |
 | `PauseReason` | UserInterrupt, CodexCrashed, DaemonRestart, InstanceReaped |
@@ -153,14 +154,14 @@
 
 | 类型 | 描述 |
 |------|------|
-| `ChatStore` | 主结构（SqlitePool）: open, ensure_room, append_message, list_messages |
+| `ChatStore` | 主结构（SqlitePool）: open, ensure_room, append_message, upsert_message_by_id, list_messages |
 | `ChatRoom` | 聊天房间（room_id, title, workspace_root） |
 | `ChatMessage` | 消息（seq, message_id, sender_role, event_type, text） |
 | `ChatAgentSession` | Agent-房间绑定 |
 | `ChatMcpCommand` | MCP 命令队列（MentionAgent/MentionUser） |
 | `ChatMessagePage` | 分页响应 |
 
-**数据库**: SQLite WAL 模式。表: chat_rooms, chat_messages, chat_agent_sessions, chat_mcp_commands
+**数据库**: SQLite WAL 模式。表: chat_rooms, chat_messages, chat_agent_sessions, chat_mcp_commands。`chat_messages.message_id` 是群聊消息的稳定 upsert key；TUI 对每个 thread turn 只创建一条流式 agent result，后续增量更新原行 body，不推进 sequence。
 
 ---
 

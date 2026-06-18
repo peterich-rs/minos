@@ -20,20 +20,20 @@ minos-tui [OPTIONS]
 | `-w, --workspace <PATH>` | 工作目录（默认 `.`） |
 | `--readonly` | 禁用消息发送 |
 | `--backend <KIND>` | `embedded`（默认）或 `daemon` |
-| `--daemon-url <URL>` | Daemon WS URL（或从 `~/.minos/run/tui-daemon-rpc.json` 自动发现） |
+| `--daemon-url <URL>` | Daemon WS URL（显式外部 daemon；未提供时先从 `~/.minos/run/tui-daemon-rpc.json` 自动发现，发现失败则由 TUI 托管本地 daemon） |
 
 ## 启动序列 (`src/main.rs`)
 
 1. 解析 CLI 参数
 2. 解析工作空间路径，初始化文件日志
 3. 安装 teamwork skills 到所有 agent 配置目录
-4. 构建后端（`EmbeddedBackend` 或 `DaemonBackend`）
+4. 构建后端（`EmbeddedBackend` 或 `DaemonBackend`；daemon 模式未发现外部 daemon 时，TUI 在当前进程内启动 `DaemonHandle::start_with_local_rpc` 并连接本地 RPC）
 5. 创建 `App`，调用 `app.init()`（检测 CLI、加载群聊历史、同步 daemon 线程）
 6. 设置终端（ratatui + crossterm 鼠标捕获）
 7. 启动 4 个事件泵（terminal, tick, ingest, manager）
 8. 可选自动启动 agent（`--agent` 参数）
 9. 进入主渲染循环
-10. 退出时 `app.shutdown()`，恢复终端
+10. 退出时 `app.shutdown()`，恢复终端，并停止 TUI 托管的 daemon（如果有）
 
 ## 后端抽象 (`src/backend/`)
 
@@ -46,6 +46,7 @@ minos-tui [OPTIONS]
 | `send_message(thread_id, text)` | 发送用户消息 |
 | `send_approval_decision(...)` | 审批 codex 请求 |
 | `respond_opencode_permission(...)` | 审批 opencode 权限 |
+| `respond_opencode_question(...)` | 回答 opencode question 请求 |
 | `interrupt_thread(thread_id)` | 中断线程 |
 | `close_thread(thread_id)` | 关闭线程 |
 | `delete_thread(thread_id)` | 删除线程 |
@@ -60,14 +61,16 @@ minos-tui [OPTIONS]
 ### `EmbeddedBackend`
 
 - 直接使用 `minos_agent_runtime::AgentManager`（进程内）
-- 配置 teamwork MCP 集成（注入独立 `minos-teamwork-mcp` sidecar）
+- 配置 teamwork MCP 集成。开发态不要求额外 `minos-teamwork-mcp` 可执行文件；`AgentRuntimeConfig` 会优先使用同目录独立 sidecar，找不到时使用当前 `minos-tui __minos-teamwork-mcp` hidden 子命令作为 stdio MCP server。
 - 不支持线程恢复和原始历史读取
 
 ### `DaemonBackend`
 
 - 通过 WebSocket 连接 `minos-daemon`（jsonrpsee WS client）
+- 未传 `--daemon-url` 且 discovery 缺失/连接失败时，TUI 自启动托管 daemon handle，暴露本地 RPC 后再连接；这让 `minos-tui --backend daemon` 在开发态也是完整体验，不依赖用户单独启动 `minos-daemon`。
 - 所有操作转为 JSON-RPC 调用（`minos_local_*` 前缀）
 - 两个订阅泵转发 daemon 事件到本地 broadcast channel
+- `minos_local_list_local_threads` 返回 daemon 本机最近线程集合，不按 TUI 当前 workspace 预过滤；`App` 在接收列表、manager event、群聊历史/session 恢复时只保留 `--workspace` 对应的线程和消息，避免一个 TUI 房间混入其它 workspace 的 agent 会话。
 
 ## UI 布局 (`src/ui/`)
 
@@ -101,15 +104,34 @@ minos-tui [OPTIONS]
 
 | 文件 | 组件 | 描述 |
 |------|------|------|
-| `ui/mod.rs` | `UiState`, `Focus`, `PanelAreas` | 布局编排、状态管理 |
-| `ui/chat.rs` | Agent 聊天视图 | Markdown 渲染、diff 高亮、工具调用、代码块 |
-| `ui/group_chat.rs` | 群聊视图 | 房间消息渲染 |
-| `ui/input_bar.rs` | `InputState` | 多行输入编辑器 + `@` agent mention 自动补全 |
-| `ui/thread_list.rs` | 线程列表 | agent 线程列表（状态颜色编码） |
-| `ui/room_list.rs` | 房间列表 | 群聊房间列表 |
-| `ui/status_bar.rs` | 状态栏 | 后端状态 + agent + 快捷键 |
-| `ui/agent_picker.rs` | Agent 选择器 | 编号快速选择（1-9） |
+| `ui/mod.rs` | `UiState`, `PanelAreas`, render tree assembly | 布局编排、状态管理、鼠标命中区域同步 |
+| `focus.rs` | `FocusManager`, `FocusNode`, `PaneId` | overview/detail 两套焦点树、深度优先 Tab 循环、布局切换时焦点保留/回退 |
+| `render/mod.rs` | `Renderable`, `Column`, `Row` | Frame-backed render trait、纵向 fill 布局、横向比例布局、cursor 传播和 area 计算 |
+| `ui/chat.rs`, `ui/chat/cache.rs` | Agent 聊天视图、`AgentChatRenderable`, `RenderCache` | Markdown 渲染、diff 高亮、工具调用、代码块、按 item 缓存的可见行切片 |
+| `ui/group_chat.rs` | 群聊视图、`GroupChatRenderable` | 房间消息渲染和按消息 block 缓存的可见行切片 |
+| `ui/input_bar.rs`, `ui/input_bar/render.rs` | `InputState`, `InputBarRenderable` | 多行输入编辑器、`@` agent mention/路径补全、输入栏渲染与鼠标坐标映射 |
+| `ui/thread_list.rs` | `ThreadListRenderable` | agent 线程列表（状态颜色编码） |
+| `ui/room_list.rs` | `RoomListRenderable` | 群聊房间列表 |
+| `ui/status_bar.rs` | `StatusBarRenderable` | 后端状态 + agent + 快捷键 |
+| `ui/agent_picker.rs` | `AgentPickerRenderable` | 编号快速选择（1-9） |
+| `ui/delete_confirm.rs` | `DeleteConfirmRenderable` | 删除确认 overlay |
 | `ui/theme.rs` | 主题 | 颜色/样式常量 |
+
+### Renderable 树与焦点树
+
+P2 后渲染入口仍是 `ui::render_ui(f, &mut UiState)`，但 `render_ui` 的职责收敛为：
+
+1. 根据 `FocusManager` 更新 `room_input.focused` / `agent_input.focused`
+2. 使用 `Column::with_fill` 组装状态栏、主体 row、输入 row
+3. overview 模式用 `Row(20/55/25)` 渲染 Room List / Group Chat / Agents
+4. detail 模式用 `Row(45/20/35)` 渲染 Group Chat / Agents / Agent Chat，输入区用 `Row(65/35)`
+5. 用同一组 `Row::areas_for` 比例写回 `PanelAreas` 和 `InputLayoutMetrics`，保证鼠标命中区域与实际渲染区域一致
+6. render tree 完成后通过 `Renderable::cursor_pos()` 向上传播输入栏 cursor，并调用 `Frame::set_cursor_position`
+7. 最后以 overlay renderable 渲染 agent picker 和 delete confirm
+
+`Renderable` 采用 `fn render(&mut self, frame: &mut Frame, area: Rect)`，而不是 Buffer-only 接口，因为当前 Ratatui 面板需要在 render 阶段更新 list state、scroll max、render cache 和 input hit-test metrics。`desired_height(width)` 用于 input row 高度协商；`cursor_pos(area)` 仅由输入栏返回，`Row`/`Column` 递归向上传播；主体 row 作为 `Column::with_fill(..., fill_index = 1)` 的 fill child 占满剩余高度。
+
+`FocusManager` 替代旧扁平 `Focus` enum。overview 焦点树包含 `RoomList -> GroupChat -> AgentList -> RoomInput`；detail 焦点树包含 `GroupChat -> AgentList -> AgentChat -> RoomInput -> AgentInput`。`Tab` 深度优先前进，`BackTab` 反向循环。打开/关闭 agent detail 时调用 `switch_layout(detail)`，若当前 pane 不存在于新树则回退到新布局首个 pane。
 
 ### 聊天渲染特性
 
@@ -130,6 +152,7 @@ AppEvent::ManagerEvent(ManagerEvent)       // 线程生命周期事件
 AppEvent::AgentStartedForPrompt { ... }    // 后台 agent 启动完成
 AppEvent::SendMessageFailed { ... }        // 异步发送错误
 AppEvent::Key(KeyEvent)                    // 键盘事件
+AppEvent::Paste(String)                    // bracketed paste 文本，按整体插入输入栏
 AppEvent::Mouse(MouseEvent)                // 鼠标事件
 AppEvent::Resize(u16, u16)                 // 终端大小变化
 AppEvent::Tick                             // 200ms 定时器
@@ -137,21 +160,26 @@ AppEvent::Tick                             // 200ms 定时器
 
 ### 4 个事件泵
 
-1. **终端事件泵**（std 线程，250ms 轮询 crossterm）
+1. **终端事件泵**（std 线程，250ms 轮询 crossterm；启用 bracketed paste 后把多行粘贴转为单个 `Paste` 事件，避免换行被当作 Enter 提交）
 2. **Tick 泵**（tokio interval，200ms）
 3. **Ingest 泵**（转发 backend `LocalIngestFrame` broadcast → MPSC）
 4. **Manager Event 泵**（转发 backend manager events → MPSC）
 
-## 核心状态 (`src/app.rs`)
+## 核心状态与事件流 (`src/app.rs`, `src/app/`, `src/state/`, `src/update/`)
 
-`App` 是中央状态机（~2950 行），协调所有 UI 和业务逻辑。
+`App` 现在是轻量 shell，持有 backend、`AppState`、`UiState`、退出标志和事件回流 channel。运行时逻辑拆到 `src/app/` 子模块：事件分发与 effect 执行在 `app/event_loop.rs`，生命周期/daemon replay 在 `app/lifecycle.rs`，提交/发送在 `app/submission.rs`，群聊协调在 `app/group_chat.rs`，MCP 处理在 `app/mcp.rs`。
 
 ### 关键字段
 
 ```rust
 App {
     backend: Arc<dyn AgentBackend>,
+    state: AppState,
     ui: UiState,
+}
+
+AppState {
+    workspace: PathBuf,
     hydrated_threads: HashSet<String>,           // 已回放历史的线程
     thread_watermarks: HashMap<String, u64>,     // 每线程最高 seq
     applied_ingest_fingerprints: HashSet<String>, // 去重 ingest
@@ -160,15 +188,47 @@ App {
 }
 ```
 
+P0-C 后事件路径为 `AppEvent`/按键语义 → `Action` → `update()` → `Effect` → App effect executor。`app/event_mapping.rs` 负责把键盘事件映射为语义 Action 或输入目标；`input.rs` 负责输入栏按键到 `InputAction` 的映射和参数化 `InputState` 编辑；`update/mod.rs` 分发 `GlobalAction`、`RoomAction`、`AgentAction`、`InputAction` 和 effect 回流结果；`update/global.rs`、`update/room.rs`、`update/agent.rs` 执行同步状态变更并返回 effect。
+
+`Ingest`、`ManagerEvent`、`Tick` 和 `McpToolCall` 不再直接在 event match 中执行业务逻辑，而是映射为 `Action::EffectCompleted` 或 `GlobalAction` 后返回 `Effect::Handle*`。输入 submit 也由 update 层清空/记录输入、解析 `@agent` 路由、判断 pending approval/question，再返回 `DispatchPromptToAgent`、`SendTextToThread`、`SubmitPendingAgentRequest` 等显式 effect。
+
+Action/Effect 类型只保留当前执行器真正消费的语义分支。P0 迁移阶段的 passthrough、未接线 submit intent、no-op global intent、`Effect::None` 和未执行的占位 backend effect 已删除，避免事件边界继续承载旧路径。
+
+`agent_route.rs` 提供共享 agent 路由解析、thread short id 和 closed-thread 判定，避免 App 与 update 层重复实现同一套 `@agent[#thread]` 规则。
+
 ### 线程水化
 
-首次查看线程时，从 `read_thread_raw_history()` 加载历史 projection frame，按 `UiEventMessage` 重建 `ChatState.messages`。daemon backend 的 replay 不需要 TUI 重新解析 raw JSON；embedded backend 没有 daemon/EventWriter 时，会在进程内用同一套 translator 临时生成 projection。
+首次查看线程时，从 `read_thread_raw_history()` 加载历史 projection frame，按 `UiEventMessage` 重建 `ChatState.items`。daemon backend 的 replay 不需要 TUI 重新解析 raw JSON；embedded backend 没有 daemon/EventWriter 时，会在进程内用同一套 translator 临时生成 projection。
+daemon 模式下，TUI 只会水化当前 workspace 的线程。来自其它 workspace 的 daemon 线程、`ThreadAdded` lifecycle event、群聊 `chat_agent_sessions` 或历史消息会在进入 `UiState.threads` / `GroupChatState.messages` 前被丢弃。
 
 ### Ingest 去重
 
 优先使用 `LocalIngestFrame.seq` + 每线程水位线去重。没有 seq 的 embedded/test frame 才使用 `ui_events` 序列化指纹作为兜底。
 
-## 翻译管线 (`src/translation.rs`)
+## 渲染性能
+
+`frame.rs` 提供 `FrameRequester` 和内部 `FrameScheduler`。`App` 在 `Action` / `Effect` 路径返回 redraw 时调用 `request_frame()`；scheduler 接收高频请求后合并为最早可绘制 deadline，并按 `MIN_FRAME_INTERVAL = 33ms` 输出 frame token。`main.rs` 的主循环同时监听 app event channel 和 frame channel，收到 frame token 后立即 draw；节流不再阻塞主事件循环，因此连续 ingest 或滚轮事件不会被 terminal draw sleep 拖慢。
+
+Agent chat 使用 `ui/chat/cache.rs::RenderCache`。cache 按 `(thread_id, version, width)` 建索引，并为每个 `ChatItem` 计算 fingerprint；同线程同宽度下，仅变更 item 会重新生成 visual segment，滚动时直接从缓存的 visual lines 切出 viewport，不再每帧重跑 Markdown/diff/tool wrapping。
+
+Group chat 使用 `GroupChatRenderCache`。`GroupChatState` 对消息变更加 `version`，cache 按 `(version, width)` 缓存每条消息 block 的完整 wrapped lines、起始视觉行和总行数；`render_group_chat()` 只克隆当前 viewport 的 cached lines。重复 daemon 历史 refresh 或 duplicate upsert 不会 bump version，因此不会让 render cache 失效。
+
+P2 后大型渲染/测试文件也被拆分以保持局部性：`ui/chat/cache.rs` 持有 agent chat 可见窗口索引；`ui/input_bar/render.rs` 持有输入栏 render/editor-coordinate 逻辑；`app_tests.rs` 仅保留共享测试 harness，具体 app 行为测试分布在 `app_tests/` 子模块中。
+
+## 翻译管线 (`src/translation/`)
+
+`translation/mod.rs` 是门面模块，保持 `crate::translation::{ChatState, ChatItem, ...}` 的外部导入路径稳定；具体职责拆到聚焦子模块：
+
+| 模块 | 职责 |
+|------|------|
+| `agent.rs` | `AgentTranslationState`，封装 codex/claude/gemini/opencode translator |
+| `chat_state.rs` | `ChatState` 与 `UiEventMessage` → `ChatItem` 投影 |
+| `chat_item.rs` | `ChatItem`、`TextPart` 与 item 内部辅助方法 |
+| `tool_summary.rs` | 工具参数/输出摘要、diff 识别 |
+| `pending_request.rs` | Codex approval、opencode permission/question 的待处理请求模型 |
+| `json_helpers.rs` | pending request 使用的 JSON 递归查找辅助 |
+| `selection.rs` | 聊天文本选区模型 |
+| `translation_tests.rs` | 翻译投影与摘要单元测试 |
 
 ### `ChatState`（每线程状态）
 
@@ -176,25 +236,28 @@ App {
 ChatState {
     thread_id, agent,
     translation_state: AgentTranslationState,  // 仅 embedded/test raw path 使用
-    messages: Vec<RenderedMessage>,
+    items: Vec<ChatItem>,
     pending_requests: Vec<PendingAgentRequest>,
+    completed_assistant_message_ids: HashSet<String>,
     scroll_offset, auto_scroll, max_scroll,
     selection: Option<ChatSelection>,
 }
 ```
 
-`ChatState::apply_ui_event()` 只消费 `UiEventMessage`。`DisplayPayload` 在 TUI 层渲染为 preview 文本；raw body/artifact 全文不进入 `RenderedMessage`。
+`ChatState::apply_ui_event()` 只消费 `UiEventMessage`。`DisplayPayload` 在 TUI 层渲染为 preview 文本；raw body/artifact 全文不进入 `ChatItem`。
+`last_completed_assistant_text()` 只从显式收到 terminal `MessageCompleted` 的 assistant message 取群聊结果；仅因下一条消息开始而停止 streaming 的中间文本不会被当成最终回复。
+聊天室 agent result 仍以 terminal `MessageCompleted` 为提交条件。`TextDelta` / `TextReplace` 只更新 direct agent panel；`AppEvent::Ingest` 只有在当前 frame 标记完成时才调用完成态记录路径，并通过稳定 `agent-result:{room_id}:{thread_id}:{source_message_id}` upsert 群聊消息，避免 live ingest、manager idle 和历史 replay 重复写入。opencode `finish:"tool-calls"` 这类工具调用前中间完成不会被 translator 映射为 terminal `MessageCompleted`，因此不会进入聊天室。
 
-### `RenderedMessage`
+### `ChatItem`
 
 ```rust
-RenderedMessage {
-    message_id, role (User/Assistant/System),
-    text_parts: Vec<TextPart>,      // 文本或代码块
-    tool_calls: Vec<ToolCallBlock>,  // 可展开工具调用
-    reasoning: Option<String>,       // "Thinking" 文本
-    is_streaming: bool,
-    error: Option<String>,
+enum ChatItem {
+    UserMessage { message_id, text_parts, is_streaming },
+    AssistantText { message_id, text_parts, is_streaming },
+    Reasoning { message_id, text, is_streaming },
+    ToolCall { message_id, tool_call_id, args/output, is_streaming },
+    SystemMessage { text },
+    Error { message_id, text },
 }
 ```
 
@@ -205,8 +268,10 @@ RenderedMessage {
 SQLite 持久化群聊房间和消息。支持:
 - 多房间管理
 - 分页加载
-- Agent 结果自动发布（线程 Idle/Closed 时）
+- Agent 结果流式 upsert（ingest 增量到达时更新当前 thread turn 的同一条群聊结果消息；完成/关闭路径保留为缺失 live ingest 的补偿）
 - MCP 命令队列处理
+
+群聊消息会记录 `agent`、`thread_id`、`thread_short_id` 和 `workspace`。发送到已有 agent 线程的用户消息在可见文本中使用 `@agent#short_id ...`，即使输入来自 Agent Input 面板也保持同一会话标识；新建 agent 的首条房间消息在线程创建前可以只有 `@agent ...`。
 
 ## Agent 间协调（MCP）
 
@@ -239,7 +304,8 @@ SQLite 持久化群聊房间和消息。支持:
 1. 在 Room Input 输入文本
 2. `@agent` 语法路由到特定 agent（`@codex`, `@claude#shortid` 等）
 3. 消息同时记录到群聊
-4. Agent 响应通过 ingest 流式返回
+4. Agent Input 面板发送到已选线程时，也会以 `@agent#shortid` 形式写入群聊，避免看起来像重新 @ 了一个新 agent
+5. Agent 响应通过 ingest 流式返回
 
 ### 审批流程
 
@@ -247,6 +313,17 @@ SQLite 持久化群聊房间和消息。支持:
 2. 创建 `PendingAgentRequest` + 系统消息
 3. 输入栏标签变为 "Agent Input: Reply Required"
 4. 用户输入 "yes"/"approve" = 批准，其他 = 拒绝
+
+### opencode question 流程
+
+1. opencode 发出 `question.asked` → projection 为 `Raw(kind="opencode/question.asked")`
+2. `ChatState` 创建 `PendingAgentRequestKind::OpencodeQuestion`，系统消息展示问题、选项和输入格式
+3. 用户在 Agent Input 输入选项编号、选项文本或自定义答案；多选用逗号/分号分隔
+4. TUI 调用 `respond_opencode_question()`，最终由 opencode driver POST `/question/{requestID}/reply`，body 为 `{ "answers": [[...]] }`
+
+### opencode 消息完成规则
+
+opencode 的 `message.updated` 可能带 `time.completed` 且 `finish:"tool-calls"`，表示当前 assistant message 为工具调用前的中间步骤，不是最终回复。translator 只在非 `tool-calls` 的 terminal completion 上发出 `MessageCompleted`，避免把中间消息写回群聊。
 
 ### 线程管理
 
@@ -259,16 +336,59 @@ SQLite 持久化群聊房间和消息。支持:
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `main.rs` | 363 | 入口、CLI、启动编排 |
-| `app.rs` | ~2950 | 中央状态机、事件分发、业务逻辑 |
-| `event.rs` | 109 | AppEvent 枚举、事件泵 |
-| `backend/mod.rs` | 95 | AgentBackend trait |
-| `backend/embedded.rs` | 181 | 进程内后端 |
-| `backend/daemon.rs` | 462 | WS RPC 后端 |
-| `translation.rs` | 1517 | 协议翻译、ChatState、RenderedMessage |
-| `ui/mod.rs` | 547 | 布局、UiState |
-| `ui/chat.rs` | 631 | Agent 聊天渲染 |
-| `ui/input_bar.rs` | 813 | 多行输入 + mention 自动补全 |
-| `ui/group_chat.rs` | 153 | 群聊渲染 |
-| `group_chat.rs` | 221 | SQLite 群聊持久化 |
-| `skills.rs` | 104 | Teamwork skill 安装 |
+| `main.rs` | 522 | 入口、CLI、启动编排、frame request select loop |
+| `action.rs` | 153 | `Action`/`GlobalAction`/`RoomAction`/`AgentAction`/`InputAction` 类型 |
+| `agent_route.rs` | 51 | `@agent[#thread]` 路由解析、thread short id、closed-thread 判定 |
+| `effect.rs` | 71 | `Effect` 与 `StateChange` |
+| `frame.rs` | 119 | `FrameRequester`、`FrameScheduler`、33ms draw interval |
+| `input.rs` | 297 | 输入栏按键映射与参数化 `InputState` action 应用 |
+| `app.rs` | 87 | `App` shell、构造器、测试模块挂载 |
+| `app/event_mapping.rs` | 229 | key event 到 semantic Action/input target 的纯映射 |
+| `app/event_loop.rs` | 411 | `AppEvent`/key/mouse/paste 分发、Action 应用、Effect 执行器 |
+| `app/lifecycle.rs` | 520 | init/shutdown、daemon thread sync、ingest/manager/tick 处理 |
+| `app/submission.rs` | 387 | async submit effect 执行：启动 agent、发送消息、approval/question 回复 |
+| `app/group_chat.rs` | 398 | 群聊历史加载、agent result 记录、group chat store 写入 |
+| `app/mcp.rs` | 224 | teamwork MCP socket request 处理 |
+| `app/thread_ops.rs` | 99 | thread 关闭/删除/选择/start picker 辅助 |
+| `app/clipboard.rs` | 114 | 剪贴板读写与测试剪贴板 |
+| `app/helpers.rs` | 196 | approval/question 解析、错误格式化和 App 局部 helper |
+| `app_tests.rs` | 321 | App 行为测试共享 harness |
+| `app_tests/input_and_routing.rs` | 412 | 输入、agent picker、prompt routing 行为测试 |
+| `app_tests/group_and_agent.rs` | 530 | 群聊、daemon history、agent pending request 行为测试 |
+| `app_tests/ingest.rs` | 548 | ingest/group result/opencode idle 行为测试 |
+| `app_tests/navigation_and_lifecycle.rs` | 464 | 导航、鼠标、删除、daemon lifecycle 行为测试 |
+| `update/mod.rs` | 287 | update 层入口、input submit、effect result 回流、共享 UI helper |
+| `update/global.rs` | 260 | `GlobalAction` 处理、鼠标和全局键状态变更 |
+| `update/room.rs` | 110 | `RoomAction`、room submit 路由决策 |
+| `update/agent.rs` | 83 | `AgentAction`、agent submit/pending request 决策 |
+| `state/mod.rs` | 41 | `AppState` 业务状态聚合 |
+| `state/ingest_dedup.rs` | 58 | ingest 去重和完成帧判断 |
+| `state/workspace_filter.rs` | 118 | workspace 过滤、线程裁剪、房间标题/ID |
+| `state/selection.rs` | 128 | 鼠标选区和列表点击几何辅助 |
+| `event.rs` | 123 | AppEvent 枚举、事件泵 |
+| `backend/mod.rs` | 111 | AgentBackend trait |
+| `backend/embedded.rs` | 262 | 进程内后端 |
+| `backend/daemon.rs` | 464 | WS RPC 后端 |
+| `translation/mod.rs` | 20 | 翻译模块门面、公开类型重导出 |
+| `translation/agent.rs` | 60 | `AgentTranslationState` 与 translator 错误日志 |
+| `translation/chat_state.rs` | 574 | `ChatState` 与 UI event 投影 |
+| `translation/chat_item.rs` | 69 | `ChatItem`、`TextPart` |
+| `translation/tool_summary.rs` | 264 | 工具参数/输出格式化 |
+| `translation/pending_request.rs` | 385 | 待处理审批/权限/问题请求 |
+| `translation/json_helpers.rs` | 80 | JSON 递归查找辅助 |
+| `translation/selection.rs` | 25 | 聊天选区状态 |
+| `translation/translation_tests.rs` | 740 | 翻译投影单元测试 |
+| `focus.rs` | 171 | `FocusManager`、focus tree、`PaneId` |
+| `focus_tests.rs` | 56 | focus tree 单元测试 |
+| `render/mod.rs` | 230 | `Renderable`、`Column`、`Row`、cursor 传播 |
+| `ui/mod.rs` | 611 | 布局、UiState、render tree assembly、GroupChatState version/cache 状态 |
+| `ui/chat.rs` | 717 | Agent 聊天渲染与 selection |
+| `ui/chat/cache.rs` | 174 | Agent chat 按 item segment 缓存和可见行切片 |
+| `ui/chat_tests.rs` | 404 | Agent chat render/cache/selection 单元测试 |
+| `ui/input_bar.rs` | 730 | `InputState`、history、mention/path completion 状态 |
+| `ui/input_bar/render.rs` | 692 | 输入栏 render/editor-coordinate 逻辑 |
+| `ui/input_bar_tests.rs` | 339 | input bar 编辑、completion、坐标映射测试 |
+| `ui/delete_confirm.rs` | 90 | 删除确认 overlay renderable |
+| `ui/group_chat.rs` | 324 | 群聊渲染、GroupChatRenderCache、cached line viewport 切片 |
+| `group_chat.rs` | 346 | SQLite 群聊持久化 |
+| `skills.rs` | 119 | Teamwork skill 安装 |

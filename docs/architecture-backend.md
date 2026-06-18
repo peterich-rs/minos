@@ -179,26 +179,38 @@
 | `host_commands` | 持久化命令队列 |
 | `durable_event_log` | 按 topic 排序的事件日志 |
 | `outbox_events` | 分发工作队列 |
+| `raw_events` | Host-local `seq` 的 Agent 原始事件，按 `(host_device_id, thread_id, seq)` 幂等 |
+| `thread_sync_state` | Host manifest、backend ack 水位、partial history metadata |
 
 ### 30 个 Store 子模块
 
-涵盖: accounts, devices, tokens, pairing_codes, host_installation_tokens, refresh_tokens, account_host_pairings, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, threads, raw_events, projects, push_tokens, notification_preferences, notification_cooldowns 等。
+涵盖: accounts, devices, tokens, pairing_codes, host_installation_tokens, refresh_tokens, account_host_pairings, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, threads, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
 
 ## Agent 会话管理 (`src/agent_sessions/`)
 
 ### 生命周期
 
 1. `POST /v1/agent-sessions/start` — 创建会话（幂等键），关联 conversation + 可选 project
-2. Host 通过 `HostStreamEvent` WS 帧流式发送事件
+2. Host 在线时通过 `HostIngestLiveBatch` WS 帧发送 chunk；重连时通过 `HostGapManifest` 上报缺口 metadata
 3. `POST /v1/agent-sessions/send-input` — 用户输入
-4. `POST /v1/agent-sessions/stop` — 请求停止
-5. `POST /v1/agent-sessions/read-turns` — 读取轮次历史
+4. `POST /v1/agent-sessions/respond-opencode-question` — 提交 opencode `question.asked` 的答案
+5. `POST /v1/agent-sessions/stop` — 请求停止
+6. `POST /v1/agent-sessions/read-turns` — 读取轮次历史
+
+### Host Ingest Sync
+
+- `/ws/host` 接收 `HostIngestLiveBatch`、`HostGapManifest`、`HostIngestPullResponse`。
+- live 和 pull chunk 共用严格幂等写入：同 `(host_device_id, thread_id, seq)` 且同 checksum 视为重复；同 key 不同 checksum 报不变量错误，不重新分配 backend seq。
+- `HostGapManifest` 落 `thread_sync_state` 后，backend 立即按 manifest range 通过同一条 host WS 发 `PullIngestRange`。
+- host 从本地 SQLite 读取 range 并回 `HostIngestPullResponse`；backend 持久化后只按连续 raw event 前缀发送 `PullAck`。
+- `agent_sessions.host_device_id` 为空时，新 handler 允许当前 host 认领该 session，避免 session 创建与 host 绑定之间的流式事件窗口丢失。
 
 ### Host 命令系统
 
 - 持久化命令队列存储在 `host_commands` 表
 - 通过 `durable_event_log` → `outbox_events` 发出
 - Host 通过 `HostCommandAck` 确认，`HostCommandResult` 完成
+- opencode question 答案通过 `minos_respond_opencode_question` 远端 host command 转发到 daemon
 - `HostCommandTimeoutJob` 后台任务处理超时命令
 
 ## 状态管理层次

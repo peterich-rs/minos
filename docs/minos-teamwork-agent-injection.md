@@ -15,9 +15,10 @@ minos-tui logging initialized path=/tmp/minos-tui.log
 That log line does not prove MCP startup failure. In the repo, MCP is already
 wired in several places:
 
-- `crates/minos-agent-runtime/src/config.rs` locates the `minos-teamwork-mcp`
-  sidecar with `MINOS_TEAMWORK_MCP_BIN`, then the current executable's sibling
-  directory, then `PATH`.
+- `crates/minos-agent-runtime/src/config.rs` locates the teamwork MCP command
+  with `MINOS_TEAMWORK_MCP_BIN`, then the current executable's sibling
+  `minos-teamwork-mcp`, then the current `minos-tui` / `minos-daemon`
+  executable as a hidden `__minos-teamwork-mcp` sidecar, then `PATH`.
 - `crates/minos-chat-store/src/mcp_server.rs` implements `minos-teamwork-mcp`
   with `list_room_messages`, `delegate_to_agent`, and `post_room_update`.
 - `crates/minos-daemon/src/agent.rs` enables the default `minos-teamwork-mcp`
@@ -41,6 +42,19 @@ All Minos MCP injections name the server `minos_teamwork`.
 | Claude | `claude -p` receives `--mcp-config <json>` with `mcpServers.minos_teamwork` and `--strict-mcp-config`. |
 | Gemini | ACP `session/new` and `session/resume` receive `mcpServers` containing `minos_teamwork` as a stdio server. |
 | OpenCode | `opencode serve` receives `OPENCODE_CONFIG_CONTENT` containing a local enabled `mcp.minos_teamwork` server, unless the caller already supplied that environment variable. |
+
+The command may be the standalone `minos-teamwork-mcp` binary or the
+self-contained hidden sidecar form:
+
+```text
+minos-tui __minos-teamwork-mcp --room-id ... --source-agent ... --socket-path ...
+minos-daemon __minos-teamwork-mcp --room-id ... --source-agent ... --socket-path ...
+```
+
+This keeps TUI development and packaged TUI usage self-contained. A missing
+standalone sidecar no longer silently disables MCP injection when the current
+binary can serve the MCP protocol itself. `minos_agent_runtime::config` logs the
+resolved command, args, and socket path when injection is enabled.
 
 The MCP server now also returns an `instructions` field during `initialize`.
 Codex documents that it reads MCP server instructions and uses them as
