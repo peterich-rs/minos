@@ -5,7 +5,7 @@ use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;
 use minos_protocol::{LocalGroupChatMessage, LocalIngestFrame};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::sync::broadcast;
 
 use crate::event::AppEvent;
@@ -35,6 +35,59 @@ pub struct BackendThreadSnapshot {
     pub agent: Option<AgentName>,
     pub workspace: PathBuf,
     pub state: minos_agent_runtime::ThreadState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectEntry {
+    pub project_id: String,
+    pub name: String,
+    pub workspace_path: PathBuf,
+    pub thread_count: u32,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+impl ProjectEntry {
+    pub fn from_summary(s: &minos_protocol::ProjectSummary, fallback_cwd: &Path) -> Self {
+        let workspace_path = s
+            .workspace_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| fallback_cwd.to_path_buf());
+        Self {
+            project_id: s.project_id.clone(),
+            name: s.name.clone(),
+            workspace_path,
+            thread_count: s.thread_count,
+            created_at_ms: s.created_at_ms,
+            updated_at_ms: s.updated_at_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSummaryEntry {
+    pub thread_id: String,
+    pub agent: AgentName,
+    pub title: Option<String>,
+    pub first_ts_ms: i64,
+    pub last_ts_ms: i64,
+    pub message_count: u32,
+    pub ended_at_ms: Option<i64>,
+}
+
+impl ThreadSummaryEntry {
+    pub fn from_summary(s: &minos_protocol::ThreadSummary) -> Self {
+        Self {
+            thread_id: s.thread_id.clone(),
+            agent: s.agent,
+            title: s.title.clone(),
+            first_ts_ms: s.first_ts_ms,
+            last_ts_ms: s.last_ts_ms,
+            message_count: s.message_count,
+            ended_at_ms: s.ended_at_ms,
+        }
+    }
 }
 
 #[async_trait]
@@ -73,6 +126,19 @@ pub trait AgentBackend: Send + Sync {
     async fn delete_thread(&self, thread_id: &str) -> Result<()>;
 
     async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>>;
+
+    async fn list_projects(&self) -> Result<Vec<ProjectEntry>>;
+
+    async fn create_project(&self, name: &str, workspace_path: &Path) -> Result<ProjectEntry>;
+
+    async fn list_project_threads(&self, project_id: &str) -> Result<Vec<ThreadSummaryEntry>>;
+
+    async fn start_agent_in_project(
+        &self,
+        project_id: &str,
+        agent: AgentName,
+        workspace: PathBuf,
+    ) -> Result<StartAgentOutcome>;
 
     async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentOutcome>;
 

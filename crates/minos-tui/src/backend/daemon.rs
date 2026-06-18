@@ -1,4 +1,4 @@
-use super::{AgentBackend, BackendConnectionState, BackendThreadSnapshot};
+use super::{AgentBackend, BackendConnectionState, BackendThreadSnapshot, ProjectEntry, ThreadSummaryEntry};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
@@ -18,7 +18,7 @@ use minos_protocol::{
     ThreadState as ProtoThreadState,
 };
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::broadcast;
 use tracing::warn;
@@ -327,6 +327,81 @@ impl AgentBackend for DaemonBackend {
             .request("minos_local_resume_thread", [request])
             .await
             .context("RPC minos_local_resume_thread failed")?;
+        Ok(StartAgentOutcome {
+            thread_id: response.session_id,
+            cwd: PathBuf::from(response.cwd),
+            provider_session_id: None,
+        })
+    }
+
+    async fn list_projects(&self) -> Result<Vec<ProjectEntry>> {
+        let response: minos_protocol::ListProjectsResponse = self
+            .client
+            .request("minos_list_projects", ArrayParams::new())
+            .await
+            .context("RPC minos_list_projects failed")?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Ok(response
+            .projects
+            .iter()
+            .map(|p| ProjectEntry::from_summary(p, &cwd))
+            .collect())
+    }
+
+    async fn create_project(&self, name: &str, workspace_path: &Path) -> Result<ProjectEntry> {
+        let workspace_str = workspace_path.to_string_lossy().into_owned();
+        let slug = workspace_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
+        let request = minos_protocol::CreateProjectRequest {
+            name: name.to_owned(),
+            workspace_slug: slug,
+            workspace_path: Some(workspace_str),
+        };
+        let response: minos_protocol::CreateProjectResponse = self
+            .client
+            .request("minos_create_project", [request])
+            .await
+            .context("RPC minos_create_project failed")?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Ok(ProjectEntry::from_summary(&response.project, &cwd))
+    }
+
+    async fn list_project_threads(&self, project_id: &str) -> Result<Vec<ThreadSummaryEntry>> {
+        let params = minos_protocol::ListProjectThreadsParams {
+            project_id: project_id.to_owned(),
+            limit: 100,
+            before_ts_ms: None,
+        };
+        let response: minos_protocol::ListProjectThreadsResponse = self
+            .client
+            .request("minos_list_project_threads", [params])
+            .await
+            .context("RPC minos_list_project_threads failed")?;
+        Ok(response
+            .threads
+            .iter()
+            .map(ThreadSummaryEntry::from_summary)
+            .collect())
+    }
+
+    async fn start_agent_in_project(
+        &self,
+        project_id: &str,
+        agent: AgentName,
+        workspace: PathBuf,
+    ) -> Result<StartAgentOutcome> {
+        let params = serde_json::json!({
+            "agent": agent,
+            "workspace": workspace.to_string_lossy(),
+            "project_id": project_id,
+        });
+        let response: StartAgentResponse = self
+            .client
+            .request("minos_start_agent_in_project", [params])
+            .await
+            .context("RPC minos_start_agent_in_project failed")?;
         Ok(StartAgentOutcome {
             thread_id: response.session_id,
             cwd: PathBuf::from(response.cwd),

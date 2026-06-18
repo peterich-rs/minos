@@ -31,6 +31,9 @@ struct TestBackend {
     listed_threads: Mutex<Vec<BackendThreadSnapshot>>,
     history_pages: Mutex<HashMap<String, VecDeque<ReadThreadRawHistoryResponse>>>,
     history_calls: Mutex<Vec<(String, Option<u64>, u32)>>,
+    projects: Mutex<Vec<crate::backend::ProjectEntry>>,
+    created_projects: Mutex<Vec<(String, std::path::PathBuf)>>,
+    project_thread_lists: Mutex<Vec<(String, Vec<crate::backend::ThreadSummaryEntry>)>>,
     connection_state: BackendConnectionState,
     block_starts: bool,
     block_sends: bool,
@@ -61,6 +64,9 @@ impl TestBackend {
             listed_threads: Mutex::new(Vec::new()),
             history_pages: Mutex::new(HashMap::new()),
             history_calls: Mutex::new(Vec::new()),
+            projects: Mutex::new(Vec::new()),
+            created_projects: Mutex::new(Vec::new()),
+            project_thread_lists: Mutex::new(Vec::new()),
             connection_state: BackendConnectionState::Embedded,
             block_starts: false,
             block_sends: false,
@@ -99,6 +105,23 @@ impl TestBackend {
 
     fn with_group_chat_pages(self, pages: Vec<Vec<LocalGroupChatMessage>>) -> Self {
         *self.group_chat_pages.lock().expect("group chat pages lock") = VecDeque::from(pages);
+        self
+    }
+
+    fn with_projects(self, projects: Vec<crate::backend::ProjectEntry>) -> Self {
+        *self.projects.lock().expect("projects lock") = projects;
+        self
+    }
+
+    fn with_project_threads(
+        self,
+        project_id: &str,
+        threads: Vec<crate::backend::ThreadSummaryEntry>,
+    ) -> Self {
+        self.project_thread_lists
+            .lock()
+            .expect("project threads lock")
+            .push((project_id.to_owned(), threads));
         self
     }
 }
@@ -207,6 +230,58 @@ impl AgentBackend for TestBackend {
             .lock()
             .expect("listed threads lock")
             .clone())
+    }
+
+    async fn list_projects(&self) -> Result<Vec<crate::backend::ProjectEntry>> {
+        Ok(self.projects.lock().expect("projects lock").clone())
+    }
+
+    async fn create_project(
+        &self,
+        name: &str,
+        workspace_path: &std::path::Path,
+    ) -> Result<crate::backend::ProjectEntry> {
+        self.created_projects
+            .lock()
+            .expect("created projects lock")
+            .push((name.to_owned(), workspace_path.to_path_buf()));
+        let entry = crate::backend::ProjectEntry {
+            project_id: format!("test-project-{}", name),
+            name: name.to_owned(),
+            workspace_path: workspace_path.to_path_buf(),
+            thread_count: 0,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        self.projects
+            .lock()
+            .expect("projects lock")
+            .push(entry.clone());
+        Ok(entry)
+    }
+
+    async fn list_project_threads(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::backend::ThreadSummaryEntry>> {
+        let lists = self
+            .project_thread_lists
+            .lock()
+            .expect("project threads lock");
+        Ok(lists
+            .iter()
+            .find(|(pid, _)| pid == project_id)
+            .map(|(_, threads)| threads.clone())
+            .unwrap_or_default())
+    }
+
+    async fn start_agent_in_project(
+        &self,
+        _project_id: &str,
+        agent: AgentName,
+        workspace: PathBuf,
+    ) -> Result<StartAgentOutcome> {
+        self.start_agent(agent, workspace).await
     }
 
     async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {

@@ -1,4 +1,4 @@
-use super::{AgentBackend, BackendConnectionState, BackendThreadSnapshot};
+use super::{AgentBackend, BackendConnectionState, BackendThreadSnapshot, ProjectEntry, ThreadSummaryEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use minos_agent_runtime::{AgentManager, InstanceCaps, ManagerEvent, StartAgentOutcome};
@@ -9,15 +9,25 @@ use minos_protocol::LocalGroupChatMessage;
 use minos_protocol::LocalIngestFrame;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::{path::PathBuf, sync::Arc};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::event::{AppEvent, McpToolEvent};
 use crate::translation::AgentTranslationState;
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 pub struct EmbeddedBackend {
     manager: Arc<AgentManager>,
     mcp_socket_path: Option<PathBuf>,
+    workspace: PathBuf,
+    projects: std::sync::Mutex<Vec<ProjectEntry>>,
 }
 
 impl EmbeddedBackend {
@@ -27,6 +37,7 @@ impl EmbeddedBackend {
         idle_timeout: std::time::Duration,
         mcp_permissions: minos_chat_store::mcp_server::McpToolPermissions,
     ) -> Result<Self> {
+        let workspace = workspace_root.clone();
         let shell_env = capture_user_shell_env().await;
         let mut config = minos_agent_runtime::AgentRuntimeConfig::new(workspace_root);
         let db_path = minos_chat_store::default_db_path()?;
@@ -58,6 +69,8 @@ impl EmbeddedBackend {
         Ok(Self {
             manager: Arc::new(manager),
             mcp_socket_path,
+            workspace,
+            projects: std::sync::Mutex::new(Vec::new()),
         })
     }
 }
@@ -151,6 +164,68 @@ impl AgentBackend for EmbeddedBackend {
                 state: thread.state,
             })
             .collect())
+    }
+
+    async fn list_projects(&self) -> Result<Vec<ProjectEntry>> {
+        let projects = self.projects.lock().expect("projects lock").clone();
+        if projects.is_empty() {
+            let cwd = self.workspace.clone();
+            let name = cwd
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "workspace".to_owned());
+            Ok(vec![ProjectEntry {
+                project_id: format!("embedded-{}", name),
+                name,
+                workspace_path: cwd,
+                thread_count: 0,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            }])
+        } else {
+            Ok(projects)
+        }
+    }
+
+    async fn create_project(&self, name: &str, workspace_path: &Path) -> Result<ProjectEntry> {
+        let entry = ProjectEntry {
+            project_id: format!("embedded-{}", name),
+            name: name.to_owned(),
+            workspace_path: workspace_path.to_path_buf(),
+            thread_count: 0,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        };
+        self.projects
+            .lock()
+            .expect("projects lock")
+            .push(entry.clone());
+        Ok(entry)
+    }
+
+    async fn list_project_threads(&self, _project_id: &str) -> Result<Vec<ThreadSummaryEntry>> {
+        let snapshots = self.list_threads().await?;
+        Ok(snapshots
+            .into_iter()
+            .map(|s| ThreadSummaryEntry {
+                thread_id: s.thread_id,
+                agent: s.agent.unwrap_or(AgentName::Codex),
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+            })
+            .collect())
+    }
+
+    async fn start_agent_in_project(
+        &self,
+        _project_id: &str,
+        agent: AgentName,
+        workspace: PathBuf,
+    ) -> Result<StartAgentOutcome> {
+        self.start_agent(agent, workspace).await
     }
 
     async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {
