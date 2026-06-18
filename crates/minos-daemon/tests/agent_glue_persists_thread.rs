@@ -65,9 +65,9 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
     assert_eq!(threads[0].agent, "codex");
     assert_eq!(threads[0].status, "idle");
     assert_eq!(
-        threads[0].codex_session_id.as_deref(),
+        threads[0].provider_session_id.as_deref(),
         Some(resp.session_id.as_str()),
-        "codex_session_id must be populated for §9.3 jsonl recovery",
+        "provider_session_id must be populated for jsonl recovery",
     );
 
     let workspace_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces")

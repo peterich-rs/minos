@@ -23,7 +23,7 @@ use minos_ui_protocol::ThreadEndReason;
 use tokio::sync::{broadcast, watch};
 
 use crate::store::event_writer::{provider_session_id_from_ingest, EventWriter};
-use crate::store::{EventRow, LocalStore, ThreadRow};
+use crate::store::{ChatMessageRow, ConversationRow, EventRow, LocalStore, ThreadRow};
 use crate::subscription::{AgentStateObserver, Subscription};
 use crate::{ingest_coalescer::IngestCoalescer, ingest_sync::IngestSyncHandle};
 
@@ -190,14 +190,17 @@ impl AgentGlue {
                         agent,
                     }) => {
                         let cwd = workspace.display().to_string();
-                        persist_thread_parent_rows_inner(
-                            &store_clone,
-                            &thread_id,
-                            &cwd,
-                            agent,
-                            None,
-                        )
-                        .await;
+                        let now_ms = current_unix_ms();
+                        if let Err(e) = store_clone.upsert_workspace(&cwd, now_ms).await {
+                            tracing::warn!(
+                                target: "minos_daemon::agent",
+                                error = %e,
+                                thread_id = %thread_id,
+                                agent = %agent_label(agent),
+                                workspace = %cwd,
+                                "store.upsert_workspace failed for ThreadAdded",
+                            );
+                        }
                     }
                     Ok(ManagerEvent::ThreadStateChanged {
                         thread_id,
@@ -480,8 +483,34 @@ impl AgentGlue {
         agent: minos_domain::AgentName,
         provider_session_id: Option<&str>,
     ) {
-        persist_thread_parent_rows_inner(&self.store, thread_id, cwd, agent, provider_session_id)
-            .await;
+        persist_thread_parent_rows_inner(
+            &self.store,
+            thread_id,
+            cwd,
+            agent,
+            provider_session_id,
+            None,
+        )
+        .await;
+    }
+
+    async fn persist_thread_parent_rows_in_conversation(
+        &self,
+        thread_id: &str,
+        conversation_id: &str,
+        cwd: &str,
+        agent: minos_domain::AgentName,
+        provider_session_id: Option<&str>,
+    ) {
+        persist_thread_parent_rows_inner(
+            &self.store,
+            thread_id,
+            cwd,
+            agent,
+            provider_session_id,
+            Some(conversation_id),
+        )
+        .await;
     }
 
     async fn persist_current_provider_session_id(&self, thread_id: &str) {
@@ -509,11 +538,11 @@ impl AgentGlue {
         agent: minos_domain::AgentName,
     ) -> Result<Option<String>, MinosError> {
         if agent == minos_domain::AgentName::Codex {
-            return Ok(row.codex_session_id.clone());
+            return Ok(row.provider_session_id.clone());
         }
 
         if let Some(session_id) = row
-            .codex_session_id
+            .provider_session_id
             .as_deref()
             .filter(|session_id| *session_id != row.thread_id)
         {
@@ -902,12 +931,11 @@ impl AgentGlue {
 
         let mut projects = Vec::with_capacity(rows.len());
         for row in rows {
-            #[allow(clippy::cast_possible_truncation)]
             let thread_count = self
                 .store
-                .list_threads_by_project(&row.project_id, None, Some(500))
+                .count_conversations_by_project(&row.project_id)
                 .await
-                .map_or(0, |threads| threads.len() as u32);
+                .unwrap_or(0);
             projects.push(minos_protocol::ProjectSummary {
                 project_id: row.project_id,
                 name: row.name,
@@ -950,18 +978,163 @@ impl AgentGlue {
             .map_err(|e| map_store_error("delete_project", e))
     }
 
+    pub async fn create_conversation(
+        &self,
+        req: minos_protocol::CreateConversationParams,
+    ) -> Result<minos_protocol::CreateConversationResponse, MinosError> {
+        let project = self
+            .store
+            .get_project(&req.project_id)
+            .await
+            .map_err(|e| map_store_error("create_conversation.get_project", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "create_conversation".into(),
+                message: format!("project not found: {}", req.project_id),
+            })?;
+        let title = req.title.trim();
+        if title.is_empty() {
+            return Err(MinosError::CodexProtocolError {
+                method: "create_conversation".into(),
+                message: "conversation title cannot be empty".into(),
+            });
+        }
+        let conversation_id = uuid::Uuid::new_v4().to_string();
+        let now_ms = current_unix_ms();
+        self.store
+            .create_conversation(&conversation_id, &project.project_id, title, now_ms)
+            .await
+            .map_err(|e| map_store_error("create_conversation", e))?;
+        tracing::info!(
+            target: "minos_daemon::agent",
+            project_id = %project.project_id,
+            conversation_id = %conversation_id,
+            "conversation created",
+        );
+        let row = self
+            .store
+            .get_conversation(&conversation_id)
+            .await
+            .map_err(|e| map_store_error("create_conversation.reload", e))?
+            .expect("conversation inserted above");
+        Ok(minos_protocol::CreateConversationResponse {
+            conversation: conversation_summary_from_row(row, Vec::new())?,
+        })
+    }
+
+    pub async fn list_conversations(
+        &self,
+        req: minos_protocol::ListConversationsParams,
+    ) -> Result<minos_protocol::ListConversationsResponse, MinosError> {
+        let rows = self
+            .store
+            .list_conversations_by_project(&req.project_id, req.before_updated_at_ms, req.limit)
+            .await
+            .map_err(|e| map_store_error("list_conversations", e))?;
+        let ids = rows
+            .iter()
+            .map(|row| row.conversation_id.clone())
+            .collect::<Vec<_>>();
+        let agents = self
+            .store
+            .list_agents_for_conversations(&ids)
+            .await
+            .map_err(|e| map_store_error("list_agents_for_conversations", e))?;
+        let conversations = rows
+            .into_iter()
+            .map(|row| {
+                let participating_agents = agents
+                    .get(&row.conversation_id)
+                    .into_iter()
+                    .flatten()
+                    .map(|agent| parse_agent_label(agent))
+                    .collect::<Result<Vec<_>, _>>()?;
+                conversation_summary_from_row(row, participating_agents)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(minos_protocol::ListConversationsResponse { conversations })
+    }
+
+    pub async fn list_conversation_messages(
+        &self,
+        req: minos_protocol::ListConversationMessagesParams,
+    ) -> Result<minos_protocol::ListConversationMessagesResponse, MinosError> {
+        let requested_limit = req.limit.unwrap_or(100).min(500);
+        let rows = self
+            .store
+            .list_conversation_messages(
+                &req.conversation_id,
+                req.before_seq,
+                Some(requested_limit.saturating_add(1)),
+            )
+            .await
+            .map_err(|e| map_store_error("list_conversation_messages", e))?;
+        let has_more = rows.len() > requested_limit as usize;
+        let messages = rows
+            .into_iter()
+            .take(requested_limit as usize)
+            .map(local_conversation_message_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(minos_protocol::ListConversationMessagesResponse { messages, has_more })
+    }
+
+    pub async fn list_conversation_agent_sessions(
+        &self,
+        req: minos_protocol::ListConversationAgentSessionsParams,
+    ) -> Result<minos_protocol::ListConversationAgentSessionsResponse, MinosError> {
+        let threads = self
+            .store
+            .list_threads_by_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("list_conversation_agent_sessions", e))?
+            .into_iter()
+            .map(thread_summary_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(minos_protocol::ListConversationAgentSessionsResponse { threads })
+    }
+
+    pub async fn append_conversation_message(
+        &self,
+        req: minos_protocol::AppendConversationMessageParams,
+    ) -> Result<minos_protocol::AppendConversationMessageResponse, MinosError> {
+        let now_ms = current_unix_ms();
+        let agent = req.agent.map(agent_label);
+        let message_seq = self
+            .store
+            .upsert_conversation_message(
+                &req.conversation_id,
+                &req.message_id,
+                req.thread_id.as_deref(),
+                &req.sender_role,
+                agent,
+                &req.body,
+                now_ms,
+            )
+            .await
+            .map_err(|e| map_store_error("append_conversation_message", e))?;
+        Ok(minos_protocol::AppendConversationMessageResponse { message_seq })
+    }
+
     pub async fn list_project_threads(
         &self,
         req: minos_protocol::ListProjectThreadsParams,
     ) -> Result<minos_protocol::ListProjectThreadsResponse, MinosError> {
-        let threads = self
+        let conversations = self
             .store
-            .list_threads_by_project(&req.project_id, req.before_ts_ms, Some(req.limit))
+            .list_conversations_by_project(&req.project_id, req.before_ts_ms, Some(req.limit))
             .await
-            .map_err(|e| map_store_error("list_project_threads", e))?
-            .into_iter()
-            .map(thread_summary_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
+            .map_err(|e| map_store_error("list_project_threads", e))?;
+        let mut threads = Vec::new();
+        for conversation in conversations {
+            threads.extend(
+                self.store
+                    .list_threads_by_conversation(&conversation.conversation_id)
+                    .await
+                    .map_err(|e| map_store_error("list_project_threads.sessions", e))?
+                    .into_iter()
+                    .map(thread_summary_from_row)
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+        }
         Ok(minos_protocol::ListProjectThreadsResponse { threads })
     }
 
@@ -1008,28 +1181,93 @@ impl AgentGlue {
         let mut project_req = req;
         project_req.workspace = workspace_dir.display().to_string();
 
-        let response = self.start_agent(project_req).await?;
+        let title = format!("{} session", agent_label(project_req.agent));
+        let conversation_id = uuid::Uuid::new_v4().to_string();
+        self.store
+            .create_conversation(&conversation_id, project_id, &title, current_unix_ms())
+            .await
+            .map_err(|e| map_store_error("start_agent_in_project.create_conversation", e))?;
+        self.start_agent_in_conversation(minos_protocol::StartAgentInConversationRequest {
+            conversation_id,
+            agent: project_req.agent,
+            workspace: project_req.workspace,
+        })
+        .await
+    }
 
-        if local_project.is_some() {
-            if let Err(e) = self
-                .store
-                .assign_thread_to_project(&response.session_id, project_id)
-                .await
-            {
-                tracing::warn!(
-                    target: "minos_daemon::agent",
-                    error = %e,
-                    thread_id = %response.session_id,
-                    project_id = %project_id,
-                    "assign_thread_to_project failed",
-                );
-            }
-
-            let now_ms = current_unix_ms();
-            let _ = self.store.touch_project(project_id, now_ms).await;
+    pub async fn start_agent_in_conversation(
+        &self,
+        req: minos_protocol::StartAgentInConversationRequest,
+    ) -> Result<StartAgentResponse, MinosError> {
+        let conversation = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("start_agent_in_conversation.get_conversation", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "start_agent_in_conversation".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+        let project = self
+            .store
+            .get_project(&conversation.project_id)
+            .await
+            .map_err(|e| map_store_error("start_agent_in_conversation.get_project", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "start_agent_in_conversation".into(),
+                message: format!("project not found: {}", conversation.project_id),
+            })?;
+        let workspace = if req.workspace.trim().is_empty() {
+            project
+                .workspace_path
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    self.default_workspace
+                        .parent()
+                        .unwrap_or(&self.default_workspace)
+                        .join("workspaces")
+                        .join(project.workspace_slug)
+                })
+        } else {
+            PathBuf::from(req.workspace.trim())
+        };
+        if let Err(e) = std::fs::create_dir_all(&workspace) {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                path = %workspace.display(),
+                conversation_id = %req.conversation_id,
+                "failed to create conversation workspace directory",
+            );
         }
-
-        Ok(response)
+        let outcome = self
+            .manager
+            .start_agent(req.agent, workspace)
+            .await
+            .map_err(map_anyhow)?;
+        let cwd = outcome.cwd.display().to_string();
+        self.persist_thread_parent_rows_in_conversation(
+            &outcome.thread_id,
+            &req.conversation_id,
+            &cwd,
+            req.agent,
+            outcome.provider_session_id.as_deref(),
+        )
+        .await;
+        let _ = self.state_tx.send(ThreadState::Idle);
+        tracing::info!(
+            target: "minos_daemon::agent",
+            conversation_id = %req.conversation_id,
+            thread_id = %outcome.thread_id,
+            agent = %agent_label(req.agent),
+            workspace = %cwd,
+            "agent session started in conversation",
+        );
+        Ok(StartAgentResponse {
+            session_id: outcome.thread_id,
+            cwd,
+        })
     }
 }
 
@@ -1176,6 +1414,38 @@ fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary
         message_count: u32::try_from(row.last_seq.max(0)).unwrap_or(u32::MAX),
         ended_at_ms: row.ended_at,
         end_reason,
+    })
+}
+
+fn conversation_summary_from_row(
+    row: ConversationRow,
+    participating_agents: Vec<AgentName>,
+) -> Result<minos_protocol::LocalConversationSummary, MinosError> {
+    Ok(minos_protocol::LocalConversationSummary {
+        conversation_id: row.conversation_id,
+        project_id: row.project_id,
+        title: row.title,
+        last_message_preview: row.last_message_preview,
+        created_at_ms: row.created_at_ms,
+        updated_at_ms: row.updated_at_ms,
+        message_count: u32::try_from(row.message_count.max(0)).unwrap_or(u32::MAX),
+        agent_session_count: u32::try_from(row.agent_session_count.max(0)).unwrap_or(u32::MAX),
+        participating_agents,
+    })
+}
+
+fn local_conversation_message_from_row(
+    row: ChatMessageRow,
+) -> Result<minos_protocol::LocalConversationMessage, MinosError> {
+    Ok(minos_protocol::LocalConversationMessage {
+        message_seq: row.message_seq,
+        message_id: row.message_id,
+        conversation_id: row.conversation_id,
+        thread_id: row.thread_id,
+        created_at_ms: row.created_at_ms,
+        sender_role: row.sender_role,
+        agent: row.agent.as_deref().map(parse_agent_label).transpose()?,
+        body: row.body,
     })
 }
 
@@ -1752,6 +2022,7 @@ async fn persist_thread_parent_rows_inner(
     cwd: &str,
     agent: minos_domain::AgentName,
     provider_session_id: Option<&str>,
+    conversation_id: Option<&str>,
 ) {
     let now_ms = current_unix_ms();
     if let Err(e) = store.upsert_workspace(cwd, now_ms).await {
@@ -1762,9 +2033,30 @@ async fn persist_thread_parent_rows_inner(
             "store.upsert_workspace failed; events FK may reject ingest",
         );
     }
+    let owned_conversation_id;
+    let conversation_id = match conversation_id {
+        Some(conversation_id) => conversation_id,
+        None => match ensure_workspace_conversation(store, cwd, now_ms).await {
+            Ok(conversation_id) => {
+                owned_conversation_id = conversation_id;
+                owned_conversation_id.as_str()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    thread_id = %thread_id,
+                    workspace = %cwd,
+                    "ensure_workspace_conversation failed; events FK may reject ingest",
+                );
+                return;
+            }
+        },
+    };
     if let Err(e) = store
-        .insert_thread(
+        .insert_thread_in_conversation(
             thread_id,
+            conversation_id,
             cwd,
             agent_label(agent),
             provider_session_id,
@@ -1793,6 +2085,66 @@ async fn persist_thread_parent_rows_inner(
             );
         }
     }
+}
+
+async fn ensure_workspace_conversation(
+    store: &LocalStore,
+    cwd: &str,
+    now_ms: i64,
+) -> anyhow::Result<String> {
+    let slug = workspace_slug(cwd);
+    let project_id = format!("workspace-{slug}");
+    let conversation_id = format!("conversation-{slug}");
+    let title = "Direct agent sessions";
+    store
+        .create_project(&project_id, title, &slug, Some(cwd), now_ms)
+        .await
+        .or_else(|error| {
+            if is_unique_constraint(&error) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })?;
+    store
+        .create_conversation(&conversation_id, &project_id, title, now_ms)
+        .await
+        .or_else(|error| {
+            if is_unique_constraint(&error) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })?;
+    Ok(conversation_id)
+}
+
+fn workspace_slug(cwd: &str) -> String {
+    let mut slug = cwd
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug = slug.trim_matches('-').to_owned();
+    if slug.is_empty() {
+        "workspace".into()
+    } else {
+        slug.chars().take(96).collect()
+    }
+}
+
+fn is_unique_constraint(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains("UNIQUE constraint failed"))
 }
 
 fn provider_session_id_from_event(
@@ -1893,10 +2245,28 @@ mod tests {
     ) {
         glue.store.upsert_workspace("/w", started_at).await.unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
-             VALUES (?, '/w', ?, 'idle', 3, ?, ?)",
+            "INSERT OR IGNORE INTO projects(project_id, name, workspace_slug, workspace_path, created_at, updated_at) \
+             VALUES ('p-test', 'Test', 'test', '/w', 0, 0)",
+        )
+        .execute(glue.store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations(conversation_id, project_id, title, created_at_ms, updated_at_ms) \
+             VALUES (?, 'p-test', 'Test', ?, ?)",
+        )
+        .bind(format!("c-{thread_id}"))
+        .bind(started_at)
+        .bind(last_activity_at)
+        .execute(glue.store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+             VALUES (?, ?, '/w', ?, 'idle', 3, ?, ?)",
         )
         .bind(thread_id)
+        .bind(format!("c-{thread_id}"))
         .bind(agent)
         .bind(started_at)
         .bind(last_activity_at)
@@ -2037,8 +2407,23 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
-             VALUES ('thr-live', ?, 'codex', 'idle', 0, 10, 10)",
+            "INSERT INTO projects(project_id, name, workspace_slug, workspace_path, created_at, updated_at) \
+             VALUES ('p-live', 'Live', 'live', ?, 10, 10)",
+        )
+        .bind(&workspace_root)
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations(conversation_id, project_id, title, created_at_ms, updated_at_ms) \
+             VALUES ('c-live', 'p-live', 'Live', 10, 10)",
+        )
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+             VALUES ('thr-live', 'c-live', ?, 'codex', 'idle', 0, 10, 10)",
         )
         .bind(&workspace_root)
         .execute(test.glue.store.pool())
@@ -2094,8 +2479,23 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
-             VALUES ('thr-snapshot', ?, 'codex', 'idle', 0, 10, 20)",
+            "INSERT INTO projects(project_id, name, workspace_slug, workspace_path, created_at, updated_at) \
+             VALUES ('p-snapshot', 'Snapshot', 'snapshot', ?, 10, 10)",
+        )
+        .bind(&workspace_root)
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations(conversation_id, project_id, title, created_at_ms, updated_at_ms) \
+             VALUES ('c-snapshot', 'p-snapshot', 'Snapshot', 10, 20)",
+        )
+        .execute(test.glue.store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+             VALUES ('thr-snapshot', 'c-snapshot', ?, 'codex', 'idle', 0, 10, 20)",
         )
         .bind(&workspace_root)
         .execute(test.glue.store.pool())
@@ -2134,7 +2534,7 @@ mod tests {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-r", "codex", 10, 20).await;
         sqlx::query(
-            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', codex_session_id = 'thr-r' WHERE thread_id = 'thr-r'",
+            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', provider_session_id = 'thr-r' WHERE thread_id = 'thr-r'",
         )
         .execute(test.glue.store.pool())
         .await
@@ -2151,7 +2551,7 @@ mod tests {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-g", "gemini", 10, 20).await;
         sqlx::query(
-            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', codex_session_id = 'thr-g', last_seq = 1 WHERE thread_id = 'thr-g'",
+            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', provider_session_id = 'thr-g', last_seq = 1 WHERE thread_id = 'thr-g'",
         )
         .execute(test.glue.store.pool())
         .await

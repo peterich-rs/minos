@@ -865,6 +865,111 @@ pub struct ListProjectsResponse {
     pub projects: Vec<ProjectSummary>,
 }
 
+/// Local TUI conversation list item. This is separate from the social/cloud
+/// `ConversationSummary` type near the top of this file.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalConversationSummary {
+    pub conversation_id: String,
+    pub project_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub message_count: u32,
+    pub agent_session_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub participating_agents: Vec<AgentName>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalConversationMessage {
+    pub message_seq: i64,
+    pub message_id: String,
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    pub created_at_ms: i64,
+    pub sender_role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+    pub body: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationsParams {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_updated_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationsResponse {
+    pub conversations: Vec<LocalConversationSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateConversationParams {
+    pub project_id: String,
+    pub title: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateConversationResponse {
+    pub conversation: LocalConversationSummary,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationMessagesParams {
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_seq: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationMessagesResponse {
+    pub messages: Vec<LocalConversationMessage>,
+    pub has_more: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationAgentSessionsParams {
+    pub conversation_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationAgentSessionsResponse {
+    pub threads: Vec<ThreadSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StartAgentInConversationRequest {
+    pub conversation_id: String,
+    pub agent: AgentName,
+    pub workspace: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AppendConversationMessageParams {
+    pub conversation_id: String,
+    pub message_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    pub sender_role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+    pub body: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AppendConversationMessageResponse {
+    pub message_seq: i64,
+}
+
 /// Parameters for listing threads within a project.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

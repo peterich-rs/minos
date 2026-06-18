@@ -450,8 +450,22 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
-             VALUES ('thr-sync', '/w', 'codex', 'running', 3, 0, 300)",
+            "INSERT INTO projects(project_id, name, workspace_slug, workspace_path, created_at, updated_at) \
+             VALUES ('p-sync', 'Sync', 'sync', '/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations(conversation_id, project_id, title, created_at_ms, updated_at_ms) \
+             VALUES ('c-sync', 'p-sync', 'Sync', 0, 300)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+             VALUES ('thr-sync', 'c-sync', '/w', 'codex', 'running', 3, 0, 300)",
         )
         .execute(store.pool())
         .await

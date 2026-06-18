@@ -17,6 +17,7 @@ use artifacts::{ArtifactRange, ArtifactStore};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -35,7 +36,8 @@ impl LocalStore {
         let url = format!("sqlite://{}?mode=rwc", db_file.display());
         let opts = SqliteConnectOptions::from_str(&url)?
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+            .foreign_keys(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             .connect_with(opts)
@@ -164,22 +166,24 @@ impl LocalStore {
     pub async fn insert_thread(
         &self,
         thread_id: &str,
+        conversation_id: &str,
         workspace_root: &str,
         agent: &str,
-        codex_session_id: Option<&str>,
+        provider_session_id: Option<&str>,
         status: &str,
         ts_ms: i64,
     ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT OR IGNORE INTO threads( \
-                thread_id, workspace_root, agent, codex_session_id, status, \
+                thread_id, conversation_id, workspace_root, agent, provider_session_id, status, \
                 last_seq, started_at, last_activity_at \
-             ) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+             ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
         .bind(thread_id)
+        .bind(conversation_id)
         .bind(workspace_root)
         .bind(agent)
-        .bind(codex_session_id)
+        .bind(provider_session_id)
         .bind(status)
         .bind(ts_ms)
         .bind(ts_ms)
@@ -193,7 +197,7 @@ impl LocalStore {
         thread_id: &str,
         provider_session_id: Option<&str>,
     ) -> anyhow::Result<()> {
-        sqlx::query("UPDATE threads SET codex_session_id = ? WHERE thread_id = ?")
+        sqlx::query("UPDATE threads SET provider_session_id = ? WHERE thread_id = ?")
             .bind(provider_session_id)
             .bind(thread_id)
             .execute(&self.pool)
@@ -341,14 +345,9 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Delete a project. Threads referencing it will have their project_id
-    /// set to NULL (SQLite FK ON DELETE SET NULL behavior is not configured,
-    /// so we do it manually).
+    /// Delete a project. Conversation/message/thread rows cascade through the
+    /// schema; no legacy reassignment path is kept.
     pub async fn delete_project(&self, project_id: &str) -> anyhow::Result<()> {
-        sqlx::query("UPDATE threads SET project_id = NULL WHERE project_id = ?")
-            .bind(project_id)
-            .execute(&self.pool)
-            .await?;
         sqlx::query("DELETE FROM projects WHERE project_id = ?")
             .bind(project_id)
             .execute(&self.pool)
@@ -356,20 +355,64 @@ impl LocalStore {
         Ok(())
     }
 
-    /// List threads belonging to a specific project.
-    pub async fn list_threads_by_project(
+    pub async fn count_conversations_by_project(&self, project_id: &str) -> anyhow::Result<u32> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE project_id = ?")
+                .bind(project_id)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(u32::try_from(count.max(0)).unwrap_or(u32::MAX))
+    }
+
+    // ── Conversation CRUD ──────────────────────────────────────────────
+
+    pub async fn create_conversation(
+        &self,
+        conversation_id: &str,
+        project_id: &str,
+        title: &str,
+        ts_ms: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO conversations( \
+                conversation_id, project_id, title, created_at_ms, updated_at_ms \
+             ) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(conversation_id)
+        .bind(project_id)
+        .bind(title)
+        .bind(ts_ms)
+        .bind(ts_ms)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> anyhow::Result<Option<ConversationRow>> {
+        Ok(sqlx::query_as::<_, ConversationRow>(
+            "SELECT * FROM conversations WHERE conversation_id = ?",
+        )
+        .bind(conversation_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    pub async fn list_conversations_by_project(
         &self,
         project_id: &str,
-        before_ts_ms: Option<i64>,
+        before_updated_at_ms: Option<i64>,
         limit: Option<u32>,
-    ) -> anyhow::Result<Vec<ThreadRow>> {
+    ) -> anyhow::Result<Vec<ConversationRow>> {
         let limit = limit.unwrap_or(50).min(500) as i64;
-        let rows = match before_ts_ms {
+        let rows = match before_updated_at_ms {
             Some(ts) => {
-                sqlx::query_as::<_, ThreadRow>(
-                    "SELECT * FROM threads \
-                     WHERE project_id = ? AND last_activity_at < ? \
-                     ORDER BY last_activity_at DESC LIMIT ?",
+                sqlx::query_as::<_, ConversationRow>(
+                    "SELECT * FROM conversations \
+                     WHERE project_id = ? AND updated_at_ms < ? \
+                     ORDER BY updated_at_ms DESC, conversation_id LIMIT ?",
                 )
                 .bind(project_id)
                 .bind(ts)
@@ -378,10 +421,10 @@ impl LocalStore {
                 .await?
             }
             None => {
-                sqlx::query_as::<_, ThreadRow>(
-                    "SELECT * FROM threads \
+                sqlx::query_as::<_, ConversationRow>(
+                    "SELECT * FROM conversations \
                      WHERE project_id = ? \
-                     ORDER BY last_activity_at DESC LIMIT ?",
+                     ORDER BY updated_at_ms DESC, conversation_id LIMIT ?",
                 )
                 .bind(project_id)
                 .bind(limit)
@@ -392,18 +435,199 @@ impl LocalStore {
         Ok(rows)
     }
 
-    /// Assign a thread to a project.
-    pub async fn assign_thread_to_project(
+    pub async fn list_agents_for_conversations(
+        &self,
+        conversation_ids: &[String],
+    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
+        if conversation_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(conversation_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT conversation_id, agent FROM threads \
+             WHERE conversation_id IN ({placeholders}) \
+             GROUP BY conversation_id, agent \
+             ORDER BY conversation_id, agent"
+        );
+        let mut query = sqlx::query(&sql);
+        for id in conversation_ids {
+            query = query.bind(id);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+        let mut by_conversation = HashMap::<String, Vec<String>>::new();
+        for row in rows {
+            by_conversation
+                .entry(row.try_get("conversation_id")?)
+                .or_default()
+                .push(row.try_get("agent")?);
+        }
+        Ok(by_conversation)
+    }
+
+    pub async fn list_threads_by_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> anyhow::Result<Vec<ThreadRow>> {
+        Ok(sqlx::query_as::<_, ThreadRow>(
+            "SELECT * FROM threads \
+             WHERE conversation_id = ? \
+             ORDER BY last_activity_at DESC, thread_id",
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub async fn insert_thread_in_conversation(
         &self,
         thread_id: &str,
-        project_id: &str,
+        conversation_id: &str,
+        workspace_root: &str,
+        agent: &str,
+        provider_session_id: Option<&str>,
+        status: &str,
+        ts_ms: i64,
     ) -> anyhow::Result<()> {
-        sqlx::query("UPDATE threads SET project_id = ? WHERE thread_id = ?")
-            .bind(project_id)
-            .bind(thread_id)
-            .execute(&self.pool)
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT OR IGNORE INTO threads( \
+                thread_id, conversation_id, workspace_root, agent, provider_session_id, status, \
+                last_seq, started_at, last_activity_at \
+             ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+        )
+        .bind(thread_id)
+        .bind(conversation_id)
+        .bind(workspace_root)
+        .bind(agent)
+        .bind(provider_session_id)
+        .bind(status)
+        .bind(ts_ms)
+        .bind(ts_ms)
+        .execute(&mut *tx)
+        .await?;
+        if inserted.rows_affected() > 0 {
+            sqlx::query(
+                "UPDATE conversations \
+                 SET agent_session_count = agent_session_count + 1, updated_at_ms = ? \
+                 WHERE conversation_id = ?",
+            )
+            .bind(ts_ms)
+            .bind(conversation_id)
+            .execute(&mut *tx)
             .await?;
+        }
+        tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn upsert_conversation_message(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        thread_id: Option<&str>,
+        sender_role: &str,
+        agent: Option<&str>,
+        body: &str,
+        ts_ms: i64,
+    ) -> anyhow::Result<i64> {
+        let preview = body.chars().take(120).collect::<String>();
+        let mut tx = self.pool.begin().await?;
+        let existing: Option<i64> =
+            sqlx::query_scalar("SELECT message_seq FROM chat_messages WHERE message_id = ?")
+                .bind(message_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+        let message_seq = if let Some(seq) = existing {
+            sqlx::query(
+                "UPDATE chat_messages \
+                 SET thread_id = ?, sender_role = ?, agent = ?, body = ? \
+                 WHERE message_id = ?",
+            )
+            .bind(thread_id)
+            .bind(sender_role)
+            .bind(agent)
+            .bind(body)
+            .bind(message_id)
+            .execute(&mut *tx)
+            .await?;
+            seq
+        } else {
+            let result = sqlx::query(
+                "INSERT INTO chat_messages( \
+                    message_id, conversation_id, thread_id, created_at_ms, sender_role, agent, body \
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(message_id)
+            .bind(conversation_id)
+            .bind(thread_id)
+            .bind(ts_ms)
+            .bind(sender_role)
+            .bind(agent)
+            .bind(body)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE conversations \
+                 SET message_count = message_count + 1 \
+                 WHERE conversation_id = ?",
+            )
+            .bind(conversation_id)
+            .execute(&mut *tx)
+            .await?;
+            result.last_insert_rowid()
+        };
+
+        sqlx::query(
+            "UPDATE conversations \
+             SET last_message_preview = ?, updated_at_ms = ? \
+             WHERE conversation_id = ?",
+        )
+        .bind(preview)
+        .bind(ts_ms)
+        .bind(conversation_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(message_seq)
+    }
+
+    pub async fn list_conversation_messages(
+        &self,
+        conversation_id: &str,
+        before_seq: Option<i64>,
+        limit: Option<u32>,
+    ) -> anyhow::Result<Vec<ChatMessageRow>> {
+        let limit = limit.unwrap_or(100).min(500) as i64;
+        let rows = match before_seq {
+            Some(seq) => {
+                sqlx::query_as::<_, ChatMessageRow>(
+                    "SELECT * FROM chat_messages \
+                     WHERE conversation_id = ? AND message_seq < ? \
+                     ORDER BY message_seq DESC LIMIT ?",
+                )
+                .bind(conversation_id)
+                .bind(seq)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query_as::<_, ChatMessageRow>(
+                    "SELECT * FROM chat_messages \
+                     WHERE conversation_id = ? \
+                     ORDER BY message_seq DESC LIMIT ?",
+                )
+                .bind(conversation_id)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        Ok(rows)
     }
 
     /// Touch a project's `updated_at` timestamp.
@@ -443,9 +667,10 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ProjectRow {
 #[derive(Debug, Clone)]
 pub struct ThreadRow {
     pub thread_id: String,
+    pub conversation_id: String,
     pub workspace_root: String,
     pub agent: String,
-    pub codex_session_id: Option<String>,
+    pub provider_session_id: Option<String>,
     pub status: String,
     pub last_pause_reason: Option<String>,
     pub last_close_reason: Option<String>,
@@ -453,16 +678,16 @@ pub struct ThreadRow {
     pub started_at: i64,
     pub last_activity_at: i64,
     pub ended_at: Option<i64>,
-    pub project_id: Option<String>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
     fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
             thread_id: row.try_get("thread_id")?,
+            conversation_id: row.try_get("conversation_id")?,
             workspace_root: row.try_get("workspace_root")?,
             agent: row.try_get("agent")?,
-            codex_session_id: row.try_get("codex_session_id")?,
+            provider_session_id: row.try_get("provider_session_id")?,
             status: row.try_get("status")?,
             last_pause_reason: row.try_get("last_pause_reason")?,
             last_close_reason: row.try_get("last_close_reason")?,
@@ -470,9 +695,32 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
             started_at: row.try_get("started_at")?,
             last_activity_at: row.try_get("last_activity_at")?,
             ended_at: row.try_get("ended_at")?,
-            project_id: row.try_get("project_id")?,
         })
     }
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ConversationRow {
+    pub conversation_id: String,
+    pub project_id: String,
+    pub title: String,
+    pub last_message_preview: Option<String>,
+    pub message_count: i64,
+    pub agent_session_count: i64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ChatMessageRow {
+    pub message_seq: i64,
+    pub message_id: String,
+    pub conversation_id: String,
+    pub thread_id: Option<String>,
+    pub created_at_ms: i64,
+    pub sender_role: String,
+    pub agent: Option<String>,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -493,6 +741,17 @@ pub struct EventRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn seed_conversation(store: &LocalStore) {
+        store
+            .create_project("p", "Project", "project", Some("/w"), 0)
+            .await
+            .unwrap();
+        store
+            .create_conversation("c", "p", "Conversation", 0)
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn open_creates_schema() {
@@ -516,11 +775,12 @@ mod tests {
             .execute(store.pool())
             .await
             .unwrap();
+        seed_conversation(&store).await;
         for (i, status) in ["running", "idle", "closed", "suspended"]
             .iter()
             .enumerate()
         {
-            sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, '/w', 'codex', ?, 0, ?, ?)")
+            sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', 'codex', ?, 0, ?, ?)")
                 .bind(format!("t{i}"))
                 .bind(*status)
                 .bind(i as i64)
@@ -545,8 +805,9 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
+        seed_conversation(&store).await;
         for i in 0..3 {
-            sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, '/w', 'codex', 'idle', 0, ?, ?)")
+            sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', 'codex', 'idle', 0, ?, ?)")
                 .bind(format!("thr-{i}"))
                 .bind(i as i64)
                 .bind(i as i64)
@@ -572,7 +833,8 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
-        sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-status', '/w', 'codex', 'idle', 0, 1, 1)")
+        seed_conversation(&store).await;
+        sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-status', 'c', '/w', 'codex', 'idle', 0, 1, 1)")
             .execute(store.pool())
             .await
             .unwrap();
@@ -603,7 +865,8 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
-        sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-delete', '/w', 'codex', 'idle', 1, 0, 0)")
+        seed_conversation(&store).await;
+        sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-delete', 'c', '/w', 'codex', 'idle', 1, 0, 0)")
             .execute(store.pool())
             .await
             .unwrap();
@@ -656,8 +919,9 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
+        seed_conversation(&store).await;
         for (thread_id, agent, ts) in [("thr-a", "codex", 10), ("thr-b", "claude", 20)] {
-            sqlx::query("INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, '/w', ?, 'idle', 0, ?, ?)")
+            sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', ?, 'idle', 0, ?, ?)")
                 .bind(thread_id)
                 .bind(agent)
                 .bind(ts)

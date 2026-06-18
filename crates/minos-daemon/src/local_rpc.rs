@@ -9,14 +9,19 @@ use minos_agent_runtime::ManagerEvent;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
-    ApprovalDecisionRequest, CloseReason, CloseThreadRequest, CreateProjectRequest,
-    CreateProjectResponse, GetThreadParams, HealthResponse, InterruptThreadRequest,
-    ListClisResponse, ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse,
+    AppendConversationMessageParams, AppendConversationMessageResponse, ApprovalDecisionRequest,
+    CloseReason, CloseThreadRequest, CreateConversationParams, CreateConversationResponse,
+    CreateProjectRequest, CreateProjectResponse, GetThreadParams, HealthResponse,
+    InterruptThreadRequest, ListClisResponse, ListConversationAgentSessionsParams,
+    ListConversationAgentSessionsResponse, ListConversationMessagesParams,
+    ListConversationMessagesResponse, ListConversationsParams, ListConversationsResponse,
+    ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse,
     LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot,
     ReadArtifactRangeRequest, ReadArtifactRangeResponse, ReadGroupChatParams,
     ReadGroupChatResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
-    StartAgentInProjectRequest, StartAgentRequest, StartAgentResponse, ThreadState,
+    StartAgentInConversationRequest, StartAgentInProjectRequest, StartAgentRequest,
+    StartAgentResponse, ThreadState,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -157,6 +162,73 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             "local RPC create_project",
         );
         self.agent.create_project(req).await.map_err(rpc_err)
+    }
+
+    async fn list_conversations(
+        &self,
+        req: ListConversationsParams,
+    ) -> jsonrpsee::core::RpcResult<ListConversationsResponse> {
+        self.agent.list_conversations(req).await.map_err(rpc_err)
+    }
+
+    async fn create_conversation(
+        &self,
+        req: CreateConversationParams,
+    ) -> jsonrpsee::core::RpcResult<CreateConversationResponse> {
+        tracing::info!(
+            target: "minos_daemon::local_rpc",
+            project_id = %req.project_id,
+            title = %req.title,
+            "local RPC create_conversation",
+        );
+        self.agent.create_conversation(req).await.map_err(rpc_err)
+    }
+
+    async fn list_conversation_messages(
+        &self,
+        req: ListConversationMessagesParams,
+    ) -> jsonrpsee::core::RpcResult<ListConversationMessagesResponse> {
+        self.agent
+            .list_conversation_messages(req)
+            .await
+            .map_err(rpc_err)
+    }
+
+    async fn list_conversation_agent_sessions(
+        &self,
+        req: ListConversationAgentSessionsParams,
+    ) -> jsonrpsee::core::RpcResult<ListConversationAgentSessionsResponse> {
+        self.agent
+            .list_conversation_agent_sessions(req)
+            .await
+            .map_err(rpc_err)
+    }
+
+    async fn start_agent_in_conversation(
+        &self,
+        req: StartAgentInConversationRequest,
+    ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
+        tracing::info!(
+            target: "minos_daemon::local_rpc",
+            conversation_id = %req.conversation_id,
+            agent = ?req.agent,
+            workspace = %req.workspace,
+            "local RPC start_agent_in_conversation",
+        );
+        self.agent
+            .start_agent_in_conversation(req)
+            .await
+            .map_err(rpc_err)
+    }
+
+    async fn append_conversation_message(
+        &self,
+        req: AppendConversationMessageParams,
+    ) -> jsonrpsee::core::RpcResult<AppendConversationMessageResponse> {
+        self.agent
+            .append_conversation_message(req)
+            .await
+            .map_err(rpc_err)
     }
 
     async fn list_project_threads(

@@ -211,6 +211,42 @@ pub trait LocalDaemonRpc {
         req: crate::CreateProjectRequest,
     ) -> jsonrpsee::core::RpcResult<crate::CreateProjectResponse>;
 
+    #[method(name = "list_conversations")]
+    async fn list_conversations(
+        &self,
+        req: crate::ListConversationsParams,
+    ) -> jsonrpsee::core::RpcResult<crate::ListConversationsResponse>;
+
+    #[method(name = "create_conversation")]
+    async fn create_conversation(
+        &self,
+        req: crate::CreateConversationParams,
+    ) -> jsonrpsee::core::RpcResult<crate::CreateConversationResponse>;
+
+    #[method(name = "list_conversation_messages")]
+    async fn list_conversation_messages(
+        &self,
+        req: crate::ListConversationMessagesParams,
+    ) -> jsonrpsee::core::RpcResult<crate::ListConversationMessagesResponse>;
+
+    #[method(name = "list_conversation_agent_sessions")]
+    async fn list_conversation_agent_sessions(
+        &self,
+        req: crate::ListConversationAgentSessionsParams,
+    ) -> jsonrpsee::core::RpcResult<crate::ListConversationAgentSessionsResponse>;
+
+    #[method(name = "start_agent_in_conversation")]
+    async fn start_agent_in_conversation(
+        &self,
+        req: crate::StartAgentInConversationRequest,
+    ) -> jsonrpsee::core::RpcResult<crate::StartAgentResponse>;
+
+    #[method(name = "append_conversation_message")]
+    async fn append_conversation_message(
+        &self,
+        req: crate::AppendConversationMessageParams,
+    ) -> jsonrpsee::core::RpcResult<crate::AppendConversationMessageResponse>;
+
     #[method(name = "list_project_threads")]
     async fn list_project_threads(
         &self,

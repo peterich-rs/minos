@@ -453,8 +453,23 @@ async fn list_local_threads_includes_persisted_suspended_threads() {
         .await
         .unwrap();
     glue.store()
+        .create_project(
+            "p-persisted",
+            "Persisted",
+            "persisted",
+            Some("/tmp/persisted"),
+            10,
+        )
+        .await
+        .unwrap();
+    glue.store()
+        .create_conversation("c-persisted", "p-persisted", "Persisted", 10)
+        .await
+        .unwrap();
+    glue.store()
         .insert_thread(
             "thr-persisted",
+            "c-persisted",
             "/tmp/persisted",
             "claude",
             None,

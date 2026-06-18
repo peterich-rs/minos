@@ -233,7 +233,7 @@ async fn process_batch(
             sqlx::query(
                 "UPDATE threads SET \
                     last_seq = CASE WHEN last_seq < ? THEN ? ELSE last_seq END, \
-                    last_activity_at = ?, codex_session_id = ? WHERE thread_id = ?",
+                    last_activity_at = ?, provider_session_id = ? WHERE thread_id = ?",
             )
             .bind(seq as i64)
             .bind(seq as i64)
@@ -444,15 +444,29 @@ mod tests {
 
     async fn seed_thread(store: &LocalStore, tid: &str) {
         sqlx::query(
-            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/tmp/ws', 0, 0)",
+            "INSERT OR IGNORE INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/tmp/ws', 0, 0)",
         )
         .execute(store.pool())
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, '/tmp/ws', 'codex', 'idle', 0, 0, 0)",
+            "INSERT OR IGNORE INTO projects(project_id, name, workspace_slug, workspace_path, created_at, updated_at) VALUES ('p-test', 'Test', 'test', '/tmp/ws', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT OR IGNORE INTO conversations(conversation_id, project_id, title, created_at_ms, updated_at_ms) VALUES (?, 'p-test', 'Test', 0, 0)",
+        )
+        .bind(format!("c-{tid}"))
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, ?, '/tmp/ws', 'codex', 'idle', 0, 0, 0)",
         )
         .bind(tid)
+        .bind(format!("c-{tid}"))
         .execute(store.pool())
         .await
         .unwrap();
