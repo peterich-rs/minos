@@ -79,6 +79,9 @@ pub fn handle_server_frame(frame: ServerFrame) -> Option<RealtimeEvent> {
             Some(RealtimeEvent::ForceClose { reason, close_code })
         }
         ServerFrame::Pong { .. } => None,
+        ServerFrame::HostIngestAck { .. }
+        | ServerFrame::PullIngestRange { .. }
+        | ServerFrame::PullAck { .. } => None,
         ServerFrame::Error { code, message, .. } => {
             tracing::warn!(code, message, "server error frame");
             None

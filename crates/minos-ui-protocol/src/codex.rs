@@ -444,10 +444,10 @@ fn translate_item_completed(
             };
             let content = string_array(item.get("content"));
             let summary = string_array(item.get("summary"));
-            let text = if !summary.is_empty() {
-                summary.join("\n")
-            } else {
+            let text = if summary.is_empty() {
                 content.join("\n")
+            } else {
+                summary.join("\n")
             };
             if text.is_empty() {
                 Vec::new()

@@ -19,7 +19,6 @@ use minos_protocol::{
     LocalGroupChatMessage, LocalGroupChatMessageKind, ReadGroupChatParams, ReadGroupChatResponse,
     ReadThreadParams, StartAgentRequest, StartAgentResponse,
 };
-use tokio::sync::mpsc;
 
 use async_trait::async_trait;
 use minos_cli_detect::CommandOutcome;
@@ -67,8 +66,7 @@ async fn setup() -> (
     cfg.test_ws_url = Some(url);
     let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
 
-    let (relay_tx, _relay_rx) = mpsc::channel(64);
-    let writer = Arc::new(EventWriter::spawn(store.clone(), relay_tx));
+    let writer = Arc::new(EventWriter::spawn(store.clone()));
     let glue = Arc::new(AgentGlue::wire_with(manager, writer, store, workspace));
 
     let discovery_path = tmp.path().join("discovery.json");

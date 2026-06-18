@@ -13,6 +13,12 @@ use sqlx::SqlitePool;
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostIngestInsert {
+    Inserted,
+    Duplicate,
+}
+
 /// Decoded row from the `raw_events` table.
 #[derive(Debug, Clone)]
 pub struct RawEventRow {
@@ -156,6 +162,130 @@ pub async fn insert_assigning_seq(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_host_ingest_chunk(
+    store: &impl AsStorePool,
+    host_device_id: &str,
+    thread_id: &str,
+    seq: u64,
+    event_id: &str,
+    kind: &str,
+    agent: AgentName,
+    payload: &Value,
+    ts_ms: i64,
+    checksum_sha256: &str,
+    byte_len: u64,
+) -> Result<HostIngestInsert, BackendError> {
+    let payload_s = serde_json::to_string(payload).map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.insert_host_ingest_chunk.serialise".into(),
+        message: e.to_string(),
+    })?;
+    let seq_i64 = i64::try_from(seq).unwrap_or(i64::MAX);
+    let byte_len_i64 = i64::try_from(byte_len).unwrap_or(i64::MAX);
+    let inserted = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r"INSERT OR IGNORE INTO raw_events (
+                    host_device_id, thread_id, seq, event_id, kind, agent,
+                    payload_json, ts_ms, checksum_sha256, byte_len
+               ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )
+        .bind(host_device_id)
+        .bind(thread_id)
+        .bind(seq_i64)
+        .bind(event_id)
+        .bind(kind)
+        .bind(agent_str(agent))
+        .bind(&payload_s)
+        .bind(ts_ms)
+        .bind(checksum_sha256)
+        .bind(byte_len_i64)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected() == 1),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r"INSERT INTO raw_events (
+                    host_device_id, thread_id, seq, event_id, kind, agent,
+                    payload_json, ts_ms, checksum_sha256, byte_len
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               ON CONFLICT (host_device_id, thread_id, seq) DO NOTHING",
+        )
+        .bind(host_device_id)
+        .bind(thread_id)
+        .bind(seq_i64)
+        .bind(event_id)
+        .bind(kind)
+        .bind(agent_str(agent))
+        .bind(&payload_s)
+        .bind(ts_ms)
+        .bind(checksum_sha256)
+        .bind(byte_len_i64)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected() == 1),
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.insert_host_ingest_chunk".into(),
+        message: e.to_string(),
+    })?;
+
+    if inserted {
+        return Ok(HostIngestInsert::Inserted);
+    }
+
+    let existing = lookup_host_ingest_collision(store, host_device_id, thread_id, seq_i64).await?;
+    let Some((existing_checksum, existing_payload)) = existing else {
+        return Err(BackendError::StoreQuery {
+            operation: "raw_events.insert_host_ingest_chunk.lookup".into(),
+            message: "insert conflict had no matching host-local row".into(),
+        });
+    };
+    if existing_checksum == checksum_sha256 || existing_payload == payload_s {
+        return Ok(HostIngestInsert::Duplicate);
+    }
+    Err(BackendError::StoreQuery {
+        operation: "raw_events.insert_host_ingest_chunk.invariant".into(),
+        message: format!(
+            "host-local ingest collision for host={host_device_id} thread={thread_id} seq={seq}"
+        ),
+    })
+}
+
+async fn lookup_host_ingest_collision(
+    store: &impl AsStorePool,
+    host_device_id: &str,
+    thread_id: &str,
+    seq: i64,
+) -> Result<Option<(String, String)>, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT checksum_sha256, payload_json FROM raw_events \
+             WHERE host_device_id = ?1 AND thread_id = ?2 AND seq = ?3",
+            )
+            .bind(host_device_id)
+            .bind(thread_id)
+            .bind(seq)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT checksum_sha256, payload_json FROM raw_events \
+             WHERE host_device_id = $1 AND thread_id = $2 AND seq = $3",
+            )
+            .bind(host_device_id)
+            .bind(thread_id)
+            .bind(seq)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.lookup_host_ingest_collision".into(),
+        message: e.to_string(),
+    })
+}
+
 async fn insert_payload_at_seq(
     store: &impl AsStorePool,
     thread_id: &str,
@@ -260,10 +390,9 @@ pub async fn read_range(
 /// `owner_device_id`. Threads with zero raw events are omitted (the
 /// `INNER JOIN` excludes them).
 ///
-/// Used by `/ws/host` activation to compute the `IngestCheckpoint` frame the
-/// host receives on connect (Phase D / spec §9 reconciliation): the
-/// daemon compares each backend max against its local watermark and
-/// replays the gap.
+/// Kept for legacy raw ingest readers. The production host reconnect path now
+/// uses `HostGapManifest` plus backend-driven `PullIngestRange` instead of a
+/// backend-pushed checkpoint replay command.
 pub async fn last_seq_per_owner(
     store: &impl AsStorePool,
     owner_device_id: &str,
@@ -330,6 +459,63 @@ pub async fn last_seq(store: &impl AsStorePool, thread_id: &str) -> Result<u64, 
     Ok(u64::try_from(v.unwrap_or(0)).unwrap_or(0))
 }
 
+pub async fn contiguous_host_seq_after(
+    store: &impl AsStorePool,
+    host_device_id: &str,
+    thread_id: &str,
+    after_seq: u64,
+) -> Result<u64, BackendError> {
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar(
+                "SELECT seq FROM raw_events \
+                 WHERE host_device_id = ?1 AND thread_id = ?2 AND seq > ?3 \
+                 ORDER BY seq ASC",
+            )
+            .bind(host_device_id)
+            .bind(thread_id)
+            .bind(i64::try_from(after_seq).unwrap_or(i64::MAX))
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar(
+                "SELECT seq FROM raw_events \
+                 WHERE host_device_id = $1 AND thread_id = $2 AND seq > $3 \
+                 ORDER BY seq ASC",
+            )
+            .bind(host_device_id)
+            .bind(thread_id)
+            .bind(i64::try_from(after_seq).unwrap_or(i64::MAX))
+            .fetch_all(pool)
+            .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "raw_events.contiguous_host_seq_after".into(),
+        message: e.to_string(),
+    })?;
+    Ok(contiguous_seq_after(after_seq, rows))
+}
+
+fn contiguous_seq_after(after_seq: u64, seqs: impl IntoIterator<Item = i64>) -> u64 {
+    let mut accepted = after_seq;
+    for seq in seqs {
+        let Ok(seq) = u64::try_from(seq) else {
+            break;
+        };
+        let Some(next) = accepted.checked_add(1) else {
+            break;
+        };
+        if seq == next {
+            accepted = seq;
+        } else if seq > next {
+            break;
+        }
+    }
+    accepted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +555,13 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn contiguous_seq_after_stops_at_first_gap() {
+        assert_eq!(contiguous_seq_after(100, [106]), 100);
+        assert_eq!(contiguous_seq_after(100, [101, 102, 104, 105]), 102);
+        assert_eq!(contiguous_seq_after(100, [101, 102, 103]), 103);
     }
 
     #[tokio::test]
@@ -412,6 +605,70 @@ mod tests {
         assert_eq!(rows[0].payload, first);
         assert_eq!(rows[1].seq, 2);
         assert_eq!(rows[1].payload, fresh_after_counter_reset);
+    }
+
+    #[tokio::test]
+    async fn insert_host_ingest_chunk_is_strictly_idempotent() {
+        let pool = memory_pool().await;
+        seed_host_and_thread(&pool).await;
+        let first = serde_json::json!({"delta":"hello"});
+
+        assert_eq!(
+            insert_host_ingest_chunk(
+                &pool,
+                "dev1",
+                "thr1",
+                1,
+                "dev1:thr1:1",
+                "agent_event",
+                AgentName::Codex,
+                &first,
+                100,
+                "checksum-a",
+                17,
+            )
+            .await
+            .unwrap(),
+            HostIngestInsert::Inserted,
+        );
+        assert_eq!(
+            insert_host_ingest_chunk(
+                &pool,
+                "dev1",
+                "thr1",
+                1,
+                "dev1:thr1:1",
+                "agent_event",
+                AgentName::Codex,
+                &first,
+                100,
+                "checksum-a",
+                17,
+            )
+            .await
+            .unwrap(),
+            HostIngestInsert::Duplicate,
+        );
+
+        let err = insert_host_ingest_chunk(
+            &pool,
+            "dev1",
+            "thr1",
+            1,
+            "dev1:thr1:1-conflict",
+            "agent_event",
+            AgentName::Codex,
+            &serde_json::json!({"delta":"different"}),
+            101,
+            "checksum-b",
+            19,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, BackendError::StoreQuery { ref operation, .. } if operation.contains("invariant")),
+            "expected invariant error, got {err:?}",
+        );
     }
 
     #[tokio::test]

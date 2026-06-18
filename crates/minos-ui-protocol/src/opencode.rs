@@ -214,11 +214,7 @@ fn translate_message_updated(
                 }
             }
 
-            if message
-                .get("time")
-                .and_then(|time| time.get("completed"))
-                .is_some()
-            {
+            if opencode_message_completion_is_terminal(&message) {
                 events.extend(complete_specific_assistant_message(state, &message_id));
             }
         }
@@ -719,6 +715,21 @@ fn normalize_user_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn opencode_message_completion_is_terminal(message: &Value) -> bool {
+    if message
+        .get("time")
+        .and_then(|time| time.get("completed"))
+        .is_none()
+    {
+        return false;
+    }
+
+    let Some(finish) = message.get("finish").and_then(Value::as_str) else {
+        return true;
+    };
+    !matches!(finish.to_ascii_lowercase().as_str(), "tool-calls")
+}
+
 fn start_message(
     state: &mut OpencodeTranslatorState,
     message_id: &str,
@@ -895,6 +906,59 @@ mod tests {
             UiEventMessage::TextReplace { message_id, text }
                 if message_id == "msg_a1" && text == "Hello"
         ));
+    }
+
+    #[test]
+    fn assistant_message_completed_with_tool_calls_is_not_terminal() {
+        let mut state = OpencodeTranslatorState::new("thr_tool_calls".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_tool_calls","sessionID":"sess_1","role":"assistant","time":{"created":1}}}
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        let events = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_tool_calls","sessionID":"sess_1","role":"assistant","finish":"tool-calls","time":{"created":1,"completed":2}}}
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, UiEventMessage::MessageCompleted { .. })));
+    }
+
+    #[test]
+    fn assistant_message_completed_with_stop_is_terminal() {
+        let mut state = OpencodeTranslatorState::new("thr_stop".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_stop","sessionID":"sess_1","role":"assistant","time":{"created":1}}}
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        let events = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_stop","sessionID":"sess_1","role":"assistant","finish":"stop","time":{"created":1,"completed":2}}}
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UiEventMessage::MessageCompleted { message_id, .. } if message_id == "msg_stop"
+        )));
     }
 
     #[test]

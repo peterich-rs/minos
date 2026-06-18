@@ -611,6 +611,15 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
+        sqlx::query(
+            "INSERT INTO ingest_sync_state( \
+                thread_id, backend_acked_seq, dirty_from_seq, dirty_to_seq, \
+                dirty_bytes, dirty_events, updated_at \
+             ) VALUES ('thr-delete', 0, 1, 1, 1, 1, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
 
         let deleted = store.delete_thread("thr-delete").await.unwrap();
 
@@ -622,6 +631,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.0, 0);
+        let sync_rows: (i64,) =
+            sqlx::query_as("SELECT count(*) FROM ingest_sync_state WHERE thread_id = ?")
+                .bind("thr-delete")
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(sync_rows.0, 0);
     }
 
     #[tokio::test]

@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1125718951;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1911971143;
 
 // Section: executor
 
@@ -2765,6 +2765,70 @@ fn wire__crate__api__minos__MobileClient_remove_group_member_impl(
                             &*api_that_guard,
                             api_conversation_id,
                             api_member_account_id,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__minos__MobileClient_respond_opencode_question_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_respond_opencode_question",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            let api_session_id = <String>::sse_decode(&mut deserializer);
+            let api_question_id = <String>::sse_decode(&mut deserializer);
+            let api_answers_json = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::minos::MobileClient::respond_opencode_question(
+                            &*api_that_guard,
+                            api_session_id,
+                            api_question_id,
+                            api_answers_json,
                         )
                         .await?;
                         Ok(output_ok)
@@ -6671,101 +6735,107 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        48 => wire__crate__api__minos__MobileClient_resume_persisted_session_impl(
+        48 => wire__crate__api__minos__MobileClient_respond_opencode_question_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        49 => wire__crate__api__minos__MobileClient_search_users_impl(
+        49 => wire__crate__api__minos__MobileClient_resume_persisted_session_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        50 => wire__crate__api__minos__MobileClient_send_approval_decision_impl(
+        50 => wire__crate__api__minos__MobileClient_search_users_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        51 => wire__crate__api__minos__MobileClient_send_chat_message_impl(
+        51 => wire__crate__api__minos__MobileClient_send_approval_decision_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        52 => wire__crate__api__minos__MobileClient_send_user_message_impl(
+        52 => wire__crate__api__minos__MobileClient_send_chat_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        53 => wire__crate__api__minos__MobileClient_set_active_host_impl(
+        53 => wire__crate__api__minos__MobileClient_send_user_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        54 => wire__crate__api__minos__MobileClient_set_minos_id_impl(
+        54 => wire__crate__api__minos__MobileClient_set_active_host_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        55 => wire__crate__api__minos__MobileClient_subscribe_agent_session_impl(
+        55 => wire__crate__api__minos__MobileClient_set_minos_id_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        56 => wire__crate__api__minos__MobileClient_subscribe_auth_state_impl(
+        56 => wire__crate__api__minos__MobileClient_subscribe_agent_session_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        57 => wire__crate__api__minos__MobileClient_subscribe_social_events_impl(
+        57 => wire__crate__api__minos__MobileClient_subscribe_auth_state_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        58 => wire__crate__api__minos__MobileClient_subscribe_state_impl(
+        58 => wire__crate__api__minos__MobileClient_subscribe_social_events_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        59 => wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
+        59 => wire__crate__api__minos__MobileClient_subscribe_state_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        60 => wire__crate__api__minos__MobileClient_update_agent_impl(
+        60 => wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        61 => wire__crate__api__minos__MobileClient_update_project_impl(
+        61 => wire__crate__api__minos__MobileClient_update_agent_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        62 => wire__crate__api__minos__MobileClient_write_host_skill_config_impl(
+        62 => wire__crate__api__minos__MobileClient_update_project_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        65 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
-        69 => {
+        63 => wire__crate__api__minos__MobileClient_write_host_skill_config_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        66 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
+        70 => {
             wire__crate__api__minos__subscribe_log_records_impl(port, ptr, rust_vec_len, data_len)
         }
-        70 => wire__crate__api__minos__subscribe_request_traces_impl(
+        71 => wire__crate__api__minos__subscribe_request_traces_impl(
             port,
             ptr,
             rust_vec_len,
@@ -6800,11 +6870,11 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        63 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__minos__emit_log_impl(ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__minos__emit_log_impl(ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
+        69 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

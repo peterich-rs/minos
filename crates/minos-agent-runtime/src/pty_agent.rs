@@ -94,16 +94,27 @@ impl PtyAgent {
                 let mut seq: u64 = 0;
                 while let Ok(Some(line)) = lines.next_line().await {
                     seq += 1;
-                    tx.emit(RawIngest::from_json(
-                        ag,
-                        tid.clone(),
-                        json!({
-                            "kind": "raw",
-                            "raw_kind": "stdout",
-                            "payload_json": serde_json::to_string(&line).unwrap_or_default()
-                        }),
-                        chrono::Utc::now().timestamp_millis(),
-                    ));
+                    if let Err(error) = tx
+                        .emit(RawIngest::from_json(
+                            ag,
+                            tid.clone(),
+                            json!({
+                                "kind": "raw",
+                                "raw_kind": "stdout",
+                                "payload_json": serde_json::to_string(&line).unwrap_or_default()
+                            }),
+                            chrono::Utc::now().timestamp_millis(),
+                        ))
+                        .await
+                    {
+                        warn!(
+                            target: "minos_agent_runtime::pty_agent",
+                            error = %error,
+                            thread_id = %tid,
+                            "durable ingest sink closed while reading stdout",
+                        );
+                        break;
+                    }
                     let _ = seq; // suppress unused warning in non-debug
                 }
             })
@@ -117,16 +128,27 @@ impl PtyAgent {
                 let reader = BufReader::new(err_stream);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tx.emit(RawIngest::from_json(
-                        ag,
-                        tid.clone(),
-                        json!({
-                            "kind": "raw",
-                            "raw_kind": "stderr",
-                            "payload_json": serde_json::to_string(&line).unwrap_or_default()
-                        }),
-                        chrono::Utc::now().timestamp_millis(),
-                    ));
+                    if let Err(error) = tx
+                        .emit(RawIngest::from_json(
+                            ag,
+                            tid.clone(),
+                            json!({
+                                "kind": "raw",
+                                "raw_kind": "stderr",
+                                "payload_json": serde_json::to_string(&line).unwrap_or_default()
+                            }),
+                            chrono::Utc::now().timestamp_millis(),
+                        ))
+                        .await
+                    {
+                        warn!(
+                            target: "minos_agent_runtime::pty_agent",
+                            error = %error,
+                            thread_id = %tid,
+                            "durable ingest sink closed while reading stderr",
+                        );
+                        break;
+                    }
                 }
             })
         });
@@ -194,17 +216,27 @@ impl PtyAgent {
         }
 
         // Emit thread_closed event
-        events_tx.emit(RawIngest::from_json(
-            self.agent,
-            self.thread_id.clone(),
-            json!({
-                "kind": "thread_closed",
-                "thread_id": self.thread_id,
-                "reason": { "kind": "user_stopped" },
-                "closed_at_ms": chrono::Utc::now().timestamp_millis()
-            }),
-            chrono::Utc::now().timestamp_millis(),
-        ));
+        if let Err(error) = events_tx
+            .emit(RawIngest::from_json(
+                self.agent,
+                self.thread_id.clone(),
+                json!({
+                    "kind": "thread_closed",
+                    "thread_id": self.thread_id,
+                    "reason": { "kind": "user_stopped" },
+                    "closed_at_ms": chrono::Utc::now().timestamp_millis()
+                }),
+                chrono::Utc::now().timestamp_millis(),
+            ))
+            .await
+        {
+            warn!(
+                target: "minos_agent_runtime::pty_agent",
+                error = %error,
+                thread_id = %self.thread_id,
+                "failed to emit thread_closed ingest",
+            );
+        }
 
         info!(thread_id = %self.thread_id, "pty agent closed");
     }

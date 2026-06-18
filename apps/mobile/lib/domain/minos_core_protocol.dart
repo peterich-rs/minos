@@ -289,6 +289,13 @@ abstract class MinosCoreProtocol {
     required Map<String, dynamic> decision,
   });
 
+  /// Submit answers for a pending opencode question request.
+  Future<void> respondOpencodeQuestion({
+    required String sessionId,
+    required String questionId,
+    required List<List<String>> answers,
+  });
+
   /// Re-open the WS using the durable pairing snapshot already loaded
   /// into the Rust core. Idempotent: a no-op when [currentConnectionState]
   /// is already `Connected`, and an error when no pairing snapshot exists.

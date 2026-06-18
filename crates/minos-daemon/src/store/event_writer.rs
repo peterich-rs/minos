@@ -7,11 +7,11 @@
     clippy::cast_sign_loss
 )]
 
+use crate::ingest_chunk::IngestChunk;
 use crate::store::LocalStore;
 use anyhow::Result;
 use minos_agent_runtime::{RawBody, RawIngest, INLINE_RAW_BODY_THRESHOLD};
 use minos_domain::AgentName;
-use minos_protocol::realtime::ClientFrame;
 use minos_ui_protocol::{
     translate_claude, translate_codex, translate_gemini, translate_opencode, ClaudeTranslatorState,
     CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState, UiEventMessage,
@@ -42,35 +42,52 @@ pub struct CommittedIngest {
 #[derive(Debug)]
 struct WriteJob {
     ingest: RawIngest,
+    seq: Option<u64>,
+    projection: Option<Vec<UiEventMessage>>,
     source: EventSource,
     ack: tokio::sync::oneshot::Sender<Result<CommittedIngest>>,
 }
 
 impl EventWriter {
-    pub fn spawn(store: Arc<LocalStore>, relay_out: mpsc::Sender<ClientFrame>) -> Self {
+    pub fn spawn(store: Arc<LocalStore>) -> Self {
         let (tx, rx) = mpsc::channel::<WriteJob>(1024);
-        tokio::spawn(writer_loop(store, relay_out, rx));
+        tokio::spawn(writer_loop(store, rx));
         Self { tx }
     }
 
     pub async fn write_live(&self, ingest: RawIngest) -> Result<CommittedIngest> {
-        self.write_internal(ingest, EventSource::Live).await
+        self.write_internal(ingest, None, None, EventSource::Live)
+            .await
+    }
+
+    pub async fn write_chunk(&self, chunk: IngestChunk) -> Result<CommittedIngest> {
+        self.write_internal(
+            chunk.ingest,
+            Some(chunk.seq),
+            Some(chunk.projection),
+            EventSource::Live,
+        )
+        .await
     }
 
     pub async fn write_recovery(&self, ingest: RawIngest) -> Result<CommittedIngest> {
-        self.write_internal(ingest, EventSource::JsonlRecovery)
+        self.write_internal(ingest, None, None, EventSource::JsonlRecovery)
             .await
     }
 
     async fn write_internal(
         &self,
         ingest: RawIngest,
+        seq: Option<u64>,
+        projection: Option<Vec<UiEventMessage>>,
         source: EventSource,
     ) -> Result<CommittedIngest> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.tx
             .send(WriteJob {
                 ingest,
+                seq,
+                projection,
                 source,
                 ack: tx,
             })
@@ -81,11 +98,7 @@ impl EventWriter {
     }
 }
 
-async fn writer_loop(
-    store: Arc<LocalStore>,
-    relay_out: mpsc::Sender<ClientFrame>,
-    mut rx: mpsc::Receiver<WriteJob>,
-) {
+async fn writer_loop(store: Arc<LocalStore>, mut rx: mpsc::Receiver<WriteJob>) {
     use tokio::time::{Duration, Instant};
     const BATCH_MAX: usize = 100;
     const BATCH_WINDOW: Duration = Duration::from_millis(5);
@@ -102,13 +115,12 @@ async fn writer_loop(
                 Ok(None) | Err(_) => break,
             }
         }
-        process_batch(&store, &relay_out, &mut projector, std::mem::take(&mut buf)).await;
+        process_batch(&store, &mut projector, std::mem::take(&mut buf)).await;
     }
 }
 
 async fn process_batch(
     store: &LocalStore,
-    relay_out: &mpsc::Sender<ClientFrame>,
     projector: &mut ProjectionTranslator,
     jobs: Vec<WriteJob>,
 ) {
@@ -148,28 +160,31 @@ async fn process_batch(
         }
     };
     let mut results: Vec<Result<CommittedIngest>> = Vec::with_capacity(ready_jobs.len());
-    let mut frames: Vec<ClientFrame> = Vec::with_capacity(ready_jobs.len());
     for job in &ready_jobs {
-        let prev: Option<i64> =
-            match sqlx::query_scalar("SELECT last_seq FROM threads WHERE thread_id = ?")
-                .bind(&job.ingest.thread_id)
-                .fetch_optional(&mut *tx)
-                .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    results.push(Err(e.into()));
-                    continue;
-                }
+        let seq = if let Some(seq) = job.seq {
+            seq
+        } else {
+            let prev: Option<i64> =
+                match sqlx::query_scalar("SELECT last_seq FROM threads WHERE thread_id = ?")
+                    .bind(&job.ingest.thread_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        results.push(Err(e.into()));
+                        continue;
+                    }
+                };
+            let Some(prev) = prev else {
+                results.push(Err(anyhow::anyhow!(
+                    "thread parent row disappeared before event write: {}",
+                    job.ingest.thread_id
+                )));
+                continue;
             };
-        let Some(prev) = prev else {
-            results.push(Err(anyhow::anyhow!(
-                "thread parent row disappeared before event write: {}",
-                job.ingest.thread_id
-            )));
-            continue;
+            (prev + 1) as u64
         };
-        let seq = (prev + 1) as u64;
         let stored_body = match prepare_raw_body(store, &job.ingest).await {
             Ok(body) => body,
             Err(e) => {
@@ -177,8 +192,9 @@ async fn process_batch(
                 continue;
             }
         };
-        let projection =
-            projector.translate(&job.ingest, stored_body.inline_for_projection.as_deref());
+        let projection = job.projection.clone().unwrap_or_else(|| {
+            projector.translate(&job.ingest, stored_body.inline_for_projection.as_deref())
+        });
         let projection_json = match serde_json::to_vec(&projection) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -215,8 +231,11 @@ async fn process_batch(
         let provider_session_id = provider_session_id_from_ingest(&job.ingest);
         let update_result = if let Some(provider_session_id) = provider_session_id.as_deref() {
             sqlx::query(
-                "UPDATE threads SET last_seq = ?, last_activity_at = ?, codex_session_id = ? WHERE thread_id = ?",
+                "UPDATE threads SET \
+                    last_seq = CASE WHEN last_seq < ? THEN ? ELSE last_seq END, \
+                    last_activity_at = ?, codex_session_id = ? WHERE thread_id = ?",
             )
+            .bind(seq as i64)
             .bind(seq as i64)
             .bind(job.ingest.ts_ms)
             .bind(provider_session_id)
@@ -224,12 +243,17 @@ async fn process_batch(
             .execute(&mut *tx)
             .await
         } else {
-            sqlx::query("UPDATE threads SET last_seq = ?, last_activity_at = ? WHERE thread_id = ?")
-                .bind(seq as i64)
-                .bind(job.ingest.ts_ms)
-                .bind(&job.ingest.thread_id)
-                .execute(&mut *tx)
-                .await
+            sqlx::query(
+                "UPDATE threads SET \
+                    last_seq = CASE WHEN last_seq < ? THEN ? ELSE last_seq END, \
+                    last_activity_at = ? WHERE thread_id = ?",
+            )
+            .bind(seq as i64)
+            .bind(seq as i64)
+            .bind(job.ingest.ts_ms)
+            .bind(&job.ingest.thread_id)
+            .execute(&mut *tx)
+            .await
         };
         if let Err(e) = update_result {
             results.push(Err(e.into()));
@@ -239,17 +263,6 @@ async fn process_batch(
             seq,
             projection: projection.clone(),
         }));
-        let topic = format!("agent_session:{}", job.ingest.thread_id);
-        let kind = job
-            .ingest
-            .event_type
-            .clone()
-            .unwrap_or_else(|| "agent_event".to_string());
-        frames.push(ClientFrame::HostStreamEvent {
-            topic,
-            kind,
-            payload: host_stream_payload(&job.ingest, seq, &projection),
-        });
     }
     if let Err(e) = tx.commit().await {
         for (job, _) in ready_jobs.into_iter().zip(results) {
@@ -259,9 +272,6 @@ async fn process_batch(
     }
     for (job, r) in ready_jobs.into_iter().zip(results) {
         let _ = job.ack.send(r);
-    }
-    for frame in frames {
-        let _ = relay_out.send(frame).await;
     }
 }
 
@@ -327,7 +337,7 @@ async fn prepare_raw_body(store: &LocalStore, ingest: &RawIngest) -> Result<Stor
 }
 
 #[derive(Default)]
-struct ProjectionTranslator {
+pub(crate) struct ProjectionTranslator {
     codex: HashMap<String, CodexTranslatorState>,
     claude: HashMap<String, ClaudeTranslatorState>,
     gemini: HashMap<String, GeminiTranslatorState>,
@@ -335,7 +345,11 @@ struct ProjectionTranslator {
 }
 
 impl ProjectionTranslator {
-    fn translate(&mut self, ingest: &RawIngest, raw_bytes: Option<&[u8]>) -> Vec<UiEventMessage> {
+    pub(crate) fn translate(
+        &mut self,
+        ingest: &RawIngest,
+        raw_bytes: Option<&[u8]>,
+    ) -> Vec<UiEventMessage> {
         let Some(raw_bytes) = raw_bytes else {
             return vec![raw_projection_fallback(ingest)];
         };
@@ -420,21 +434,6 @@ async fn wait_for_thread_parent(store: &LocalStore, thread_id: &str) -> Result<(
     ))
 }
 
-fn host_stream_payload(ingest: &RawIngest, seq: u64, projection: &[UiEventMessage]) -> Value {
-    serde_json::json!({
-        "version": 2,
-        "seq": seq,
-        "agent": ingest.agent,
-        "thread_id": ingest.thread_id,
-        "ts_ms": ingest.ts_ms,
-        "event_type": ingest.event_type,
-        "provider_session_id": ingest.provider_session_id,
-        "provider_event_id": ingest.provider_event_id,
-        "body": ingest.body,
-        "projection": projection,
-    })
-}
-
 pub(crate) fn provider_session_id_from_ingest(ingest: &RawIngest) -> Option<String> {
     ingest.provider_session_id.clone()
 }
@@ -512,8 +511,7 @@ mod tests {
                 .unwrap(),
         );
         seed_thread(&store, "thr-B").await;
-        let (relay_tx, mut relay_rx) = mpsc::channel(256);
-        let writer = EventWriter::spawn(store.clone(), relay_tx);
+        let writer = EventWriter::spawn(store.clone());
 
         let start = Instant::now();
         let mut handles = Vec::new();
@@ -539,17 +537,8 @@ mod tests {
             "50 events should commit fast: {elapsed:?}"
         );
 
-        let mut got = 0;
-        while tokio::time::timeout(Duration::from_millis(200), relay_rx.recv())
-            .await
-            .is_ok()
-        {
-            got += 1;
-            if got == 50 {
-                break;
-            }
-        }
-        assert_eq!(got, 50);
+        let rows = store.read_events("thr-B", 1, 50).await.unwrap();
+        assert_eq!(rows.len(), 50);
     }
 
     #[tokio::test]
@@ -561,8 +550,7 @@ mod tests {
                 .unwrap(),
         );
         seed_thread(&store, "thr-A").await;
-        let (relay_tx, mut relay_rx) = mpsc::channel(16);
-        let writer = EventWriter::spawn(store.clone(), relay_tx);
+        let writer = EventWriter::spawn(store.clone());
 
         for i in 0..5 {
             let ingest = RawIngest::from_json(
@@ -575,21 +563,8 @@ mod tests {
             assert_eq!(committed.seq, (i + 1) as u64);
         }
 
-        for _i in 0..5 {
-            let frame = relay_rx.recv().await.unwrap();
-            match frame {
-                ClientFrame::HostStreamEvent {
-                    topic,
-                    kind,
-                    payload,
-                } => {
-                    assert!(topic.starts_with("agent_session:"));
-                    assert!(!kind.is_empty());
-                    assert!(payload.is_object());
-                }
-                other => panic!("unexpected frame: {other:?}"),
-            }
-        }
+        let rows = store.read_events("thr-A", 1, 5).await.unwrap();
+        assert_eq!(rows.len(), 5);
     }
 
     #[tokio::test]
@@ -600,8 +575,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let (relay_tx, mut relay_rx) = mpsc::channel(16);
-        let writer = EventWriter::spawn(store.clone(), relay_tx);
+        let writer = EventWriter::spawn(store.clone());
 
         let pending = {
             let writer = writer.clone();
@@ -631,13 +605,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].seq, 1);
 
-        let frame = relay_rx.recv().await.unwrap();
-        match frame {
-            ClientFrame::HostStreamEvent { topic, kind, .. } => {
-                assert_eq!(topic, "agent_session:thr-delayed");
-                assert_eq!(kind, "agent_event");
-            }
-            other => panic!("unexpected frame: {other:?}"),
-        }
+        let rows = store.read_events("thr-delayed", 1, 1).await.unwrap();
+        assert_eq!(rows.len(), 1);
     }
 }

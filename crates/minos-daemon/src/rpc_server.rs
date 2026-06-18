@@ -21,8 +21,9 @@ use minos_protocol::{
     GetThreadResponse, HealthResponse, InterruptThreadRequest, ListClisResponse,
     ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
     ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, MinosRpcServer,
-    PairRequest, PairResponse, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    PairRequest, PairResponse, RespondOpencodeQuestionRequest, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -102,6 +103,16 @@ impl MinosRpcServer for RpcServerImpl {
         req: ApprovalDecisionRequest,
     ) -> jsonrpsee::core::RpcResult<()> {
         self.agent.resolve_approval(req).await.map_err(rpc_err)
+    }
+
+    async fn respond_opencode_question(
+        &self,
+        req: RespondOpencodeQuestionRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent
+            .respond_opencode_question(req)
+            .await
+            .map_err(rpc_err)
     }
 
     async fn interrupt_thread(
@@ -226,6 +237,10 @@ pub async fn invoke_host_command(
         "minos_approval_decision" => {
             let req: ApprovalDecisionRequest = parse_params(&params)?;
             into_result(server.approval_decision(req).await)
+        }
+        "minos_respond_opencode_question" => {
+            let req: RespondOpencodeQuestionRequest = parse_params(&params)?;
+            into_result(server.respond_opencode_question(req).await)
         }
         "minos_agent_dispatch" => {
             let req: AgentDispatchRequest = parse_params(&params)?;
@@ -419,7 +434,6 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let (out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
         Arc::new(RpcServerImpl {
             started_at: Instant::now(),
             runner: Arc::new(NoopRunner),
@@ -427,7 +441,6 @@ mod tests {
                 tmp.path().to_path_buf(),
                 Arc::new(std::collections::HashMap::new()),
                 store,
-                out_tx,
             )),
         })
     }
@@ -517,10 +530,8 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let (out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
         let writer = Arc::new(crate::store::event_writer::EventWriter::spawn(
             store.clone(),
-            out_tx,
         ));
         let server = Arc::new(RpcServerImpl {
             started_at: Instant::now(),
@@ -567,10 +578,8 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let (out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
         let writer = Arc::new(crate::store::event_writer::EventWriter::spawn(
             store.clone(),
-            out_tx,
         ));
         let server = Arc::new(RpcServerImpl {
             started_at: Instant::now(),

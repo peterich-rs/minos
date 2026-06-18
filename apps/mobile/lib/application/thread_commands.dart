@@ -73,6 +73,36 @@ class ThreadCommands {
     }
   }
 
+  Future<void> respondOpencodeQuestion({
+    required String sessionId,
+    required String questionId,
+    required List<List<String>> answers,
+  }) async {
+    logFlutterInfo(
+      'thread_commands',
+      'respondOpencodeQuestion requested sessionId=$sessionId questionId=$questionId',
+    );
+    try {
+      await _repository.respondOpencodeQuestion(
+        sessionId: sessionId,
+        questionId: questionId,
+        answers: answers,
+      );
+      logFlutterDebug(
+        'thread_commands',
+        'respondOpencodeQuestion accepted sessionId=$sessionId questionId=$questionId',
+      );
+    } catch (error, stackTrace) {
+      logFlutterError(
+        'thread_commands',
+        'respondOpencodeQuestion failed sessionId=$sessionId questionId=$questionId',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
+  }
+
   Future<void> deleteThread({required String threadId}) async {
     logFlutterInfo(
       'thread_commands',

@@ -11,7 +11,7 @@
 //!   5. receives `ServerFrame` messages from the topic-based realtime gateway;
 //!   6. dispatches `DurableEvent::HostCommandIssued` to the local
 //!      [`RpcServerImpl`] and pushes `ClientFrame::HostCommandResult` back;
-//!   7. sends `ClientFrame::HostStreamEvent` for agent ingest data.
+//!   7. routes host ingest ack/pull frames for the daemon sync worker.
 //!
 //! Pairing QR issuance, redeem polling, and `forget_peer` go through the
 //! backend's HTTP `/v1/*` control plane on a separate [`RelayHttpClient`]
@@ -45,6 +45,7 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
+use crate::ingest_sync::IngestSyncHandle;
 use crate::relay_http::{PairingRedeemOutcome, RelayHttpClient};
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
 use crate::rpc_server::{invoke_host_command, RpcServerImpl};
@@ -53,6 +54,8 @@ use crate::rpc_server::{invoke_host_command, RpcServerImpl};
 /// handshake pause without back-pressuring callers. The dispatch loop
 /// drains continuously, so the steady-state depth is effectively zero.
 const OUTBOUND_QUEUE_DEPTH: usize = 64;
+const LIVE_OUTBOUND_QUEUE_DEPTH: usize = 64;
+const BACKFILL_OUTBOUND_QUEUE_DEPTH: usize = 16;
 const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 const HOST_COMMAND_RESULT_CACHE_CAPACITY: usize = 512;
@@ -107,11 +110,10 @@ struct Inner {
     peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     last_error: Arc<StdMutex<Option<MinosError>>>,
     pairing_task: Mutex<Option<JoinHandle<()>>>,
-    /// Cloneable producer side of the dispatcher's outbound queue.
-    /// Other in-process producers (e.g. the agent-ingest forwarder) clone
-    /// this via [`RelayClient::outbound_sender`] so every host-side WS frame
-    /// goes through the single socket the dispatcher owns.
+    /// Cloneable producer side of the dispatcher's control outbound queue.
     out_tx: mpsc::Sender<ClientFrame>,
+    live_tx: mpsc::Sender<ClientFrame>,
+    backfill_tx: mpsc::Sender<ClientFrame>,
 }
 
 pub struct RelayClient {
@@ -152,6 +154,9 @@ impl RelayClient {
         let (peer_tx, peer_rx) = watch::channel(initial_peer);
 
         let (out_tx, out_rx) = mpsc::channel::<ClientFrame>(OUTBOUND_QUEUE_DEPTH);
+        let (live_tx, live_rx) = mpsc::channel::<ClientFrame>(LIVE_OUTBOUND_QUEUE_DEPTH);
+        let (backfill_tx, backfill_rx) =
+            mpsc::channel::<ClientFrame>(BACKFILL_OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let host_command_cache = Arc::new(Mutex::new(HashMap::new()));
 
@@ -188,13 +193,15 @@ impl RelayClient {
             peer_tx: peer_tx.clone(),
             out_tx: out_tx.clone(),
             out_rx,
+            live_rx,
+            backfill_rx,
             host_command_cache,
             http: http.clone(),
             rpc_server,
             peer_store: peer_store.clone(),
             peers_store: peers_store.clone(),
             last_error: last_error.clone(),
-            reconciliator: persistence.reconciliator,
+            ingest_sync: persistence.ingest_sync,
         };
 
         let task = tokio::spawn(run_dispatch(dispatch_ctx, shutdown_rx));
@@ -212,6 +219,8 @@ impl RelayClient {
             last_error,
             pairing_task: Mutex::new(None),
             out_tx,
+            live_tx,
+            backfill_tx,
         });
 
         (Arc::new(Self { inner }), link_rx, peer_rx)
@@ -319,12 +328,21 @@ impl RelayClient {
 
     /// Clone the producer side of the dispatcher's outbound queue.
     ///
-    /// Used by in-process forwarders (e.g. `agent_ingest`) to push
-    /// `ClientFrame::HostStreamEvent` frames through the same socket the
-    /// dispatcher owns.
+    /// Used by in-process producers to push host-side WS frames through the
+    /// same socket the dispatcher owns.
     #[must_use]
     pub fn outbound_sender(&self) -> mpsc::Sender<ClientFrame> {
         self.inner.out_tx.clone()
+    }
+
+    #[must_use]
+    pub fn live_ingest_sender(&self) -> mpsc::Sender<ClientFrame> {
+        self.inner.live_tx.clone()
+    }
+
+    #[must_use]
+    pub fn backfill_sender(&self) -> mpsc::Sender<ClientFrame> {
+        self.inner.backfill_tx.clone()
     }
 
     /// Signal the dispatch task to exit and await its join. Idempotent:
@@ -347,7 +365,7 @@ pub struct PersistenceCtx {
     pub peer_store: Arc<StdMutex<Option<PeerRecord>>>,
     pub peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     pub last_error: Arc<StdMutex<Option<MinosError>>>,
-    pub reconciliator: Option<Arc<crate::reconciliator::Reconciliator>>,
+    pub ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
 }
 
 struct DispatchCtx {
@@ -359,14 +377,15 @@ struct DispatchCtx {
     peer_tx: watch::Sender<PeerState>,
     out_tx: mpsc::Sender<ClientFrame>,
     out_rx: mpsc::Receiver<ClientFrame>,
+    live_rx: mpsc::Receiver<ClientFrame>,
+    backfill_rx: mpsc::Receiver<ClientFrame>,
     host_command_cache: HostCommandCache,
     http: Arc<RelayHttpClient>,
     rpc_server: Option<Arc<RpcServerImpl>>,
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
     peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     last_error: Arc<StdMutex<Option<MinosError>>>,
-    #[allow(dead_code)]
-    reconciliator: Option<Arc<crate::reconciliator::Reconciliator>>,
+    ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -741,23 +760,23 @@ async fn dispatch_loop(
                 let Some(frame) = out else {
                     return CycleOutcome::Shutdown;
                 };
-                let text = match serde_json::to_string(&frame) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::error!(
-                            target: "minos_daemon::relay_client",
-                            error = %e,
-                            "failed to serialize outbound ClientFrame"
-                        );
-                        continue;
-                    }
+                if send_outbound_frame(&mut sink, frame).await.is_err() {
+                    return CycleOutcome::Reconnect;
+                }
+            }
+            out = ctx.live_rx.recv() => {
+                let Some(frame) = out else {
+                    continue;
                 };
-                if let Err(e) = sink.send(Message::Text(text.into())).await {
-                    tracing::warn!(
-                        target: "minos_daemon::relay_client",
-                        error = %e,
-                        "failed to send outbound frame; reconnecting"
-                    );
+                if send_outbound_frame(&mut sink, frame).await.is_err() {
+                    return CycleOutcome::Reconnect;
+                }
+            }
+            out = ctx.backfill_rx.recv() => {
+                let Some(frame) = out else {
+                    continue;
+                };
+                if send_outbound_frame(&mut sink, frame).await.is_err() {
                     return CycleOutcome::Reconnect;
                 }
             }
@@ -839,6 +858,32 @@ async fn dispatch_loop(
     }
 }
 
+async fn send_outbound_frame<S>(sink: &mut S, frame: ClientFrame) -> Result<(), ()>
+where
+    S: futures_util::Sink<Message, Error = WsError> + Unpin,
+{
+    let text = match serde_json::to_string(&frame) {
+        Ok(text) => text,
+        Err(error) => {
+            tracing::error!(
+                target: "minos_daemon::relay_client",
+                error = %error,
+                "failed to serialize outbound ClientFrame",
+            );
+            return Ok(());
+        }
+    };
+    if let Err(error) = sink.send(Message::Text(text.into())).await {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %error,
+            "failed to send outbound frame; reconnecting",
+        );
+        return Err(());
+    }
+    Ok(())
+}
+
 /// Parse an inbound text frame as a `ServerFrame` and route it.
 async fn handle_inbound_text(text: &str, ctx: &DispatchCtx) -> Result<(), serde_json::Error> {
     let frame: ServerFrame = serde_json::from_str(text)?;
@@ -883,10 +928,47 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
             let host_topic = format!("host:{}", ctx.self_device_id);
             if topics.iter().any(|topic| topic == &host_topic) {
                 let _ = ctx.link_tx.send(RelayLinkState::Connected);
+                if let Some(sync) = ingest_sync(ctx) {
+                    sync.send_manifest().await;
+                }
             }
         }
         ServerFrame::DurableEvent { kind, payload, .. } => {
             route_durable_event(&kind, &payload, ctx).await;
+        }
+        ServerFrame::HostIngestAck {
+            thread_id,
+            accepted_to_seq,
+            ..
+        } => {
+            if let Some(sync) = ingest_sync(ctx) {
+                sync.mark_backend_acked(&thread_id, accepted_to_seq).await;
+            }
+        }
+        ServerFrame::PullIngestRange {
+            request_id,
+            thread_id,
+            from_seq,
+            to_seq,
+            max_bytes,
+            priority,
+            reason,
+        } => {
+            if let Some(sync) = ingest_sync(ctx) {
+                sync.handle_pull_range(
+                    request_id, thread_id, from_seq, to_seq, max_bytes, priority, reason,
+                )
+                .await;
+            }
+        }
+        ServerFrame::PullAck {
+            thread_id,
+            accepted_to_seq,
+            ..
+        } => {
+            if let Some(sync) = ingest_sync(ctx) {
+                sync.mark_backend_acked(&thread_id, accepted_to_seq).await;
+            }
         }
         ServerFrame::HostForceClose { reason, close_code } => {
             tracing::warn!(
@@ -942,6 +1024,10 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
             );
         }
     }
+}
+
+fn ingest_sync(ctx: &DispatchCtx) -> Option<IngestSyncHandle> {
+    ctx.ingest_sync.lock().ok().and_then(|guard| guard.clone())
 }
 
 /// Route a durable event extracted from a `ServerFrame::DurableEvent`.
@@ -1239,15 +1325,6 @@ fn build_host_command_result(
         result,
         error,
         finished_at_ms,
-    }
-}
-
-/// Build a `ClientFrame::HostStreamEvent` for agent ingest data.
-pub fn build_host_stream_event(topic: &str, kind: &str, payload: Value) -> ClientFrame {
-    ClientFrame::HostStreamEvent {
-        topic: topic.to_string(),
-        kind: kind.to_string(),
-        payload,
     }
 }
 

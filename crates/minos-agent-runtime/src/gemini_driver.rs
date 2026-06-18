@@ -227,29 +227,51 @@ pub fn spawn_acp_pump(
         loop {
             match client.next_inbound().await {
                 Some(crate::acp_client::Inbound::Notification { method, params }) => {
-                    events_tx.emit(RawIngest::from_json(
-                        AgentName::Gemini,
-                        thread_id.clone(),
-                        serde_json::json!({
-                            "kind": "acp_notification",
-                            "method": method,
-                            "params": params,
-                        }),
-                        chrono::Utc::now().timestamp_millis(),
-                    ));
+                    if let Err(error) = events_tx
+                        .emit(RawIngest::from_json(
+                            AgentName::Gemini,
+                            thread_id.clone(),
+                            serde_json::json!({
+                                "kind": "acp_notification",
+                                "method": method,
+                                "params": params,
+                            }),
+                            chrono::Utc::now().timestamp_millis(),
+                        ))
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "minos_agent_runtime::gemini_driver",
+                            error = %error,
+                            thread_id = %thread_id,
+                            "durable ingest sink closed while reading gemini notification",
+                        );
+                        break;
+                    }
                 }
                 Some(crate::acp_client::Inbound::ServerRequest { id, method, params }) => {
-                    events_tx.emit(RawIngest::from_json(
-                        AgentName::Gemini,
-                        thread_id.clone(),
-                        serde_json::json!({
-                            "kind": "acp_server_request",
-                            "id": id,
-                            "method": method,
-                            "params": params,
-                        }),
-                        chrono::Utc::now().timestamp_millis(),
-                    ));
+                    if let Err(error) = events_tx
+                        .emit(RawIngest::from_json(
+                            AgentName::Gemini,
+                            thread_id.clone(),
+                            serde_json::json!({
+                                "kind": "acp_server_request",
+                                "id": id,
+                                "method": method,
+                                "params": params,
+                            }),
+                            chrono::Utc::now().timestamp_millis(),
+                        ))
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "minos_agent_runtime::gemini_driver",
+                            error = %error,
+                            thread_id = %thread_id,
+                            "durable ingest sink closed while reading gemini server request",
+                        );
+                        break;
+                    }
                     if let Err(error) = reply_to_acp_server_request(&client, id, &method).await {
                         tracing::warn!(
                             target: "minos_agent_runtime::gemini_driver",
@@ -262,15 +284,25 @@ pub fn spawn_acp_pump(
                 }
                 Some(crate::acp_client::Inbound::Closed) => {
                     info!(target: "minos_agent_runtime::gemini_driver", thread_id = %thread_id, "gemini ACP stream closed");
-                    events_tx.emit(RawIngest::from_json(
-                        AgentName::Gemini,
-                        thread_id.clone(),
-                        serde_json::json!({
-                            "kind": "acp_closed",
-                            "thread_id": thread_id,
-                        }),
-                        chrono::Utc::now().timestamp_millis(),
-                    ));
+                    if let Err(error) = events_tx
+                        .emit(RawIngest::from_json(
+                            AgentName::Gemini,
+                            thread_id.clone(),
+                            serde_json::json!({
+                                "kind": "acp_closed",
+                                "thread_id": thread_id,
+                            }),
+                            chrono::Utc::now().timestamp_millis(),
+                        ))
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "minos_agent_runtime::gemini_driver",
+                            error = %error,
+                            thread_id = %thread_id,
+                            "failed to emit gemini closed ingest",
+                        );
+                    }
                     break;
                 }
                 None => break,

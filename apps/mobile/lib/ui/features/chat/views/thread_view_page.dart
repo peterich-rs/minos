@@ -15,6 +15,7 @@ import 'package:minos/application/thread_view_state.dart';
 import 'package:minos/domain/active_session.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/src/rust/api/minos.dart';
+import 'package:minos/ui/core/widgets/agent_question_sheet.dart';
 import 'package:minos/ui/core/widgets/approval_sheet.dart';
 import 'package:minos/ui/core/widgets/error_feedback.dart';
 import 'package:minos/ui/features/chat/widgets/input_bar.dart';
@@ -110,10 +111,16 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   }
 
   void _handleRawApprovalEvent(UiEventMessage_Raw event, String threadId) {
-    if (event.kind == 'approval_request') {
+    if (event.kind == 'approval/request' || event.kind == 'approval_request') {
       unawaited(_onApprovalRequest(event.payloadJson, threadId));
-    } else if (event.kind == 'approval_timeout') {
+    } else if (event.kind == 'approval/timeout' ||
+        event.kind == 'approval_timeout') {
       _onApprovalTimeout(event.payloadJson);
+    } else if (event.kind == 'opencode/question.asked') {
+      unawaited(_onAgentQuestionRequest(event.payloadJson, threadId));
+    } else if (event.kind == 'opencode/question.replied' ||
+        event.kind == 'opencode/question.rejected') {
+      _onAgentQuestionResolved();
     }
   }
 
@@ -208,6 +215,81 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
       logFlutterInfo('thread_view', 'approval timed out reason=$reason');
       final message = reason == 'disconnected' ? '连接断开，审批已自动拒绝' : '审批已超时，自动拒绝';
       _showThreadInfo(context, message);
+    }
+  }
+
+  Future<void> _onAgentQuestionRequest(
+    String payloadJson,
+    String threadId,
+  ) async {
+    final threadViewState = ref.read(
+      threadViewStateControllerProvider(_viewStateId),
+    );
+    if (threadViewState.approvalSheetVisible) return;
+
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(payloadJson) as Map<String, dynamic>;
+    } catch (error, stackTrace) {
+      logFlutterWarn(
+        'thread_view',
+        'agent question decode failed threadId=$threadId',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return;
+    }
+
+    final request = AgentQuestionRequestData.fromJson(json);
+    if (request.requestId.isEmpty || request.questions.isEmpty) {
+      logFlutterWarn(
+        'thread_view',
+        'agent question payload missing request id or questions threadId=$threadId',
+      );
+      return;
+    }
+
+    ref
+        .read(threadViewStateControllerProvider(_viewStateId).notifier)
+        .setApprovalSheetVisible(true);
+    final answers = await showAgentQuestionSheet(context, request: request);
+    if (!mounted) return;
+    ref
+        .read(threadViewStateControllerProvider(_viewStateId).notifier)
+        .setApprovalSheetVisible(false);
+
+    if (answers == null) return;
+
+    try {
+      await ref
+          .read(threadCommandsProvider)
+          .respondOpencodeQuestion(
+            sessionId: threadId,
+            questionId: request.requestId,
+            answers: answers,
+          );
+    } catch (error) {
+      if (mounted) {
+        showLoggedErrorToast(
+          context,
+          target: 'thread_view',
+          title: '发送问题答案失败',
+          error: error,
+        );
+      }
+    }
+  }
+
+  void _onAgentQuestionResolved() {
+    final controller = ref.read(
+      threadViewStateControllerProvider(_viewStateId).notifier,
+    );
+    if (ref
+            .read(threadViewStateControllerProvider(_viewStateId))
+            .approvalSheetVisible &&
+        mounted) {
+      Navigator.of(context).pop(null);
+      controller.setApprovalSheetVisible(false);
     }
   }
 

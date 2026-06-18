@@ -26,6 +26,7 @@ pub struct AgentRuntimeConfig {
     pub ws_port_range: std::ops::RangeInclusive<u16>,
     pub event_buffer: usize,
     pub handshake_call_timeout: Duration,
+    pub thread_start_timeout: Duration,
     pub approval_request_timeout: Duration,
     pub subprocess_env: Arc<std::collections::HashMap<String, String>>,
     pub mcp: Option<McpConfig>,
@@ -42,10 +43,18 @@ pub struct McpConfig {
     pub permissions: minos_chat_store::mcp_server::McpToolPermissions,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatedMcpCommand {
+    pub server_bin: PathBuf,
+    pub server_args: Vec<String>,
+}
+
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_THREAD_START_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_APPROVAL_REQUEST_TIMEOUT: Duration = Duration::from_mins(2);
 const DEFAULT_EVENT_BUFFER: usize = 256;
 const TEAMWORK_MCP_ENV: &str = "MINOS_TEAMWORK_MCP_BIN";
+pub const TEAMWORK_MCP_SIDECAR_ARG: &str = "__minos-teamwork-mcp";
 
 #[must_use]
 pub fn teamwork_mcp_filename() -> &'static str {
@@ -58,7 +67,12 @@ pub fn teamwork_mcp_filename() -> &'static str {
 
 #[must_use]
 pub fn locate_teamwork_mcp_binary() -> Option<PathBuf> {
-    locate_teamwork_mcp_binary_from(
+    locate_teamwork_mcp_command().map(|command| command.server_bin)
+}
+
+#[must_use]
+pub fn locate_teamwork_mcp_command() -> Option<LocatedMcpCommand> {
+    locate_teamwork_mcp_command_from(
         std::env::var_os(TEAMWORK_MCP_ENV).map(PathBuf::from),
         std::env::current_exe().ok(),
         std::env::var_os("PATH"),
@@ -80,6 +94,7 @@ impl AgentRuntimeConfig {
             ws_port_range: 7879..=7883,
             event_buffer: DEFAULT_EVENT_BUFFER,
             handshake_call_timeout: DEFAULT_HANDSHAKE_CALL_TIMEOUT,
+            thread_start_timeout: DEFAULT_THREAD_START_TIMEOUT,
             approval_request_timeout: DEFAULT_APPROVAL_REQUEST_TIMEOUT,
             subprocess_env: Arc::new(std::collections::HashMap::new()),
             mcp: None,
@@ -97,7 +112,7 @@ impl AgentRuntimeConfig {
         socket_path: PathBuf,
     ) -> anyhow::Result<()> {
         let db_path = minos_chat_store::default_db_path()?;
-        let Some(server_bin) = locate_teamwork_mcp_binary() else {
+        let Some(command) = locate_teamwork_mcp_command() else {
             tracing::warn!(
                 target: "minos_agent_runtime::config",
                 env = TEAMWORK_MCP_ENV,
@@ -107,9 +122,16 @@ impl AgentRuntimeConfig {
             self.mcp = None;
             return Ok(());
         };
+        tracing::info!(
+            target: "minos_agent_runtime::config",
+            command = %command.server_bin.display(),
+            args = ?command.server_args,
+            socket_path = %socket_path.display(),
+            "enabled Minos teamwork MCP injection"
+        );
         self.mcp = Some(McpConfig {
-            server_bin,
-            server_args: Vec::new(),
+            server_bin: command.server_bin,
+            server_args: command.server_args,
             socket_path,
             db_path,
             permissions: minos_chat_store::mcp_server::McpToolPermissions::default(),
@@ -142,32 +164,62 @@ fn default_mcp_socket_path() -> anyhow::Result<PathBuf> {
         .join(format!("mcp-daemon-{}.sock", uuid::Uuid::new_v4())))
 }
 
-fn locate_teamwork_mcp_binary_from(
+fn locate_teamwork_mcp_command_from(
     env_override: Option<PathBuf>,
     current_exe: Option<PathBuf>,
     path_env: Option<OsString>,
-) -> Option<PathBuf> {
+) -> Option<LocatedMcpCommand> {
     if let Some(candidate) = env_override {
         if is_executable_file(&candidate) {
-            return Some(candidate);
+            return Some(LocatedMcpCommand {
+                server_bin: candidate,
+                server_args: Vec::new(),
+            });
         }
     }
 
-    if let Some(dir) = current_exe.and_then(|path| path.parent().map(Path::to_path_buf)) {
+    if let Some(current_exe) = current_exe {
+        let Some(dir) = current_exe.parent().map(Path::to_path_buf) else {
+            return find_executable_on_path(teamwork_mcp_filename(), path_env);
+        };
         let candidate = dir.join(teamwork_mcp_filename());
         if is_executable_file(&candidate) {
-            return Some(candidate);
+            return Some(LocatedMcpCommand {
+                server_bin: candidate,
+                server_args: Vec::new(),
+            });
+        }
+        if let Some(command) = current_exe_sidecar_command(&current_exe) {
+            return Some(command);
         }
     }
 
     find_executable_on_path(teamwork_mcp_filename(), path_env)
 }
 
-fn find_executable_on_path(filename: &str, path_env: Option<OsString>) -> Option<PathBuf> {
+fn current_exe_sidecar_command(current_exe: &Path) -> Option<LocatedMcpCommand> {
+    let stem = current_exe.file_stem()?.to_string_lossy();
+    if !matches!(stem.as_ref(), "minos-tui" | "minos-daemon") {
+        return None;
+    }
+    is_executable_file(current_exe).then(|| LocatedMcpCommand {
+        server_bin: current_exe.to_path_buf(),
+        server_args: vec![TEAMWORK_MCP_SIDECAR_ARG.to_owned()],
+    })
+}
+
+fn find_executable_on_path(
+    filename: &str,
+    path_env: Option<OsString>,
+) -> Option<LocatedMcpCommand> {
     let path_env = path_env?;
     std::env::split_paths(&path_env)
         .map(|dir| dir.join(filename))
         .find(|path| is_executable_file(path))
+        .map(|server_bin| LocatedMcpCommand {
+            server_bin,
+            server_args: Vec::new(),
+        })
 }
 
 fn is_executable_file(path: &Path) -> bool {
@@ -507,13 +559,19 @@ mod tests {
         make_executable(&sibling_bin);
         make_executable(&path_bin);
 
-        let found = locate_teamwork_mcp_binary_from(
+        let found = locate_teamwork_mcp_command_from(
             Some(env_bin.clone()),
             Some(sibling_dir.join("minos-daemon")),
             std::env::join_paths([path_dir]).ok(),
         );
 
-        assert_eq!(found, Some(env_bin));
+        assert_eq!(
+            found,
+            Some(LocatedMcpCommand {
+                server_bin: env_bin,
+                server_args: Vec::new(),
+            })
+        );
     }
 
     #[test]
@@ -529,13 +587,47 @@ mod tests {
         make_executable(&sibling_bin);
         make_executable(&path_bin);
 
-        let found = locate_teamwork_mcp_binary_from(
+        let found = locate_teamwork_mcp_command_from(
             None,
             Some(sibling_dir.join("minos-daemon")),
             std::env::join_paths([path_dir]).ok(),
         );
 
-        assert_eq!(found, Some(sibling_bin));
+        assert_eq!(
+            found,
+            Some(LocatedMcpCommand {
+                server_bin: sibling_bin,
+                server_args: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn teamwork_mcp_locator_uses_current_tui_as_hidden_sidecar_before_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let exe_dir = tmp.path().join("exe");
+        let path_dir = tmp.path().join("path");
+        std::fs::create_dir_all(&exe_dir).expect("mkdir exe");
+        std::fs::create_dir_all(&path_dir).expect("mkdir path");
+
+        let current_exe = exe_dir.join("minos-tui");
+        let path_bin = path_dir.join(teamwork_mcp_filename());
+        make_executable(&current_exe);
+        make_executable(&path_bin);
+
+        let found = locate_teamwork_mcp_command_from(
+            None,
+            Some(current_exe.clone()),
+            std::env::join_paths([path_dir]).ok(),
+        );
+
+        assert_eq!(
+            found,
+            Some(LocatedMcpCommand {
+                server_bin: current_exe,
+                server_args: vec![TEAMWORK_MCP_SIDECAR_ARG.to_owned()],
+            })
+        );
     }
 
     #[test]
@@ -548,9 +640,15 @@ mod tests {
         make_executable(&path_bin);
 
         let found =
-            locate_teamwork_mcp_binary_from(None, None, std::env::join_paths([path_dir]).ok());
+            locate_teamwork_mcp_command_from(None, None, std::env::join_paths([path_dir]).ok());
 
-        assert_eq!(found, Some(path_bin));
+        assert_eq!(
+            found,
+            Some(LocatedMcpCommand {
+                server_bin: path_bin,
+                server_args: Vec::new(),
+            })
+        );
     }
 
     #[test]
@@ -558,7 +656,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path_env = std::env::join_paths([tmp.path().join("path")]).ok();
 
-        let found = locate_teamwork_mcp_binary_from(
+        let found = locate_teamwork_mcp_command_from(
             Some(tmp.path().join("missing")),
             Some(tmp.path().join("sibling").join("minos-daemon")),
             path_env,

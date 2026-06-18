@@ -8,7 +8,9 @@ use minos_domain::AgentName;
 use minos_ui_protocol::ThreadEndReason;
 use serde::{Deserialize, Serialize};
 
-use crate::agent_sessions::{AgentSessionError, ListAgentSessionsInput, ReadTurnsInput};
+use crate::agent_sessions::{
+    AgentSessionError, ListAgentSessionsInput, ReadTurnsInput, RespondOpencodeQuestionInput,
+};
 use crate::http::error_response::{err_json as err, ErrorEnvelope};
 use crate::http::BackendState;
 
@@ -16,6 +18,10 @@ pub fn router() -> Router<BackendState> {
     Router::new()
         .route("/agent-sessions/start", post(start_session))
         .route("/agent-sessions/send-input", post(send_input))
+        .route(
+            "/agent-sessions/respond-opencode-question",
+            post(respond_opencode_question),
+        )
         .route("/agent-sessions/stop", post(stop_session))
         .route("/agent-sessions/list", post(list_sessions))
         .route("/agent-sessions/read-turns", post(read_turns))
@@ -55,6 +61,13 @@ struct SendInputResponse {
     session_id: String,
     turn_id: String,
     turn_seq: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RespondOpencodeQuestionRequest {
+    session_id: String,
+    question_id: String,
+    answers: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,6 +207,26 @@ async fn send_input(
         turn_id: output.turn_id,
         turn_seq: output.turn_seq,
     }))
+}
+
+async fn respond_opencode_question(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Json(request): Json<RespondOpencodeQuestionRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
+    let (_caller, account_id) = super::require_authed_session(&state, &headers).await?;
+    state
+        .agent_sessions
+        .respond_opencode_question(RespondOpencodeQuestionInput {
+            session_id: request.session_id,
+            question_id: request.question_id,
+            answers: request.answers,
+            caller_account_id: account_id,
+        })
+        .await
+        .map_err(map_agent_session_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn stop_session(

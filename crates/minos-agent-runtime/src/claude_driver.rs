@@ -91,12 +91,23 @@ impl ClaudeNdjsonSession {
                         }),
                     };
                     sync_thread_from_payload(&payload, &tid, &threads, &manager_tx).await;
-                    tx.emit(RawIngest::from_json(
-                        AgentName::Claude,
-                        tid.clone(),
-                        payload,
-                        chrono::Utc::now().timestamp_millis(),
-                    ));
+                    if let Err(error) = tx
+                        .emit(RawIngest::from_json(
+                            AgentName::Claude,
+                            tid.clone(),
+                            payload,
+                            chrono::Utc::now().timestamp_millis(),
+                        ))
+                        .await
+                    {
+                        warn!(
+                            target: "minos_agent_runtime::claude_driver",
+                            error = %error,
+                            thread_id = %tid,
+                            "durable ingest sink closed while reading claude stdout",
+                        );
+                        break;
+                    }
                 }
             })
         });
@@ -176,17 +187,27 @@ impl ClaudeNdjsonSession {
             task.abort();
         }
 
-        events_tx.emit(RawIngest::from_json(
-            AgentName::Claude,
-            self.thread_id.clone(),
-            serde_json::json!({
-                "kind": "thread_closed",
-                "thread_id": self.thread_id,
-                "reason": { "kind": "user_stopped" },
-                "closed_at_ms": chrono::Utc::now().timestamp_millis()
-            }),
-            chrono::Utc::now().timestamp_millis(),
-        ));
+        if let Err(error) = events_tx
+            .emit(RawIngest::from_json(
+                AgentName::Claude,
+                self.thread_id.clone(),
+                serde_json::json!({
+                    "kind": "thread_closed",
+                    "thread_id": self.thread_id,
+                    "reason": { "kind": "user_stopped" },
+                    "closed_at_ms": chrono::Utc::now().timestamp_millis()
+                }),
+                chrono::Utc::now().timestamp_millis(),
+            ))
+            .await
+        {
+            warn!(
+                target: "minos_agent_runtime::claude_driver",
+                error = %error,
+                thread_id = %self.thread_id,
+                "failed to emit thread_closed ingest",
+            );
+        }
 
         info!(
             target: "minos_agent_runtime::claude_driver",

@@ -86,6 +86,13 @@ pub struct RespondOpencodePermissionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RespondOpencodeQuestionRequest {
+    pub thread_id: String,
+    pub question_id: String,
+    pub answers: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalIngestFrame {
     pub thread_id: String,
     #[serde(default)]
@@ -156,6 +163,12 @@ pub trait LocalDaemonRpc {
     async fn respond_opencode_permission(
         &self,
         req: RespondOpencodePermissionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    #[method(name = "respond_opencode_question")]
+    async fn respond_opencode_question(
+        &self,
+        req: RespondOpencodeQuestionRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
     #[method(name = "interrupt_thread")]

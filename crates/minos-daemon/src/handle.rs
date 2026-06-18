@@ -15,12 +15,11 @@ use minos_domain::{DeviceId, DeviceSecret, MinosError};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
-use minos_protocol::realtime::ClientFrame;
 use minos_protocol::HostPeerSummary;
-use tokio::sync::mpsc;
 
 use crate::agent::AgentGlue;
 use crate::config::RelayConfig;
+use crate::ingest_sync::IngestSyncHandle;
 use crate::local_rpc::{start_local_rpc_server, LocalRpcConfig};
 use crate::paths;
 use crate::relay_client::{PersistenceCtx, RelayClient};
@@ -139,17 +138,13 @@ impl DaemonHandle {
             ),
         }
 
-        // Build the agent glue ahead of the relay. The agent's `EventWriter`
-        // consumes a relay-out mpsc; we cannot use `relay.outbound_sender()`
-        // yet because the relay needs an `RpcServerImpl` that references the
-        // agent. Solve the cycle with a local forwarder channel that's wired
-        // to the relay's outbound queue once both halves exist.
-        let (agent_out_tx, mut agent_out_rx) = mpsc::channel::<ClientFrame>(256);
+        // Build the agent glue ahead of the relay. Live ingest upload is
+        // attached after the relay exists; local SQLite persistence works
+        // immediately and no longer depends on a relay outbound queue.
         let agent = Arc::new(AgentGlue::new(
             paths::minos_home()?.join("workspaces"),
             subprocess_env.clone(),
             store.clone(),
-            agent_out_tx.clone(),
         ));
 
         // The relay-client dispatches forwarded peer JSON-RPC into this
@@ -185,16 +180,8 @@ impl DaemonHandle {
             "daemon runtime config resolved"
         );
 
-        // Phase D: the Reconciliator handles `Event::IngestCheckpoint`
-        // frames from the backend. It needs the local store + the
-        // EventWriter (so JSONL fallback writes go through the single
-        // writer) + the same outbound channel the AgentGlue uses (so
-        // replay events ride the same /devices WS).
-        let reconciliator = Arc::new(crate::reconciliator::Reconciliator::new(
-            store.clone(),
-            agent.writer.clone(),
-            agent_out_tx.clone(),
-        ));
+        let ingest_sync_slot: Arc<StdMutex<Option<IngestSyncHandle>>> =
+            Arc::new(StdMutex::new(None));
 
         let (relay, link_rx, peer_rx) = RelayClient::spawn(
             config,
@@ -208,25 +195,22 @@ impl DaemonHandle {
                 peer_store: peer_store.clone(),
                 peers_store: peers_store.clone(),
                 last_error: last_error.clone(),
-                reconciliator: Some(reconciliator),
+                ingest_sync: ingest_sync_slot.clone(),
             },
         );
 
-        // Forward agent ingest envelopes (already persisted by the
-        // EventWriter inside AgentGlue) into the relay's outbound queue.
-        // The single `/devices` WS the dispatcher owns carries both
-        // peer-to-peer `Forward` traffic and host `Ingest` frames — the
-        // backend's session registry is keyed by `DeviceId` alone, so a
-        // second WS handshake from the same id would supersede the first
-        // in a tight loop.
-        let relay_out = relay.outbound_sender();
-        tokio::spawn(async move {
-            while let Some(env) = agent_out_rx.recv().await {
-                if relay_out.send(env).await.is_err() {
-                    break;
-                }
-            }
-        });
+        let ingest_sync = IngestSyncHandle::spawn(
+            self_device_id,
+            store.clone(),
+            relay.outbound_sender(),
+            relay.live_ingest_sender(),
+            relay.backfill_sender(),
+            link_rx.clone(),
+        );
+        if let Ok(mut guard) = ingest_sync_slot.lock() {
+            *guard = Some(ingest_sync.clone());
+        }
+        agent.set_ingest_sync(ingest_sync);
 
         let local_rpc_discovery_path = local_rpc_config
             .as_ref()

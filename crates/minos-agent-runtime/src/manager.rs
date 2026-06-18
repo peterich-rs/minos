@@ -84,7 +84,7 @@ impl IngestSink {
         rx
     }
 
-    pub fn emit(&self, ingest: RawIngest) {
+    pub async fn emit(&self, ingest: RawIngest) -> Result<(), IngestClosed> {
         let durable_tx = self
             .durable_tx
             .lock()
@@ -94,23 +94,10 @@ impl IngestSink {
             match tx.try_send(ingest.clone()) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(ingest)) => {
-                    tokio::spawn(async move {
-                        if let Err(error) = tx.send(ingest).await {
-                            tracing::warn!(
-                                target: "minos_agent_runtime::manager",
-                                error = %error,
-                                "durable ingest sink closed while waiting for queue space",
-                            );
-                        }
-                    });
+                    tx.send(ingest).await.map_err(|_| IngestClosed)?;
                 }
-                Err(mpsc::error::TrySendError::Closed(ingest)) => {
-                    tracing::warn!(
-                        target: "minos_agent_runtime::manager",
-                        thread_id = %ingest.thread_id,
-                        agent = %ingest.agent.bin_name(),
-                        "durable ingest sink is closed; event was not queued for persistence",
-                    );
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(IngestClosed);
                 }
             }
         }
@@ -121,8 +108,13 @@ impl IngestSink {
                 "events broadcast send failed (no subscribers)",
             );
         }
+        Ok(())
     }
 }
+
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("durable ingest sink is closed")]
+pub struct IngestClosed;
 
 impl Default for InstanceCaps {
     fn default() -> Self {
@@ -755,7 +747,12 @@ impl AgentManager {
             // start_thread / send_user_message / interrupt_turn with canned
             // responses, so the handshake adds no test value.
             let (crash_tx, mut crash_rx) = tokio::sync::mpsc::channel::<()>(1);
-            let inst = build_fake_instance(workspace_buf.clone(), client, crash_tx);
+            let inst = build_fake_instance(
+                workspace_buf.clone(),
+                client,
+                self.config.thread_start_timeout,
+                crash_tx,
+            );
             let pump_client = inst.client.clone();
             let pump_events = self.events_tx.clone();
             let pump_threads = self.threads.clone();
@@ -871,6 +868,7 @@ impl AgentManager {
             workspace_buf.clone(),
             child,
             client.clone(),
+            self.config.thread_start_timeout,
             crash_tx.clone(),
         ));
 
@@ -1041,7 +1039,8 @@ impl AgentManager {
                     new: new_state,
                     at_ms: now_ms,
                 });
-                self.synth_user_message_ingest(thread_id, &text, handle.agent);
+                self.synth_user_message_ingest(thread_id, &text, handle.agent)
+                    .await?;
                 match handle.agent {
                     AgentName::Codex => {
                         let workspace = handle.workspace.clone();
@@ -1113,7 +1112,8 @@ impl AgentManager {
                     new: new_state,
                     at_ms: now_ms,
                 });
-                self.synth_user_message_ingest(thread_id, &text, handle.agent);
+                self.synth_user_message_ingest(thread_id, &text, handle.agent)
+                    .await?;
                 match handle.agent {
                     AgentName::Claude => self.start_claude_turn(thread_id, &text, &handle).await,
                     AgentName::Opencode => {
@@ -1200,7 +1200,8 @@ impl AgentManager {
         text: &str,
         handle: &ThreadHandle,
     ) -> anyhow::Result<()> {
-        self.synth_user_message_ingest(thread_id, text, handle.agent);
+        self.synth_user_message_ingest(thread_id, text, handle.agent)
+            .await?;
         self.start_claude_turn(thread_id, text, handle).await
     }
 
@@ -1251,7 +1252,8 @@ impl AgentManager {
             .get(&workspace)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
-        self.synth_user_message_ingest(thread_id, text, handle.agent);
+        self.synth_user_message_ingest(thread_id, text, handle.agent)
+            .await?;
         let result = instance
             .lock()
             .await
@@ -1354,12 +1356,22 @@ impl AgentManager {
                     "message": error.to_string(),
                 }),
             };
-            events_tx.emit(RawIngest::from_json(
-                AgentName::Gemini,
-                thread_id.clone(),
-                payload,
-                current_unix_ms(),
-            ));
+            if let Err(error) = events_tx
+                .emit(RawIngest::from_json(
+                    AgentName::Gemini,
+                    thread_id.clone(),
+                    payload,
+                    current_unix_ms(),
+                ))
+                .await
+            {
+                warn!(
+                    target: "minos_agent_runtime::manager",
+                    error = %error,
+                    thread_id,
+                    "failed to emit gemini prompt result ingest",
+                );
+            }
             mark_thread_idle_with_tx(&thread_id, &handle, &manager_tx);
         });
         Ok(())
@@ -1389,7 +1401,8 @@ impl AgentManager {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
         inst.touch().await;
-        self.synth_user_message_ingest(thread_id, &text, handle.agent);
+        self.synth_user_message_ingest(thread_id, &text, handle.agent)
+            .await?;
         let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
         let turn_id = inst
             .steer_turn(&provider_thread_id, &expected_turn_id, &text)
@@ -1415,7 +1428,12 @@ impl AgentManager {
     /// (the user content lives inside the synchronous `turn/start`
     /// request body). Without this synthesis the user message would never
     /// reach either persistence layer, so killing the app would lose it.
-    fn synth_user_message_ingest(&self, thread_id: &str, text: &str, agent: AgentName) {
+    async fn synth_user_message_ingest(
+        &self,
+        thread_id: &str,
+        text: &str,
+        agent: AgentName,
+    ) -> anyhow::Result<()> {
         let item_id = uuid::Uuid::new_v4().to_string();
         let payload = match agent {
             AgentName::Gemini => serde_json::json!({
@@ -1438,7 +1456,8 @@ impl AgentManager {
             }),
         };
         let ingest = RawIngest::from_json(agent, thread_id.to_string(), payload, current_unix_ms());
-        self.events_tx.emit(ingest);
+        self.events_tx.emit(ingest).await?;
+        Ok(())
     }
 
     async fn implicit_resume(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
@@ -1486,7 +1505,8 @@ impl AgentManager {
         inst.touch().await;
         // Same synth-then-forward pattern as the Idle path; resume races
         // shouldn't change persistence semantics.
-        self.synth_user_message_ingest(thread_id, &text, handle.agent);
+        self.synth_user_message_ingest(thread_id, &text, handle.agent)
+            .await?;
         let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
         let turn_id = inst.send_user_message(&provider_thread_id, &text).await?;
         handle.set_active_turn_id_if_absent(turn_id);
@@ -1703,6 +1723,40 @@ impl AgentManager {
         result
     }
 
+    pub async fn respond_opencode_question(
+        &self,
+        thread_id: &str,
+        question_id: &str,
+        answers: Vec<Vec<String>>,
+    ) -> anyhow::Result<()> {
+        let handle = {
+            let threads = self.threads.lock().await;
+            threads
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("thread not found: {thread_id}"))?
+        };
+        anyhow::ensure!(
+            handle.agent == AgentName::Opencode,
+            "thread {thread_id} is not an opencode thread"
+        );
+
+        let instance = self
+            .opencode_instances
+            .lock()
+            .await
+            .get(&handle.workspace)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
+
+        let result = instance
+            .lock()
+            .await
+            .respond_question(question_id, answers)
+            .await;
+        result
+    }
+
     /// Shut every codex instance down with a polite SIGTERM to its process
     /// group, wait `grace` for them to exit, and then escalate to a
     /// group-wide SIGKILL. Drops every instance from the map. Used by
@@ -1807,6 +1861,7 @@ pub struct DispatchOutcome {
 fn build_fake_instance(
     workspace: PathBuf,
     client: Arc<CodexClient>,
+    thread_start_timeout: Duration,
     crash_signal: tokio::sync::mpsc::Sender<()>,
 ) -> Arc<AppServerInstance> {
     use std::collections::HashSet;
@@ -1817,6 +1872,7 @@ fn build_fake_instance(
         workspace,
         child: Mutex::new(None),
         client,
+        thread_start_timeout,
         threads: Mutex::new(HashSet::new()),
         spawned_at: now,
         last_activity_at: Mutex::new(now),
@@ -2253,8 +2309,8 @@ async fn non_approval_context_for_request(
     }
 }
 
-fn broadcast_ingest(events_tx: &IngestSink, ingest: RawIngest) {
-    events_tx.emit(ingest);
+async fn broadcast_ingest(events_tx: &IngestSink, ingest: RawIngest) -> Result<(), IngestClosed> {
+    events_tx.emit(ingest).await
 }
 
 fn approval_request_ingest(
@@ -2338,10 +2394,18 @@ fn spawn_approval_timeout(
             );
         }
 
-        broadcast_ingest(
+        if let Err(error) = broadcast_ingest(
             &events_tx,
             approval_timeout_ingest(agent, thread_id, request_id),
-        );
+        )
+        .await
+        {
+            warn!(
+                target: "minos_agent_runtime::manager",
+                error = %error,
+                "failed to emit approval timeout ingest",
+            );
+        }
     });
 }
 
@@ -2417,7 +2481,14 @@ async fn event_pump_loop(
                     .map_or(AgentName::Codex, |h| h.agent);
                 let payload = serde_json::json!({ "method": method, "params": params });
                 let ingest = RawIngest::from_json(agent, thread_id, payload, current_unix_ms());
-                broadcast_ingest(&events_tx, ingest);
+                if let Err(error) = broadcast_ingest(&events_tx, ingest).await {
+                    warn!(
+                        target: "minos_agent_runtime::manager",
+                        error = %error,
+                        "event pump durable ingest sink closed",
+                    );
+                    break;
+                }
             }
             Inbound::ServerRequest {
                 id,
@@ -2470,7 +2541,7 @@ async fn event_pump_loop(
                             },
                         );
 
-                        broadcast_ingest(
+                        if let Err(error) = broadcast_ingest(
                             &events_tx,
                             approval_request_ingest(
                                 agent,
@@ -2481,7 +2552,16 @@ async fn event_pump_loop(
                                 params.clone(),
                                 approval_request_timeout,
                             ),
-                        );
+                        )
+                        .await
+                        {
+                            warn!(
+                                target: "minos_agent_runtime::manager",
+                                error = %error,
+                                "event pump durable ingest sink closed",
+                            );
+                            break;
+                        }
                         spawn_approval_timeout(
                             pending_approvals.clone(),
                             events_tx.clone(),
@@ -2504,10 +2584,19 @@ async fn event_pump_loop(
                                 "method": synthetic_method,
                                 "params": params.clone(),
                             });
-                            broadcast_ingest(
+                            if let Err(error) = broadcast_ingest(
                                 &events_tx,
                                 RawIngest::from_json(agent, thread_id, payload, current_unix_ms()),
-                            );
+                            )
+                            .await
+                            {
+                                warn!(
+                                    target: "minos_agent_runtime::manager",
+                                    error = %error,
+                                    "event pump durable ingest sink closed",
+                                );
+                                break;
+                            }
                         }
 
                         let context = non_approval_context_for_request(
@@ -2576,10 +2665,19 @@ async fn event_pump_loop(
                                 "method": synthetic_method,
                                 "params": params,
                             });
-                            broadcast_ingest(
+                            if let Err(error) = broadcast_ingest(
                                 &events_tx,
                                 RawIngest::from_json(agent, thread_id, payload, current_unix_ms()),
-                            );
+                            )
+                            .await
+                            {
+                                warn!(
+                                    target: "minos_agent_runtime::manager",
+                                    error = %error,
+                                    "event pump durable ingest sink closed",
+                                );
+                                break;
+                            }
                         }
                     }
                 }
@@ -2977,6 +3075,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(started.thread_id, thread_id);
+        server.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn codex_thread_start_honors_configured_timeout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = vec![
+            Step::Sleep { ms: 25 },
+            Step::ExpectRequestMatching {
+                method: "thread/start".into(),
+                params_subset: json!({
+                    "developerInstructions": MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS,
+                }),
+                reply: fake_thread_start_reply("thr-too-late"),
+            },
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.thread_start_timeout = Duration::from_millis(5);
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let error = mgr
+            .start_agent(AgentName::Codex, tmp.path().to_path_buf())
+            .await
+            .expect_err("thread/start should honor configured timeout");
+
+        assert!(error.to_string().contains("thread/start timeout"));
         server.stop().await;
     }
 

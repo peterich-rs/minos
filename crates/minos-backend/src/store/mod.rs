@@ -228,6 +228,7 @@ pub mod push_tokens;
 pub mod raw_events;
 pub mod refresh_tokens;
 pub mod social;
+pub mod thread_sync_state;
 pub mod threads;
 pub mod tokens;
 

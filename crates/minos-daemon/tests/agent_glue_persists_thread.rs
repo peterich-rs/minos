@@ -21,7 +21,6 @@ use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{AgentLaunchMode, StartAgentRequest};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
@@ -43,8 +42,7 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
     cfg.test_ws_url = Some(url);
     let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
 
-    let (relay_tx, _relay_rx) = mpsc::channel(64);
-    let writer = Arc::new(EventWriter::spawn(store.clone(), relay_tx));
+    let writer = Arc::new(EventWriter::spawn(store.clone()));
     let glue = AgentGlue::wire_with(manager.clone(), writer.clone(), store.clone(), workspace);
 
     let resp = glue

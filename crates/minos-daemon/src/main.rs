@@ -11,7 +11,6 @@ use minos_daemon::local_rpc::LocalRpcConfig;
 use minos_daemon::{paths, AgentGlue, DaemonHandle, LocalState, RelayConfig};
 use minos_domain::{AgentDescriptor, AgentName, AgentStatus, MinosError};
 use serde::Serialize;
-use tokio::sync::mpsc;
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
 
@@ -29,6 +28,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    #[command(name = "__minos-teamwork-mcp", hide = true)]
+    MinosTeamworkMcp(McpSidecarArgs),
     /// Print resolved runtime paths and the compile-time relay backend URL.
     Doctor,
     /// Detect locally installed CLI agents on this host.
@@ -67,6 +68,69 @@ struct StartArgs {
     /// Override bind address for the local RPC server (default: 127.0.0.1:0).
     #[arg(long)]
     local_rpc_addr: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct McpSidecarArgs {
+    #[arg(long)]
+    socket_path: PathBuf,
+
+    #[arg(long)]
+    room_id: String,
+
+    #[arg(long)]
+    source_agent: Option<String>,
+
+    #[arg(long)]
+    disable_list_room_messages: bool,
+
+    #[arg(long)]
+    disable_delegate_to_agent: bool,
+
+    #[arg(long)]
+    disable_get_delegation_status: bool,
+
+    #[arg(long)]
+    disable_cancel_delegation: bool,
+
+    #[arg(long)]
+    disable_ask_user_question: bool,
+
+    #[arg(long)]
+    disable_check_user_feedback: bool,
+
+    #[arg(long)]
+    disable_post_room_update: bool,
+
+    #[arg(long)]
+    disable_react_to_message: bool,
+}
+
+impl McpSidecarArgs {
+    async fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
+        let source_agent = self
+            .source_agent
+            .as_deref()
+            .map(parse_agent_name)
+            .transpose()?;
+        minos_chat_store::mcp_server::serve_stdio(minos_chat_store::mcp_server::McpServerConfig {
+            socket_path: self.socket_path,
+            room_id: self.room_id,
+            source_agent,
+            permissions: minos_chat_store::mcp_server::McpToolPermissions {
+                list_room_messages: !self.disable_list_room_messages,
+                delegate_to_agent: !self.disable_delegate_to_agent,
+                get_delegation_status: !self.disable_get_delegation_status,
+                cancel_delegation: !self.disable_cancel_delegation,
+                ask_user_question: !self.disable_ask_user_question,
+                check_user_feedback: !self.disable_check_user_feedback,
+                post_room_update: !self.disable_post_room_update,
+                react_to_message: !self.disable_react_to_message,
+            },
+        })
+        .await?;
+        Ok(())
+    }
 }
 
 #[derive(Args, Debug, Clone)]
@@ -188,9 +252,15 @@ struct CliPaths {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let command = cli.command;
+    let command = match command {
+        Command::MinosTeamworkMcp(args) => return args.serve().await,
+        command => command,
+    };
     let resolved_paths = resolve_paths(&cli.paths)?;
 
-    match cli.command {
+    match command {
+        Command::MinosTeamworkMcp(_) => unreachable!("handled before path resolution"),
         Command::Doctor => doctor(&resolved_paths).await,
         Command::ListClis(args) => list_clis(args).await,
         Command::HostSkills(args) => host_skills(args, &resolved_paths).await,
@@ -692,12 +762,10 @@ async fn start_local_agent(
     let subprocess_env = Arc::new(capture_user_shell_env().await);
     let db_path = home.join("daemon.sqlite");
     let store = Arc::new(minos_daemon::store::LocalStore::open(&db_path).await?);
-    let (out_tx, _out_rx) = mpsc::channel(8);
     let agent = Arc::new(AgentGlue::new(
         home.join("workspaces"),
         subprocess_env,
         store,
-        out_tx,
     ));
     Ok(LocalAgentContext {
         agent,

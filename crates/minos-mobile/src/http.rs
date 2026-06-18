@@ -112,6 +112,13 @@ struct SendAgentInputRequest {
     client_request_id: String,
 }
 
+#[derive(Debug, Serialize)]
+struct RespondOpencodeQuestionRequest {
+    session_id: String,
+    question_id: String,
+    answers: Vec<Vec<String>>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SendAgentInputResponse {
     pub session_id: String,
@@ -1877,6 +1884,46 @@ impl MobileHttpClient {
                 None,
             );
             Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    /// `POST /v1/agent-sessions/respond-opencode-question` — answer an
+    /// opencode question request for an active agent session.
+    pub async fn respond_opencode_question(
+        &self,
+        access_token: &str,
+        session_id: &str,
+        question_id: &str,
+        answers: Vec<Vec<String>>,
+    ) -> Result<(), MinosError> {
+        let path = "/v1/agent-sessions/respond-opencode-question";
+        let url = format!("{}{path}", self.base);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            path,
+            Some(session_id.to_owned()),
+            Some(format!("question_id={question_id}")),
+        );
+        let body = RespondOpencodeQuestionRequest {
+            session_id: session_id.into(),
+            question_id: question_id.into(),
+            answers,
+        };
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("opencode question answered".into()),
+                Some(session_id.to_owned()),
+            );
+            Ok(())
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());

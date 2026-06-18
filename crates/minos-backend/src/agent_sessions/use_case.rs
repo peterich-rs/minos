@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use minos_domain::DeviceId;
@@ -7,8 +8,9 @@ use uuid::Uuid;
 
 use crate::agent_sessions::dto::{
     AgentSessionSummary, ListAgentSessionsInput, ListAgentSessionsOutput, ReadTurnEvent,
-    ReadTurnMetadata, ReadTurnsInput, ReadTurnsOutput, SendInputInput, SendInputOutput,
-    StartAgentSessionInput, StartAgentSessionOutput, StopAgentSessionInput,
+    ReadTurnMetadata, ReadTurnsInput, ReadTurnsOutput, RespondOpencodeQuestionInput,
+    SendInputInput, SendInputOutput, StartAgentSessionInput, StartAgentSessionOutput,
+    StopAgentSessionInput,
 };
 use crate::app::repositories::RepositorySet;
 use crate::app::tx::{DbTx, Storage};
@@ -20,6 +22,7 @@ use crate::store::{durable_event_log, outbox_events, StoreHandle};
 const START_COMMAND_METHOD: &str = "agent_session.start";
 const SEND_INPUT_COMMAND_METHOD: &str = "agent_session.send_input";
 const STOP_COMMAND_METHOD: &str = "agent_session.stop";
+const RESPOND_OPENCODE_QUESTION_METHOD: &str = "minos_respond_opencode_question";
 const DEFAULT_HOST_COMMAND_DEADLINE_MS: i64 = 5_000;
 
 struct ResolvedAgent {
@@ -56,6 +59,11 @@ pub trait AgentSessionService: Send + Sync {
 
     async fn send_input(&self, input: SendInputInput)
         -> Result<SendInputOutput, AgentSessionError>;
+
+    async fn respond_opencode_question(
+        &self,
+        input: RespondOpencodeQuestionInput,
+    ) -> Result<(), AgentSessionError>;
 
     async fn stop(&self, input: StopAgentSessionInput) -> Result<(), AgentSessionError>;
 
@@ -483,6 +491,61 @@ impl AgentSessionService for DefaultAgentSessionService {
             turn_id,
             turn_seq,
         })
+    }
+
+    async fn respond_opencode_question(
+        &self,
+        input: RespondOpencodeQuestionInput,
+    ) -> Result<(), AgentSessionError> {
+        if input.question_id.trim().is_empty() {
+            return Err(AgentSessionError::ValidationMissing("question_id"));
+        }
+
+        let session = self
+            .repos
+            .agent_sessions
+            .get_for_account(&input.session_id, &input.caller_account_id)
+            .await?
+            .ok_or(AgentSessionError::NotFound)?;
+        if matches!(
+            session.status.as_str(),
+            "stopping" | "stopped" | "ended" | "failed"
+        ) {
+            return Err(AgentSessionError::StateInvalid);
+        }
+
+        let host_device_id = session
+            .host_device_id
+            .as_deref()
+            .ok_or(AgentSessionError::HostUnavailable)
+            .and_then(Self::parse_host_device_id)?;
+
+        let params = minos_protocol::RespondOpencodeQuestionRequest {
+            thread_id: session.session_id.clone(),
+            question_id: input.question_id.clone(),
+            answers: input.answers,
+        };
+        let params_json =
+            serde_json::to_value(params).map_err(|error| BackendError::StoreQuery {
+                operation: "agent_sessions.respond_opencode_question.serialize".into(),
+                message: error.to_string(),
+            })?;
+        let command_id = format!(
+            "cmd-opencode-question-{}-{}",
+            session.session_id, input.question_id
+        );
+        self.host_commands
+            .dispatch_json(
+                &command_id,
+                host_device_id,
+                Some(&session.session_id),
+                RESPOND_OPENCODE_QUESTION_METHOD,
+                &params_json,
+                Some(&input.caller_account_id),
+                Duration::from_millis(u64::try_from(DEFAULT_HOST_COMMAND_DEADLINE_MS).unwrap_or(0)),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn stop(&self, input: StopAgentSessionInput) -> Result<(), AgentSessionError> {

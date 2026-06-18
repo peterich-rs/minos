@@ -15,7 +15,6 @@ use tokio::sync::{mpsc, Mutex};
 /// runtime rewrite.
 const TURN_START_TIMEOUT: Duration = Duration::from_secs(10);
 const RESUME_TIMEOUT: Duration = Duration::from_secs(10);
-const HANDSHAKE_FALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
 const SKILLS_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const SKILLS_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -24,6 +23,7 @@ pub struct AppServerInstance {
     #[allow(dead_code)]
     pub(crate) child: Mutex<Option<tokio::process::Child>>,
     pub(crate) client: Arc<CodexClient>,
+    pub(crate) thread_start_timeout: Duration,
     pub threads: Mutex<HashSet<String>>,
     pub spawned_at: Instant,
     pub last_activity_at: Mutex<Instant>,
@@ -35,6 +35,7 @@ impl AppServerInstance {
         workspace: PathBuf,
         child: tokio::process::Child,
         client: Arc<CodexClient>,
+        thread_start_timeout: Duration,
         crash_signal: mpsc::Sender<()>,
     ) -> Self {
         let now = Instant::now();
@@ -42,6 +43,7 @@ impl AppServerInstance {
             workspace,
             child: Mutex::new(Some(child)),
             client,
+            thread_start_timeout,
             threads: Mutex::new(HashSet::new()),
             spawned_at: now,
             last_activity_at: Mutex::new(now),
@@ -74,7 +76,7 @@ impl AppServerInstance {
         crate::manager::rpc_start_thread(
             &self.client,
             cwd,
-            HANDSHAKE_FALLBACK_TIMEOUT,
+            self.thread_start_timeout,
             Some(crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS),
         )
         .await

@@ -145,9 +145,9 @@ fn test_persistence() -> PersistenceCtx {
         peer_store: Arc::new(StdMutex::new(None)),
         peers_store: Arc::new(StdMutex::new(Vec::new())),
         last_error: Arc::new(StdMutex::new(None::<MinosError>)),
-        // No Reconciliator wired: these smoke tests exercise the
-        // relay-client transport, not Phase D reconciliation.
-        reconciliator: None,
+        // No ingest sync worker wired: these smoke tests exercise the
+        // relay-client transport, not host ingest backfill.
+        ingest_sync: Arc::new(StdMutex::new(None)),
     }
 }
 

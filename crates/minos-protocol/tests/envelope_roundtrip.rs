@@ -8,7 +8,6 @@ use minos_domain::{AgentName, DeviceId, DeviceSecret};
 use minos_protocol::{ChatMessageSummary, Envelope, EventKind, SenderType, UserSummary};
 use minos_ui_protocol::UiEventMessage;
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
 
 fn assert_round_trip(env: &Envelope) {
     let json = serde_json::to_string(env).unwrap();
@@ -163,17 +162,6 @@ fn all_event_kind_variants_round_trip() {
                 mentioned_account_ids: vec!["acct-2".into()],
                 sender_type: SenderType::User,
             },
-        },
-        EventKind::IngestCheckpoint {
-            last_seq_per_thread: {
-                let mut m = HashMap::new();
-                m.insert("thr-a".into(), 10);
-                m.insert("thr-b".into(), 5);
-                m
-            },
-        },
-        EventKind::IngestCheckpoint {
-            last_seq_per_thread: HashMap::new(),
         },
     ];
 

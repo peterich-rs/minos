@@ -424,6 +424,38 @@ pub async fn update_status(
     get(store, session_id).await
 }
 
+pub async fn claim_host_if_empty(
+    store: &impl AsStorePool,
+    session_id: &str,
+    host_device_id: &str,
+) -> Result<(), BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE agent_sessions
+                    SET host_device_id = ?
+                  WHERE session_id = ?
+                    AND host_device_id IS NULL",
+        )
+        .bind(host_device_id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE agent_sessions
+                    SET host_device_id = $1
+                  WHERE session_id = $2
+                    AND host_device_id IS NULL",
+        )
+        .bind(host_device_id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+    }
+    .map_err(store_err("agent_sessions.claim_host_if_empty"))
+}
+
 fn store_err(operation: &'static str) -> impl Fn(sqlx::Error) -> BackendError {
     move |e| BackendError::StoreQuery {
         operation: operation.into(),

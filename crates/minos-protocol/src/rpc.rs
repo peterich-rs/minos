@@ -6,9 +6,9 @@ use crate::{
     ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams, GetThreadResponse,
     HealthResponse, InterruptThreadRequest, ListClisResponse, ListHostSkillsRequest,
     ListHostSkillsResponse, ListHostWorkspacesRequest, ListHostWorkspacesResponse,
-    ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
-    WriteHostSkillConfigResponse,
+    ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse,
+    RespondOpencodeQuestionRequest, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use jsonrpsee::proc_macros::rpc;
 
@@ -73,6 +73,13 @@ pub trait MinosRpc {
     async fn approval_decision(
         &self,
         req: ApprovalDecisionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    /// Resolve one pending opencode question request.
+    #[method(name = "respond_opencode_question")]
+    async fn respond_opencode_question(
+        &self,
+        req: RespondOpencodeQuestionRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
     /// Pause an in-flight turn on the named thread. Best-effort: the codex

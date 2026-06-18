@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     extract::{
@@ -25,15 +25,19 @@ use crate::realtime::subscription::ConnectionState;
 use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
 use crate::store::{
     agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands,
-    outbox_events, raw_events, threads,
+    outbox_events, raw_events, thread_sync_state, threads,
 };
-use minos_protocol::realtime::{ClientFrame, ConnectionPrincipal, RealtimeTopic, ServerFrame};
+use minos_protocol::realtime::{
+    ClientFrame, ConnectionPrincipal, HostGapManifest, HostIngestChunk, HostIngestLiveBatch,
+    HostIngestPullResponse, PullPriority, PullReason, RealtimeTopic, ServerFrame,
+};
 use minos_ui_protocol::UiEventMessage;
 
 const PUSH_CHANNEL_CAPACITY: usize = 256;
 const SUBSCRIBE_LIMIT_PER_REQUEST: usize = 32;
 const LIVE_SUBSCRIPTION_LIMIT: usize = 128;
 const REPLAY_BATCH_SIZE: u32 = 256;
+const PULL_INGEST_MAX_BYTES: u64 = 0;
 const HEARTBEAT_INTERVAL_MS: i64 = 25_000;
 const CLOSE_CODE_AUTH_REVOKED: u16 = 4401;
 const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
@@ -698,6 +702,48 @@ async fn handle_formal_frame(
             on_host_stream_event(state, upgrade, &topic, &kind, payload).await?;
             Ok(None)
         }
+        ClientFrame::HostIngestLiveBatch { batch } => {
+            if upgrade.role != DeviceRole::AgentHost {
+                let _ = send_error_frame(
+                    ws,
+                    conn,
+                    "realtime_subscription_denied",
+                    "host-only frame on client gateway",
+                )
+                .await;
+                return Ok(None);
+            }
+            handle_host_ingest_live_batch(ws, state, upgrade, batch).await?;
+            Ok(None)
+        }
+        ClientFrame::HostGapManifest { manifest } => {
+            if upgrade.role != DeviceRole::AgentHost {
+                let _ = send_error_frame(
+                    ws,
+                    conn,
+                    "realtime_subscription_denied",
+                    "host-only frame on client gateway",
+                )
+                .await;
+                return Ok(None);
+            }
+            handle_host_gap_manifest(ws, state, upgrade, manifest).await?;
+            Ok(None)
+        }
+        ClientFrame::HostIngestPullResponse { response } => {
+            if upgrade.role != DeviceRole::AgentHost {
+                let _ = send_error_frame(
+                    ws,
+                    conn,
+                    "realtime_subscription_denied",
+                    "host-only frame on client gateway",
+                )
+                .await;
+                return Ok(None);
+            }
+            handle_host_ingest_pull_response(ws, state, upgrade, response).await?;
+            Ok(None)
+        }
     }
 }
 
@@ -875,6 +921,231 @@ async fn replay_topic(
     }
 
     Ok(())
+}
+
+async fn handle_host_ingest_live_batch(
+    ws: &mut WebSocket,
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    batch: HostIngestLiveBatch,
+) -> Result<(), BackendError> {
+    if batch.host_id != upgrade.device_id {
+        return Ok(());
+    }
+    let mut accepted_threads = HashSet::new();
+    let batch_id = batch.batch_id.clone();
+    for chunk in batch.chunks {
+        let thread_id = chunk.thread_id.clone();
+        if persist_host_ingest_chunk(state, upgrade, chunk).await? {
+            accepted_threads.insert(thread_id);
+        }
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let host_id = upgrade.device_id.to_string();
+    for thread_id in accepted_threads {
+        let accepted_to_seq = backend_accepted_to_seq(state, &host_id, &thread_id).await?;
+        thread_sync_state::mark_backend_acked(
+            &state.store,
+            &host_id,
+            &thread_id,
+            accepted_to_seq,
+            now_ms,
+        )
+        .await?;
+        let _ = send_server_frame(
+            ws,
+            &ServerFrame::HostIngestAck {
+                thread_id,
+                accepted_to_seq,
+                batch_id: Some(batch_id.clone()),
+            },
+        )
+        .await;
+    }
+    Ok(())
+}
+
+async fn handle_host_gap_manifest(
+    ws: &mut WebSocket,
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    manifest: HostGapManifest,
+) -> Result<(), BackendError> {
+    if manifest.host_id != upgrade.device_id {
+        return Ok(());
+    }
+    thread_sync_state::upsert_manifest(
+        &state.store,
+        &manifest,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await?;
+    for frame in pull_requests_for_manifest(&manifest) {
+        let _ = send_server_frame(ws, &frame).await;
+    }
+    Ok(())
+}
+
+async fn handle_host_ingest_pull_response(
+    ws: &mut WebSocket,
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    response: HostIngestPullResponse,
+) -> Result<(), BackendError> {
+    let request_id = response.request_id.clone();
+    let thread_id = response.thread_id.clone();
+    let host_id = upgrade.device_id.to_string();
+    for chunk in response.chunks {
+        persist_host_ingest_chunk(state, upgrade, chunk).await?;
+    }
+    let accepted_to_seq = backend_accepted_to_seq(state, &host_id, &thread_id).await?;
+    thread_sync_state::mark_backend_acked(
+        &state.store,
+        &host_id,
+        &thread_id,
+        accepted_to_seq,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await?;
+    let _ = send_server_frame(
+        ws,
+        &ServerFrame::PullAck {
+            request_id,
+            thread_id,
+            accepted_to_seq,
+        },
+    )
+    .await;
+    Ok(())
+}
+
+async fn backend_accepted_to_seq(
+    state: &BackendState,
+    host_id: &str,
+    thread_id: &str,
+) -> Result<u64, BackendError> {
+    let current = thread_sync_state::backend_acked_seq(&state.store, host_id, thread_id).await?;
+    raw_events::contiguous_host_seq_after(&state.store, host_id, thread_id, current).await
+}
+
+fn pull_requests_for_manifest(manifest: &HostGapManifest) -> Vec<ServerFrame> {
+    let mut frames = Vec::new();
+    for session in &manifest.sessions {
+        let ranges = if session.missing_ranges.is_empty() {
+            vec![minos_protocol::realtime::SeqRange {
+                from: session.local_from_seq,
+                to: session.local_to_seq,
+            }]
+        } else {
+            session.missing_ranges.clone()
+        };
+        let min_from = session.backend_acked_seq.saturating_add(1);
+        for range in ranges {
+            let from_seq = range.from.max(min_from).max(1);
+            if from_seq > range.to {
+                continue;
+            }
+            frames.push(ServerFrame::PullIngestRange {
+                request_id: Uuid::new_v4().to_string(),
+                thread_id: session.thread_id.clone(),
+                from_seq,
+                to_seq: range.to,
+                max_bytes: PULL_INGEST_MAX_BYTES,
+                priority: PullPriority::LiveCritical,
+                reason: PullReason::IdleBackfill,
+            });
+        }
+    }
+    frames
+}
+
+async fn persist_host_ingest_chunk(
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    chunk: HostIngestChunk,
+) -> Result<bool, BackendError> {
+    let expected_host_id = upgrade.device_id.to_string();
+    let Some(session) = agent_sessions::get(&state.store, &chunk.thread_id).await? else {
+        tracing::warn!(
+            target: "minos_backend::realtime::gateway",
+            thread_id = %chunk.thread_id,
+            "dropping host ingest chunk for unknown agent session",
+        );
+        return Ok(false);
+    };
+    match session.host_device_id.as_deref() {
+        Some(host_id) if host_id != expected_host_id => {
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                thread_id = %chunk.thread_id,
+                host_device_id = %upgrade.device_id,
+                expected_host_id = host_id,
+                "dropping host ingest chunk for mismatched host",
+            );
+            return Ok(false);
+        }
+        Some(_) => {}
+        None => {
+            agent_sessions::claim_host_if_empty(&state.store, &chunk.thread_id, &expected_host_id)
+                .await?;
+        }
+    }
+
+    threads::upsert(
+        &state.store,
+        &chunk.thread_id,
+        chunk.agent,
+        &expected_host_id,
+        chunk.last_ts_ms,
+    )
+    .await?;
+
+    let inserted = raw_events::insert_host_ingest_chunk(
+        &state.store,
+        &expected_host_id,
+        &chunk.thread_id,
+        chunk.seq,
+        &chunk.event_id,
+        &chunk.kind,
+        chunk.agent,
+        &chunk.payload,
+        chunk.last_ts_ms,
+        &chunk.checksum_sha256,
+        chunk.byte_len,
+    )
+    .await?;
+
+    if inserted == raw_events::HostIngestInsert::Inserted {
+        fanout_host_ingest_projection(state, &chunk);
+    }
+    Ok(true)
+}
+
+fn fanout_host_ingest_projection(state: &BackendState, chunk: &HostIngestChunk) {
+    let topic = RealtimeTopic::AgentSession(chunk.thread_id.clone());
+    for ui in &chunk.projection {
+        let payload = match serde_json::to_value(ui) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::realtime::gateway",
+                    error = %error,
+                    thread_id = %chunk.thread_id,
+                    "failed to encode host ingest projection",
+                );
+                continue;
+            }
+        };
+        let frame = ServerFrame::StreamEvent {
+            topic: topic.topic_string(),
+            kind: "ui_event".to_string(),
+            seq: i64::try_from(chunk.seq).ok(),
+            payload,
+        };
+        for target in state.subscription_mgr.fanout_targets(&topic) {
+            let _ = target.send(frame.clone());
+        }
+    }
 }
 
 async fn on_host_stream_event(
@@ -1215,7 +1486,13 @@ async fn close_with_directive(ws: &mut WebSocket, role: DeviceRole, directive: C
 
 #[cfg(test)]
 mod tests {
-    use super::websocket_read_error_is_client_reset;
+    use super::{
+        pull_requests_for_manifest, websocket_read_error_is_client_reset, PULL_INGEST_MAX_BYTES,
+    };
+    use minos_domain::DeviceId;
+    use minos_protocol::realtime::{
+        HostGapManifest, PullPriority, PullReason, SeqRange, ServerFrame, SessionGapManifest,
+    };
 
     #[test]
     fn websocket_read_error_classifies_client_reset() {
@@ -1228,5 +1505,54 @@ mod tests {
         assert!(!websocket_read_error_is_client_reset(
             &"WebSocket protocol error: invalid opcode"
         ));
+    }
+
+    #[test]
+    fn manifest_pull_requests_cover_reported_ranges() {
+        let manifest = HostGapManifest {
+            manifest_id: "manifest-1".into(),
+            host_id: DeviceId::new(),
+            sessions: vec![SessionGapManifest {
+                thread_id: "thr-sync".into(),
+                backend_acked_seq: 10,
+                local_from_seq: 11,
+                local_to_seq: 20,
+                missing_ranges: vec![SeqRange { from: 9, to: 12 }, SeqRange { from: 15, to: 16 }],
+                bytes: 0,
+                event_count: 0,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                running: true,
+            }],
+        };
+
+        let frames = pull_requests_for_manifest(&manifest);
+
+        assert_eq!(frames.len(), 2);
+        let ServerFrame::PullIngestRange {
+            request_id,
+            thread_id,
+            from_seq,
+            to_seq,
+            max_bytes,
+            priority,
+            reason,
+        } = &frames[0]
+        else {
+            panic!("expected PullIngestRange");
+        };
+        assert!(!request_id.is_empty());
+        assert_eq!(thread_id, "thr-sync");
+        assert_eq!((*from_seq, *to_seq), (11, 12));
+        assert_eq!(*max_bytes, PULL_INGEST_MAX_BYTES);
+        assert_eq!(*priority, PullPriority::LiveCritical);
+        assert_eq!(*reason, PullReason::IdleBackfill);
+        let ServerFrame::PullIngestRange {
+            from_seq, to_seq, ..
+        } = &frames[1]
+        else {
+            panic!("expected PullIngestRange");
+        };
+        assert_eq!((*from_seq, *to_seq), (15, 16));
     }
 }

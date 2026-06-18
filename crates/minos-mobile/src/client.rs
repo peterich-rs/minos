@@ -1007,6 +1007,19 @@ impl MobileClient {
         })
     }
 
+    /// Submit an opencode question answer back to the host that owns the
+    /// agent session.
+    pub async fn respond_opencode_question(
+        &self,
+        session_id: String,
+        question_id: String,
+        answers: Vec<Vec<String>>,
+    ) -> Result<(), MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.respond_opencode_question(&access, &session_id, &question_id, answers)
+        })
+    }
+
     /// Pause an in-flight turn on the named thread via REST.
     pub async fn interrupt_thread(&self, thread_id: String) -> Result<(), MinosError> {
         auth_http_call!(self, |http, access| {

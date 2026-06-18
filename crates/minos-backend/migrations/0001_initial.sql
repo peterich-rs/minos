@@ -330,16 +330,40 @@ CREATE INDEX idx_threads_project_last
     WHERE project_id IS NOT NULL;
 
 CREATE TABLE raw_events (
-    thread_id     TEXT NOT NULL REFERENCES threads(thread_id) ON DELETE CASCADE,
-    seq           INTEGER NOT NULL,
-    agent         TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini')),
-    payload_json  TEXT NOT NULL,
-    ts_ms         INTEGER NOT NULL,
-    PRIMARY KEY (thread_id, seq)
+    host_device_id   TEXT NOT NULL DEFAULT '',
+    thread_id        TEXT NOT NULL REFERENCES threads(thread_id) ON DELETE CASCADE,
+    seq              INTEGER NOT NULL,
+    event_id         TEXT NOT NULL DEFAULT '',
+    kind             TEXT NOT NULL DEFAULT 'agent_event',
+    agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode')),
+    payload_json     TEXT NOT NULL,
+    ts_ms            INTEGER NOT NULL,
+    checksum_sha256  TEXT NOT NULL DEFAULT '',
+    byte_len         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (host_device_id, thread_id, seq)
 ) STRICT;
 
 CREATE INDEX idx_raw_events_thread_seq
     ON raw_events(thread_id, seq);
+CREATE UNIQUE INDEX idx_raw_events_event_id
+    ON raw_events(event_id)
+    WHERE event_id != '';
+
+CREATE TABLE thread_sync_state (
+    host_device_id       TEXT NOT NULL,
+    thread_id            TEXT NOT NULL,
+    backend_acked_seq    INTEGER NOT NULL DEFAULT 0,
+    local_from_seq       INTEGER,
+    local_to_seq         INTEGER,
+    missing_ranges_json  TEXT NOT NULL DEFAULT '[]',
+    bytes                INTEGER NOT NULL DEFAULT 0,
+    event_count          INTEGER NOT NULL DEFAULT 0,
+    first_ts_ms          INTEGER NOT NULL DEFAULT 0,
+    last_ts_ms           INTEGER NOT NULL DEFAULT 0,
+    running              INTEGER NOT NULL DEFAULT 0,
+    updated_at_ms        INTEGER NOT NULL,
+    PRIMARY KEY (host_device_id, thread_id)
+) STRICT;
 
 CREATE TABLE project_threads (
     project_id    TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,

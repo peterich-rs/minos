@@ -40,6 +40,14 @@ pub struct SendInputInput {
     pub caller_account_id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct RespondOpencodeQuestionInput {
+    pub session_id: String,
+    pub question_id: String,
+    pub answers: Vec<Vec<String>>,
+    pub caller_account_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SendInputOutput {
     pub session_id: String,

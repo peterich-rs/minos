@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use minos_agent_runtime::{
     AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, ManagerEvent, RawIngest,
@@ -20,11 +20,12 @@ use minos_protocol::{
     ThreadSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::ThreadEndReason;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, watch};
 
 use crate::store::event_writer::{provider_session_id_from_ingest, EventWriter};
 use crate::store::{EventRow, LocalStore, ThreadRow};
 use crate::subscription::{AgentStateObserver, Subscription};
+use crate::{ingest_coalescer::IngestCoalescer, ingest_sync::IngestSyncHandle};
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,6 +59,7 @@ pub struct AgentGlue {
     state_tx: Arc<watch::Sender<ThreadState>>,
     state_rx: watch::Receiver<ThreadState>,
     persisted_ingest_tx: broadcast::Sender<LocalIngestFrame>,
+    ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
     /// Default workspace dir used when `start_agent` is invoked under the
     /// legacy surface (no workspace param). Resolved once at construction
     /// time.
@@ -65,15 +67,14 @@ pub struct AgentGlue {
 }
 
 impl AgentGlue {
-    /// Construct a new glue and spawn the `RawIngest -> EventWriter` bridge.
-    /// `relay_out_tx` is the single `/devices` outbound channel owned by the
-    /// `RelayClient`.
+    /// Construct a new glue and spawn the `RawIngest -> chunk -> local DB`
+    /// bridge. Network upload is attached later with [`Self::set_ingest_sync`]
+    /// after the relay client exists.
     #[must_use]
     pub fn new(
         workspace_root: PathBuf,
         subprocess_env: Arc<std::collections::HashMap<String, String>>,
         store: Arc<LocalStore>,
-        relay_out_tx: mpsc::Sender<minos_protocol::realtime::ClientFrame>,
     ) -> Self {
         let mut cfg = AgentRuntimeConfig::new(workspace_root.clone());
         if let Err(error) = cfg.enable_default_mcp() {
@@ -88,7 +89,7 @@ impl AgentGlue {
         #[cfg(feature = "test-support")]
         apply_test_ws_override(&mut cfg);
         let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
-        let writer = Arc::new(EventWriter::spawn(store.clone(), relay_out_tx));
+        let writer = Arc::new(EventWriter::spawn(store.clone()));
         let glue = Self::wire_with(manager.clone(), writer, store, workspace_root.clone());
         if let Some(mcp_config) = mcp_config {
             spawn_mcp_socket_handler(mcp_config, manager, workspace_root);
@@ -114,8 +115,12 @@ impl AgentGlue {
         // user couldn't tell whether codex was active. Volume is bounded
         // by codex's own emit rate (~tens/s/thread per spec §8.7).
         let (persisted_ingest_tx, _) = broadcast::channel(256);
+        let ingest_sync = Arc::new(StdMutex::new(None::<IngestSyncHandle>));
+        let coalescer = IngestCoalescer::new(store.clone());
         let mut rx = manager.install_durable_ingest_stream();
         let writer_clone = writer.clone();
+        let coalescer_clone = coalescer.clone();
+        let ingest_sync_clone = ingest_sync.clone();
         let persisted_ingest_tx_clone = persisted_ingest_tx.clone();
         tokio::spawn(async move {
             while let Some(ingest) = rx.recv().await {
@@ -123,7 +128,26 @@ impl AgentGlue {
                 let agent = ingest.agent;
                 let ts_ms = ingest.ts_ms;
                 let payload_bytes = ingest.body_len();
-                match writer_clone.write_live(ingest).await {
+                let chunk = match coalescer_clone.coalesce(ingest).await {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        tracing::error!(
+                            target: "minos_daemon::agent",
+                            error = %error,
+                            thread_id = %thread_id,
+                            "failed to coalesce ingest event; event dropped",
+                        );
+                        continue;
+                    }
+                };
+                let sync = ingest_sync_clone
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.clone());
+                if let Some(sync) = sync {
+                    sync.submit_live(chunk.clone()).await;
+                }
+                match writer_clone.write_chunk(chunk).await {
                     Ok(committed) => {
                         let seq = committed.seq;
                         let ui_events = committed.projection;
@@ -146,7 +170,7 @@ impl AgentGlue {
                         target: "minos_daemon::agent",
                         error = %e,
                         thread_id = %thread_id,
-                        "EventWriter.write_live failed; event dropped",
+                        "EventWriter.write_chunk failed; event not persisted locally",
                     ),
                 }
             }
@@ -220,7 +244,14 @@ impl AgentGlue {
             state_tx,
             state_rx,
             persisted_ingest_tx,
+            ingest_sync,
             default_workspace,
+        }
+    }
+
+    pub fn set_ingest_sync(&self, sync: IngestSyncHandle) {
+        if let Ok(mut guard) = self.ingest_sync.lock() {
+            *guard = Some(sync);
         }
     }
 
@@ -375,6 +406,16 @@ impl AgentGlue {
     ) -> Result<(), MinosError> {
         self.manager
             .respond_opencode_permission(&req.thread_id, &req.permission_id, &req.response)
+            .await
+            .map_err(map_anyhow)
+    }
+
+    pub async fn respond_opencode_question(
+        &self,
+        req: minos_protocol::RespondOpencodeQuestionRequest,
+    ) -> Result<(), MinosError> {
+        self.manager
+            .respond_opencode_question(&req.thread_id, &req.question_id, req.answers)
             .await
             .map_err(map_anyhow)
     }
@@ -1823,13 +1864,11 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let (out_tx, _out_rx) = mpsc::channel(8);
         TestGlue {
             glue: AgentGlue::new(
                 tmp.path().join("workspaces"),
                 Arc::new(std::collections::HashMap::new()),
                 store,
-                out_tx,
             ),
             _tmp: tmp,
         }

@@ -171,6 +171,15 @@ pub enum ClientFrame {
         kind: String,
         payload: Value,
     },
+    HostIngestLiveBatch {
+        batch: HostIngestLiveBatch,
+    },
+    HostGapManifest {
+        manifest: HostGapManifest,
+    },
+    HostIngestPullResponse {
+        response: HostIngestPullResponse,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -217,6 +226,26 @@ pub enum ServerFrame {
         reason: String,
         close_code: u16,
     },
+    HostIngestAck {
+        thread_id: String,
+        accepted_to_seq: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        batch_id: Option<String>,
+    },
+    PullIngestRange {
+        request_id: String,
+        thread_id: String,
+        from_seq: u64,
+        to_seq: u64,
+        max_bytes: u64,
+        priority: PullPriority,
+        reason: PullReason,
+    },
+    PullAck {
+        request_id: String,
+        thread_id: String,
+        accepted_to_seq: u64,
+    },
     Pong {
         ts: i64,
         server_time_ms: i64,
@@ -226,6 +255,86 @@ pub enum ServerFrame {
         message: String,
         request_id: String,
     },
+}
+
+// ─── Host ingest sync ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PullPriority {
+    LiveCritical,
+    ClientOpenedHistory,
+    IdleBackfill,
+    Audit,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PullReason {
+    ClientOpenedHistory,
+    IdleBackfill,
+    Audit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeqRange {
+    pub from: u64,
+    pub to: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HostIngestChunk {
+    pub event_id: String,
+    pub thread_id: String,
+    pub seq: u64,
+    pub agent: minos_domain::AgentName,
+    pub kind: String,
+    pub payload: Value,
+    #[serde(default)]
+    pub projection: Vec<minos_ui_protocol::UiEventMessage>,
+    pub first_ts_ms: i64,
+    pub last_ts_ms: i64,
+    pub byte_len: u64,
+    pub checksum_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HostIngestLiveBatch {
+    pub batch_id: String,
+    pub host_id: minos_domain::DeviceId,
+    pub chunks: Vec<HostIngestChunk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGapManifest {
+    pub thread_id: String,
+    pub backend_acked_seq: u64,
+    pub local_from_seq: u64,
+    pub local_to_seq: u64,
+    #[serde(default)]
+    pub missing_ranges: Vec<SeqRange>,
+    pub bytes: u64,
+    pub event_count: u64,
+    pub first_ts_ms: i64,
+    pub last_ts_ms: i64,
+    pub running: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostGapManifest {
+    pub manifest_id: String,
+    pub host_id: minos_domain::DeviceId,
+    pub sessions: Vec<SessionGapManifest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HostIngestPullResponse {
+    pub request_id: String,
+    pub thread_id: String,
+    pub from_seq: u64,
+    pub to_seq: u64,
+    pub chunks: Vec<HostIngestChunk>,
+    pub has_more: bool,
 }
 
 // ─── Durable events ───────────────────────────────────────────────────
@@ -538,6 +647,118 @@ mod tests {
         let json = serde_json::to_string(&frame).unwrap();
         let back: ClientFrame = serde_json::from_str(&json).unwrap();
         assert_eq!(frame, back);
+    }
+
+    fn sample_host_ingest_chunk(seq: u64) -> HostIngestChunk {
+        HostIngestChunk {
+            event_id: format!("evt-{seq}"),
+            thread_id: "thr-sync".into(),
+            seq,
+            agent: minos_domain::AgentName::Codex,
+            kind: "agent_event".into(),
+            payload: serde_json::json!({
+                "method": "item/agentMessage/delta",
+                "params": {"delta": "hello"}
+            }),
+            projection: vec![minos_ui_protocol::UiEventMessage::Raw {
+                kind: "agent_event".into(),
+                payload_json: "{}".into(),
+            }],
+            first_ts_ms: 1_760_000_000_000,
+            last_ts_ms: 1_760_000_000_010,
+            byte_len: 42,
+            checksum_sha256: format!("checksum-{seq}"),
+        }
+    }
+
+    #[test]
+    fn client_frame_host_ingest_live_batch_round_trip() {
+        let frame = ClientFrame::HostIngestLiveBatch {
+            batch: HostIngestLiveBatch {
+                batch_id: "batch-1".into(),
+                host_id: minos_domain::DeviceId::new(),
+                chunks: vec![sample_host_ingest_chunk(1)],
+            },
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        let back: ClientFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(frame, back);
+    }
+
+    #[test]
+    fn client_frame_host_gap_manifest_round_trip() {
+        let frame = ClientFrame::HostGapManifest {
+            manifest: HostGapManifest {
+                manifest_id: "manifest-1".into(),
+                host_id: minos_domain::DeviceId::new(),
+                sessions: vec![SessionGapManifest {
+                    thread_id: "thr-A".into(),
+                    backend_acked_seq: 100,
+                    local_from_seq: 101,
+                    local_to_seq: 500,
+                    missing_ranges: vec![SeqRange { from: 101, to: 500 }],
+                    bytes: 1_000_000,
+                    event_count: 400,
+                    first_ts_ms: 1_760_000_000_000,
+                    last_ts_ms: 1_760_000_050_000,
+                    running: true,
+                }],
+            },
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        let back: ClientFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(frame, back);
+    }
+
+    #[test]
+    fn client_frame_host_ingest_pull_response_round_trip() {
+        let frame = ClientFrame::HostIngestPullResponse {
+            response: HostIngestPullResponse {
+                request_id: "pull-1".into(),
+                thread_id: "thr-sync".into(),
+                from_seq: 1,
+                to_seq: 2,
+                chunks: vec![sample_host_ingest_chunk(1), sample_host_ingest_chunk(2)],
+                has_more: false,
+            },
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        let back: ClientFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(frame, back);
+    }
+
+    #[test]
+    fn server_frame_pull_and_ack_round_trip() {
+        let pull = ServerFrame::PullIngestRange {
+            request_id: "pull-1".into(),
+            thread_id: "thr-sync".into(),
+            from_seq: 1,
+            to_seq: 50,
+            max_bytes: 2_000_000,
+            priority: PullPriority::ClientOpenedHistory,
+            reason: PullReason::ClientOpenedHistory,
+        };
+        let json = serde_json::to_string(&pull).unwrap();
+        let back: ServerFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(pull, back);
+
+        let ack = ServerFrame::HostIngestAck {
+            thread_id: "thr-sync".into(),
+            accepted_to_seq: 50,
+            batch_id: Some("batch-1".into()),
+        };
+        let json = serde_json::to_string(&ack).unwrap();
+        let back: ServerFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(ack, back);
+
+        let pull_ack = ServerFrame::PullAck {
+            request_id: "pull-1".into(),
+            thread_id: "thr-sync".into(),
+            accepted_to_seq: 50,
+        };
+        let json = serde_json::to_string(&pull_ack).unwrap();
+        let back: ServerFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(pull_ack, back);
     }
 
     #[test]

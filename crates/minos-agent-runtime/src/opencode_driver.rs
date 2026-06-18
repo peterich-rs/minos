@@ -203,6 +203,23 @@ impl OpencodeServerInstance {
         Ok(())
     }
 
+    pub async fn respond_question(
+        &self,
+        question_id: &str,
+        answers: Vec<Vec<String>>,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::json!({ "answers": answers });
+        self.http_client
+            .post(format!("{}/question/{question_id}/reply", self.base_url))
+            .header("Authorization", &self.auth_header)
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&payload)?)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
     pub fn subscribe_sse_url(&self) -> String {
         format!("{}/event", self.base_url)
     }
@@ -329,12 +346,23 @@ async fn try_sse_connect(
                     );
                     continue;
                 };
-                events_tx.emit(RawIngest::from_json(
-                    AgentName::Opencode,
-                    thread_id.clone(),
-                    payload.clone(),
-                    chrono::Utc::now().timestamp_millis(),
-                ));
+                if let Err(error) = events_tx
+                    .emit(RawIngest::from_json(
+                        AgentName::Opencode,
+                        thread_id.clone(),
+                        payload.clone(),
+                        chrono::Utc::now().timestamp_millis(),
+                    ))
+                    .await
+                {
+                    warn!(
+                        target: "minos_agent_runtime::opencode_driver",
+                        error = %error,
+                        thread_id = %thread_id,
+                        "durable ingest sink closed while reading opencode SSE",
+                    );
+                    break;
+                }
                 sync_thread_state(&payload, &thread_id, threads, manager_tx).await;
             }
             Err(e) => {
@@ -532,5 +560,49 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("404"));
+    }
+
+    #[tokio::test]
+    async fn respond_question_posts_answers_to_question_reply_endpoint() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let request_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0_u8; 4096];
+            let n = stream.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntrue")
+                .await
+                .unwrap();
+            request
+        });
+
+        let instance = OpencodeServerInstance {
+            workspace: "/tmp".into(),
+            config: OpencodeServerConfig {
+                opencode_bin: "opencode".into(),
+                port: addr.port(),
+                password: "pw".into(),
+                subprocess_env: Arc::new(HashMap::new()),
+                opencode_config_content: None,
+            },
+            child: None,
+            http_client: Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap(),
+            base_url: format!("http://{addr}"),
+            auth_header: "Basic test".into(),
+        };
+
+        instance
+            .respond_question("que-1", vec![vec!["Robust".into()]])
+            .await
+            .expect("question response should succeed");
+
+        let request = request_task.await.expect("request task should finish");
+        assert!(request.starts_with("POST /question/que-1/reply "));
+        assert!(request.contains(r#""answers":[["Robust"]]"#));
     }
 }

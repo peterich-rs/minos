@@ -686,6 +686,23 @@ impl MobileClient {
             .await
     }
 
+    /// Submit an opencode question answer for a pending host request.
+    pub async fn respond_opencode_question(
+        &self,
+        session_id: String,
+        question_id: String,
+        answers_json: String,
+    ) -> Result<(), MinosError> {
+        let answers =
+            serde_json::from_str(&answers_json).map_err(|error| MinosError::RpcCallFailed {
+                method: "respond_opencode_question".into(),
+                message: format!("invalid opencode question answers json: {error}"),
+            })?;
+        self.0
+            .respond_opencode_question(session_id, question_id, answers)
+            .await
+    }
+
     /// Pause an in-flight turn on the given thread. Best-effort. The thread
     /// transitions to `Suspended { UserInterrupt }` regardless of whether the
     /// codex side acknowledges in time.

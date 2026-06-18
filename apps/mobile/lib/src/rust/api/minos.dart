@@ -255,6 +255,13 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String memberAccountId,
   });
 
+  /// Submit an opencode question answer for a pending host request.
+  Future<void> respondOpencodeQuestion({
+    required String sessionId,
+    required String questionId,
+    required String answersJson,
+  });
+
   /// Reconnect using the durable pairing snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession();

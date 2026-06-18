@@ -13,8 +13,8 @@ use minos_protocol::{
     InterruptThreadRequest, ListClisResponse, LocalDaemonRpcServer, LocalIngestFrame,
     LocalManagerEvent, LocalThreadSnapshot, ReadArtifactRangeRequest, ReadArtifactRangeResponse,
     ReadGroupChatParams, ReadGroupChatResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
-    RespondOpencodePermissionRequest, SendUserMessageRequest, StartAgentRequest,
-    StartAgentResponse, ThreadState,
+    RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, ThreadState,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -78,6 +78,16 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
     ) -> jsonrpsee::core::RpcResult<()> {
         self.agent
             .respond_opencode_permission(req)
+            .await
+            .map_err(rpc_err)
+    }
+
+    async fn respond_opencode_question(
+        &self,
+        req: RespondOpencodeQuestionRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent
+            .respond_opencode_question(req)
             .await
             .map_err(rpc_err)
     }

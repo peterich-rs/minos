@@ -8,7 +8,6 @@ use minos_daemon::jsonl_recover::recover_with_root;
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 /// Insert a thread row so `EventWriter` can write events for it.
 async fn seed_thread(store: &LocalStore, thread_id: &str) {
@@ -35,8 +34,7 @@ async fn recover_skips_when_no_codex_session_id() {
             .unwrap(),
     );
     seed_thread(&store, "thr-X").await;
-    let (relay_tx, _relay_rx) = mpsc::channel(16);
-    let writer = Arc::new(EventWriter::spawn(store.clone(), relay_tx));
+    let writer = Arc::new(EventWriter::spawn(store.clone()));
 
     recover_with_root("thr-X", &[1, 2, 3], None, tmp.path(), &writer)
         .await
@@ -62,8 +60,7 @@ async fn recover_skips_when_file_missing() {
             .unwrap(),
     );
     seed_thread(&store, "thr-Y").await;
-    let (relay_tx, _relay_rx) = mpsc::channel(16);
-    let writer = Arc::new(EventWriter::spawn(store.clone(), relay_tx));
+    let writer = Arc::new(EventWriter::spawn(store.clone()));
 
     // codex_session_id points at a file that doesn't exist under our
     // fake codex home → recover logs and returns Ok.
@@ -95,8 +92,7 @@ async fn recover_parses_valid_lines_and_writes_with_jsonl_recovery_source() {
             .unwrap(),
     );
     seed_thread(&store, "thr-Z").await;
-    let (relay_tx, _relay_rx) = mpsc::channel(64);
-    let writer = Arc::new(EventWriter::spawn(store.clone(), relay_tx));
+    let writer = Arc::new(EventWriter::spawn(store.clone()));
 
     // Stage a fake `.codex/sessions/sess-uuid-1.jsonl` with three valid
     // lines and one malformed line. The malformed line MUST NOT abort
@@ -153,8 +149,7 @@ async fn recover_skips_blank_lines() {
             .unwrap(),
     );
     seed_thread(&store, "thr-blank").await;
-    let (relay_tx, _relay_rx) = mpsc::channel(16);
-    let writer = Arc::new(EventWriter::spawn(store.clone(), relay_tx));
+    let writer = Arc::new(EventWriter::spawn(store.clone()));
 
     let codex_root = tmp.path();
     std::fs::create_dir_all(codex_root.join(".codex/sessions")).unwrap();

@@ -554,6 +554,17 @@ class MinosCore implements MinosCoreProtocol {
     decisionJson: jsonEncode(decision),
   );
 
+  @override
+  Future<void> respondOpencodeQuestion({
+    required String sessionId,
+    required String questionId,
+    required List<List<String>> answers,
+  }) => _client.respondOpencodeQuestion(
+    sessionId: sessionId,
+    questionId: questionId,
+    answersJson: jsonEncode(answers),
+  );
+
   Future<void> _rollbackFailedPersistedPairSave() async {
     // ADR-0020: with bearer-only auth the server's `account_host_pairings`
     // row is the source of truth for the pairing — we can't atomically

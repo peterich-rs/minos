@@ -50,6 +50,18 @@ class ThreadRepository {
     );
   }
 
+  Future<void> respondOpencodeQuestion({
+    required String sessionId,
+    required String questionId,
+    required List<List<String>> answers,
+  }) {
+    return _core.respondOpencodeQuestion(
+      sessionId: sessionId,
+      questionId: questionId,
+      answers: answers,
+    );
+  }
+
   Future<void> deleteThread({required String threadId}) {
     return _core.deleteThread(threadId: threadId);
   }
