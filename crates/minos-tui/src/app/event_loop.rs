@@ -151,6 +151,7 @@ impl App {
                 }
                 true
             }
+            _ => false,
         }
     }
 

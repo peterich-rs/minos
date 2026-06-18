@@ -14,6 +14,7 @@ pub enum Action {
     Agent(AgentAction),
     Input(InputTarget, InputAction),
     EffectCompleted(EffectResult),
+    Nav(crate::nav::NavAction),
 }
 
 pub enum GlobalAction {
@@ -150,4 +151,21 @@ pub enum EffectResult {
     },
     IngestArrived(LocalIngestFrame),
     ManagerEvent(ManagerEvent),
+    ProjectsLoaded(Vec<crate::backend::ProjectEntry>),
+    ProjectCreated(crate::backend::ProjectEntry),
+    ProjectThreadsLoaded {
+        project_id: String,
+        threads: Vec<crate::backend::ThreadSummaryEntry>,
+    },
+    ProjectSessionStarted {
+        project_id: String,
+        agent: AgentName,
+        thread_id: String,
+        cwd: PathBuf,
+        text: String,
+    },
+    ProjectSessionOpened {
+        thread_id: String,
+    },
+    ProjectFailed(String),
 }

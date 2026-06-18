@@ -63,6 +63,7 @@ impl App {
                 self.request_frame();
                 true
             }
+            _ => false,
         }
     }
 

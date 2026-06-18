@@ -22,6 +22,7 @@ mod frame;
 mod group_chat;
 mod input;
 mod logging;
+mod nav;
 mod render;
 mod skills;
 mod state;

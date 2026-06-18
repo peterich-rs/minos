@@ -8,7 +8,9 @@ pub mod status_bar;
 pub mod theme;
 pub mod thread_list;
 
+use crate::backend::{ProjectEntry, ThreadSummaryEntry};
 use crate::focus::{FocusManager, PaneId};
+use crate::nav::NavLevel;
 use crate::render::{Column, Renderable, Row};
 use crate::translation::ChatState;
 use crate::ui::chat::RenderCache;
@@ -59,6 +61,13 @@ pub struct UiState {
     pub input_metrics: [InputLayoutMetrics; 2],
     pub delete_confirm: Option<DeleteConfirmState>,
     pub render_cache: RenderCache,
+    pub nav_level: NavLevel,
+    pub projects: Vec<ProjectEntry>,
+    pub selected_project: Option<usize>,
+    pub project_list_state: ListState,
+    pub project_sessions: Vec<ThreadSummaryEntry>,
+    pub project_create_dialog: Option<ProjectCreateDialogState>,
+    pub startup_create_prompt: Option<StartupCreatePromptState>,
 }
 
 pub struct AgentPickerState {
@@ -72,6 +81,19 @@ pub struct GroupChatState {
     pub max_scroll: u16,
     pub version: u64,
     pub render_cache: GroupChatRenderCache,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectCreateDialogState {
+    pub name: String,
+    pub path: String,
+    pub editing_name: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StartupCreatePromptState {
+    pub dir_name: String,
+    pub path: String,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -107,6 +129,13 @@ impl UiState {
             input_metrics: [InputLayoutMetrics::default(); 2],
             delete_confirm: None,
             render_cache: RenderCache::default(),
+            nav_level: NavLevel::Projects,
+            projects: Vec::new(),
+            selected_project: None,
+            project_list_state: ListState::default(),
+            project_sessions: Vec::new(),
+            project_create_dialog: None,
+            startup_create_prompt: None,
         }
     }
 

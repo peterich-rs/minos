@@ -51,6 +51,23 @@ pub enum Effect {
     },
     ConfirmDeleteThread,
     CopyToClipboard(String),
+    LoadProjects,
+    CreateProject {
+        name: String,
+        workspace_path: PathBuf,
+    },
+    LoadProjectThreads {
+        project_id: String,
+    },
+    StartAgentInProject {
+        project_id: String,
+        agent: AgentName,
+        workspace: PathBuf,
+        prompt: String,
+    },
+    OpenProjectSession {
+        thread_id: String,
+    },
 }
 
 #[derive(Debug, Default)]

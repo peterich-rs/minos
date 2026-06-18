@@ -22,6 +22,7 @@ pub fn update(
         Action::Agent(action) => agent::handle(state, ui, action),
         Action::Input(target, action) => handle_input(state, ui, target, action),
         Action::EffectCompleted(result) => handle_effect_result(state, ui, result),
+        Action::Nav(_) => (StateChange::none(), vec![]),
     }
 }
 
@@ -89,6 +90,7 @@ fn handle_effect_result(
         EffectResult::ManagerEvent(event) => {
             (StateChange::none(), vec![Effect::HandleManagerEvent(event)])
         }
+        _ => (StateChange::none(), vec![]),
     }
 }
 
