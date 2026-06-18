@@ -9,12 +9,14 @@ use minos_agent_runtime::ManagerEvent;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
-    ApprovalDecisionRequest, CloseReason, CloseThreadRequest, GetThreadParams, HealthResponse,
-    InterruptThreadRequest, ListClisResponse, LocalDaemonRpcServer, LocalIngestFrame,
-    LocalManagerEvent, LocalThreadSnapshot, ReadArtifactRangeRequest, ReadArtifactRangeResponse,
-    ReadGroupChatParams, ReadGroupChatResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
+    ApprovalDecisionRequest, CloseReason, CloseThreadRequest, CreateProjectRequest,
+    CreateProjectResponse, GetThreadParams, HealthResponse, InterruptThreadRequest,
+    ListClisResponse, ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse,
+    LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot,
+    ReadArtifactRangeRequest, ReadArtifactRangeResponse, ReadGroupChatParams,
+    ReadGroupChatResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, ThreadState,
+    StartAgentInProjectRequest, StartAgentRequest, StartAgentResponse, ThreadState,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -137,6 +139,56 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             });
         }
         Ok(result)
+    }
+
+    async fn list_projects(&self) -> jsonrpsee::core::RpcResult<ListProjectsResponse> {
+        self.agent.list_projects().await.map_err(rpc_err)
+    }
+
+    async fn create_project(
+        &self,
+        req: CreateProjectRequest,
+    ) -> jsonrpsee::core::RpcResult<CreateProjectResponse> {
+        tracing::info!(
+            target: "minos_daemon::local_rpc",
+            project_name = %req.name,
+            workspace_slug = %req.workspace_slug,
+            workspace_path = ?req.workspace_path,
+            "local RPC create_project",
+        );
+        self.agent.create_project(req).await.map_err(rpc_err)
+    }
+
+    async fn list_project_threads(
+        &self,
+        req: ListProjectThreadsParams,
+    ) -> jsonrpsee::core::RpcResult<ListProjectThreadsResponse> {
+        self.agent.list_project_threads(req).await.map_err(rpc_err)
+    }
+
+    async fn start_agent_in_project(
+        &self,
+        req: StartAgentInProjectRequest,
+    ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
+        tracing::info!(
+            target: "minos_daemon::local_rpc",
+            project_id = %req.project_id,
+            agent = ?req.agent,
+            workspace = %req.workspace,
+            "local RPC start_agent_in_project",
+        );
+        self.agent
+            .start_agent_in_project(
+                StartAgentRequest {
+                    agent: req.agent,
+                    workspace: req.workspace,
+                    mode: None,
+                },
+                &req.project_id,
+                req.workspace_slug.as_deref(),
+            )
+            .await
+            .map_err(rpc_err)
     }
 
     async fn read_thread_raw_history(

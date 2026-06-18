@@ -34,6 +34,11 @@ fn handle_input(
     action: InputAction,
 ) -> (StateChange, Vec<Effect>) {
     if matches!(action, InputAction::Submit) {
+        if matches!(target, InputTarget::Room)
+            && matches!(ui.nav_level, crate::nav::NavLevel::Sessions { .. })
+        {
+            return nav::handle(state, ui, crate::nav::NavAction::SubmitSessionInput);
+        }
         return match target {
             InputTarget::Room => room::handle_submit(state, ui),
             InputTarget::Agent => agent::handle_submit(state, ui),

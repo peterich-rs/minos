@@ -158,13 +158,28 @@ impl App {
                 if let Some(tx) = self.event_tx.clone() {
                     let backend = Arc::clone(&self.backend);
                     tokio::spawn(async move {
+                        tracing::info!(
+                            target: "minos_tui::app",
+                            project_name = %name,
+                            workspace = %workspace_path.display(),
+                            "create_project requested",
+                        );
                         let result = backend.create_project(&name, &workspace_path).await;
                         let _ = tx.send(match result {
-                            Ok(project) => AppEvent::ProjectCreated(project),
+                            Ok(project) => {
+                                tracing::info!(
+                                    target: "minos_tui::app",
+                                    project_id = %project.project_id,
+                                    project_name = %project.name,
+                                    workspace = %project.workspace_path.display(),
+                                    "create_project succeeded",
+                                );
+                                AppEvent::ProjectCreated(project)
+                            }
                             Err(e) => {
                                 tracing::warn!(
                                     target: "minos_tui::app",
-                                    error = %e,
+                                    error = ?e,
                                     project_name = %name,
                                     workspace = %workspace_path.display(),
                                     "create_project failed"
@@ -224,9 +239,10 @@ impl App {
             }
             Effect::OpenProjectSession { thread_id } => {
                 self.ensure_project_session_visible(&thread_id).await;
-                let action = Action::EffectCompleted(
-                    crate::action::EffectResult::ProjectSessionOpened { thread_id },
-                );
+                let action =
+                    Action::EffectCompleted(crate::action::EffectResult::ProjectSessionOpened {
+                        thread_id,
+                    });
                 let (change, effects) =
                     crate::update::update(&mut self.state, &mut self.ui, action);
                 debug_assert!(

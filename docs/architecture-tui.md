@@ -73,6 +73,7 @@ minos-tui [OPTIONS]
 - 通过 WebSocket 连接 `minos-daemon`（jsonrpsee WS client）
 - 未传 `--daemon-url` 且 discovery 缺失/连接失败时，TUI 自启动托管 daemon handle，暴露本地 RPC 后再连接；这让 `minos-tui --backend daemon` 在开发态也是完整体验，不依赖用户单独启动 `minos-daemon`。
 - 所有操作转为 JSON-RPC 调用（`minos_local_*` 前缀）
+- project 导航使用 `minos_local_list_projects`、`minos_local_create_project`、`minos_local_list_project_threads`、`minos_local_start_agent_in_project`；relay-forwarded `minos_*` host command surface 不用于 TUI 本地控制。
 - 两个订阅泵转发 daemon 事件到本地 broadcast channel
 - `minos_local_list_local_threads` 返回 daemon 本机最近线程集合，不按 TUI 当前 workspace 预过滤；`App` 在接收列表、manager event、群聊历史/session 恢复时只保留 `--workspace` 对应的线程和消息，避免一个 TUI 房间混入其它 workspace 的 agent 会话。
 

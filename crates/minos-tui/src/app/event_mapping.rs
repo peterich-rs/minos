@@ -260,9 +260,6 @@ fn projects_level_mapping(key: KeyEvent) -> KeyMapping {
 
 fn sessions_level_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     if is_input_focus(ui) {
-        if key.code == KeyCode::Enter {
-            return KeyMapping::action(Action::Nav(crate::nav::NavAction::SubmitSessionInput));
-        }
         return KeyMapping::Input(InputTarget::Room);
     }
     match key.code {

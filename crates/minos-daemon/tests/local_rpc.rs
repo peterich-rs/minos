@@ -15,7 +15,8 @@ use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
-    AgentLaunchMode, ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams, HealthResponse,
+    AgentLaunchMode, ApprovalDecisionRequest, CloseThreadRequest, CreateProjectRequest,
+    GetThreadParams, HealthResponse, ListProjectThreadsParams, ListProjectsResponse,
     LocalGroupChatMessage, LocalGroupChatMessageKind, ReadGroupChatParams, ReadGroupChatResponse,
     ReadThreadParams, StartAgentRequest, StartAgentResponse,
 };
@@ -114,6 +115,45 @@ async fn list_local_threads_returns_empty_initially() {
         .unwrap();
 
     assert!(threads.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn project_methods_are_registered_on_local_rpc() {
+    let (_glue, _handle, tmp, _fake) = setup().await;
+    let url = discovery_addr(&tmp);
+    let client = WsClientBuilder::default().build(&url).await.unwrap();
+
+    let created: minos_protocol::CreateProjectResponse = client
+        .request(
+            "minos_local_create_project",
+            [CreateProjectRequest {
+                name: "Fire".into(),
+                workspace_slug: "fire".into(),
+                workspace_path: Some(tmp.path().join("fire").display().to_string()),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let projects: ListProjectsResponse = client
+        .request("minos_local_list_projects", ArrayParams::new())
+        .await
+        .unwrap();
+    assert_eq!(projects.projects.len(), 1);
+    assert_eq!(projects.projects[0].project_id, created.project.project_id);
+
+    let threads: minos_protocol::ListProjectThreadsResponse = client
+        .request(
+            "minos_local_list_project_threads",
+            [ListProjectThreadsParams {
+                project_id: created.project.project_id,
+                limit: 100,
+                before_ts_ms: None,
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(threads.threads.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

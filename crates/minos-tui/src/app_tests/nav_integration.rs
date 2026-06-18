@@ -201,6 +201,39 @@ async fn start_new_session_via_input_transitions_to_session_level() {
 }
 
 #[tokio::test]
+async fn session_input_accepts_agent_completion_before_submit() {
+    use crate::focus::PaneId;
+
+    let project = sample_project("p1", "P1", "/tmp/p1");
+    let backend = Arc::new(TestBackend::new().with_projects(vec![project]));
+    let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/p1"));
+    app.ui.nav_level = NavLevel::Sessions { project_id: "p1".into() };
+    app.ui
+        .status
+        .update_agents(vec![ok_agent(AgentName::Codex), ok_agent(AgentName::Claude)]);
+    app.ui.focus.focus(PaneId::RoomInput);
+
+    assert!(app.handle_key(press(KeyCode::Char('@'))).await);
+    assert!(app.handle_key(press(KeyCode::Char('c'))).await);
+    assert!(app.ui.room_input.has_agent_picker());
+    assert!(app.handle_key(press(KeyCode::Down)).await);
+    assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+    assert_eq!(app.ui.room_input.content, "@claude ");
+    assert_eq!(app.ui.room_input.cursor_pos, "@claude ".len());
+    assert!(!app.ui.room_input.has_agent_picker());
+    assert_eq!(app.ui.nav_level, NavLevel::Sessions { project_id: "p1".into() });
+    assert!(
+        backend
+            .started
+            .lock()
+            .expect("started list lock")
+            .is_empty(),
+        "accepting a mention must not create a session"
+    );
+}
+
+#[tokio::test]
 async fn open_existing_session_bridges_into_legacy_thread_list() {
     use crate::backend::ThreadSummaryEntry;
 
