@@ -24,6 +24,29 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
         return delete_confirm_key_to_mapping(key);
     }
 
+    if ui.startup_create_prompt.is_some() {
+        return startup_prompt_mapping(key);
+    }
+    if ui.project_create_dialog.is_some() {
+        return create_dialog_mapping(key);
+    }
+    match &ui.nav_level {
+        crate::nav::NavLevel::Projects => return projects_level_mapping(key),
+        crate::nav::NavLevel::Sessions { .. } => {
+            return sessions_level_mapping(ui, key);
+        }
+        crate::nav::NavLevel::Session { .. } => {
+            if key.code == KeyCode::Esc && !is_input_focus(ui) {
+                return KeyMapping::action(Action::Nav(crate::nav::NavAction::Uplevel));
+            }
+        }
+        crate::nav::NavLevel::AgentDetail { .. } => {
+            if key.code == KeyCode::Esc {
+                return KeyMapping::action(Action::Nav(crate::nav::NavAction::Uplevel));
+            }
+        }
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('q') => return KeyMapping::action(Action::Global(GlobalAction::Quit)),
@@ -223,4 +246,58 @@ fn agent_chat_key_to_mapping(key: KeyEvent) -> KeyMapping {
 
 fn is_input_focus(ui: &UiState) -> bool {
     ui.focus.is(PaneId::RoomInput) || ui.focus.is(PaneId::AgentInput)
+}
+
+fn projects_level_mapping(key: KeyEvent) -> KeyMapping {
+    match key.code {
+        KeyCode::Up => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectPrev)),
+        KeyCode::Down => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectNext)),
+        KeyCode::Enter => KeyMapping::action(Action::Nav(crate::nav::NavAction::Downlevel)),
+        KeyCode::Char('n') => {
+            KeyMapping::action(Action::Nav(crate::nav::NavAction::OpenCreateProject))
+        }
+        KeyCode::Esc => KeyMapping::action(Action::Global(GlobalAction::Quit)),
+        _ => KeyMapping::None,
+    }
+}
+
+fn sessions_level_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
+    if is_input_focus(ui) {
+        if key.code == KeyCode::Enter {
+            return KeyMapping::action(Action::Nav(crate::nav::NavAction::SubmitSessionInput));
+        }
+        return KeyMapping::Input(InputTarget::Room);
+    }
+    match key.code {
+        KeyCode::Up => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectPrev)),
+        KeyCode::Down => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectNext)),
+        KeyCode::Enter => KeyMapping::action(Action::Nav(crate::nav::NavAction::Downlevel)),
+        KeyCode::Esc => KeyMapping::action(Action::Nav(crate::nav::NavAction::Uplevel)),
+        _ => KeyMapping::None,
+    }
+}
+
+fn create_dialog_mapping(key: KeyEvent) -> KeyMapping {
+    match key.code {
+        KeyCode::Esc => KeyMapping::action(Action::Nav(crate::nav::NavAction::CancelDialog)),
+        KeyCode::Tab => KeyMapping::action(Action::Nav(crate::nav::NavAction::SwitchField)),
+        KeyCode::Enter => {
+            KeyMapping::action(Action::Nav(crate::nav::NavAction::ConfirmCreateProject))
+        }
+        KeyCode::Backspace => KeyMapping::action(Action::Nav(crate::nav::NavAction::Backspace)),
+        KeyCode::Char(c) => KeyMapping::action(Action::Nav(crate::nav::NavAction::TypeChar(c))),
+        _ => KeyMapping::None,
+    }
+}
+
+fn startup_prompt_mapping(key: KeyEvent) -> KeyMapping {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+            KeyMapping::action(Action::Nav(crate::nav::NavAction::AcceptStartupPrompt))
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            KeyMapping::action(Action::Nav(crate::nav::NavAction::DismissStartupPrompt))
+        }
+        _ => KeyMapping::None,
+    }
 }

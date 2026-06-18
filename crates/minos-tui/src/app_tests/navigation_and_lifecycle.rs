@@ -109,22 +109,25 @@ async fn idle_thread_state_finishes_streaming_assistant_cursor() {
 }
 
 #[tokio::test]
-async fn esc_moves_focus_without_quitting() {
+async fn esc_at_projects_level_quits() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.focus.focus(PaneId::GroupChat);
+    app.ui.nav_level = crate::nav::NavLevel::Projects;
 
     let redraw = app.handle_key(press(KeyCode::Esc)).await;
 
-    assert!(redraw);
-    assert_eq!(app.ui.focus.current(), PaneId::RoomList);
-    assert!(!app.should_quit());
+    assert!(!redraw);
+    assert!(app.should_quit());
 }
 
 #[tokio::test]
-async fn enter_on_agent_list_opens_detail_and_esc_from_agent_chat_closes_it() {
+async fn enter_on_agent_list_opens_detail_and_esc_uplevels() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-1".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,
@@ -143,8 +146,12 @@ async fn enter_on_agent_list_opens_detail_and_esc_from_agent_chat_closes_it() {
     assert_eq!(app.ui.focus.current(), PaneId::AgentChat);
 
     assert!(app.handle_key(press(KeyCode::Esc)).await);
-    assert!(!app.ui.agent_detail_visible);
-    assert_eq!(app.ui.focus.current(), PaneId::AgentList);
+    assert_eq!(
+        app.ui.nav_level,
+        crate::nav::NavLevel::Sessions {
+            project_id: "test".into()
+        }
+    );
 }
 
 #[tokio::test]
@@ -311,6 +318,10 @@ async fn mouse_selection_copies_chat_text_on_release() {
 async fn delete_key_in_thread_list_opens_confirmation() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-1".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,
@@ -350,6 +361,10 @@ async fn delete_key_in_thread_list_opens_confirmation() {
 async fn enter_confirms_thread_delete_and_removes_local_state() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-1".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,

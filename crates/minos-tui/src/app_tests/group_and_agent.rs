@@ -7,6 +7,10 @@ async fn routed_prompt_records_user_message_in_group_chat() {
     let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Gemini)]));
     let mut app =
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "test".into(),
+    };
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Gemini)]);
@@ -53,6 +57,10 @@ async fn routed_prompt_echoes_in_group_chat_before_backend_send_finishes() {
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-gemini-1234".into(),
+    };
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Gemini)]);
@@ -105,6 +113,10 @@ async fn routed_prompt_echoes_in_group_chat_before_agent_start_finishes() {
     let mut app = App::with_group_chat_store(backend, false, PathBuf::from("/tmp"), group_store);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "test".into(),
+    };
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Gemini)]);
@@ -314,6 +326,10 @@ async fn agent_input_group_echo_includes_existing_thread_short_id() {
         PathBuf::from("/tmp/ws"),
         group_store,
     );
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-codex-1234".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-codex-1234".into(),
         agent: AgentName::Codex,
@@ -352,6 +368,10 @@ async fn agent_input_group_echo_includes_existing_thread_short_id() {
 async fn agent_input_answers_pending_question_without_group_echo_or_prompt() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-codex-1234".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-codex-1234".into(),
         agent: AgentName::Codex,
@@ -416,6 +436,10 @@ async fn agent_input_answers_pending_question_without_group_echo_or_prompt() {
 async fn agent_input_answers_opencode_permission() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-opencode-1234".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-opencode-1234".into(),
         agent: AgentName::Opencode,
@@ -468,6 +492,10 @@ async fn agent_input_answers_opencode_permission() {
 async fn agent_input_answers_opencode_question_with_selected_option() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-opencode-1234".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-opencode-1234".into(),
         agent: AgentName::Opencode,

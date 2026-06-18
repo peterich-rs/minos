@@ -12,7 +12,66 @@ impl App {
         ) {
             self.hydrate_daemon_threads().await;
         }
+        self.resolve_startup_project().await;
         Ok(())
+    }
+
+    async fn resolve_startup_project(&mut self) {
+        let projects = match self.backend.list_projects().await {
+            Ok(p) => p,
+            Err(e) => {
+                self.ui.set_error(format!("Failed to load projects: {e}"));
+                return;
+            }
+        };
+        self.ui.projects = projects.clone();
+        self.ui.selected_project = if self.ui.projects.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        self.ui.project_list_state.select(self.ui.selected_project);
+
+        let cwd = &self.state.workspace;
+        let matched = projects.into_iter().find(|p| {
+            crate::state::workspace_path_belongs_to_current_workspace(
+                cwd,
+                &p.workspace_path,
+            )
+        });
+
+        match matched {
+            Some(project) => {
+                let threads = self
+                    .backend
+                    .list_project_threads(&project.project_id)
+                    .await
+                    .unwrap_or_default();
+                self.ui.project_sessions = threads;
+                self.ui.selected_thread =
+                    if self.ui.project_sessions.is_empty() { None } else { Some(0) };
+                self.ui.room_list_state.select(self.ui.selected_thread);
+                self.ui.selected_project = self
+                    .ui
+                    .projects
+                    .iter()
+                    .position(|p| p.project_id == project.project_id);
+                self.ui.project_list_state.select(self.ui.selected_project);
+                self.ui.nav_level = crate::nav::NavLevel::Sessions {
+                    project_id: project.project_id,
+                };
+            }
+            None => {
+                let dir_name = cwd
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "workspace".to_owned());
+                self.ui.startup_create_prompt = Some(crate::ui::StartupCreatePromptState {
+                    dir_name,
+                    path: cwd.to_string_lossy().into_owned(),
+                });
+            }
+        }
     }
 
     pub async fn handle_event(&mut self, event: AppEvent) -> bool {

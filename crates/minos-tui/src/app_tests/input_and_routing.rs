@@ -4,6 +4,10 @@ use super::*;
 async fn ctrl_c_interrupts_running_thread() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-1".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,
@@ -38,6 +42,10 @@ async fn ctrl_c_interrupts_running_thread() {
 async fn ctrl_c_quits_idle_thread_view() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-1".into(),
+    };
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Gemini,
@@ -67,6 +75,10 @@ async fn ctrl_c_quits_idle_thread_view() {
 async fn ctrl_v_pastes_from_clipboard() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "test".into(),
+    };
     app.ui.agent_detail_visible = true;
     app.ui.focus.switch_layout(true);
     app.ui.focus.focus(PaneId::AgentInput);
@@ -125,6 +137,10 @@ async fn at_completion_inserts_selected_agent() {
         ok_agent(AgentName::Gemini),
     ]));
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "test".into(),
+    };
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Claude),
@@ -147,6 +163,10 @@ async fn at_completion_inserts_selected_agent() {
 async fn input_shortcuts_edit_without_inserting_control_text() {
     let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Codex)]));
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "test".into(),
+    };
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Codex)]);
@@ -191,6 +211,10 @@ async fn room_input_paste_inserts_multiline_text_without_submitting() {
     let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Codex)]));
     let mut app =
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-codex-1234".into(),
+    };
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Codex)]);
@@ -243,6 +267,10 @@ async fn routed_prompt_starts_target_agent_and_sends_body_only() {
         ok_agent(AgentName::Gemini),
     ]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "test".into(),
+    };
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Claude),
@@ -282,6 +310,10 @@ async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
         AgentName::Opencode,
     )]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-opencode-closed".into(),
+    };
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);
@@ -327,6 +359,10 @@ async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
         AgentName::Opencode,
     )]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-opencode-closed".into(),
+    };
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);
@@ -374,6 +410,10 @@ async fn routed_prompt_to_closed_thread_reports_error_without_sending() {
         AgentName::Opencode,
     )]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-opencode-closed".into(),
+    };
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);

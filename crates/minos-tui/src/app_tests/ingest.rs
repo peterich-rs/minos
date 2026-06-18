@@ -10,6 +10,10 @@ async fn room_can_invite_second_agent_after_first_routed_prompt() {
     ]));
     let mut app =
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "test".into(),
+    };
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Gemini),
@@ -77,6 +81,10 @@ async fn picker_can_route_prompt_to_existing_agent_session() {
     ]));
     let mut app =
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+    app.ui.nav_level = crate::nav::NavLevel::Session {
+        project_id: "test".into(),
+        thread_id: "thread-codex-1234".into(),
+    };
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Claude),
