@@ -51,6 +51,10 @@ minos-tui [OPTIONS]
 | `close_thread(thread_id)` | 关闭线程 |
 | `delete_thread(thread_id)` | 删除线程 |
 | `list_threads()` | 列出所有线程 |
+| `list_projects()` | 列出所有 project（项目导航层入口） |
+| `create_project(name, workspace_path)` | 创建 project，返回新 `ProjectEntry` |
+| `list_project_threads(project_id)` | 列出绑定到某 project 的 agent session |
+| `start_agent_in_project(project_id, agent, workspace)` | 在 project 内启动 agent（不传 prompt；首条消息由 `AgentStartedForPrompt` effect 携带） |
 | `resume_thread(thread_id)` | 恢复挂起线程 |
 | `read_thread_raw_history(...)` | 读取原始事件历史 |
 | `read_group_chat(...)` | 读取群聊消息 |
@@ -98,7 +102,7 @@ minos-tui [OPTIONS]
 
 顶部 **状态栏**（1 行）：后端状态、检测到的 agent、快捷键提示。
 
-叠加层: Agent Picker（选择 agent 的模态框）、Delete Confirm（删除确认模态框）。
+叠加层: Project Create Dialog（新建 project 模态）、Startup Create Prompt（cwd 未匹配 project 时的创建提示）、Agent Picker（选择 agent 的模态框）、Delete Confirm（删除确认模态框）。
 
 ### UI 组件
 
@@ -111,6 +115,9 @@ minos-tui [OPTIONS]
 | `ui/group_chat.rs` | 群聊视图、`GroupChatRenderable` | 房间消息渲染和按消息 block 缓存的可见行切片 |
 | `ui/input_bar.rs`, `ui/input_bar/render.rs` | `InputState`, `InputBarRenderable` | 多行输入编辑器、`@` agent mention/路径补全、输入栏渲染与鼠标坐标映射 |
 | `ui/thread_list.rs` | `ThreadListRenderable` | agent 线程列表（状态颜色编码） |
+| `ui/project_list.rs` | `ProjectListRenderable`, `ProjectSidebarRenderable` | 项目导航层 Projects 主列表 + 侧栏（project 名称、workspace、session 计数） |
+| `ui/project_sessions.rs` | `ProjectSessionsRenderable` | 项目导航层 Sessions 列表（project 绑定的 agent session 摘要） |
+| `ui/project_create_dialog.rs` | create dialog render | 新建 project 模态（名称/路径字段、Tab 切换） |
 | `ui/room_list.rs` | `RoomListRenderable` | 群聊房间列表 |
 | `ui/status_bar.rs` | `StatusBarRenderable` | 后端状态 + agent + 快捷键 |
 | `ui/agent_picker.rs` | `AgentPickerRenderable` | 编号快速选择（1-9） |
@@ -122,12 +129,12 @@ minos-tui [OPTIONS]
 P2 后渲染入口仍是 `ui::render_ui(f, &mut UiState)`，但 `render_ui` 的职责收敛为：
 
 1. 根据 `FocusManager` 更新 `room_input.focused` / `agent_input.focused`
-2. 使用 `Column::with_fill` 组装状态栏、主体 row、输入 row
-3. overview 模式用 `Row(20/55/25)` 渲染 Room List / Group Chat / Agents
-4. detail 模式用 `Row(45/20/35)` 渲染 Group Chat / Agents / Agent Chat，输入区用 `Row(65/35)`
-5. 用同一组 `Row::areas_for` 比例写回 `PanelAreas` 和 `InputLayoutMetrics`，保证鼠标命中区域与实际渲染区域一致
-6. render tree 完成后通过 `Renderable::cursor_pos()` 向上传播输入栏 cursor，并调用 `Frame::set_cursor_position`
-7. 最后以 overlay renderable 渲染 agent picker 和 delete confirm
+2. 按 `nav_level` 分派渲染：`Projects` → `render_projects_level`（project 列表 + 侧栏 + 底部 hint 行），`Sessions` → `render_sessions_level`（session 列表 + 侧栏 + 输入栏），`Session`/`AgentDetail` → `render_legacy`（overview/detail 树，见下）
+3. 渲染叠加层：`project_create_dialog`、`startup_create_prompt`、`agent_picker`、`delete_confirm`
+4. legacy 树内部根据 `agent_detail_visible` 再分 overview/detail 两套比例布局，使用 `Column::with_fill` 组装状态栏、主体 row、输入 row
+5. overview 模式用 `Row(20/55/25)` 渲染 Room List / Group Chat / Agents；detail 模式用 `Row(45/20/35)` 渲染 Group Chat / Agents / Agent Chat，输入区用 `Row(65/35)`
+6. 用同一组 `Row::areas_for` 比例写回 `PanelAreas` 和 `InputLayoutMetrics`，保证鼠标命中区域与实际渲染区域一致
+7. render tree 完成后通过 `Renderable::cursor_pos()` 向上传播输入栏 cursor，并调用 `Frame::set_cursor_position`
 
 `Renderable` 采用 `fn render(&mut self, frame: &mut Frame, area: Rect)`，而不是 Buffer-only 接口，因为当前 Ratatui 面板需要在 render 阶段更新 list state、scroll max、render cache 和 input hit-test metrics。`desired_height(width)` 用于 input row 高度协商；`cursor_pos(area)` 仅由输入栏返回，`Row`/`Column` 递归向上传播；主体 row 作为 `Column::with_fill(..., fill_index = 1)` 的 fill child 占满剩余高度。
 
@@ -142,6 +149,36 @@ P2 后渲染入口仍是 `ui::render_ui(f, &mut UiState)`，但 `render_ui` 的�
 - 流式光标（闪烁块字符）
 - Unicode 感知的自动换行
 
+## 项目导航层 (`src/nav.rs`)
+
+TUI 顶层是一个三级项目导航 shell，把早期的 "room/thread 扁平列表" 收敛为按 project 组织的 agent session 视图。`NavLevel` 描述当前所在层级：
+
+```rust
+enum NavLevel {
+    Projects,                                  // project 列表
+    Sessions { project_id: String },           // 某 project 绑定的 agent session 列表
+    Session { project_id, thread_id },          // 单个 session（复用 Thread/ChatState 模型）
+    AgentDetail { project_id, thread_id, agent }, // legacy detail 视图
+}
+```
+
+`NavLevel` 提供 `go_up()`（返回上一层，Projects 停在 Projects）、`project_id()`、`thread_id()` 和 `esc_quits()`（仅 Projects 层 Esc 触发退出）。`NavAction` 枚举（`Downlevel`/`Uplevel`/`SelectNext`/`SelectPrev`/`OpenCreateProject`/`ConfirmCreateProject`/`CancelDialog`/`SwitchField`/`TypeChar`/`Backspace`/`DismissStartupPrompt`/`AcceptStartupPrompt`/`SubmitSessionInput`）是导航层唯一的输入语义集合，由 `app/event_mapping.rs` 的 `projects_level_mapping` / `sessions_level_mapping` / `create_dialog_mapping` / `startup_prompt_mapping` 从原始按键翻译而来。
+
+### 导航流
+
+1. **Projects 层**：列出所有 project，`Up`/`Down` 循环选择，`Enter` 下钻到 Sessions，`n` 打开创建对话框，`Esc` 退出。
+2. **Sessions 层**：列出某 project 绑定的 agent session，`Up`/`Down` 选择，`Enter` 打开单个 session，`Esc` 返回 Projects；输入栏提交时调用 `start_agent_in_project` 新建 session。
+3. **Session 层**：单个 agent session，复用 legacy chat 渲染；`Esc` 返回 Sessions。
+4. **AgentDetail 层**：legacy agent detail，`Esc` 返回 Session。
+
+### 启动 cwd 匹配 (`resolve_startup_project`)
+
+`App::init()` 在检测 CLI、加载群聊后调用 `resolve_startup_project`：拉取 project 列表，把 `state.workspace` 与每个 project 的 `workspace_path` 比对（`workspace_path_belongs_to_current_workspace`）。匹配成功则直接进入该 project 的 Sessions 层；未匹配则弹出 `StartupCreatePromptState`，提示是否在当前 cwd 创建新 project。
+
+### update 层
+
+`update/nav.rs` 按 `nav_level` 分发 `NavAction`：Projects 层调用 `navigate()` 循环移动 `selected_project`，下钻返回 `Effect::LoadProjectThreads`；Sessions 层返回 `Effect::OpenProjectSession` 或 `Effect::StartAgentInProject`；对话框/启动提示态直接编辑 `ProjectCreateDialogState`/`StartupCreatePromptState`，确认时返回 `Effect::CreateProject`。`navigate()` 是带循环边界的纯函数（空列表返回 `None`，单元素自循环，越界 wrap）。
+
 ## 事件系统 (`src/event.rs`)
 
 ### `AppEvent` 枚举
@@ -151,12 +188,19 @@ AppEvent::Ingest(LocalIngestFrame)         // seq + UiEventMessage projection
 AppEvent::ManagerEvent(ManagerEvent)       // 线程生命周期事件
 AppEvent::AgentStartedForPrompt { ... }    // 后台 agent 启动完成
 AppEvent::SendMessageFailed { ... }        // 异步发送错误
+AppEvent::ProjectsLoaded(Vec<ProjectEntry>)         // project 列表加载完成
+AppEvent::ProjectCreated(ProjectEntry)              // 新 project 创建完成
+AppEvent::ProjectThreadsLoaded { project_id, threads } // project session 列表加载完成
+AppEvent::ProjectSessionStarted { project_id, agent, thread_id, cwd, text } // project 内新 session 启动完成
+AppEvent::ProjectFailed(String)                     // project 操作错误（create/list/start）
 AppEvent::Key(KeyEvent)                    // 键盘事件
 AppEvent::Paste(String)                    // bracketed paste 文本，按整体插入输入栏
 AppEvent::Mouse(MouseEvent)                // 鼠标事件
 AppEvent::Resize(u16, u16)                 // 终端大小变化
 AppEvent::Tick                             // 200ms 定时器
 ```
+
+project 相关事件由 `execute_effect` 内 `tokio::spawn` 的异步任务回传（`LoadProjectThreads`、`CreateProject`、`StartAgentInProject` effect），`App::handle_event` 把它们统一映射为 `Action::EffectCompleted(EffectResult::*)`，由 update 层同步更新 `UiState.projects` / `project_sessions` / `nav_level`。
 
 ### 4 个事件泵
 
@@ -295,9 +339,11 @@ SQLite 持久化群聊房间和消息。支持:
 
 ### 启动 Agent
 
-1. 按 `n` 或聚焦 agent 列表 → 打开 Agent Picker
-2. 选择 agent → `backend.start_agent()` → `ManagerEvent::ThreadAdded`
-3. Agent 输出通过 Ingest 事件流式传输 → 翻译 → 渲染
+项目导航 shell 下的启动路径：
+
+1. 启动时 `resolve_startup_project` 匹配 cwd：命中已有 project 直接进入其 Sessions 层；未命中弹出 Startup Create Prompt，确认后创建 project 并进入 Sessions 层
+2. 在 Sessions 层输入栏提交首条 prompt → `start_agent_in_project(project_id, agent, workspace)` → `ProjectSessionStarted` 事件 → 进入 Session 层并触发 `AgentStartedForPrompt` 把 prompt 发给新线程
+3. `n` 在 Projects 层打开 Project Create Dialog；在 Session 层（legacy 视图）打开 Agent Picker 切换当前线程的 agent
 
 ### 发送消息
 
@@ -337,36 +383,39 @@ opencode 的 `message.updated` 可能带 `time.completed` 且 `finish:"tool-call
 | 文件 | 行数 | 职责 |
 |------|------|------|
 | `main.rs` | 522 | 入口、CLI、启动编排、frame request select loop |
-| `action.rs` | 153 | `Action`/`GlobalAction`/`RoomAction`/`AgentAction`/`InputAction` 类型 |
+| `action.rs` | 171 | `Action`/`GlobalAction`/`RoomAction`/`AgentAction`/`InputAction`/`EffectResult` 类型 |
 | `agent_route.rs` | 51 | `@agent[#thread]` 路由解析、thread short id、closed-thread 判定 |
-| `effect.rs` | 71 | `Effect` 与 `StateChange` |
+| `effect.rs` | 87 | `Effect` 与 `StateChange` |
+| `nav.rs` | 108 | `NavLevel`、`NavAction` 项目导航层类型 |
 | `frame.rs` | 119 | `FrameRequester`、`FrameScheduler`、33ms draw interval |
 | `input.rs` | 297 | 输入栏按键映射与参数化 `InputState` action 应用 |
-| `app.rs` | 87 | `App` shell、构造器、测试模块挂载 |
-| `app/event_mapping.rs` | 229 | key event 到 semantic Action/input target 的纯映射 |
-| `app/event_loop.rs` | 411 | `AppEvent`/key/mouse/paste 分发、Action 应用、Effect 执行器 |
-| `app/lifecycle.rs` | 520 | init/shutdown、daemon thread sync、ingest/manager/tick 处理 |
+| `app.rs` | 85 | `App` shell、构造器、测试模块挂载 |
+| `app/event_mapping.rs` | 303 | key event 到 semantic Action/input target 的纯映射（含 projects/sessions/dialog/startup 分支） |
+| `app/event_loop.rs` | 486 | `AppEvent`/key/mouse/paste 分发、Action 应用、Effect 执行器（含 project effect spawn） |
+| `app/lifecycle.rs` | 642 | init/shutdown、`resolve_startup_project`、daemon thread sync、ingest/manager/tick 处理 |
 | `app/submission.rs` | 387 | async submit effect 执行：启动 agent、发送消息、approval/question 回复 |
 | `app/group_chat.rs` | 398 | 群聊历史加载、agent result 记录、group chat store 写入 |
 | `app/mcp.rs` | 224 | teamwork MCP socket request 处理 |
 | `app/thread_ops.rs` | 99 | thread 关闭/删除/选择/start picker 辅助 |
 | `app/clipboard.rs` | 114 | 剪贴板读写与测试剪贴板 |
 | `app/helpers.rs` | 196 | approval/question 解析、错误格式化和 App 局部 helper |
-| `app_tests.rs` | 321 | App 行为测试共享 harness |
+| `app_tests.rs` | 386 | App 行为测试共享 harness（TestBackend） |
+| `app_tests/nav_integration.rs` | 125 | 项目导航层集成测试（projects 导航、对话框、Esc 行为、project-bound session 创建） |
 | `app_tests/input_and_routing.rs` | 412 | 输入、agent picker、prompt routing 行为测试 |
 | `app_tests/group_and_agent.rs` | 530 | 群聊、daemon history、agent pending request 行为测试 |
 | `app_tests/ingest.rs` | 548 | ingest/group result/opencode idle 行为测试 |
-| `app_tests/navigation_and_lifecycle.rs` | 464 | 导航、鼠标、删除、daemon lifecycle 行为测试 |
-| `update/mod.rs` | 287 | update 层入口、input submit、effect result 回流、共享 UI helper |
+| `app_tests/navigation_and_lifecycle.rs` | 479 | 导航、鼠标、删除、daemon lifecycle 行为测试 |
+| `update/mod.rs` | 385 | update 层入口、input submit、effect result 回流、共享 UI helper |
 | `update/global.rs` | 260 | `GlobalAction` 处理、鼠标和全局键状态变更 |
 | `update/room.rs` | 110 | `RoomAction`、room submit 路由决策 |
 | `update/agent.rs` | 83 | `AgentAction`、agent submit/pending request 决策 |
+| `update/nav.rs` | 296 | `NavAction` 处理、projects/sessions/dialog/startup prompt 状态变更与 effect 触发 |
 | `state/mod.rs` | 41 | `AppState` 业务状态聚合 |
 | `state/ingest_dedup.rs` | 58 | ingest 去重和完成帧判断 |
 | `state/workspace_filter.rs` | 118 | workspace 过滤、线程裁剪、房间标题/ID |
 | `state/selection.rs` | 128 | 鼠标选区和列表点击几何辅助 |
 | `event.rs` | 123 | AppEvent 枚举、事件泵 |
-| `backend/mod.rs` | 111 | AgentBackend trait |
+| `backend/mod.rs` | 177 | AgentBackend trait、`ProjectEntry`、`ThreadSummaryEntry` |
 | `backend/embedded.rs` | 262 | 进程内后端 |
 | `backend/daemon.rs` | 464 | WS RPC 后端 |
 | `translation/mod.rs` | 20 | 翻译模块门面、公开类型重导出 |
@@ -381,7 +430,10 @@ opencode 的 `message.updated` 可能带 `time.completed` 且 `finish:"tool-call
 | `focus.rs` | 171 | `FocusManager`、focus tree、`PaneId` |
 | `focus_tests.rs` | 56 | focus tree 单元测试 |
 | `render/mod.rs` | 230 | `Renderable`、`Column`、`Row`、cursor 传播 |
-| `ui/mod.rs` | 611 | 布局、UiState、render tree assembly、GroupChatState version/cache 状态 |
+| `ui/mod.rs` | 831 | 布局、UiState（含 nav_level/projects/project_sessions/project_create_dialog）、nav-level render dispatch、GroupChatState version/cache 状态 |
+| `ui/project_list.rs` | 113 | `ProjectListRenderable`、`ProjectSidebarRenderable`（项目导航 Projects 层） |
+| `ui/project_sessions.rs` | 121 | `ProjectSessionsRenderable`（项目导航 Sessions 层） |
+| `ui/project_create_dialog.rs` | 59 | 新建 project 模态渲染 |
 | `ui/chat.rs` | 717 | Agent 聊天渲染与 selection |
 | `ui/chat/cache.rs` | 174 | Agent chat 按 item segment 缓存和可见行切片 |
 | `ui/chat_tests.rs` | 404 | Agent chat render/cache/selection 单元测试 |

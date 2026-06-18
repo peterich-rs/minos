@@ -112,18 +112,6 @@ impl TestBackend {
         *self.projects.lock().expect("projects lock") = projects;
         self
     }
-
-    fn with_project_threads(
-        self,
-        project_id: &str,
-        threads: Vec<crate::backend::ThreadSummaryEntry>,
-    ) -> Self {
-        self.project_thread_lists
-            .lock()
-            .expect("project threads lock")
-            .push((project_id.to_owned(), threads));
-        self
-    }
 }
 
 #[async_trait]
@@ -394,3 +382,5 @@ mod ingest;
 mod input_and_routing;
 #[path = "app_tests/navigation_and_lifecycle.rs"]
 mod navigation_and_lifecycle;
+#[path = "app_tests/nav_integration.rs"]
+mod nav_integration;
