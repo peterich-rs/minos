@@ -859,7 +859,13 @@ impl AgentGlue {
         }
 
         self.store
-            .create_project(&project_id, &req.name, &req.workspace_slug, now_ms)
+            .create_project(
+                &project_id,
+                &req.name,
+                &req.workspace_slug,
+                Some(workspace_path.as_str()),
+                now_ms,
+            )
             .await
             .map_err(|e| map_store_error("create_project", e))?;
 
@@ -905,10 +911,14 @@ impl AgentGlue {
             projects.push(minos_protocol::ProjectSummary {
                 project_id: row.project_id,
                 name: row.name,
-                workspace_path: Some(project_workspace_dir(
-                    &self.default_workspace,
-                    &row.workspace_slug,
-                )),
+                workspace_path: Some(
+                    row.workspace_path
+                        .clone()
+                        .filter(|p| !p.trim().is_empty())
+                        .unwrap_or_else(|| {
+                            project_workspace_dir(&self.default_workspace, &row.workspace_slug)
+                        }),
+                ),
                 workspace_slug: row.workspace_slug,
                 created_at_ms: row.created_at,
                 updated_at_ms: row.updated_at,

@@ -288,15 +288,17 @@ impl LocalStore {
         project_id: &str,
         name: &str,
         workspace_slug: &str,
+        workspace_path: Option<&str>,
         ts_ms: i64,
     ) -> anyhow::Result<()> {
         sqlx::query(
-            "INSERT INTO projects(project_id, name, workspace_slug, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO projects(project_id, name, workspace_slug, workspace_path, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(project_id)
         .bind(name)
         .bind(workspace_slug)
+        .bind(workspace_path)
         .bind(ts_ms)
         .bind(ts_ms)
         .execute(&self.pool)
@@ -420,6 +422,7 @@ pub struct ProjectRow {
     pub project_id: String,
     pub name: String,
     pub workspace_slug: String,
+    pub workspace_path: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -430,6 +433,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ProjectRow {
             project_id: row.try_get("project_id")?,
             name: row.try_get("name")?,
             workspace_slug: row.try_get("workspace_slug")?,
+            workspace_path: row.try_get("workspace_path")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })
