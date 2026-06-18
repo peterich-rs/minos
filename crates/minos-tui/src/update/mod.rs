@@ -91,16 +91,6 @@ fn handle_effect_result(
         EffectResult::ManagerEvent(event) => {
             (StateChange::none(), vec![Effect::HandleManagerEvent(event)])
         }
-        EffectResult::ProjectsLoaded(projects) => {
-            ui.projects = projects;
-            ui.selected_project = if ui.projects.is_empty() {
-                None
-            } else {
-                Some(ui.selected_project.unwrap_or(0).min(ui.projects.len() - 1))
-            };
-            ui.project_list_state.select(ui.selected_project);
-            (StateChange::redraw(), vec![])
-        }
         EffectResult::ProjectCreated(project) => {
             let project_id = project.project_id.clone();
             ui.projects.push(project);

@@ -110,12 +110,6 @@ impl App {
                 ))
                 .await
             }
-            AppEvent::ProjectsLoaded(projects) => {
-                self.apply_action(Action::EffectCompleted(
-                    crate::action::EffectResult::ProjectsLoaded(projects),
-                ))
-                .await
-            }
             AppEvent::ProjectCreated(project) => {
                 self.apply_action(Action::EffectCompleted(
                     crate::action::EffectResult::ProjectCreated(project),

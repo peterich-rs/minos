@@ -123,3 +123,90 @@ async fn create_project_dialog_types_and_confirms() {
         .expect("created projects lock");
     assert!(!created.is_empty());
 }
+
+#[tokio::test]
+async fn start_new_session_via_input_transitions_to_session_level() {
+    use crate::focus::PaneId;
+    use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
+
+    let project = sample_project("p1", "P1", "/tmp/p1");
+    let backend = Arc::new(TestBackend::new().with_projects(vec![project]));
+    let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/p1"));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.set_event_sender(tx);
+    app.ui.nav_level = NavLevel::Sessions { project_id: "p1".into() };
+    app.ui.status.update_agents(vec![AgentDescriptor {
+        name: AgentName::Codex,
+        path: None,
+        version: None,
+        status: AgentStatus::Ok,
+    }]);
+    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.room_input.content = "hello world".to_owned();
+
+    app.handle_key(press(KeyCode::Enter)).await;
+    pump_events(&mut app, &mut rx).await;
+
+    assert_eq!(
+        app.ui.nav_level,
+        NavLevel::Session {
+            project_id: "p1".into(),
+            thread_id: app
+                .ui
+                .nav_level
+                .thread_id()
+                .map(str::to_owned)
+                .unwrap_or_default(),
+        }
+    );
+    let thread_id = app.ui.nav_level.thread_id().unwrap().to_owned();
+    assert!(
+        app.ui
+            .project_sessions
+            .iter()
+            .any(|s| s.thread_id == thread_id),
+        "new session must appear in project_sessions"
+    );
+    assert!(app.ui.room_input.content.is_empty(), "input must be cleared");
+}
+
+#[tokio::test]
+async fn open_existing_session_bridges_into_legacy_thread_list() {
+    use crate::backend::ThreadSummaryEntry;
+
+    let project = sample_project("p1", "P1", "/tmp/p1");
+    let backend = Arc::new(TestBackend::new().with_projects(vec![project]));
+    let mut app = App::new(backend, false, PathBuf::from("/tmp/p1"));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.set_event_sender(tx);
+    app.ui.nav_level = NavLevel::Sessions { project_id: "p1".into() };
+    app.ui.project_sessions = vec![ThreadSummaryEntry {
+        thread_id: "existing-session-1".into(),
+        agent: minos_domain::AgentName::Codex,
+        title: Some("an existing session".into()),
+        first_ts_ms: 0,
+        last_ts_ms: 0,
+        message_count: 0,
+        ended_at_ms: None,
+    }];
+    app.ui.selected_thread = Some(0);
+    app.ui.room_list_state.select(Some(0));
+
+    app.handle_key(press(KeyCode::Enter)).await;
+    pump_events(&mut app, &mut rx).await;
+
+    assert_eq!(
+        app.ui.nav_level,
+        NavLevel::Session {
+            project_id: "p1".into(),
+            thread_id: "existing-session-1".into(),
+        }
+    );
+    assert!(
+        app.ui
+            .threads
+            .iter()
+            .any(|t| t.thread_id == "existing-session-1"),
+        "ensure_project_session_visible must bridge the session into ui.threads"
+    );
+}

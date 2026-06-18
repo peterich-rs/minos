@@ -151,7 +151,6 @@ pub enum EffectResult {
     },
     IngestArrived(LocalIngestFrame),
     ManagerEvent(ManagerEvent),
-    ProjectsLoaded(Vec<crate::backend::ProjectEntry>),
     ProjectCreated(crate::backend::ProjectEntry),
     ProjectThreadsLoaded {
         project_id: String,
