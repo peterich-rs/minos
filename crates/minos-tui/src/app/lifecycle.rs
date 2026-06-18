@@ -66,9 +66,10 @@ impl App {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "workspace".to_owned());
-                self.ui.startup_create_prompt = Some(crate::ui::StartupCreatePromptState {
-                    dir_name,
+                self.ui.project_create_dialog = Some(crate::ui::ProjectCreateDialogState {
+                    name: dir_name,
                     path: cwd.to_string_lossy().into_owned(),
+                    editing_name: true,
                 });
             }
         }

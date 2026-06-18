@@ -68,8 +68,6 @@ pub enum NavAction {
     SwitchField,
     TypeChar(char),
     Backspace,
-    DismissStartupPrompt,
-    AcceptStartupPrompt,
     SubmitSessionInput,
 }
 

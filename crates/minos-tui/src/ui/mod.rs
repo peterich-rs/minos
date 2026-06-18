@@ -70,7 +70,6 @@ pub struct UiState {
     pub project_list_state: ListState,
     pub project_sessions: Vec<ThreadSummaryEntry>,
     pub project_create_dialog: Option<ProjectCreateDialogState>,
-    pub startup_create_prompt: Option<StartupCreatePromptState>,
 }
 
 pub struct AgentPickerState {
@@ -91,12 +90,6 @@ pub struct ProjectCreateDialogState {
     pub name: String,
     pub path: String,
     pub editing_name: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct StartupCreatePromptState {
-    pub dir_name: String,
-    pub path: String,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -138,7 +131,6 @@ impl UiState {
             project_list_state: ListState::default(),
             project_sessions: Vec::new(),
             project_create_dialog: None,
-            startup_create_prompt: None,
         }
     }
 
@@ -364,9 +356,6 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
     if let Some(dialog) = state.project_create_dialog.as_ref() {
         project_create_dialog::render(f, f.area(), dialog);
     }
-    if let Some(prompt) = state.startup_create_prompt.as_ref() {
-        render_startup_prompt(f, prompt);
-    }
     if let Some(picker) = state.agent_picker.as_ref() {
         let mut overlay =
             agent_picker::AgentPickerRenderable::new(state.status.agents.as_slice(), picker);
@@ -518,41 +507,6 @@ fn render_sessions_level(f: &mut Frame, state: &mut UiState) {
     if let Some(position) = tree.cursor_pos(root) {
         f.set_cursor_position(position);
     }
-}
-
-fn render_startup_prompt(f: &mut Frame, prompt: &StartupCreatePromptState) {
-    use ratatui::layout::Flex;
-    let area = f.area();
-    let popup = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Fill(1), Constraint::Length(7), Constraint::Fill(1)])
-        .flex(Flex::Center)
-        .split(area);
-    let popup = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Fill(1), Constraint::Length(52), Constraint::Fill(1)])
-        .flex(Flex::Center)
-        .split(popup[1])[1];
-
-    f.render_widget(ratatui::widgets::Clear, popup);
-    let lines = vec![
-        ratatui::text::Line::raw(""),
-        ratatui::text::Line::from(format!(
-            "  Create project \"{}\" ({})?",
-            prompt.dir_name, prompt.path
-        )),
-        ratatui::text::Line::raw(""),
-        ratatui::text::Line::from(vec![
-            ratatui::text::Span::styled("[Y] ", theme::FOCUSED_BORDER),
-            ratatui::text::Span::raw("Create & enter  "),
-            ratatui::text::Span::styled("[n] ", theme::FOCUSED_BORDER),
-            ratatui::text::Span::raw("Skip"),
-        ]),
-    ];
-    let block = ratatui::widgets::Block::bordered()
-        .title("New Directory Detected")
-        .border_style(theme::FOCUSED_BORDER);
-    f.render_widget(ratatui::widgets::Paragraph::new(lines).block(block), popup);
 }
 
 fn render_overview_tree(f: &mut Frame, state: &mut UiState) {

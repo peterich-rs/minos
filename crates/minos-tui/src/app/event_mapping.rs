@@ -36,9 +36,6 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
         }
     }
 
-    if ui.startup_create_prompt.is_some() {
-        return startup_prompt_mapping(key);
-    }
     if ui.project_create_dialog.is_some() {
         return create_dialog_mapping(key);
     }
@@ -286,18 +283,6 @@ fn create_dialog_mapping(key: KeyEvent) -> KeyMapping {
         }
         KeyCode::Backspace => KeyMapping::action(Action::Nav(crate::nav::NavAction::Backspace)),
         KeyCode::Char(c) => KeyMapping::action(Action::Nav(crate::nav::NavAction::TypeChar(c))),
-        _ => KeyMapping::None,
-    }
-}
-
-fn startup_prompt_mapping(key: KeyEvent) -> KeyMapping {
-    match key.code {
-        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-            KeyMapping::action(Action::Nav(crate::nav::NavAction::AcceptStartupPrompt))
-        }
-        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-            KeyMapping::action(Action::Nav(crate::nav::NavAction::DismissStartupPrompt))
-        }
         _ => KeyMapping::None,
     }
 }

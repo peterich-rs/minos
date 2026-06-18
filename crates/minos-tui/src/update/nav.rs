@@ -8,37 +8,14 @@ pub fn handle(
     ui: &mut UiState,
     action: NavAction,
 ) -> (StateChange, Vec<Effect>) {
-    if ui.startup_create_prompt.is_some() {
-        return handle_startup_prompt(ui, action);
-    }
     if ui.project_create_dialog.is_some() {
         return handle_create_dialog(ui, action);
     }
     match &ui.nav_level {
-        NavLevel::Projects => handle_projects_level(ui, action),
+        NavLevel::Projects => handle_projects_level(state, ui, action),
         NavLevel::Sessions { .. } => handle_sessions_level(state, ui, action),
         NavLevel::Session { .. } => handle_session_level(ui, action),
         NavLevel::AgentDetail { .. } => handle_agent_detail_level(ui, action),
-    }
-}
-
-fn handle_startup_prompt(ui: &mut UiState, action: NavAction) -> (StateChange, Vec<Effect>) {
-    match action {
-        NavAction::AcceptStartupPrompt => {
-            let prompt = ui.startup_create_prompt.take().unwrap();
-            (
-                StateChange::redraw(),
-                vec![Effect::CreateProject {
-                    name: prompt.dir_name,
-                    workspace_path: prompt.path.into(),
-                }],
-            )
-        }
-        NavAction::DismissStartupPrompt => {
-            ui.startup_create_prompt = None;
-            (StateChange::redraw(), vec![])
-        }
-        _ => (StateChange::none(), vec![]),
     }
 }
 
@@ -88,7 +65,11 @@ fn handle_create_dialog(ui: &mut UiState, action: NavAction) -> (StateChange, Ve
     }
 }
 
-fn handle_projects_level(ui: &mut UiState, action: NavAction) -> (StateChange, Vec<Effect>) {
+fn handle_projects_level(
+    state: &mut AppState,
+    ui: &mut UiState,
+    action: NavAction,
+) -> (StateChange, Vec<Effect>) {
     match action {
         NavAction::SelectNext => {
             navigate(&mut ui.selected_project, ui.projects.len(), 1);
@@ -113,14 +94,14 @@ fn handle_projects_level(ui: &mut UiState, action: NavAction) -> (StateChange, V
             (StateChange::none(), vec![])
         }
         NavAction::OpenCreateProject => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let dir_name = cwd
+            let workspace = &state.workspace;
+            let dir_name = workspace
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "workspace".to_owned());
             ui.project_create_dialog = Some(crate::ui::ProjectCreateDialogState {
                 name: dir_name,
-                path: cwd.to_string_lossy().into_owned(),
+                path: workspace.to_string_lossy().into_owned(),
                 editing_name: true,
             });
             (StateChange::redraw(), vec![])

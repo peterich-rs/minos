@@ -104,7 +104,29 @@ async fn open_project_dialog_with_n_key() {
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/newproj"));
     app.ui.nav_level = NavLevel::Projects;
     app.handle_key(press(KeyCode::Char('n'))).await;
-    assert!(app.ui.project_create_dialog.is_some());
+    let dialog = app
+        .ui
+        .project_create_dialog
+        .as_ref()
+        .expect("project dialog opens");
+    assert_eq!(dialog.name, "newproj");
+    assert_eq!(dialog.path, "/tmp/newproj");
+}
+
+#[tokio::test]
+async fn init_opens_project_dialog_for_unmatched_workspace() {
+    let backend = Arc::new(TestBackend::new());
+    let mut app = App::new(backend, false, PathBuf::from("/tmp/fire"));
+
+    app.init().await.expect("app initializes");
+
+    let dialog = app
+        .ui
+        .project_create_dialog
+        .as_ref()
+        .expect("startup opens project create dialog");
+    assert_eq!(dialog.name, "fire");
+    assert_eq!(dialog.path, "/tmp/fire");
 }
 
 #[tokio::test]

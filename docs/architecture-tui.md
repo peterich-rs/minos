@@ -102,7 +102,7 @@ minos-tui [OPTIONS]
 
 顶部 **状态栏**（1 行）：后端状态、检测到的 agent、快捷键提示。
 
-叠加层: Project Create Dialog（新建 project 模态）、Startup Create Prompt（cwd 未匹配 project 时的创建提示）、Agent Picker（选择 agent 的模态框）、Delete Confirm（删除确认模态框）。
+叠加层: Project Create Dialog（新建 project 模态，含启动时 workspace 未匹配 project 的自动创建入口）、Agent Picker（选择 agent 的模态框）、Delete Confirm（删除确认模态框）。
 
 ### UI 组件
 
@@ -130,7 +130,7 @@ P2 后渲染入口仍是 `ui::render_ui(f, &mut UiState)`，但 `render_ui` 的�
 
 1. 根据 `FocusManager` 更新 `room_input.focused` / `agent_input.focused`
 2. 按 `nav_level` 分派渲染：`Projects` → `render_projects_level`（project 列表 + 侧栏 + 底部 hint 行），`Sessions` → `render_sessions_level`（session 列表 + 侧栏 + 输入栏），`Session`/`AgentDetail` → `render_legacy`（overview/detail 树，见下）
-3. 渲染叠加层：`project_create_dialog`、`startup_create_prompt`、`agent_picker`、`delete_confirm`
+3. 渲染叠加层：`project_create_dialog`、`agent_picker`、`delete_confirm`
 4. legacy 树内部根据 `agent_detail_visible` 再分 overview/detail 两套比例布局，使用 `Column::with_fill` 组装状态栏、主体 row、输入 row
 5. overview 模式用 `Row(20/55/25)` 渲染 Room List / Group Chat / Agents；detail 模式用 `Row(45/20/35)` 渲染 Group Chat / Agents / Agent Chat，输入区用 `Row(65/35)`
 6. 用同一组 `Row::areas_for` 比例写回 `PanelAreas` 和 `InputLayoutMetrics`，保证鼠标命中区域与实际渲染区域一致
@@ -162,7 +162,7 @@ enum NavLevel {
 }
 ```
 
-`NavLevel` 提供 `go_up()`（返回上一层，Projects 停在 Projects）、`project_id()`、`thread_id()` 和 `esc_quits()`（仅 Projects 层 Esc 触发退出）。`NavAction` 枚举（`Downlevel`/`Uplevel`/`SelectNext`/`SelectPrev`/`OpenCreateProject`/`ConfirmCreateProject`/`CancelDialog`/`SwitchField`/`TypeChar`/`Backspace`/`DismissStartupPrompt`/`AcceptStartupPrompt`/`SubmitSessionInput`）是导航层唯一的输入语义集合，由 `app/event_mapping.rs` 的 `projects_level_mapping` / `sessions_level_mapping` / `create_dialog_mapping` / `startup_prompt_mapping` 从原始按键翻译而来。
+`NavLevel` 提供 `go_up()`（返回上一层，Projects 停在 Projects）、`project_id()`、`thread_id()` 和 `esc_quits()`（仅 Projects 层 Esc 触发退出）。`NavAction` 枚举（`Downlevel`/`Uplevel`/`SelectNext`/`SelectPrev`/`OpenCreateProject`/`ConfirmCreateProject`/`CancelDialog`/`SwitchField`/`TypeChar`/`Backspace`/`SubmitSessionInput`）是导航层唯一的输入语义集合，由 `app/event_mapping.rs` 的 `projects_level_mapping` / `sessions_level_mapping` / `create_dialog_mapping` 从原始按键翻译而来。
 
 ### 导航流
 
@@ -173,11 +173,11 @@ enum NavLevel {
 
 ### 启动 cwd 匹配 (`resolve_startup_project`)
 
-`App::init()` 在检测 CLI、加载群聊后调用 `resolve_startup_project`：拉取 project 列表，把 `state.workspace` 与每个 project 的 `workspace_path` 比对（`workspace_path_belongs_to_current_workspace`）。匹配成功则直接进入该 project 的 Sessions 层；未匹配则弹出 `StartupCreatePromptState`，提示是否在当前 cwd 创建新 project。
+`App::init()` 在检测 CLI、加载群聊后调用 `resolve_startup_project`：拉取 project 列表，把 `state.workspace` 与每个 project 的 `workspace_path` 比对（`workspace_path_belongs_to_current_workspace`）。匹配成功则直接进入该 project 的 Sessions 层；未匹配则自动打开 `ProjectCreateDialogState`，默认 name/path 来自传入的 `--workspace`。
 
 ### update 层
 
-`update/nav.rs` 按 `nav_level` 分发 `NavAction`：Projects 层调用 `navigate()` 循环移动 `selected_project`，下钻返回 `Effect::LoadProjectThreads`；Sessions 层返回 `Effect::OpenProjectSession` 或 `Effect::StartAgentInProject`；对话框/启动提示态直接编辑 `ProjectCreateDialogState`/`StartupCreatePromptState`，确认时返回 `Effect::CreateProject`。`navigate()` 是带循环边界的纯函数（空列表返回 `None`，单元素自循环，越界 wrap）。
+`update/nav.rs` 按 `nav_level` 分发 `NavAction`：Projects 层调用 `navigate()` 循环移动 `selected_project`，下钻返回 `Effect::LoadProjectThreads`；Sessions 层返回 `Effect::OpenProjectSession` 或 `Effect::StartAgentInProject`；创建对话框直接编辑 `ProjectCreateDialogState`，确认时返回 `Effect::CreateProject`。`navigate()` 是带循环边界的纯函数（空列表返回 `None`，单元素自循环，越界 wrap）。
 
 ## 事件系统 (`src/event.rs`)
 
@@ -341,7 +341,7 @@ SQLite 持久化群聊房间和消息。支持:
 
 项目导航 shell 下的启动路径：
 
-1. 启动时 `resolve_startup_project` 匹配 cwd：命中已有 project 直接进入其 Sessions 层；未命中弹出 Startup Create Prompt，确认后创建 project 并进入 Sessions 层
+1. 启动时 `resolve_startup_project` 匹配 cwd：命中已有 project 直接进入其 Sessions 层；未命中自动打开 Project Create Dialog，确认后创建 project 并进入 Sessions 层
 2. 在 Sessions 层输入栏提交首条 prompt → `start_agent_in_project(project_id, agent, workspace)` → `ProjectSessionStarted` 事件 → 进入 Session 层并触发 `AgentStartedForPrompt` 把 prompt 发给新线程
 3. `n` 在 Projects 层打开 Project Create Dialog；在 Session 层（legacy 视图）打开 Agent Picker 切换当前线程的 agent
 
