@@ -15,13 +15,11 @@ use minos_protocol::{
     InterruptThreadRequest, ListClisResponse, ListConversationAgentSessionsParams,
     ListConversationAgentSessionsResponse, ListConversationMessagesParams,
     ListConversationMessagesResponse, ListConversationsParams, ListConversationsResponse,
-    ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse,
-    LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot,
-    ReadArtifactRangeRequest, ReadArtifactRangeResponse, ReadGroupChatParams,
+    ListProjectsResponse, LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent,
+    LocalThreadSnapshot, ReadArtifactRangeRequest, ReadArtifactRangeResponse, ReadGroupChatParams,
     ReadGroupChatResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
-    StartAgentInConversationRequest, StartAgentInProjectRequest, StartAgentRequest,
-    StartAgentResponse, ThreadState,
+    StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse, ThreadState,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -227,38 +225,6 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
     ) -> jsonrpsee::core::RpcResult<AppendConversationMessageResponse> {
         self.agent
             .append_conversation_message(req)
-            .await
-            .map_err(rpc_err)
-    }
-
-    async fn list_project_threads(
-        &self,
-        req: ListProjectThreadsParams,
-    ) -> jsonrpsee::core::RpcResult<ListProjectThreadsResponse> {
-        self.agent.list_project_threads(req).await.map_err(rpc_err)
-    }
-
-    async fn start_agent_in_project(
-        &self,
-        req: StartAgentInProjectRequest,
-    ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
-        tracing::info!(
-            target: "minos_daemon::local_rpc",
-            project_id = %req.project_id,
-            agent = ?req.agent,
-            workspace = %req.workspace,
-            "local RPC start_agent_in_project",
-        );
-        self.agent
-            .start_agent_in_project(
-                StartAgentRequest {
-                    agent: req.agent,
-                    workspace: req.workspace,
-                    mode: None,
-                },
-                &req.project_id,
-                req.workspace_slug.as_deref(),
-            )
             .await
             .map_err(rpc_err)
     }

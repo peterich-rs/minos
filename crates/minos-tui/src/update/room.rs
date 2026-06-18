@@ -17,8 +17,17 @@ pub fn handle(
     action: RoomAction,
 ) -> (StateChange, Vec<Effect>) {
     let change = match action {
-        RoomAction::Select(index) => super::select_room(ui, index),
-        RoomAction::Scroll(direction, lines) => super::scroll_group_chat(ui, direction, lines),
+        RoomAction::Scroll(direction, lines) => {
+            if matches!(
+                ui.nav_level(),
+                crate::nav::NavLevel::Conversation { .. }
+                    | crate::nav::NavLevel::AgentDetail { .. }
+            ) {
+                super::scroll_conversation(ui, direction, lines)
+            } else {
+                super::scroll_group_chat(ui, direction, lines)
+            }
+        }
     };
     (change, vec![])
 }

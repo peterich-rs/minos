@@ -1,5 +1,5 @@
 use super::*;
-use crate::backend::ProjectEntry;
+use crate::backend::{ConversationEntry, ProjectEntry};
 use crate::nav::NavLevel;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,7 +12,7 @@ fn app_with_projects(
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/test"));
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
-    app.ui.nav_level = NavLevel::Projects;
+    set_test_projects_nav(&mut app);
     app.ui.projects = projects;
     app.ui.selected_project = if app.ui.projects.is_empty() {
         None
@@ -45,6 +45,20 @@ fn sample_project(id: &str, name: &str, path: &str) -> ProjectEntry {
     }
 }
 
+fn sample_conversation(project_id: &str, conversation_id: &str, title: &str) -> ConversationEntry {
+    ConversationEntry {
+        conversation_id: conversation_id.into(),
+        project_id: project_id.into(),
+        title: title.into(),
+        last_message_preview: None,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+        message_count: 0,
+        agent_session_count: 0,
+        participating_agents: Vec::new(),
+    }
+}
+
 #[tokio::test]
 async fn projects_navigate_down_then_open() {
     let (_, mut app, mut rx) = app_with_projects(vec![
@@ -56,8 +70,10 @@ async fn projects_navigate_down_then_open() {
     app.handle_key(press(KeyCode::Enter)).await;
     pump_events(&mut app, &mut rx).await;
     assert_eq!(
-        app.ui.nav_level,
-        NavLevel::Sessions { project_id: "p2".into() }
+        app.ui.nav_level(),
+        &NavLevel::Conversations {
+            project_id: "p2".into()
+        }
     );
 }
 
@@ -81,20 +97,22 @@ async fn esc_at_projects_quits() {
 #[tokio::test]
 async fn ctrl_q_at_projects_quits() {
     let (_, mut app, _rx) = app_with_projects(vec![]);
-    app.handle_key(press_with_modifiers(KeyCode::Char('q'), KeyModifiers::CONTROL))
-        .await;
+    app.handle_key(press_with_modifiers(
+        KeyCode::Char('q'),
+        KeyModifiers::CONTROL,
+    ))
+    .await;
     assert!(app.should_quit());
 }
 
 #[tokio::test]
 async fn esc_at_sessions_returns_to_projects() {
-    let backend = Arc::new(
-        TestBackend::new().with_projects(vec![sample_project("p1", "P1", "/tmp/p1")]),
-    );
+    let backend =
+        Arc::new(TestBackend::new().with_projects(vec![sample_project("p1", "P1", "/tmp/p1")]));
     let mut app = App::new(backend, false, PathBuf::from("/tmp/p1"));
-    app.ui.nav_level = NavLevel::Sessions { project_id: "p1".into() };
+    set_test_conversations_nav(&mut app, "p1");
     app.handle_key(press(KeyCode::Esc)).await;
-    assert_eq!(app.ui.nav_level, NavLevel::Projects);
+    assert_eq!(app.ui.nav_level(), &NavLevel::Projects);
     assert!(!app.should_quit());
 }
 
@@ -102,7 +120,7 @@ async fn esc_at_sessions_returns_to_projects() {
 async fn open_project_dialog_with_n_key() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/newproj"));
-    app.ui.nav_level = NavLevel::Projects;
+    set_test_projects_nav(&mut app);
     app.handle_key(press(KeyCode::Char('n'))).await;
     let dialog = app
         .ui
@@ -135,16 +153,15 @@ async fn create_project_dialog_types_and_confirms() {
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/newproj"));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
-    app.ui.nav_level = NavLevel::Projects;
+    set_test_projects_nav(&mut app);
     app.handle_key(press(KeyCode::Char('n'))).await;
     app.handle_key(press(KeyCode::Char('M'))).await;
-    assert!(
-        app.ui
-            .project_create_dialog
-            .as_ref()
-            .map(|d| d.name.ends_with('M'))
-            .unwrap_or(false)
-    );
+    assert!(app
+        .ui
+        .project_create_dialog
+        .as_ref()
+        .map(|d| d.name.ends_with('M'))
+        .unwrap_or(false));
     app.handle_key(press(KeyCode::Enter)).await;
     pump_events(&mut app, &mut rx).await;
     let created = backend
@@ -155,7 +172,7 @@ async fn create_project_dialog_types_and_confirms() {
 }
 
 #[tokio::test]
-async fn start_new_session_via_input_transitions_to_session_level() {
+async fn start_new_session_via_input_transitions_to_conversation_level() {
     use crate::focus::PaneId;
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
 
@@ -164,40 +181,43 @@ async fn start_new_session_via_input_transitions_to_session_level() {
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/p1"));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
-    app.ui.nav_level = NavLevel::Sessions { project_id: "p1".into() };
+    set_test_conversations_nav(&mut app, "p1");
     app.ui.status.update_agents(vec![AgentDescriptor {
         name: AgentName::Codex,
         path: None,
         version: None,
         status: AgentStatus::Ok,
     }]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.room_input.content = "hello world".to_owned();
 
     app.handle_key(press(KeyCode::Enter)).await;
     pump_events(&mut app, &mut rx).await;
 
+    let conversation_id = app
+        .ui
+        .nav_level()
+        .conversation_id()
+        .map(str::to_owned)
+        .unwrap_or_default();
     assert_eq!(
-        app.ui.nav_level,
-        NavLevel::Session {
+        app.ui.nav_level(),
+        &NavLevel::Conversation {
             project_id: "p1".into(),
-            thread_id: app
-                .ui
-                .nav_level
-                .thread_id()
-                .map(str::to_owned)
-                .unwrap_or_default(),
+            conversation_id,
         }
     );
-    let thread_id = app.ui.nav_level.thread_id().unwrap().to_owned();
     assert!(
         app.ui
-            .project_sessions
+            .conversation_agent_sessions
             .iter()
-            .any(|s| s.thread_id == thread_id),
-        "new session must appear in project_sessions"
+            .any(|s| s.agent == AgentName::Codex),
+        "new session must appear in conversation_agent_sessions"
     );
-    assert!(app.ui.room_input.content.is_empty(), "input must be cleared");
+    assert!(
+        app.ui.room_input.content.is_empty(),
+        "input must be cleared"
+    );
 }
 
 #[tokio::test]
@@ -207,11 +227,12 @@ async fn session_input_accepts_agent_completion_before_submit() {
     let project = sample_project("p1", "P1", "/tmp/p1");
     let backend = Arc::new(TestBackend::new().with_projects(vec![project]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/p1"));
-    app.ui.nav_level = NavLevel::Sessions { project_id: "p1".into() };
-    app.ui
-        .status
-        .update_agents(vec![ok_agent(AgentName::Codex), ok_agent(AgentName::Claude)]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    set_test_conversations_nav(&mut app, "p1");
+    app.ui.status.update_agents(vec![
+        ok_agent(AgentName::Codex),
+        ok_agent(AgentName::Claude),
+    ]);
+    app.ui.focus.focus(PaneId::Input);
 
     assert!(app.handle_key(press(KeyCode::Char('@'))).await);
     assert!(app.handle_key(press(KeyCode::Char('c'))).await);
@@ -222,7 +243,12 @@ async fn session_input_accepts_agent_completion_before_submit() {
     assert_eq!(app.ui.room_input.content, "@claude ");
     assert_eq!(app.ui.room_input.cursor_pos, "@claude ".len());
     assert!(!app.ui.room_input.has_agent_picker());
-    assert_eq!(app.ui.nav_level, NavLevel::Sessions { project_id: "p1".into() });
+    assert_eq!(
+        app.ui.nav_level(),
+        &NavLevel::Conversations {
+            project_id: "p1".into()
+        }
+    );
     assert!(
         backend
             .started
@@ -234,18 +260,12 @@ async fn session_input_accepts_agent_completion_before_submit() {
 }
 
 #[tokio::test]
-async fn open_existing_session_bridges_into_legacy_thread_list() {
+async fn open_existing_session_bridges_into_thread_list() {
     use crate::backend::ThreadSummaryEntry;
 
     let project = sample_project("p1", "P1", "/tmp/p1");
-    let backend = Arc::new(TestBackend::new().with_projects(vec![project.clone()]));
-    let mut app = App::new(backend, false, PathBuf::from("/tmp/p1"));
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    app.set_event_sender(tx);
-    app.ui.nav_level = NavLevel::Sessions { project_id: "p1".into() };
-    app.ui.projects = vec![project.clone()];
-    app.ui.selected_project = Some(0);
-    app.ui.project_sessions = vec![ThreadSummaryEntry {
+    let conversation = sample_conversation("p1", "c1", "conversation");
+    let session = ThreadSummaryEntry {
         thread_id: "existing-session-1".into(),
         agent: minos_domain::AgentName::Codex,
         title: Some("an existing session".into()),
@@ -253,26 +273,41 @@ async fn open_existing_session_bridges_into_legacy_thread_list() {
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-    }];
-    app.ui.selected_thread = Some(0);
-    app.ui.room_list_state.select(Some(0));
+    };
+    let backend = Arc::new(
+        TestBackend::new()
+            .with_projects(vec![project.clone()])
+            .with_conversations(vec![conversation.clone()])
+            .with_conversation_sessions("c1", vec![session.clone()]),
+    );
+    let mut app = App::new(backend, false, PathBuf::from("/tmp/p1"));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.set_event_sender(tx);
+    set_test_conversations_nav(&mut app, "p1");
+    app.ui.projects = vec![project.clone()];
+    app.ui.selected_project = Some(0);
+    app.ui.conversations = vec![conversation];
+    app.ui.selected_conversation = Some(0);
+    app.ui.conversation_list_state.select(Some(0));
 
     app.handle_key(press(KeyCode::Enter)).await;
     pump_events(&mut app, &mut rx).await;
 
     assert_eq!(
-        app.ui.nav_level,
-        NavLevel::Session {
+        app.ui.nav_level(),
+        &NavLevel::Conversation {
             project_id: "p1".into(),
-            thread_id: "existing-session-1".into(),
+            conversation_id: "c1".into(),
         }
     );
+    assert_eq!(app.ui.conversation_agent_sessions, vec![session]);
+    app.handle_key(press(KeyCode::Enter)).await;
     assert!(
         app.ui
             .threads
             .iter()
             .any(|t| t.thread_id == "existing-session-1"),
-        "ensure_project_session_visible must bridge the session into ui.threads"
+        "ensure_conversation_agent_session_visible must bridge the session into ui.threads"
     );
     let bridged = app
         .ui
@@ -283,6 +318,6 @@ async fn open_existing_session_bridges_into_legacy_thread_list() {
     assert_eq!(bridged.workspace, project.workspace_path);
     assert!(
         app.ui.chat_states.contains_key("existing-session-1"),
-        "bridged project session must create chat state before hydration"
+        "bridged conversation session must create chat state before hydration"
     );
 }

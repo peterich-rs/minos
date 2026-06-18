@@ -10,15 +10,12 @@ async fn room_can_invite_second_agent_after_first_routed_prompt() {
     ]));
     let mut app =
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "test".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Gemini),
     ]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
 
     app.ui.room_input.content = "@codex inspect the repo".into();
     app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
@@ -39,7 +36,7 @@ async fn room_can_invite_second_agent_after_first_routed_prompt() {
             .as_slice(),
         &[AgentName::Codex]
     );
-    assert_eq!(app.ui.group_chat.messages.len(), 1);
+    assert_eq!(app.ui.conversation_messages.len(), 1);
 
     assert!(app.handle_key(press(KeyCode::Enter)).await);
 
@@ -59,16 +56,16 @@ async fn room_can_invite_second_agent_after_first_routed_prompt() {
             .as_slice(),
         &[("thread-1".to_owned(), "inspect the repo".to_owned())]
     );
-    assert_eq!(app.ui.group_chat.messages.len(), 2);
+    assert_eq!(app.ui.conversation_messages.len(), 2);
     assert_eq!(
-        app.ui.group_chat.messages[0].text,
+        app.ui.conversation_messages[0].body,
         "@codex inspect the repo"
     );
-    assert_eq!(app.ui.group_chat.messages[0].agent, Some(AgentName::Codex));
-    assert_eq!(app.ui.group_chat.messages[1].text, "@gemini");
-    assert_eq!(app.ui.group_chat.messages[1].agent, Some(AgentName::Gemini));
+    assert_eq!(app.ui.conversation_messages[0].agent, None);
+    assert_eq!(app.ui.conversation_messages[1].body, "@gemini");
+    assert_eq!(app.ui.conversation_messages[1].agent, None);
     assert_eq!(app.ui.room_input.content, "");
-    assert_eq!(app.ui.selected_thread, Some(1));
+    assert_eq!(app.ui.selected_agent_session, Some(1));
 }
 
 #[tokio::test]
@@ -81,15 +78,12 @@ async fn picker_can_route_prompt_to_existing_agent_session() {
     ]));
     let mut app =
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-codex-1234".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Claude),
     ]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-codex".into(),
         agent: AgentName::Codex,
@@ -139,9 +133,9 @@ async fn picker_can_route_prompt_to_existing_agent_session() {
             "explain the diff".to_owned()
         )]
     );
-    assert_eq!(app.ui.group_chat.messages.len(), 1);
+    assert_eq!(app.ui.conversation_messages.len(), 1);
     assert_eq!(
-        app.ui.group_chat.messages[0].text,
+        app.ui.conversation_messages[0].body,
         "@codex#thread-c explain the diff"
     );
 }

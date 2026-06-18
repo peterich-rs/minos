@@ -112,7 +112,7 @@ async fn idle_thread_state_finishes_streaming_assistant_cursor() {
 async fn esc_at_projects_level_quits() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Projects;
+    set_test_projects_nav(&mut app);
 
     let redraw = app.handle_key(press(KeyCode::Esc)).await;
 
@@ -124,10 +124,7 @@ async fn esc_at_projects_level_quits() {
 async fn enter_on_agent_list_opens_detail_and_esc_uplevels() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-1".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,
@@ -138,17 +135,31 @@ async fn enter_on_agent_list_opens_detail_and_esc_uplevels() {
         "thread-1".into(),
         ChatState::new("thread-1".into(), AgentName::Codex),
     );
+    app.ui.conversation_agent_sessions = vec![crate::backend::ThreadSummaryEntry {
+        thread_id: "thread-1".into(),
+        agent: AgentName::Codex,
+        title: None,
+        first_ts_ms: 0,
+        last_ts_ms: 0,
+        message_count: 0,
+        ended_at_ms: None,
+    }];
+    app.ui.selected_agent_session = Some(0);
+    app.ui.agent_list_state.select(Some(0));
     app.select_thread(0);
-    app.ui.focus.focus(PaneId::AgentList);
+    app.ui.focus.focus(PaneId::Sidebar);
 
     assert!(app.handle_key(press(KeyCode::Enter)).await);
-    assert!(app.ui.agent_detail_visible);
-    assert_eq!(app.ui.focus.current(), PaneId::AgentChat);
+    assert!(matches!(
+        app.ui.nav_level(),
+        crate::nav::NavLevel::AgentDetail { thread_id, .. } if thread_id == "thread-1"
+    ));
 
     assert!(app.handle_key(press(KeyCode::Esc)).await);
     assert_eq!(
-        app.ui.nav_level,
-        crate::nav::NavLevel::Sessions {
+        app.ui.nav_level(),
+        &crate::nav::NavLevel::Conversation {
+            conversation_id: "conversation-1".into(),
             project_id: "test".into()
         }
     );
@@ -169,8 +180,8 @@ async fn mouse_wheel_scrolls_chat_and_focuses_it() {
         ChatState::new("thread-1".into(), AgentName::Codex),
     );
     app.select_thread(0);
-    app.ui.focus.focus(PaneId::RoomInput);
-    app.ui.agent_detail_visible = true;
+    app.ui.focus.focus(PaneId::Input);
+    set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
     app.ui.panel_areas.agent_chat = Rect::new(20, 0, 60, 20);
     if let Some(chat) = app.ui.current_chat_mut() {
@@ -186,7 +197,7 @@ async fn mouse_wheel_scrolls_chat_and_focuses_it() {
         .await;
 
     assert!(redraw);
-    assert_eq!(app.ui.focus.current(), PaneId::AgentChat);
+    assert_eq!(app.ui.focus.current(), PaneId::MainChat);
     assert!(app
         .ui
         .current_chat_mut()
@@ -221,7 +232,7 @@ async fn mouse_wheel_over_thread_list_moves_selection() {
         .await;
 
     assert!(redraw);
-    assert_eq!(app.ui.focus.current(), PaneId::AgentList);
+    assert_eq!(app.ui.focus.current(), PaneId::Sidebar);
     assert_eq!(app.ui.selected_thread, Some(1));
 }
 
@@ -230,7 +241,7 @@ async fn clicking_thread_list_blank_area_focuses_thread_list() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
     app.ui.panel_areas.room_list = Rect::new(0, 0, 20, 10);
-    app.ui.focus.focus(PaneId::GroupChat);
+    app.ui.focus.focus(PaneId::MainChat);
 
     let redraw = app
         .handle_mouse(MouseEvent {
@@ -242,7 +253,7 @@ async fn clicking_thread_list_blank_area_focuses_thread_list() {
         .await;
 
     assert!(redraw);
-    assert_eq!(app.ui.focus.current(), PaneId::RoomList);
+    assert_eq!(app.ui.focus.current(), PaneId::MainList);
 }
 
 #[tokio::test]
@@ -273,7 +284,7 @@ async fn mouse_selection_copies_chat_text_on_release() {
     ]);
     app.ui.chat_states.insert("thread-1".into(), chat);
     app.select_thread(0);
-    app.ui.agent_detail_visible = true;
+    set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
     app.ui.panel_areas.agent_chat = Rect::new(0, 0, 40, 10);
     super::TEST_CLIPBOARD
@@ -318,10 +329,7 @@ async fn mouse_selection_copies_chat_text_on_release() {
 async fn delete_key_in_thread_list_opens_confirmation() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-1".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,
@@ -340,7 +348,7 @@ async fn delete_key_in_thread_list_opens_confirmation() {
     );
     app.state.hydrated_threads.insert("thread-1".into());
     app.select_thread(0);
-    app.ui.focus.focus(PaneId::AgentList);
+    app.ui.focus.focus(PaneId::Sidebar);
 
     let redraw = app.handle_key(press(KeyCode::Delete)).await;
 
@@ -361,10 +369,7 @@ async fn delete_key_in_thread_list_opens_confirmation() {
 async fn enter_confirms_thread_delete_and_removes_local_state() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-1".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,
@@ -383,7 +388,7 @@ async fn enter_confirms_thread_delete_and_removes_local_state() {
     );
     app.state.hydrated_threads.insert("thread-1".into());
     app.select_thread(0);
-    app.ui.focus.focus(PaneId::AgentList);
+    app.ui.focus.focus(PaneId::Sidebar);
 
     assert!(app.handle_key(press(KeyCode::Delete)).await);
     let redraw = app.handle_key(press(KeyCode::Enter)).await;

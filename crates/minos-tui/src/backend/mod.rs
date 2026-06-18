@@ -90,6 +90,62 @@ impl ThreadSummaryEntry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationEntry {
+    pub conversation_id: String,
+    pub project_id: String,
+    pub title: String,
+    pub last_message_preview: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub message_count: u32,
+    pub agent_session_count: u32,
+    pub participating_agents: Vec<AgentName>,
+}
+
+impl ConversationEntry {
+    pub fn from_summary(s: &minos_protocol::LocalConversationSummary) -> Self {
+        Self {
+            conversation_id: s.conversation_id.clone(),
+            project_id: s.project_id.clone(),
+            title: s.title.clone(),
+            last_message_preview: s.last_message_preview.clone(),
+            created_at_ms: s.created_at_ms,
+            updated_at_ms: s.updated_at_ms,
+            message_count: s.message_count,
+            agent_session_count: s.agent_session_count,
+            participating_agents: s.participating_agents.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMessageEntry {
+    pub message_seq: i64,
+    pub message_id: String,
+    pub conversation_id: String,
+    pub thread_id: Option<String>,
+    pub created_at_ms: i64,
+    pub sender_role: String,
+    pub agent: Option<AgentName>,
+    pub body: String,
+}
+
+impl ConversationMessageEntry {
+    pub fn from_message(s: &minos_protocol::LocalConversationMessage) -> Self {
+        Self {
+            message_seq: s.message_seq,
+            message_id: s.message_id.clone(),
+            conversation_id: s.conversation_id.clone(),
+            thread_id: s.thread_id.clone(),
+            created_at_ms: s.created_at_ms,
+            sender_role: s.sender_role.clone(),
+            agent: s.agent,
+            body: s.body.clone(),
+        }
+    }
+}
+
 #[async_trait]
 pub trait AgentBackend: Send + Sync {
     async fn detect_clis(&self) -> Result<Vec<AgentDescriptor>>;
@@ -131,14 +187,36 @@ pub trait AgentBackend: Send + Sync {
 
     async fn create_project(&self, name: &str, workspace_path: &Path) -> Result<ProjectEntry>;
 
-    async fn list_project_threads(&self, project_id: &str) -> Result<Vec<ThreadSummaryEntry>>;
+    async fn list_conversations(&self, project_id: &str) -> Result<Vec<ConversationEntry>>;
 
-    async fn start_agent_in_project(
+    async fn create_conversation(&self, project_id: &str, title: &str)
+        -> Result<ConversationEntry>;
+
+    async fn list_conversation_messages(
         &self,
-        project_id: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<ConversationMessageEntry>>;
+
+    async fn list_conversation_agent_sessions(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ThreadSummaryEntry>>;
+
+    async fn start_agent_in_conversation(
+        &self,
+        conversation_id: &str,
         agent: AgentName,
         workspace: PathBuf,
     ) -> Result<StartAgentOutcome>;
+
+    async fn append_conversation_message(
+        &self,
+        conversation_id: &str,
+        thread_id: Option<&str>,
+        sender_role: &str,
+        agent: Option<AgentName>,
+        body: &str,
+    ) -> Result<()>;
 
     async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentOutcome>;
 

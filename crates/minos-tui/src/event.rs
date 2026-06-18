@@ -19,12 +19,18 @@ pub enum AppEvent {
         error: String,
     },
     ProjectCreated(crate::backend::ProjectEntry),
-    ProjectThreadsLoaded {
+    ConversationsLoaded {
         project_id: String,
-        threads: Vec<crate::backend::ThreadSummaryEntry>,
+        conversations: Vec<crate::backend::ConversationEntry>,
     },
-    ProjectSessionStarted {
+    ConversationOpened {
         project_id: String,
+        conversation_id: String,
+        messages: Vec<crate::backend::ConversationMessageEntry>,
+        sessions: Vec<crate::backend::ThreadSummaryEntry>,
+    },
+    ConversationAgentStarted {
+        conversation_id: String,
         agent: AgentName,
         thread_id: String,
         cwd: PathBuf,

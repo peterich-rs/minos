@@ -1,17 +1,17 @@
 pub mod agent_picker;
 pub mod chat;
+pub mod conversation_detail;
+pub mod conversation_list;
 pub mod delete_confirm;
-pub mod group_chat;
 pub mod input_bar;
 pub mod project_create_dialog;
 pub mod project_list;
-pub mod project_sessions;
-pub mod room_list;
 pub mod status_bar;
 pub mod theme;
-pub mod thread_list;
 
-use crate::backend::{ProjectEntry, ThreadSummaryEntry};
+use crate::backend::{
+    ConversationEntry, ConversationMessageEntry, ProjectEntry, ThreadSummaryEntry,
+};
 use crate::focus::{FocusManager, PaneId};
 use crate::nav::NavLevel;
 use crate::render::{Column, Renderable, Row};
@@ -19,9 +19,7 @@ use crate::translation::ChatState;
 use crate::ui::chat::RenderCache;
 use crate::ui::chat::{AgentChatRenderable, AgentChatTarget};
 pub use crate::ui::delete_confirm::DeleteConfirmState;
-use crate::ui::group_chat::GroupChatRenderCache;
 use crate::ui::input_bar::{AgentMentionCandidate, InputLayoutMetrics, InputState};
-use crate::ui::room_list::RoomEntry;
 use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
@@ -45,9 +43,6 @@ pub struct ThreadEntry {
 
 pub struct UiState {
     pub status: StatusBarState,
-    pub rooms: Vec<RoomEntry>,
-    pub selected_room: Option<usize>,
-    pub room_list_state: ListState,
     pub threads: Vec<ThreadEntry>,
     pub selected_thread: Option<usize>,
     pub agent_list_state: ListState,
@@ -56,7 +51,6 @@ pub struct UiState {
     pub chat_states: HashMap<String, ChatState>,
     pub room_input: InputState,
     pub agent_input: InputState,
-    pub agent_detail_visible: bool,
     pub focus: FocusManager,
     pub error_flash: Option<(String, Instant)>,
     pub flash_copied: Option<Instant>,
@@ -64,11 +58,19 @@ pub struct UiState {
     pub input_metrics: [InputLayoutMetrics; 2],
     pub delete_confirm: Option<DeleteConfirmState>,
     pub render_cache: RenderCache,
-    pub nav_level: NavLevel,
+    pub nav_stack: Vec<NavLevel>,
     pub projects: Vec<ProjectEntry>,
     pub selected_project: Option<usize>,
     pub project_list_state: ListState,
-    pub project_sessions: Vec<ThreadSummaryEntry>,
+    pub conversations: Vec<ConversationEntry>,
+    pub selected_conversation: Option<usize>,
+    pub conversation_list_state: ListState,
+    pub conversation_messages: Vec<ConversationMessageEntry>,
+    pub conversation_scroll_offset: u16,
+    pub conversation_auto_scroll: bool,
+    pub conversation_max_scroll: u16,
+    pub conversation_agent_sessions: Vec<ThreadSummaryEntry>,
+    pub selected_agent_session: Option<usize>,
     pub project_create_dialog: Option<ProjectCreateDialogState>,
 }
 
@@ -82,7 +84,6 @@ pub struct GroupChatState {
     pub auto_scroll: bool,
     pub max_scroll: u16,
     pub version: u64,
-    pub render_cache: GroupChatRenderCache,
 }
 
 #[derive(Debug, Clone)]
@@ -106,9 +107,6 @@ impl UiState {
     pub fn new(readonly: bool) -> Self {
         Self {
             status: StatusBarState::new(),
-            rooms: Vec::new(),
-            selected_room: None,
-            room_list_state: ListState::default(),
             threads: Vec::new(),
             selected_thread: None,
             agent_list_state: ListState::default(),
@@ -117,7 +115,6 @@ impl UiState {
             chat_states: HashMap::new(),
             room_input: InputState::new(readonly),
             agent_input: InputState::new(readonly),
-            agent_detail_visible: false,
             focus: FocusManager::new(false),
             error_flash: None,
             flash_copied: None,
@@ -125,36 +122,70 @@ impl UiState {
             input_metrics: [InputLayoutMetrics::default(); 2],
             delete_confirm: None,
             render_cache: RenderCache::default(),
-            nav_level: NavLevel::Projects,
+            nav_stack: vec![NavLevel::Projects],
             projects: Vec::new(),
             selected_project: None,
             project_list_state: ListState::default(),
-            project_sessions: Vec::new(),
+            conversations: Vec::new(),
+            selected_conversation: None,
+            conversation_list_state: ListState::default(),
+            conversation_messages: Vec::new(),
+            conversation_scroll_offset: 0,
+            conversation_auto_scroll: true,
+            conversation_max_scroll: 0,
+            conversation_agent_sessions: Vec::new(),
+            selected_agent_session: None,
             project_create_dialog: None,
         }
     }
 
+    pub fn nav_level(&self) -> &NavLevel {
+        self.nav_stack.last().unwrap_or(&NavLevel::Projects)
+    }
+
+    pub fn push_nav(&mut self, level: NavLevel) {
+        self.nav_stack.push(level);
+    }
+
+    pub fn pop_nav(&mut self) {
+        if self.nav_stack.len() > 1 {
+            self.nav_stack.pop();
+        }
+    }
+
     pub fn current_thread_id(&self) -> Option<&str> {
+        if matches!(
+            self.nav_level(),
+            NavLevel::Conversation { .. } | NavLevel::AgentDetail { .. }
+        ) {
+            if let Some(thread_id) = self
+                .selected_agent_session
+                .and_then(|i| self.conversation_agent_sessions.get(i))
+                .map(|t| t.thread_id.as_str())
+            {
+                return Some(thread_id);
+            }
+        }
         self.selected_thread
             .and_then(|i| self.threads.get(i))
             .map(|t| t.thread_id.as_str())
     }
 
     pub fn current_chat_mut(&mut self) -> Option<&mut ChatState> {
-        let id = self.selected_thread.and_then(|i| self.threads.get(i))?;
-        self.chat_states.get_mut(&id.thread_id)
+        let thread_id = self.current_thread_id()?.to_owned();
+        self.chat_states.get_mut(&thread_id)
     }
 
     pub fn current_chat(&self) -> Option<&ChatState> {
-        let id = self.selected_thread.and_then(|i| self.threads.get(i))?;
-        self.chat_states.get(&id.thread_id)
+        let thread_id = self.current_thread_id()?;
+        self.chat_states.get(thread_id)
     }
 
     /// Returns the active chat alongside the shared render cache, using a split
     /// borrow so callers can mutate both in the same scope.
     pub fn current_chat_and_cache_mut(&mut self) -> Option<(&mut ChatState, &mut RenderCache)> {
-        let id = self.selected_thread.and_then(|i| self.threads.get(i))?;
-        let chat = self.chat_states.get_mut(&id.thread_id)?;
+        let thread_id = self.current_thread_id()?.to_owned();
+        let chat = self.chat_states.get_mut(&thread_id)?;
         Some((chat, &mut self.render_cache))
     }
 
@@ -169,10 +200,6 @@ impl UiState {
     pub fn is_flash_copied_active(&self) -> bool {
         self.flash_copied
             .is_some_and(|instant| instant.elapsed().as_secs() < 2)
-    }
-
-    pub fn current_room(&self) -> Option<&RoomEntry> {
-        self.selected_room.and_then(|index| self.rooms.get(index))
     }
 
     pub fn room_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
@@ -206,7 +233,6 @@ impl GroupChatState {
             auto_scroll: true,
             max_scroll: 0,
             version: 0,
-            render_cache: GroupChatRenderCache::default(),
         }
     }
 
@@ -262,21 +288,6 @@ impl GroupChatState {
             .map(|message| message.seq)
             .max()
             .unwrap_or(0)
-    }
-
-    pub fn update_max_scroll(&mut self, max_scroll: u16) {
-        self.max_scroll = max_scroll;
-        if !self.auto_scroll {
-            self.scroll_offset = self.scroll_offset.min(self.max_scroll);
-        }
-    }
-
-    pub fn active_scroll(&self) -> u16 {
-        if self.auto_scroll {
-            self.max_scroll
-        } else {
-            self.scroll_offset.min(self.max_scroll)
-        }
     }
 
     pub fn scroll_up(&mut self, lines: u16) {
@@ -338,18 +349,23 @@ fn sort_messages(messages: &mut [LocalGroupChatMessage]) {
 }
 
 pub fn render_ui(f: &mut Frame, state: &mut UiState) {
-    state.room_input.focused = state.focus.is(PaneId::RoomInput);
-    state.agent_input.focused = state.focus.is(PaneId::AgentInput);
+    let agent_input_active =
+        matches!(state.nav_level(), NavLevel::AgentDetail { .. }) && state.focus.is(PaneId::Input);
+    state.room_input.focused = state.focus.is(PaneId::Input) && !agent_input_active;
+    state.agent_input.focused = agent_input_active;
 
-    match &state.nav_level {
+    match state.nav_level() {
         NavLevel::Projects => {
             render_projects_level(f, state);
         }
-        NavLevel::Sessions { .. } => {
-            render_sessions_level(f, state);
+        NavLevel::Conversations { .. } => {
+            render_conversations_level(f, state);
         }
-        NavLevel::Session { .. } | NavLevel::AgentDetail { .. } => {
-            render_legacy(f, state);
+        NavLevel::Conversation { .. } => {
+            render_conversation_level(f, state);
+        }
+        NavLevel::AgentDetail { .. } => {
+            render_agent_detail_level(f, state);
         }
     }
 
@@ -365,14 +381,6 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
     if let Some(confirm) = state.delete_confirm.as_ref() {
         let mut overlay = delete_confirm::DeleteConfirmRenderable::new(confirm);
         overlay.render(f, f.area());
-    }
-}
-
-fn render_legacy(f: &mut Frame, state: &mut UiState) {
-    if state.agent_detail_visible {
-        render_detail_tree(f, state);
-    } else {
-        render_overview_tree(f, state);
     }
 }
 
@@ -440,7 +448,7 @@ fn render_projects_level(f: &mut Frame, state: &mut UiState) {
     f.render_widget(hint, hint_area);
 }
 
-fn render_sessions_level(f: &mut Frame, state: &mut UiState) {
+fn render_conversations_level(f: &mut Frame, state: &mut UiState) {
     let mention_candidates = state.room_agent_mention_candidates();
     let flash_active = state.is_flash_copied_active();
     let root = f.area();
@@ -469,16 +477,16 @@ fn render_sessions_level(f: &mut Frame, state: &mut UiState) {
 
     let main_row = Row::new(
         vec![
-            Box::new(project_sessions::SessionListRenderable::new(
+            Box::new(conversation_list::ConversationListRenderable::new(
                 project_name,
-                &state.project_sessions,
-                state.selected_thread,
-                &mut state.room_list_state,
+                &state.conversations,
+                state.selected_conversation,
+                &mut state.conversation_list_state,
                 true,
             )),
-            Box::new(project_sessions::SessionSidebarRenderable::new(
-                &state.project_sessions,
-                state.selected_thread,
+            Box::new(conversation_list::ConversationSidebarRenderable::new(
+                &state.conversations,
+                state.selected_conversation,
             )),
         ],
         vec![78, 22],
@@ -509,59 +517,53 @@ fn render_sessions_level(f: &mut Frame, state: &mut UiState) {
     }
 }
 
-fn render_overview_tree(f: &mut Frame, state: &mut UiState) {
-    let room_title = state
-        .current_room()
-        .map(|room| format!("Chat Room: {}", room.title))
-        .unwrap_or_else(|| "Chat Room".to_owned());
+fn render_conversation_level(f: &mut Frame, state: &mut UiState) {
     let mention_candidates = state.room_agent_mention_candidates();
-    let room_input_title = room_input_title(&state.room_input);
     let flash_active = state.is_flash_copied_active();
     let root = f.area();
     let input_height = input_bar::required_height(&state.room_input, root.width);
     let [_, middle, input_area] = root_sections(root, input_height);
-    let columns = Row::areas_for(middle, &[20, 55, 25]);
+    let areas = Row::areas_for(middle, &[72, 28]);
 
     state.panel_areas = PanelAreas {
-        room_list: columns[0],
-        room_chat: columns[1],
-        agent_list: columns[2],
+        room_list: Rect::default(),
+        room_chat: areas[0],
+        agent_list: areas[1],
         agent_chat: Rect::default(),
         room_input: input_area,
         agent_input: Rect::default(),
     };
-    state.input_metrics[1] = InputLayoutMetrics::default();
+    state.input_metrics = [InputLayoutMetrics::default(); 2];
 
+    let title = current_conversation_title(state);
     let main_row = Row::new(
         vec![
-            Box::new(room_list::RoomListRenderable::new(
-                &state.rooms,
-                state.selected_room,
-                &mut state.room_list_state,
-                state.focus.is(PaneId::RoomList),
+            Box::new(conversation_detail::ConversationMessagesRenderable::new(
+                title,
+                &state.conversation_messages,
+                &mut state.conversation_scroll_offset,
+                &mut state.conversation_auto_scroll,
+                &mut state.conversation_max_scroll,
+                false,
             )),
-            Box::new(group_chat::GroupChatRenderable::new(
-                room_title,
-                &mut state.group_chat,
-                state.focus.is(PaneId::GroupChat),
-            )),
-            Box::new(thread_list::ThreadListRenderable::new(
-                "Agents",
-                &state.threads,
-                state.selected_thread,
+            Box::new(conversation_detail::AgentSessionListRenderable::new(
+                &state.conversation_agent_sessions,
+                state.selected_agent_session,
                 &mut state.agent_list_state,
-                state.focus.is(PaneId::AgentList),
+                state.focus.is(PaneId::Sidebar),
             )),
         ],
-        vec![20, 55, 25],
+        vec![72, 28],
     );
+
     let input = input_bar::InputBarRenderable::new(
-        room_input_title,
-        "Type @ to choose an agent or send to the room",
+        room_input_title(&state.room_input),
+        "Type @agent to run inside this conversation",
         &state.room_input,
         mention_candidates.as_slice(),
         &mut state.input_metrics[0],
     );
+
     let mut tree = Column::with_fill(
         vec![
             Box::new(status_bar::StatusBarRenderable::new(
@@ -579,11 +581,7 @@ fn render_overview_tree(f: &mut Frame, state: &mut UiState) {
     }
 }
 
-fn render_detail_tree(f: &mut Frame, state: &mut UiState) {
-    let room_title = state
-        .current_room()
-        .map(|room| format!("Chat Room: {}", room.title))
-        .unwrap_or_else(|| "Chat Room".to_owned());
+fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
     let mention_candidates = state.room_agent_mention_candidates();
     let pending_agent_request = state
         .current_chat()
@@ -624,6 +622,7 @@ fn render_detail_tree(f: &mut Frame, state: &mut UiState) {
         agent_input: inputs[1],
     };
 
+    let title = current_conversation_title(state);
     let agent_chat_target = if let Some(thread_id) = selected_thread_id.as_deref() {
         if let Some(chat) = state.chat_states.get_mut(thread_id) {
             AgentChatTarget::Chat {
@@ -640,21 +639,23 @@ fn render_detail_tree(f: &mut Frame, state: &mut UiState) {
     let [room_metrics, agent_metrics] = &mut state.input_metrics;
     let main_row = Row::new(
         vec![
-            Box::new(group_chat::GroupChatRenderable::new(
-                room_title,
-                &mut state.group_chat,
-                state.focus.is(PaneId::GroupChat),
+            Box::new(conversation_detail::ConversationMessagesRenderable::new(
+                title,
+                &state.conversation_messages,
+                &mut state.conversation_scroll_offset,
+                &mut state.conversation_auto_scroll,
+                &mut state.conversation_max_scroll,
+                state.focus.is(PaneId::MainChat),
             )),
-            Box::new(thread_list::ThreadListRenderable::new(
-                "Agents",
-                &state.threads,
-                state.selected_thread,
+            Box::new(conversation_detail::AgentSessionListRenderable::new(
+                &state.conversation_agent_sessions,
+                state.selected_agent_session,
                 &mut state.agent_list_state,
-                state.focus.is(PaneId::AgentList),
+                state.focus.is(PaneId::Sidebar),
             )),
             Box::new(AgentChatRenderable::new(
                 agent_chat_target,
-                state.focus.is(PaneId::AgentChat),
+                state.focus.is(PaneId::MainChat),
             )),
         ],
         vec![45, 20, 35],
@@ -663,7 +664,7 @@ fn render_detail_tree(f: &mut Frame, state: &mut UiState) {
         vec![
             Box::new(input_bar::InputBarRenderable::new(
                 room_input_title,
-                "Type @ to choose an agent or send to the room",
+                "Type @agent to run inside this conversation",
                 &state.room_input,
                 mention_candidates.as_slice(),
                 room_metrics,
@@ -693,6 +694,20 @@ fn render_detail_tree(f: &mut Frame, state: &mut UiState) {
     if let Some(position) = tree.cursor_pos(root) {
         f.set_cursor_position(position);
     }
+}
+
+fn current_conversation_title(state: &UiState) -> String {
+    let nav_conversation_id = state.nav_level().conversation_id();
+    state
+        .selected_conversation
+        .and_then(|idx| state.conversations.get(idx))
+        .filter(|conversation| {
+            nav_conversation_id
+                .map(|id| id == conversation.conversation_id)
+                .unwrap_or(true)
+        })
+        .map(|conversation| format!("Conversation: {}", conversation.title))
+        .unwrap_or_else(|| "Conversation".to_owned())
 }
 
 fn root_sections(area: Rect, input_height: u16) -> [Rect; 3] {

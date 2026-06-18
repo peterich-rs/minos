@@ -1,4 +1,7 @@
-use super::{AgentBackend, BackendConnectionState, BackendThreadSnapshot, ProjectEntry, ThreadSummaryEntry};
+use super::{
+    AgentBackend, BackendConnectionState, BackendThreadSnapshot, ConversationEntry,
+    ConversationMessageEntry, ProjectEntry, ThreadSummaryEntry,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use minos_agent_runtime::{AgentManager, InstanceCaps, ManagerEvent, StartAgentOutcome};
@@ -28,6 +31,9 @@ pub struct EmbeddedBackend {
     mcp_socket_path: Option<PathBuf>,
     workspace: PathBuf,
     projects: std::sync::Mutex<Vec<ProjectEntry>>,
+    conversations: std::sync::Mutex<Vec<ConversationEntry>>,
+    conversation_messages: std::sync::Mutex<HashMap<String, Vec<ConversationMessageEntry>>>,
+    conversation_sessions: std::sync::Mutex<HashMap<String, Vec<ThreadSummaryEntry>>>,
 }
 
 impl EmbeddedBackend {
@@ -71,6 +77,9 @@ impl EmbeddedBackend {
             mcp_socket_path,
             workspace,
             projects: std::sync::Mutex::new(Vec::new()),
+            conversations: std::sync::Mutex::new(Vec::new()),
+            conversation_messages: std::sync::Mutex::new(HashMap::new()),
+            conversation_sessions: std::sync::Mutex::new(HashMap::new()),
         })
     }
 }
@@ -203,29 +212,140 @@ impl AgentBackend for EmbeddedBackend {
         Ok(entry)
     }
 
-    async fn list_project_threads(&self, _project_id: &str) -> Result<Vec<ThreadSummaryEntry>> {
-        let snapshots = self.list_threads().await?;
-        Ok(snapshots
-            .into_iter()
-            .map(|s| ThreadSummaryEntry {
-                thread_id: s.thread_id,
-                agent: s.agent.unwrap_or(AgentName::Codex),
-                title: None,
-                first_ts_ms: 0,
-                last_ts_ms: 0,
-                message_count: 0,
-                ended_at_ms: None,
-            })
+    async fn list_conversations(&self, project_id: &str) -> Result<Vec<ConversationEntry>> {
+        Ok(self
+            .conversations
+            .lock()
+            .expect("conversations lock")
+            .iter()
+            .filter(|conversation| conversation.project_id == project_id)
+            .cloned()
             .collect())
     }
 
-    async fn start_agent_in_project(
+    async fn create_conversation(
         &self,
-        _project_id: &str,
+        project_id: &str,
+        title: &str,
+    ) -> Result<ConversationEntry> {
+        let now = now_ms();
+        let entry = ConversationEntry {
+            conversation_id: format!("embedded-conversation-{now}"),
+            project_id: project_id.to_owned(),
+            title: title.to_owned(),
+            last_message_preview: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+            message_count: 0,
+            agent_session_count: 0,
+            participating_agents: Vec::new(),
+        };
+        self.conversations
+            .lock()
+            .expect("conversations lock")
+            .push(entry.clone());
+        Ok(entry)
+    }
+
+    async fn list_conversation_messages(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ConversationMessageEntry>> {
+        Ok(self
+            .conversation_messages
+            .lock()
+            .expect("conversation messages lock")
+            .get(conversation_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn list_conversation_agent_sessions(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ThreadSummaryEntry>> {
+        Ok(self
+            .conversation_sessions
+            .lock()
+            .expect("conversation sessions lock")
+            .get(conversation_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn start_agent_in_conversation(
+        &self,
+        conversation_id: &str,
         agent: AgentName,
         workspace: PathBuf,
     ) -> Result<StartAgentOutcome> {
-        self.start_agent(agent, workspace).await
+        let outcome = self.start_agent(agent, workspace).await?;
+        self.conversation_sessions
+            .lock()
+            .expect("conversation sessions lock")
+            .entry(conversation_id.to_owned())
+            .or_default()
+            .push(ThreadSummaryEntry {
+                thread_id: outcome.thread_id.clone(),
+                agent,
+                title: None,
+                first_ts_ms: now_ms(),
+                last_ts_ms: now_ms(),
+                message_count: 0,
+                ended_at_ms: None,
+            });
+        if let Some(conversation) = self
+            .conversations
+            .lock()
+            .expect("conversations lock")
+            .iter_mut()
+            .find(|conversation| conversation.conversation_id == conversation_id)
+        {
+            conversation.agent_session_count = conversation.agent_session_count.saturating_add(1);
+            conversation.updated_at_ms = now_ms();
+            if !conversation.participating_agents.contains(&agent) {
+                conversation.participating_agents.push(agent);
+            }
+        }
+        Ok(outcome)
+    }
+
+    async fn append_conversation_message(
+        &self,
+        conversation_id: &str,
+        thread_id: Option<&str>,
+        sender_role: &str,
+        agent: Option<AgentName>,
+        body: &str,
+    ) -> Result<()> {
+        let mut messages = self
+            .conversation_messages
+            .lock()
+            .expect("conversation messages lock");
+        let conversation_messages = messages.entry(conversation_id.to_owned()).or_default();
+        let now = now_ms();
+        conversation_messages.push(ConversationMessageEntry {
+            message_seq: i64::try_from(conversation_messages.len() + 1).unwrap_or(i64::MAX),
+            message_id: format!("embedded-message-{now}"),
+            conversation_id: conversation_id.to_owned(),
+            thread_id: thread_id.map(str::to_owned),
+            created_at_ms: now,
+            sender_role: sender_role.to_owned(),
+            agent,
+            body: body.to_owned(),
+        });
+        if let Some(conversation) = self
+            .conversations
+            .lock()
+            .expect("conversations lock")
+            .iter_mut()
+            .find(|conversation| conversation.conversation_id == conversation_id)
+        {
+            conversation.message_count = conversation.message_count.saturating_add(1);
+            conversation.last_message_preview = Some(body.chars().take(120).collect());
+            conversation.updated_at_ms = now;
+        }
+        Ok(())
     }
 
     async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {

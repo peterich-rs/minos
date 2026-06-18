@@ -1,5 +1,6 @@
 use super::{
-    AgentBackend, BackendConnectionState, BackendThreadSnapshot, ProjectEntry, ThreadSummaryEntry,
+    AgentBackend, BackendConnectionState, BackendThreadSnapshot, ConversationEntry,
+    ConversationMessageEntry, ProjectEntry, ThreadSummaryEntry,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -13,11 +14,13 @@ use minos_agent_runtime::{
 };
 use minos_domain::{AgentDescriptor, AgentName};
 use minos_protocol::{
-    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams,
-    InterruptThreadRequest, ListClisResponse, LocalGroupChatMessage, LocalIngestFrame,
-    LocalManagerEvent, LocalThreadSnapshot, PauseReason as ProtoPauseReason, ReadGroupChatParams,
-    ReadThreadParams, ReadThreadRawHistoryResponse, RespondOpencodePermissionRequest,
-    RespondOpencodeQuestionRequest, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    AppendConversationMessageParams, ApprovalDecisionRequest, CloseReason as ProtoCloseReason,
+    CloseThreadRequest, CreateConversationParams, GetThreadParams, InterruptThreadRequest,
+    ListClisResponse, ListConversationAgentSessionsParams, ListConversationMessagesParams,
+    ListConversationsParams, LocalGroupChatMessage, LocalIngestFrame, LocalManagerEvent,
+    LocalThreadSnapshot, PauseReason as ProtoPauseReason, ReadGroupChatParams, ReadThreadParams,
+    ReadThreadRawHistoryResponse, RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest,
+    SendUserMessageRequest, StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
     ThreadState as ProtoThreadState,
 };
 use serde_json::Value;
@@ -190,25 +193,71 @@ fn create_project_request(
     }
 }
 
-fn list_project_threads_request(project_id: &str) -> minos_protocol::ListProjectThreadsParams {
-    minos_protocol::ListProjectThreadsParams {
+fn list_conversations_request(project_id: &str) -> ListConversationsParams {
+    ListConversationsParams {
         project_id: project_id.to_owned(),
-        limit: 100,
-        before_ts_ms: None,
+        limit: Some(100),
+        before_updated_at_ms: None,
     }
 }
 
-fn start_agent_in_project_request(
-    project_id: &str,
+fn create_conversation_request(project_id: &str, title: &str) -> CreateConversationParams {
+    CreateConversationParams {
+        project_id: project_id.to_owned(),
+        title: title.to_owned(),
+    }
+}
+
+fn list_conversation_messages_request(conversation_id: &str) -> ListConversationMessagesParams {
+    ListConversationMessagesParams {
+        conversation_id: conversation_id.to_owned(),
+        before_seq: None,
+        limit: Some(500),
+    }
+}
+
+fn list_conversation_agent_sessions_request(
+    conversation_id: &str,
+) -> ListConversationAgentSessionsParams {
+    ListConversationAgentSessionsParams {
+        conversation_id: conversation_id.to_owned(),
+    }
+}
+
+fn start_agent_in_conversation_request(
+    conversation_id: &str,
     agent: AgentName,
     workspace: &Path,
-) -> minos_protocol::StartAgentInProjectRequest {
-    minos_protocol::StartAgentInProjectRequest {
-        project_id: project_id.to_owned(),
+) -> StartAgentInConversationRequest {
+    StartAgentInConversationRequest {
+        conversation_id: conversation_id.to_owned(),
         agent,
         workspace: workspace.to_string_lossy().into_owned(),
-        workspace_slug: None,
     }
+}
+
+fn append_conversation_message_request(
+    conversation_id: &str,
+    thread_id: Option<&str>,
+    sender_role: &str,
+    agent: Option<AgentName>,
+    body: &str,
+) -> AppendConversationMessageParams {
+    AppendConversationMessageParams {
+        conversation_id: conversation_id.to_owned(),
+        message_id: format!("tui-{}-{}", conversation_id, now_ms()),
+        thread_id: thread_id.map(str::to_owned),
+        sender_role: sender_role.to_owned(),
+        agent,
+        body: body.to_owned(),
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -226,21 +275,21 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(list_project_threads_request("project-1")).unwrap(),
+            serde_json::to_value(list_conversations_request("project-1")).unwrap(),
             serde_json::json!({
                 "project_id": "project-1",
                 "limit": 100
             })
         );
         assert_eq!(
-            serde_json::to_value(start_agent_in_project_request(
-                "project-1",
+            serde_json::to_value(start_agent_in_conversation_request(
+                "conversation-1",
                 AgentName::Codex,
                 Path::new("/tmp/fire")
             ))
             .unwrap(),
             serde_json::json!({
-                "project_id": "project-1",
+                "conversation_id": "conversation-1",
                 "agent": "codex",
                 "workspace": "/tmp/fire"
             })
@@ -436,15 +485,69 @@ impl AgentBackend for DaemonBackend {
         Ok(ProjectEntry::from_summary(&response.project, &cwd))
     }
 
-    async fn list_project_threads(&self, project_id: &str) -> Result<Vec<ThreadSummaryEntry>> {
-        let response: minos_protocol::ListProjectThreadsResponse = self
+    async fn list_conversations(&self, project_id: &str) -> Result<Vec<ConversationEntry>> {
+        let response: minos_protocol::ListConversationsResponse = self
             .client
             .request(
-                "minos_local_list_project_threads",
-                [list_project_threads_request(project_id)],
+                "minos_local_list_conversations",
+                [list_conversations_request(project_id)],
             )
             .await
-            .context("RPC minos_local_list_project_threads failed")?;
+            .context("RPC minos_local_list_conversations failed")?;
+        Ok(response
+            .conversations
+            .iter()
+            .map(ConversationEntry::from_summary)
+            .collect())
+    }
+
+    async fn create_conversation(
+        &self,
+        project_id: &str,
+        title: &str,
+    ) -> Result<ConversationEntry> {
+        let response: minos_protocol::CreateConversationResponse = self
+            .client
+            .request(
+                "minos_local_create_conversation",
+                [create_conversation_request(project_id, title)],
+            )
+            .await
+            .context("RPC minos_local_create_conversation failed")?;
+        Ok(ConversationEntry::from_summary(&response.conversation))
+    }
+
+    async fn list_conversation_messages(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ConversationMessageEntry>> {
+        let response: minos_protocol::ListConversationMessagesResponse = self
+            .client
+            .request(
+                "minos_local_list_conversation_messages",
+                [list_conversation_messages_request(conversation_id)],
+            )
+            .await
+            .context("RPC minos_local_list_conversation_messages failed")?;
+        Ok(response
+            .messages
+            .iter()
+            .map(ConversationMessageEntry::from_message)
+            .collect())
+    }
+
+    async fn list_conversation_agent_sessions(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ThreadSummaryEntry>> {
+        let response: minos_protocol::ListConversationAgentSessionsResponse = self
+            .client
+            .request(
+                "minos_local_list_conversation_agent_sessions",
+                [list_conversation_agent_sessions_request(conversation_id)],
+            )
+            .await
+            .context("RPC minos_local_list_conversation_agent_sessions failed")?;
         Ok(response
             .threads
             .iter()
@@ -452,27 +555,54 @@ impl AgentBackend for DaemonBackend {
             .collect())
     }
 
-    async fn start_agent_in_project(
+    async fn start_agent_in_conversation(
         &self,
-        project_id: &str,
+        conversation_id: &str,
         agent: AgentName,
         workspace: PathBuf,
     ) -> Result<StartAgentOutcome> {
         let response: StartAgentResponse = self
             .client
             .request(
-                "minos_local_start_agent_in_project",
-                [start_agent_in_project_request(
-                    project_id, agent, &workspace,
+                "minos_local_start_agent_in_conversation",
+                [start_agent_in_conversation_request(
+                    conversation_id,
+                    agent,
+                    &workspace,
                 )],
             )
             .await
-            .context("RPC minos_local_start_agent_in_project failed")?;
+            .context("RPC minos_local_start_agent_in_conversation failed")?;
         Ok(StartAgentOutcome {
             thread_id: response.session_id,
             cwd: PathBuf::from(response.cwd),
             provider_session_id: None,
         })
+    }
+
+    async fn append_conversation_message(
+        &self,
+        conversation_id: &str,
+        thread_id: Option<&str>,
+        sender_role: &str,
+        agent: Option<AgentName>,
+        body: &str,
+    ) -> Result<()> {
+        let request = append_conversation_message_request(
+            conversation_id,
+            thread_id,
+            sender_role,
+            agent,
+            body,
+        );
+        self.client
+            .request::<minos_protocol::AppendConversationMessageResponse, _>(
+                "minos_local_append_conversation_message",
+                [request],
+            )
+            .await
+            .context("RPC minos_local_append_conversation_message failed")?;
+        Ok(())
     }
 
     async fn read_thread_raw_history(

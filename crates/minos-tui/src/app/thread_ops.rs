@@ -55,7 +55,6 @@ impl App {
         if self.ui.threads.is_empty() {
             self.ui.selected_thread = None;
             self.ui.agent_list_state.select(None);
-            self.ui.agent_detail_visible = false;
             self.ui.focus.switch_layout(false);
         } else {
             self.select_thread(index.min(self.ui.threads.len().saturating_sub(1)));

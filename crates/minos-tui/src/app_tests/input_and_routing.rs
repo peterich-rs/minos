@@ -4,10 +4,7 @@ use super::*;
 async fn ctrl_c_interrupts_running_thread() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-1".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,
@@ -42,10 +39,7 @@ async fn ctrl_c_interrupts_running_thread() {
 async fn ctrl_c_quits_idle_thread_view() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-1".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Gemini,
@@ -75,13 +69,10 @@ async fn ctrl_c_quits_idle_thread_view() {
 async fn ctrl_v_pastes_from_clipboard() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "test".into(),
-    };
-    app.ui.agent_detail_visible = true;
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
+    set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
-    app.ui.focus.focus(PaneId::AgentInput);
+    app.ui.focus.focus(PaneId::Input);
 
     super::TEST_CLIPBOARD
         .lock()
@@ -137,16 +128,13 @@ async fn at_completion_inserts_selected_agent() {
         ok_agent(AgentName::Gemini),
     ]));
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "test".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Claude),
         ok_agent(AgentName::Gemini),
     ]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.sync_input_agent_picker();
 
     assert!(app.handle_key(press(KeyCode::Char('@'))).await);
@@ -163,14 +151,11 @@ async fn at_completion_inserts_selected_agent() {
 async fn input_shortcuts_edit_without_inserting_control_text() {
     let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Codex)]));
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "test".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Codex)]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.room_input.content = "hello brave world".into();
     app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
 
@@ -211,10 +196,7 @@ async fn room_input_paste_inserts_multiline_text_without_submitting() {
     let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Codex)]));
     let mut app =
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-codex-1234".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Codex)]);
@@ -229,7 +211,7 @@ async fn room_input_paste_inserts_multiline_text_without_submitting() {
         ChatState::new("thread-codex-1234".into(), AgentName::Codex),
     );
     app.select_thread(0);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
 
     assert!(
         app.handle_event(AppEvent::Paste("first\r\nsecond\nthird".into()))
@@ -252,11 +234,10 @@ async fn room_input_paste_inserts_multiline_text_without_submitting() {
             .lock()
             .expect("sent messages lock")
             .as_slice(),
-        &[(
-            "thread-codex-1234".to_owned(),
-            "first\nsecond\nthird".to_owned()
-        )]
+        &[("thread-1".to_owned(), "first\nsecond\nthird".to_owned())]
     );
+    assert_eq!(app.ui.conversation_messages.len(), 1);
+    assert_eq!(app.ui.conversation_messages[0].body, "first\nsecond\nthird");
 }
 
 #[tokio::test]
@@ -267,16 +248,13 @@ async fn routed_prompt_starts_target_agent_and_sends_body_only() {
         ok_agent(AgentName::Gemini),
     ]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "test".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Claude),
         ok_agent(AgentName::Gemini),
     ]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.room_input.content = "@gemini write tests".into();
     app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
     app.sync_input_agent_picker();
@@ -310,10 +288,7 @@ async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
         AgentName::Opencode,
     )]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-opencode-closed".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);
@@ -326,7 +301,7 @@ async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
         },
     });
     app.select_thread(0);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.room_input.content = "are you there?".into();
     app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
 
@@ -359,10 +334,7 @@ async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
         AgentName::Opencode,
     )]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-opencode-closed".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);
@@ -375,9 +347,9 @@ async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
         },
     });
     app.select_thread(0);
-    app.ui.agent_detail_visible = true;
+    set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
-    app.ui.focus.focus(PaneId::AgentInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.agent_input.content = "continue".into();
     app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
 
@@ -410,10 +382,7 @@ async fn routed_prompt_to_closed_thread_reports_error_without_sending() {
         AgentName::Opencode,
     )]));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-opencode-closed".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);
@@ -425,7 +394,7 @@ async fn routed_prompt_to_closed_thread_reports_error_without_sending() {
             reason: minos_agent_runtime::CloseReason::UserClose,
         },
     });
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.room_input.content = "@opencode#thread-o hello".into();
     app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
     app.sync_input_agent_picker();

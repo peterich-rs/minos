@@ -24,7 +24,7 @@
 
 ### 1.3 范围
 
-本设计只关注 TUI 所需的本地 Project → Conversation → Agent session 层级。mobile/web/cloud 的社交 conversation 模型不作为本次约束。
+本设计只关注 TUI 所需的本地 Project → Conversation → Agent session 层级，其它端的 conversation 模型不作为本次约束。
 
 ### 1.4 命名统一
 

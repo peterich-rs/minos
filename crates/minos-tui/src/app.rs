@@ -18,12 +18,9 @@ use crate::effect::Effect;
 use crate::event::AppEvent;
 use crate::focus::PaneId;
 use crate::group_chat::GroupChatStore;
-use crate::state::{
-    self, default_room_title, frame_marks_agent_result_done, rect_contains, thread_is_done,
-    workspace_room_id, AppState,
-};
+use crate::state::{self, frame_marks_agent_result_done, rect_contains, thread_is_done, AppState};
 use crate::translation::{ChatState, PendingAgentRequestKind, PendingQuestionSpec};
-use crate::ui::{room_list::RoomEntry, ThreadEntry, UiState};
+use crate::ui::{ThreadEntry, UiState};
 
 mod clipboard;
 mod event_loop;
@@ -62,13 +59,7 @@ impl App {
         workspace: PathBuf,
         group_chat_store: GroupChatStore,
     ) -> Self {
-        let mut ui = UiState::new(readonly);
-        ui.rooms.push(RoomEntry {
-            room_id: workspace_room_id(workspace.as_path()),
-            title: default_room_title(workspace.as_path()),
-        });
-        ui.selected_room = Some(0);
-        ui.room_list_state.select(Some(0));
+        let ui = UiState::new(readonly);
         Self {
             backend,
             state: AppState::new(workspace, group_chat_store),

@@ -7,14 +7,11 @@ async fn routed_prompt_records_user_message_in_group_chat() {
     let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Gemini)]));
     let mut app =
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "test".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Gemini)]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.room_input.content = "@gemini write tests".into();
     app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
     app.sync_input_agent_picker();
@@ -29,22 +26,20 @@ async fn routed_prompt_records_user_message_in_group_chat() {
             .as_slice(),
         &[("thread-1".to_owned(), "write tests".to_owned())]
     );
-    assert_eq!(app.ui.group_chat.messages.len(), 1);
-    let message = &app.ui.group_chat.messages[0];
-    assert_eq!(message.seq, 1);
-    assert_eq!(message.kind, LocalGroupChatMessageKind::User);
-    assert_eq!(message.text, "@gemini write tests");
-    assert_eq!(message.agent, Some(AgentName::Gemini));
+    assert_eq!(app.ui.conversation_messages.len(), 1);
+    let message = &app.ui.conversation_messages[0];
+    assert_eq!(message.message_seq, 1);
+    assert_eq!(message.sender_role, "user");
+    assert_eq!(message.body, "@gemini write tests");
+    assert_eq!(message.agent, None);
 
-    let persisted = app
-        .state
-        .group_chat_store
-        .load_recent(10)
+    let persisted = backend
+        .list_conversation_messages("conversation-1")
         .await
-        .expect("group chat DB should be readable");
+        .expect("conversation messages should be readable");
     assert_eq!(persisted.len(), 1);
-    assert_eq!(persisted[0].kind, LocalGroupChatMessageKind::User);
-    assert_eq!(persisted[0].text, "@gemini write tests");
+    assert_eq!(persisted[0].sender_role, "user");
+    assert_eq!(persisted[0].body, "@gemini write tests");
 }
 
 #[tokio::test]
@@ -57,14 +52,11 @@ async fn routed_prompt_echoes_in_group_chat_before_backend_send_finishes() {
         App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-gemini-1234".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Gemini)]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-gemini-1234".into(),
         agent: AgentName::Gemini,
@@ -88,19 +80,13 @@ async fn routed_prompt_echoes_in_group_chat_before_backend_send_finishes() {
     .expect("room submit should not wait for backend send");
 
     assert!(handled);
-    assert_eq!(app.ui.group_chat.messages.len(), 1);
+    assert_eq!(app.ui.conversation_messages.len(), 1);
+    assert_eq!(app.ui.conversation_messages[0].sender_role, "user");
     assert_eq!(
-        app.ui.group_chat.messages[0].kind,
-        LocalGroupChatMessageKind::User
-    );
-    assert_eq!(
-        app.ui.group_chat.messages[0].text,
+        app.ui.conversation_messages[0].body,
         "@gemini#thread-g write tests"
     );
-    assert_eq!(
-        app.ui.group_chat.messages[0].thread_id.as_deref(),
-        Some("thread-gemini-1234")
-    );
+    assert_eq!(app.ui.conversation_messages[0].thread_id, None);
     assert_eq!(app.ui.room_input.content, "");
 }
 
@@ -113,14 +99,11 @@ async fn routed_prompt_echoes_in_group_chat_before_agent_start_finishes() {
     let mut app = App::with_group_chat_store(backend, false, PathBuf::from("/tmp"), group_store);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "test".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Gemini)]);
-    app.ui.focus.focus(PaneId::RoomInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.room_input.content = "@gemini write tests".into();
     app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
     app.sync_input_agent_picker();
@@ -133,14 +116,11 @@ async fn routed_prompt_echoes_in_group_chat_before_agent_start_finishes() {
     .expect("room submit should not wait for agent startup");
 
     assert!(handled);
-    assert_eq!(app.ui.group_chat.messages.len(), 1);
-    assert_eq!(
-        app.ui.group_chat.messages[0].kind,
-        LocalGroupChatMessageKind::User
-    );
-    assert_eq!(app.ui.group_chat.messages[0].text, "@gemini write tests");
-    assert_eq!(app.ui.group_chat.messages[0].agent, Some(AgentName::Gemini));
-    assert_eq!(app.ui.group_chat.messages[0].thread_id, None);
+    assert_eq!(app.ui.conversation_messages.len(), 1);
+    assert_eq!(app.ui.conversation_messages[0].sender_role, "user");
+    assert_eq!(app.ui.conversation_messages[0].body, "@gemini write tests");
+    assert_eq!(app.ui.conversation_messages[0].agent, None);
+    assert_eq!(app.ui.conversation_messages[0].thread_id, None);
     assert_eq!(app.ui.room_input.content, "");
 }
 
@@ -326,10 +306,7 @@ async fn agent_input_group_echo_includes_existing_thread_short_id() {
         PathBuf::from("/tmp/ws"),
         group_store,
     );
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-codex-1234".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-codex-1234".into(),
         agent: AgentName::Codex,
@@ -341,9 +318,9 @@ async fn agent_input_group_echo_includes_existing_thread_short_id() {
         ChatState::new("thread-codex-1234".into(), AgentName::Codex),
     );
     app.select_thread(0);
-    app.ui.agent_detail_visible = true;
+    set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
-    app.ui.focus.focus(PaneId::AgentInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.agent_input.content = "continue".into();
     app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
 
@@ -357,21 +334,18 @@ async fn agent_input_group_echo_includes_existing_thread_short_id() {
             .as_slice(),
         &[("thread-codex-1234".to_owned(), "continue".to_owned())]
     );
-    assert_eq!(app.ui.group_chat.messages.len(), 1);
-    let message = &app.ui.group_chat.messages[0];
-    assert_eq!(message.text, "@codex#thread-c continue");
-    assert_eq!(message.thread_id.as_deref(), Some("thread-codex-1234"));
-    assert_eq!(message.thread_short_id.as_deref(), Some("thread-c"));
+    assert_eq!(app.ui.conversation_messages.len(), 1);
+    let message = &app.ui.conversation_messages[0];
+    assert_eq!(message.body, "@codex#thread-c continue");
+    assert_eq!(message.thread_id, None);
+    assert_eq!(message.sender_role, "user");
 }
 
 #[tokio::test]
 async fn agent_input_answers_pending_question_without_group_echo_or_prompt() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-codex-1234".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-codex-1234".into(),
         agent: AgentName::Codex,
@@ -398,9 +372,9 @@ async fn agent_input_answers_pending_question_without_group_echo_or_prompt() {
     }]);
     app.ui.chat_states.insert("thread-codex-1234".into(), chat);
     app.select_thread(0);
-    app.ui.agent_detail_visible = true;
+    set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
-    app.ui.focus.focus(PaneId::AgentInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.agent_input.content = "blue".into();
     app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
 
@@ -436,10 +410,7 @@ async fn agent_input_answers_pending_question_without_group_echo_or_prompt() {
 async fn agent_input_answers_opencode_permission() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-opencode-1234".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-opencode-1234".into(),
         agent: AgentName::Opencode,
@@ -465,9 +436,9 @@ async fn agent_input_answers_opencode_permission() {
         .chat_states
         .insert("thread-opencode-1234".into(), chat);
     app.select_thread(0);
-    app.ui.agent_detail_visible = true;
+    set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
-    app.ui.focus.focus(PaneId::AgentInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.agent_input.content = "yes".into();
     app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
 
@@ -492,10 +463,7 @@ async fn agent_input_answers_opencode_permission() {
 async fn agent_input_answers_opencode_question_with_selected_option() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.nav_level = crate::nav::NavLevel::Session {
-        project_id: "test".into(),
-        thread_id: "thread-opencode-1234".into(),
-    };
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-opencode-1234".into(),
         agent: AgentName::Opencode,
@@ -527,9 +495,9 @@ async fn agent_input_answers_opencode_question_with_selected_option() {
         .chat_states
         .insert("thread-opencode-1234".into(), chat);
     app.select_thread(0);
-    app.ui.agent_detail_visible = true;
+    set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
-    app.ui.focus.focus(PaneId::AgentInput);
+    app.ui.focus.focus(PaneId::Input);
     app.ui.agent_input.content = "2".into();
     app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
 

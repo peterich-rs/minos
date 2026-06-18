@@ -228,13 +228,37 @@ impl App {
 
         self.hydrate_thread_if_needed(&thread_id).await;
 
-        if let Some(group_text) = group_text {
-            self.record_user_group_message(&thread_id, group_text).await;
+        let conversation_message = group_text.as_ref().and_then(|body| {
+            self.ui
+                .nav_level()
+                .conversation_id()
+                .map(|conversation_id| (conversation_id.to_owned(), body.clone()))
+        });
+        if conversation_message.is_none() {
+            if let Some(group_text) = group_text.as_ref() {
+                self.record_user_group_message(&thread_id, group_text.clone())
+                    .await;
+            }
         }
 
         if let Some(tx) = self.event_tx.clone() {
             let backend = Arc::clone(&self.backend);
+            let conversation_message = conversation_message.clone();
             tokio::spawn(async move {
+                if let Some((conversation_id, body)) = conversation_message {
+                    if let Err(error) = backend
+                        .append_conversation_message(&conversation_id, None, "user", None, &body)
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "minos_tui::app",
+                            error = %error,
+                            conversation_id = %conversation_id,
+                            thread_id = %thread_id,
+                            "append_conversation_message failed before send"
+                        );
+                    }
+                }
                 if let Err(e) = backend.resume_thread(&thread_id).await {
                     tracing::debug!(
                         target: "minos_tui::app",
@@ -257,6 +281,23 @@ impl App {
             return true;
         }
 
+        if let Some((conversation_id, body)) = conversation_message {
+            if let Err(error) = self
+                .backend
+                .append_conversation_message(&conversation_id, None, "user", None, &body)
+                .await
+            {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %error,
+                    conversation_id = %conversation_id,
+                    thread_id = %thread_id,
+                    "append_conversation_message failed before send"
+                );
+                self.ui
+                    .set_error(format!("Failed to record conversation message: {error}"));
+            }
+        }
         if let Err(e) = self.backend.resume_thread(&thread_id).await {
             tracing::debug!(
                 target: "minos_tui::app",
@@ -344,7 +385,7 @@ impl App {
             }
             self.ensure_chat_state_agent(&thread_id, agent);
             self.select_thread(index);
-            self.ui.focus.focus(PaneId::RoomInput);
+            self.ui.focus.focus(PaneId::Input);
             self.sync_input_agent_picker();
             return;
         }
@@ -357,7 +398,7 @@ impl App {
         });
         self.ensure_chat_state_agent(&thread_id, agent);
         self.select_thread(self.ui.threads.len().saturating_sub(1));
-        self.ui.focus.focus(PaneId::RoomInput);
+        self.ui.focus.focus(PaneId::Input);
         self.sync_input_agent_picker();
     }
 
@@ -382,6 +423,6 @@ impl App {
         let candidates = self.ui.room_agent_mention_candidates();
         self.ui
             .room_input
-            .sync_agent_picker(candidates.as_slice(), self.ui.focus.is(PaneId::RoomInput));
+            .sync_agent_picker(candidates.as_slice(), self.ui.focus.is(PaneId::Input));
     }
 }

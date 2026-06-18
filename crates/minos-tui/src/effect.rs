@@ -55,16 +55,28 @@ pub enum Effect {
         name: String,
         workspace_path: PathBuf,
     },
-    LoadProjectThreads {
+    LoadConversations {
         project_id: String,
     },
-    StartAgentInProject {
+    CreateConversationAndStartAgent {
         project_id: String,
         agent: AgentName,
         workspace: PathBuf,
+        message_body: String,
         prompt: String,
     },
-    OpenProjectSession {
+    StartAgentInConversation {
+        project_id: String,
+        conversation_id: String,
+        agent: AgentName,
+        workspace: PathBuf,
+        message_body: String,
+        prompt: String,
+    },
+    OpenConversation {
+        conversation_id: String,
+    },
+    OpenAgentSession {
         thread_id: String,
     },
 }

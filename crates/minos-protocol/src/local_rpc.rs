@@ -79,15 +79,6 @@ pub struct ReadArtifactRangeResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StartAgentInProjectRequest {
-    pub project_id: String,
-    pub agent: minos_domain::AgentName,
-    pub workspace: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_slug: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RespondOpencodePermissionRequest {
     pub thread_id: String,
     pub permission_id: String,
@@ -246,18 +237,6 @@ pub trait LocalDaemonRpc {
         &self,
         req: crate::AppendConversationMessageParams,
     ) -> jsonrpsee::core::RpcResult<crate::AppendConversationMessageResponse>;
-
-    #[method(name = "list_project_threads")]
-    async fn list_project_threads(
-        &self,
-        req: crate::ListProjectThreadsParams,
-    ) -> jsonrpsee::core::RpcResult<crate::ListProjectThreadsResponse>;
-
-    #[method(name = "start_agent_in_project")]
-    async fn start_agent_in_project(
-        &self,
-        req: StartAgentInProjectRequest,
-    ) -> jsonrpsee::core::RpcResult<crate::StartAgentResponse>;
 
     #[method(name = "read_thread_raw_history")]
     async fn read_thread_raw_history(

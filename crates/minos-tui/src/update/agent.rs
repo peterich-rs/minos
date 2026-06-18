@@ -71,6 +71,12 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
     }
 
     let group_text = super::group_user_text_for_thread(ui, &thread_id, text.as_str());
+    if let (Some(conversation_id), Some(body)) = (
+        ui.nav_level().conversation_id().map(str::to_owned),
+        group_text.as_deref(),
+    ) {
+        super::push_pending_conversation_user_message(ui, &conversation_id, body);
+    }
     ui.agent_input.take_input();
     (
         StateChange::redraw(),

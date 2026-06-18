@@ -4,49 +4,40 @@ use minos_domain::AgentName;
 #[allow(dead_code)]
 pub enum NavLevel {
     Projects,
-    Sessions {
+    Conversations {
         project_id: String,
     },
-    Session {
+    Conversation {
         project_id: String,
-        thread_id: String,
+        conversation_id: String,
     },
     AgentDetail {
         project_id: String,
+        conversation_id: String,
         thread_id: String,
         agent: AgentName,
     },
 }
 
 impl NavLevel {
-    pub fn go_up(&self) -> NavLevel {
-        match self {
-            NavLevel::Projects => NavLevel::Projects,
-            NavLevel::Sessions { .. } => NavLevel::Projects,
-            NavLevel::Session { project_id, .. } => {
-                NavLevel::Sessions { project_id: project_id.clone() }
-            }
-            NavLevel::AgentDetail { project_id, thread_id, .. } => NavLevel::Session {
-                project_id: project_id.clone(),
-                thread_id: thread_id.clone(),
-            },
-        }
-    }
-
     pub fn project_id(&self) -> Option<&str> {
         match self {
             NavLevel::Projects => None,
-            NavLevel::Sessions { project_id }
-            | NavLevel::Session { project_id, .. }
+            NavLevel::Conversations { project_id }
+            | NavLevel::Conversation { project_id, .. }
             | NavLevel::AgentDetail { project_id, .. } => Some(project_id),
         }
     }
 
-    pub fn thread_id(&self) -> Option<&str> {
+    pub fn conversation_id(&self) -> Option<&str> {
         match self {
-            NavLevel::Projects | NavLevel::Sessions { .. } => None,
-            NavLevel::Session { thread_id, .. }
-            | NavLevel::AgentDetail { thread_id, .. } => Some(thread_id),
+            NavLevel::Projects | NavLevel::Conversations { .. } => None,
+            NavLevel::Conversation {
+                conversation_id, ..
+            }
+            | NavLevel::AgentDetail {
+                conversation_id, ..
+            } => Some(conversation_id),
         }
     }
 
@@ -68,7 +59,7 @@ pub enum NavAction {
     SwitchField,
     TypeChar(char),
     Backspace,
-    SubmitSessionInput,
+    SubmitConversationInput,
 }
 
 #[cfg(test)]
@@ -76,31 +67,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn go_up_from_sessions_to_projects() {
-        let level = NavLevel::Sessions { project_id: "p1".into() };
-        assert_eq!(level.go_up(), NavLevel::Projects);
-    }
-
-    #[test]
-    fn go_up_from_session_to_sessions() {
-        let level = NavLevel::Session {
-            project_id: "p1".into(),
-            thread_id: "t1".into(),
-        };
-        assert_eq!(
-            level.go_up(),
-            NavLevel::Sessions { project_id: "p1".into() }
-        );
-    }
-
-    #[test]
-    fn go_up_at_projects_stays() {
-        assert_eq!(NavLevel::Projects.go_up(), NavLevel::Projects);
-    }
-
-    #[test]
     fn esc_quits_only_at_projects() {
         assert!(NavLevel::Projects.esc_quits());
-        assert!(!NavLevel::Sessions { project_id: "p".into() }.esc_quits());
+        assert!(!NavLevel::Conversations {
+            project_id: "p".into()
+        }
+        .esc_quits());
     }
 }

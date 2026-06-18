@@ -85,6 +85,32 @@ impl App {
         redraw
     }
 
+    async fn execute_non_recursive_effects(&mut self, effects: Vec<Effect>) -> bool {
+        let mut redraw = false;
+        for effect in effects {
+            match effect {
+                Effect::AgentStartedForPrompt {
+                    agent,
+                    thread_id,
+                    cwd,
+                    text,
+                } => {
+                    self.ensure_thread_visible(thread_id.clone(), agent, cwd);
+                    if !text.trim().is_empty() {
+                        redraw |= self.send_text_to_thread(thread_id, text, None).await;
+                    }
+                }
+                _ => {
+                    tracing::warn!(
+                        target: "minos_tui::app",
+                        "unexpected follow-up effect in synchronous conversation fallback"
+                    );
+                }
+            }
+        }
+        redraw
+    }
+
     pub(super) async fn execute_effect(&mut self, effect: Effect) -> bool {
         match effect {
             Effect::Quit => {
@@ -109,7 +135,11 @@ impl App {
                 text,
             } => {
                 self.ensure_thread_visible(thread_id.clone(), agent, cwd);
-                self.send_text_to_thread(thread_id, text, None).await
+                if text.trim().is_empty() {
+                    true
+                } else {
+                    self.send_text_to_thread(thread_id, text, None).await
+                }
             }
             Effect::DispatchPromptToExistingAgent {
                 agent,
@@ -191,15 +221,15 @@ impl App {
                 }
                 false
             }
-            Effect::LoadProjectThreads { project_id } => {
+            Effect::LoadConversations { project_id } => {
                 if let Some(tx) = self.event_tx.clone() {
                     let backend = Arc::clone(&self.backend);
                     tokio::spawn(async move {
-                        let result = backend.list_project_threads(&project_id).await;
+                        let result = backend.list_conversations(&project_id).await;
                         let _ = tx.send(match result {
-                            Ok(threads) => AppEvent::ProjectThreadsLoaded {
+                            Ok(conversations) => AppEvent::ConversationsLoaded {
                                 project_id,
-                                threads,
+                                conversations,
                             },
                             Err(e) => AppEvent::ProjectFailed(e.to_string()),
                         });
@@ -207,22 +237,64 @@ impl App {
                 }
                 false
             }
-            Effect::StartAgentInProject {
+            Effect::CreateConversationAndStartAgent {
                 project_id,
                 agent,
                 workspace,
+                message_body,
                 prompt,
             } => {
                 if let Some(tx) = self.event_tx.clone() {
                     let backend = Arc::clone(&self.backend);
                     tokio::spawn(async move {
+                        let title = prompt
+                            .lines()
+                            .next()
+                            .map(str::trim)
+                            .filter(|line| !line.is_empty())
+                            .unwrap_or("Untitled conversation")
+                            .chars()
+                            .take(80)
+                            .collect::<String>();
+                        let conversation =
+                            match backend.create_conversation(&project_id, &title).await {
+                                Ok(conversation) => conversation,
+                                Err(e) => {
+                                    let _ = tx.send(AppEvent::ProjectFailed(e.to_string()));
+                                    return;
+                                }
+                            };
+                        let conversation_id = conversation.conversation_id.clone();
+                        let _ = backend
+                            .append_conversation_message(
+                                &conversation_id,
+                                None,
+                                "user",
+                                None,
+                                &message_body,
+                            )
+                            .await;
+                        let messages = backend
+                            .list_conversation_messages(&conversation_id)
+                            .await
+                            .unwrap_or_default();
+                        let sessions = backend
+                            .list_conversation_agent_sessions(&conversation_id)
+                            .await
+                            .unwrap_or_default();
+                        let _ = tx.send(AppEvent::ConversationOpened {
+                            project_id: project_id.clone(),
+                            conversation_id: conversation_id.clone(),
+                            messages,
+                            sessions,
+                        });
                         match backend
-                            .start_agent_in_project(&project_id, agent, workspace)
+                            .start_agent_in_conversation(&conversation_id, agent, workspace)
                             .await
                         {
                             Ok(outcome) => {
-                                let _ = tx.send(AppEvent::ProjectSessionStarted {
-                                    project_id,
+                                let _ = tx.send(AppEvent::ConversationAgentStarted {
+                                    conversation_id,
                                     agent,
                                     thread_id: outcome.thread_id,
                                     cwd: outcome.cwd,
@@ -234,25 +306,236 @@ impl App {
                             }
                         }
                     });
+                    return false;
+                }
+                let title = conversation_title_from_prompt(&prompt);
+                let conversation = match self.backend.create_conversation(&project_id, &title).await
+                {
+                    Ok(conversation) => conversation,
+                    Err(error) => {
+                        self.ui.set_error(error.to_string());
+                        return true;
+                    }
+                };
+                let conversation_id = conversation.conversation_id.clone();
+                let _ = self
+                    .backend
+                    .append_conversation_message(
+                        &conversation_id,
+                        None,
+                        "user",
+                        None,
+                        &message_body,
+                    )
+                    .await;
+                let messages = self
+                    .backend
+                    .list_conversation_messages(&conversation_id)
+                    .await
+                    .unwrap_or_default();
+                let sessions = self
+                    .backend
+                    .list_conversation_agent_sessions(&conversation_id)
+                    .await
+                    .unwrap_or_default();
+                let (change, effects) = crate::update::update(
+                    &mut self.state,
+                    &mut self.ui,
+                    Action::EffectCompleted(crate::action::EffectResult::ConversationOpened {
+                        project_id: project_id.clone(),
+                        conversation_id: conversation_id.clone(),
+                        messages,
+                        sessions,
+                    }),
+                );
+                debug_assert!(effects.is_empty());
+                let mut redraw = change.needs_redraw;
+                match self
+                    .backend
+                    .start_agent_in_conversation(&conversation_id, agent, workspace)
+                    .await
+                {
+                    Ok(outcome) => {
+                        let (change, effects) = crate::update::update(
+                            &mut self.state,
+                            &mut self.ui,
+                            Action::EffectCompleted(
+                                crate::action::EffectResult::ConversationAgentStarted {
+                                    conversation_id,
+                                    agent,
+                                    thread_id: outcome.thread_id,
+                                    cwd: outcome.cwd,
+                                    text: prompt,
+                                },
+                            ),
+                        );
+                        redraw |= change.needs_redraw;
+                        redraw |= self.execute_non_recursive_effects(effects).await;
+                    }
+                    Err(error) => {
+                        self.ui.set_error(error.to_string());
+                        redraw = true;
+                    }
+                }
+                redraw
+            }
+            Effect::StartAgentInConversation {
+                project_id,
+                conversation_id,
+                agent,
+                workspace,
+                message_body,
+                prompt,
+            } => {
+                if let Some(tx) = self.event_tx.clone() {
+                    let backend = Arc::clone(&self.backend);
+                    tokio::spawn(async move {
+                        let _ = backend
+                            .append_conversation_message(
+                                &conversation_id,
+                                None,
+                                "user",
+                                None,
+                                &message_body,
+                            )
+                            .await;
+                        let messages = backend
+                            .list_conversation_messages(&conversation_id)
+                            .await
+                            .unwrap_or_default();
+                        let sessions = backend
+                            .list_conversation_agent_sessions(&conversation_id)
+                            .await
+                            .unwrap_or_default();
+                        let _ = tx.send(AppEvent::ConversationOpened {
+                            project_id,
+                            conversation_id: conversation_id.clone(),
+                            messages,
+                            sessions,
+                        });
+                        match backend
+                            .start_agent_in_conversation(&conversation_id, agent, workspace)
+                            .await
+                        {
+                            Ok(outcome) => {
+                                let _ = tx.send(AppEvent::ConversationAgentStarted {
+                                    conversation_id,
+                                    agent,
+                                    thread_id: outcome.thread_id,
+                                    cwd: outcome.cwd,
+                                    text: prompt,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::ProjectFailed(e.to_string()));
+                            }
+                        }
+                    });
+                    return false;
+                }
+                let _ = self
+                    .backend
+                    .append_conversation_message(
+                        &conversation_id,
+                        None,
+                        "user",
+                        None,
+                        &message_body,
+                    )
+                    .await;
+                let messages = self
+                    .backend
+                    .list_conversation_messages(&conversation_id)
+                    .await
+                    .unwrap_or_default();
+                let sessions = self
+                    .backend
+                    .list_conversation_agent_sessions(&conversation_id)
+                    .await
+                    .unwrap_or_default();
+                let (change, effects) = crate::update::update(
+                    &mut self.state,
+                    &mut self.ui,
+                    Action::EffectCompleted(crate::action::EffectResult::ConversationOpened {
+                        project_id,
+                        conversation_id: conversation_id.clone(),
+                        messages,
+                        sessions,
+                    }),
+                );
+                debug_assert!(effects.is_empty());
+                let mut redraw = change.needs_redraw;
+                match self
+                    .backend
+                    .start_agent_in_conversation(&conversation_id, agent, workspace)
+                    .await
+                {
+                    Ok(outcome) => {
+                        let (change, effects) = crate::update::update(
+                            &mut self.state,
+                            &mut self.ui,
+                            Action::EffectCompleted(
+                                crate::action::EffectResult::ConversationAgentStarted {
+                                    conversation_id,
+                                    agent,
+                                    thread_id: outcome.thread_id,
+                                    cwd: outcome.cwd,
+                                    text: prompt,
+                                },
+                            ),
+                        );
+                        redraw |= change.needs_redraw;
+                        redraw |= self.execute_non_recursive_effects(effects).await;
+                    }
+                    Err(error) => {
+                        self.ui.set_error(error.to_string());
+                        redraw = true;
+                    }
+                }
+                redraw
+            }
+            Effect::OpenConversation { conversation_id } => {
+                if let Some(tx) = self.event_tx.clone() {
+                    let backend = Arc::clone(&self.backend);
+                    let project_id = self
+                        .ui
+                        .nav_level()
+                        .project_id()
+                        .map(str::to_owned)
+                        .unwrap_or_default();
+                    tokio::spawn(async move {
+                        let messages =
+                            match backend.list_conversation_messages(&conversation_id).await {
+                                Ok(messages) => messages,
+                                Err(e) => {
+                                    let _ = tx.send(AppEvent::ProjectFailed(e.to_string()));
+                                    return;
+                                }
+                            };
+                        let sessions = match backend
+                            .list_conversation_agent_sessions(&conversation_id)
+                            .await
+                        {
+                            Ok(sessions) => sessions,
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::ProjectFailed(e.to_string()));
+                                return;
+                            }
+                        };
+                        let _ = tx.send(AppEvent::ConversationOpened {
+                            project_id,
+                            conversation_id,
+                            messages,
+                            sessions,
+                        });
+                    });
                 }
                 false
             }
-            Effect::OpenProjectSession { thread_id } => {
-                self.ensure_project_session_visible(&thread_id).await;
-                let action =
-                    Action::EffectCompleted(crate::action::EffectResult::ProjectSessionOpened {
-                        thread_id,
-                    });
-                let (change, effects) =
-                    crate::update::update(&mut self.state, &mut self.ui, action);
-                debug_assert!(
-                    effects.is_empty(),
-                    "ProjectSessionOpened must not emit follow-up effects"
-                );
-                if change.needs_redraw {
-                    self.request_frame();
-                }
-                change.needs_redraw
+            Effect::OpenAgentSession { thread_id } => {
+                self.ensure_conversation_agent_session_visible(&thread_id)
+                    .await;
+                true
             }
         }
     }
@@ -274,8 +557,15 @@ impl App {
         }
 
         let target = match self.ui.focus.current() {
-            PaneId::RoomInput => InputTarget::Room,
-            PaneId::AgentInput => InputTarget::Agent,
+            PaneId::Input
+                if matches!(
+                    self.ui.nav_level(),
+                    crate::nav::NavLevel::AgentDetail { .. }
+                ) =>
+            {
+                InputTarget::Agent
+            }
+            PaneId::Input => InputTarget::Room,
             _ => return false,
         };
         let sync_agent_picker = matches!(target, InputTarget::Room);
@@ -295,7 +585,7 @@ impl App {
     }
 
     pub(super) async fn handle_ctrl_c(&mut self) -> bool {
-        if self.ui.focus.is(PaneId::AgentChat) {
+        if self.ui.focus.is(PaneId::MainChat) {
             if let Some(chat) = self.ui.current_chat() {
                 if chat.selection.is_some() {
                     let width = self.ui.panel_areas.agent_chat.width.saturating_sub(2);
@@ -508,4 +798,16 @@ impl App {
             _ => false,
         }
     }
+}
+
+fn conversation_title_from_prompt(prompt: &str) -> String {
+    prompt
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .unwrap_or("Untitled conversation")
+        .chars()
+        .take(80)
+        .collect()
 }

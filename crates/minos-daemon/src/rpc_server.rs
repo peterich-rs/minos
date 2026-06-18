@@ -314,40 +314,6 @@ pub async fn invoke_host_command(
                 .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
                 .map_err(|e| rpc_err_value(e))
         }
-        "minos_list_project_threads" => {
-            let req: minos_protocol::ListProjectThreadsParams = parse_params(&params)?;
-            server
-                .agent
-                .list_project_threads(req)
-                .await
-                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
-                .map_err(|e| rpc_err_value(e))
-        }
-        "minos_start_agent_in_project" => {
-            #[derive(serde::Deserialize)]
-            struct StartInProjectParams {
-                agent: minos_domain::AgentName,
-                #[serde(default)]
-                workspace: String,
-                project_id: String,
-                #[serde(default)]
-                workspace_slug: Option<String>,
-                #[serde(default)]
-                mode: Option<minos_protocol::AgentLaunchMode>,
-            }
-            let req: StartInProjectParams = parse_params(&params)?;
-            let start_req = minos_protocol::StartAgentRequest {
-                agent: req.agent,
-                workspace: req.workspace,
-                mode: req.mode,
-            };
-            server
-                .agent
-                .start_agent_in_project(start_req, &req.project_id, req.workspace_slug.as_deref())
-                .await
-                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
-                .map_err(|e| rpc_err_value(e))
-        }
         other => Err(json!({
             "code": -32601,
             "message": format!("method '{other}' is not host-command-callable"),

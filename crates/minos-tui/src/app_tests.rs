@@ -33,7 +33,9 @@ struct TestBackend {
     history_calls: Mutex<Vec<(String, Option<u64>, u32)>>,
     projects: Mutex<Vec<crate::backend::ProjectEntry>>,
     created_projects: Mutex<Vec<(String, std::path::PathBuf)>>,
-    project_thread_lists: Mutex<Vec<(String, Vec<crate::backend::ThreadSummaryEntry>)>>,
+    conversations: Mutex<Vec<crate::backend::ConversationEntry>>,
+    conversation_messages: Mutex<HashMap<String, Vec<crate::backend::ConversationMessageEntry>>>,
+    conversation_sessions: Mutex<HashMap<String, Vec<crate::backend::ThreadSummaryEntry>>>,
     connection_state: BackendConnectionState,
     block_starts: bool,
     block_sends: bool,
@@ -66,7 +68,9 @@ impl TestBackend {
             history_calls: Mutex::new(Vec::new()),
             projects: Mutex::new(Vec::new()),
             created_projects: Mutex::new(Vec::new()),
-            project_thread_lists: Mutex::new(Vec::new()),
+            conversations: Mutex::new(Vec::new()),
+            conversation_messages: Mutex::new(HashMap::new()),
+            conversation_sessions: Mutex::new(HashMap::new()),
             connection_state: BackendConnectionState::Embedded,
             block_starts: false,
             block_sends: false,
@@ -110,6 +114,23 @@ impl TestBackend {
 
     fn with_projects(self, projects: Vec<crate::backend::ProjectEntry>) -> Self {
         *self.projects.lock().expect("projects lock") = projects;
+        self
+    }
+
+    fn with_conversations(self, conversations: Vec<crate::backend::ConversationEntry>) -> Self {
+        *self.conversations.lock().expect("conversations lock") = conversations;
+        self
+    }
+
+    fn with_conversation_sessions(
+        self,
+        conversation_id: &str,
+        sessions: Vec<crate::backend::ThreadSummaryEntry>,
+    ) -> Self {
+        self.conversation_sessions
+            .lock()
+            .expect("conversation sessions lock")
+            .insert(conversation_id.to_owned(), sessions);
         self
     }
 }
@@ -248,28 +269,117 @@ impl AgentBackend for TestBackend {
         Ok(entry)
     }
 
-    async fn list_project_threads(
+    async fn list_conversations(
         &self,
         project_id: &str,
-    ) -> Result<Vec<crate::backend::ThreadSummaryEntry>> {
-        let lists = self
-            .project_thread_lists
+    ) -> Result<Vec<crate::backend::ConversationEntry>> {
+        Ok(self
+            .conversations
             .lock()
-            .expect("project threads lock");
-        Ok(lists
+            .expect("conversations lock")
             .iter()
-            .find(|(pid, _)| pid == project_id)
-            .map(|(_, threads)| threads.clone())
+            .filter(|conversation| conversation.project_id == project_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn create_conversation(
+        &self,
+        project_id: &str,
+        title: &str,
+    ) -> Result<crate::backend::ConversationEntry> {
+        let entry = crate::backend::ConversationEntry {
+            conversation_id: format!("test-conversation-{}", title.replace(' ', "-")),
+            project_id: project_id.to_owned(),
+            title: title.to_owned(),
+            last_message_preview: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            message_count: 0,
+            agent_session_count: 0,
+            participating_agents: Vec::new(),
+        };
+        self.conversations
+            .lock()
+            .expect("conversations lock")
+            .push(entry.clone());
+        Ok(entry)
+    }
+
+    async fn list_conversation_messages(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<crate::backend::ConversationMessageEntry>> {
+        Ok(self
+            .conversation_messages
+            .lock()
+            .expect("conversation messages lock")
+            .get(conversation_id)
+            .cloned()
             .unwrap_or_default())
     }
 
-    async fn start_agent_in_project(
+    async fn list_conversation_agent_sessions(
         &self,
-        _project_id: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<crate::backend::ThreadSummaryEntry>> {
+        Ok(self
+            .conversation_sessions
+            .lock()
+            .expect("conversation sessions lock")
+            .get(conversation_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn start_agent_in_conversation(
+        &self,
+        conversation_id: &str,
         agent: AgentName,
         workspace: PathBuf,
     ) -> Result<StartAgentOutcome> {
-        self.start_agent(agent, workspace).await
+        let outcome = self.start_agent(agent, workspace).await?;
+        self.conversation_sessions
+            .lock()
+            .expect("conversation sessions lock")
+            .entry(conversation_id.to_owned())
+            .or_default()
+            .push(crate::backend::ThreadSummaryEntry {
+                thread_id: outcome.thread_id.clone(),
+                agent,
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+            });
+        Ok(outcome)
+    }
+
+    async fn append_conversation_message(
+        &self,
+        conversation_id: &str,
+        thread_id: Option<&str>,
+        sender_role: &str,
+        agent: Option<AgentName>,
+        body: &str,
+    ) -> Result<()> {
+        let mut messages = self
+            .conversation_messages
+            .lock()
+            .expect("conversation messages lock");
+        let list = messages.entry(conversation_id.to_owned()).or_default();
+        list.push(crate::backend::ConversationMessageEntry {
+            message_seq: i64::try_from(list.len() + 1).unwrap_or(i64::MAX),
+            message_id: format!("test-message-{}", list.len() + 1),
+            conversation_id: conversation_id.to_owned(),
+            thread_id: thread_id.map(str::to_owned),
+            created_at_ms: 0,
+            sender_role: sender_role.to_owned(),
+            agent,
+            body: body.to_owned(),
+        });
+        Ok(())
     }
 
     async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {
@@ -337,6 +447,54 @@ fn ok_agent(agent: AgentName) -> AgentDescriptor {
     }
 }
 
+fn set_test_projects_nav(app: &mut App) {
+    app.ui.nav_stack = vec![crate::nav::NavLevel::Projects];
+}
+
+fn set_test_conversations_nav(app: &mut App, project_id: &str) {
+    app.ui.nav_stack = vec![
+        crate::nav::NavLevel::Projects,
+        crate::nav::NavLevel::Conversations {
+            project_id: project_id.to_owned(),
+        },
+    ];
+}
+
+fn set_test_conversation_nav(app: &mut App, project_id: &str, conversation_id: &str) {
+    app.ui.nav_stack = vec![
+        crate::nav::NavLevel::Projects,
+        crate::nav::NavLevel::Conversations {
+            project_id: project_id.to_owned(),
+        },
+        crate::nav::NavLevel::Conversation {
+            project_id: project_id.to_owned(),
+            conversation_id: conversation_id.to_owned(),
+        },
+    ];
+}
+
+fn set_test_agent_detail_nav(app: &mut App, project_id: &str, conversation_id: &str) {
+    let (thread_id, agent) = app
+        .ui
+        .selected_thread
+        .and_then(|index| app.ui.threads.get(index))
+        .map(|thread| (thread.thread_id.clone(), thread.agent))
+        .or_else(|| {
+            app.ui
+                .threads
+                .first()
+                .map(|thread| (thread.thread_id.clone(), thread.agent))
+        })
+        .unwrap_or_else(|| ("thread-1".to_owned(), AgentName::Codex));
+    set_test_conversation_nav(app, project_id, conversation_id);
+    app.ui.nav_stack.push(crate::nav::NavLevel::AgentDetail {
+        project_id: project_id.to_owned(),
+        conversation_id: conversation_id.to_owned(),
+        thread_id,
+        agent,
+    });
+}
+
 fn press(code: KeyCode) -> KeyEvent {
     press_with_modifiers(code, KeyModifiers::NONE)
 }
@@ -380,7 +538,7 @@ mod group_and_agent;
 mod ingest;
 #[path = "app_tests/input_and_routing.rs"]
 mod input_and_routing;
-#[path = "app_tests/navigation_and_lifecycle.rs"]
-mod navigation_and_lifecycle;
 #[path = "app_tests/nav_integration.rs"]
 mod nav_integration;
+#[path = "app_tests/navigation_and_lifecycle.rs"]
+mod navigation_and_lifecycle;

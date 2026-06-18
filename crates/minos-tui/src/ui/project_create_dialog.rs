@@ -11,12 +11,20 @@ use ratatui::{
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let popup = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Fill(1), Constraint::Length(height), Constraint::Fill(1)])
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(height),
+            Constraint::Fill(1),
+        ])
         .flex(Flex::Center)
         .split(area);
     Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Fill(1), Constraint::Length(width), Constraint::Fill(1)])
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(width),
+            Constraint::Fill(1),
+        ])
         .flex(Flex::Center)
         .split(popup[1])[1]
 }

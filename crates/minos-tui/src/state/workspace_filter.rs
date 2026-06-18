@@ -101,14 +101,6 @@ pub(crate) fn remove_thread_local_state(
     true
 }
 
-pub(crate) fn workspace_room_id(workspace: &Path) -> String {
-    minos_chat_store::room_id_for_workspace(workspace)
-}
-
-pub(crate) fn default_room_title(workspace: &Path) -> String {
-    minos_chat_store::room_title_for_workspace(workspace)
-}
-
 fn workspace_paths_match(a: &Path, b: &Path) -> bool {
     normalized_workspace_path(a) == normalized_workspace_path(b)
 }

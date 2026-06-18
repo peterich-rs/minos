@@ -16,9 +16,9 @@ use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
     AgentLaunchMode, ApprovalDecisionRequest, CloseThreadRequest, CreateProjectRequest,
-    GetThreadParams, HealthResponse, ListProjectThreadsParams, ListProjectsResponse,
-    LocalGroupChatMessage, LocalGroupChatMessageKind, ReadGroupChatParams, ReadGroupChatResponse,
-    ReadThreadParams, StartAgentRequest, StartAgentResponse,
+    GetThreadParams, HealthResponse, ListConversationsParams, ListConversationsResponse,
+    ListProjectsResponse, LocalGroupChatMessage, LocalGroupChatMessageKind, ReadGroupChatParams,
+    ReadGroupChatResponse, ReadThreadParams, StartAgentRequest, StartAgentResponse,
 };
 
 use async_trait::async_trait;
@@ -142,18 +142,18 @@ async fn project_methods_are_registered_on_local_rpc() {
     assert_eq!(projects.projects.len(), 1);
     assert_eq!(projects.projects[0].project_id, created.project.project_id);
 
-    let threads: minos_protocol::ListProjectThreadsResponse = client
+    let conversations: ListConversationsResponse = client
         .request(
-            "minos_local_list_project_threads",
-            [ListProjectThreadsParams {
+            "minos_local_list_conversations",
+            [ListConversationsParams {
                 project_id: created.project.project_id,
-                limit: 100,
-                before_ts_ms: None,
+                limit: Some(100),
+                before_updated_at_ms: None,
             }],
         )
         .await
         .unwrap();
-    assert!(threads.threads.is_empty());
+    assert!(conversations.conversations.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

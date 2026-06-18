@@ -34,32 +34,37 @@ impl App {
 
         let cwd = &self.state.workspace;
         let matched = projects.into_iter().find(|p| {
-            crate::state::workspace_path_belongs_to_current_workspace(
-                cwd,
-                &p.workspace_path,
-            )
+            crate::state::workspace_path_belongs_to_current_workspace(cwd, &p.workspace_path)
         });
 
         match matched {
             Some(project) => {
-                let threads = self
+                let conversations = self
                     .backend
-                    .list_project_threads(&project.project_id)
+                    .list_conversations(&project.project_id)
                     .await
                     .unwrap_or_default();
-                self.ui.project_sessions = threads;
-                self.ui.selected_thread =
-                    if self.ui.project_sessions.is_empty() { None } else { Some(0) };
-                self.ui.room_list_state.select(self.ui.selected_thread);
+                self.ui.conversations = conversations;
+                self.ui.selected_conversation = if self.ui.conversations.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                };
+                self.ui
+                    .conversation_list_state
+                    .select(self.ui.selected_conversation);
                 self.ui.selected_project = self
                     .ui
                     .projects
                     .iter()
                     .position(|p| p.project_id == project.project_id);
                 self.ui.project_list_state.select(self.ui.selected_project);
-                self.ui.nav_level = crate::nav::NavLevel::Sessions {
-                    project_id: project.project_id,
-                };
+                self.ui.nav_stack = vec![
+                    crate::nav::NavLevel::Projects,
+                    crate::nav::NavLevel::Conversations {
+                        project_id: project.project_id,
+                    },
+                ];
             }
             None => {
                 let dir_name = cwd
@@ -117,22 +122,44 @@ impl App {
                 ))
                 .await
             }
-            AppEvent::ProjectThreadsLoaded { project_id, threads } => {
+            AppEvent::ConversationsLoaded {
+                project_id,
+                conversations,
+            } => {
                 self.apply_action(Action::EffectCompleted(
-                    crate::action::EffectResult::ProjectThreadsLoaded { project_id, threads },
+                    crate::action::EffectResult::ConversationsLoaded {
+                        project_id,
+                        conversations,
+                    },
                 ))
                 .await
             }
-            AppEvent::ProjectSessionStarted {
+            AppEvent::ConversationOpened {
                 project_id,
+                conversation_id,
+                messages,
+                sessions,
+            } => {
+                self.apply_action(Action::EffectCompleted(
+                    crate::action::EffectResult::ConversationOpened {
+                        project_id,
+                        conversation_id,
+                        messages,
+                        sessions,
+                    },
+                ))
+                .await
+            }
+            AppEvent::ConversationAgentStarted {
+                conversation_id,
                 agent,
                 thread_id,
                 cwd,
                 text,
             } => {
                 self.apply_action(Action::EffectCompleted(
-                    crate::action::EffectResult::ProjectSessionStarted {
-                        project_id,
+                    crate::action::EffectResult::ConversationAgentStarted {
+                        conversation_id,
                         agent,
                         thread_id,
                         cwd,
@@ -442,19 +469,19 @@ impl App {
         self.replay_thread_history_from(thread_id, None, true).await
     }
 
-    pub(super) async fn ensure_project_session_visible(&mut self, thread_id: &str) {
+    pub(super) async fn ensure_conversation_agent_session_visible(&mut self, thread_id: &str) {
         let was_visible = self.ui.threads.iter().any(|t| t.thread_id == thread_id);
         if !was_visible {
             if let Some(agent) = self
                 .ui
-                .project_sessions
+                .conversation_agent_sessions
                 .iter()
                 .find(|s| s.thread_id == thread_id)
                 .map(|session| session.agent)
             {
                 let workspace = self
                     .ui
-                    .nav_level
+                    .nav_level()
                     .project_id()
                     .and_then(|project_id| {
                         self.ui
@@ -567,7 +594,7 @@ impl App {
                     .chat_states
                     .insert(thread_id.clone(), ChatState::new(thread_id, agent));
                 self.select_thread(self.ui.threads.len().saturating_sub(1));
-                self.ui.focus.focus(PaneId::RoomInput);
+                self.ui.focus.focus(PaneId::Input);
                 self.sync_input_agent_picker();
                 true
             }

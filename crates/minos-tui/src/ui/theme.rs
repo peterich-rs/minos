@@ -18,10 +18,6 @@ pub const DIFF_HUNK: Style = Style::new().fg(Color::Cyan);
 pub const STREAMING_CURSOR: Style = Style::new()
     .fg(Color::White)
     .add_modifier(Modifier::SLOW_BLINK);
-pub const THREAD_ACTIVE: Style = Style::new().fg(Color::Green);
-pub const THREAD_IDLE: Style = Style::new().fg(Color::DarkGray);
-pub const THREAD_RUNNING: Style = Style::new().fg(Color::Yellow);
-pub const THREAD_CLOSED: Style = Style::new().fg(Color::DarkGray);
 pub const CLI_OK: Style = Style::new().fg(Color::Green);
 pub const CLI_MISSING: Style = Style::new().fg(Color::Red);
 pub const DAEMON_CONNECTED: Style = Style::new().fg(Color::Green);

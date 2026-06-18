@@ -11,11 +11,11 @@ pub fn handle(
     if ui.project_create_dialog.is_some() {
         return handle_create_dialog(ui, action);
     }
-    match &ui.nav_level {
+    match ui.nav_level() {
         NavLevel::Projects => handle_projects_level(state, ui, action),
-        NavLevel::Sessions { .. } => handle_sessions_level(state, ui, action),
-        NavLevel::Session { .. } => handle_session_level(ui, action),
-        NavLevel::AgentDetail { .. } => handle_agent_detail_level(ui, action),
+        NavLevel::Conversations { .. } => handle_conversations_level(state, ui, action),
+        NavLevel::Conversation { .. } => handle_conversation_level(state, ui, action),
+        NavLevel::AgentDetail { .. } => handle_agent_detail_level(state, ui, action),
     }
 }
 
@@ -87,7 +87,7 @@ fn handle_projects_level(
                     let project_id = project.project_id.clone();
                     return (
                         StateChange::redraw(),
-                        vec![Effect::LoadProjectThreads { project_id }],
+                        vec![Effect::LoadConversations { project_id }],
                     );
                 }
             }
@@ -110,112 +110,257 @@ fn handle_projects_level(
     }
 }
 
-fn handle_sessions_level(
+fn handle_conversations_level(
     state: &mut AppState,
     ui: &mut UiState,
     action: NavAction,
 ) -> (StateChange, Vec<Effect>) {
     match action {
         NavAction::SelectNext => {
-            navigate(&mut ui.selected_thread, ui.project_sessions.len(), 1);
-            ui.room_list_state.select(ui.selected_thread);
+            navigate(&mut ui.selected_conversation, ui.conversations.len(), 1);
+            ui.conversation_list_state.select(ui.selected_conversation);
             (StateChange::redraw(), vec![])
         }
         NavAction::SelectPrev => {
-            navigate(&mut ui.selected_thread, ui.project_sessions.len(), -1);
-            ui.room_list_state.select(ui.selected_thread);
+            navigate(&mut ui.selected_conversation, ui.conversations.len(), -1);
+            ui.conversation_list_state.select(ui.selected_conversation);
             (StateChange::redraw(), vec![])
         }
         NavAction::Uplevel => {
-            ui.nav_level = ui.nav_level.go_up();
+            ui.pop_nav();
             (StateChange::redraw(), vec![])
         }
         NavAction::Downlevel => {
-            if let Some(idx) = ui.selected_thread {
-                if let Some(thread) = ui.project_sessions.get(idx) {
-                    let thread_id = thread.thread_id.clone();
+            if let Some(idx) = ui.selected_conversation {
+                if let Some(conversation) = ui.conversations.get(idx) {
+                    let conversation_id = conversation.conversation_id.clone();
                     return (
                         StateChange::none(),
-                        vec![Effect::OpenProjectSession { thread_id }],
+                        vec![Effect::OpenConversation { conversation_id }],
                     );
                 }
             }
             (StateChange::none(), vec![])
         }
-        NavAction::SubmitSessionInput => {
-            let text = ui.room_input.content.clone();
-            if text.trim().is_empty() {
-                return (StateChange::redraw(), vec![]);
-            }
-            let (agent, prompt_text) = match crate::agent_route::parse_agent_routing(text.as_str())
-            {
-                Some((target, body)) => (target.agent, body),
-                None => {
-                    let agent = ui
-                        .status
-                        .agents
-                        .first()
-                        .map(|a| a.name)
-                        .unwrap_or(minos_domain::AgentName::Codex);
-                    (agent, text.clone())
+        NavAction::SubmitConversationInput => submit_conversation_input(state, ui),
+        _ => (StateChange::none(), vec![]),
+    }
+}
+
+fn handle_conversation_level(
+    state: &mut AppState,
+    ui: &mut UiState,
+    action: NavAction,
+) -> (StateChange, Vec<Effect>) {
+    match action {
+        NavAction::SelectNext => {
+            navigate(
+                &mut ui.selected_agent_session,
+                ui.conversation_agent_sessions.len(),
+                1,
+            );
+            ui.agent_list_state.select(ui.selected_agent_session);
+            (StateChange::redraw(), vec![])
+        }
+        NavAction::SelectPrev => {
+            navigate(
+                &mut ui.selected_agent_session,
+                ui.conversation_agent_sessions.len(),
+                -1,
+            );
+            ui.agent_list_state.select(ui.selected_agent_session);
+            (StateChange::redraw(), vec![])
+        }
+        NavAction::Uplevel => {
+            ui.pop_nav();
+            (StateChange::redraw(), vec![])
+        }
+        NavAction::Downlevel => {
+            if let Some(idx) = ui.selected_agent_session {
+                if let Some(session) = ui.conversation_agent_sessions.get(idx) {
+                    let thread_id = session.thread_id.clone();
+                    let agent = session.agent;
+                    let project_id = ui
+                        .nav_level()
+                        .project_id()
+                        .map(str::to_owned)
+                        .unwrap_or_default();
+                    let conversation_id = ui
+                        .nav_level()
+                        .conversation_id()
+                        .map(str::to_owned)
+                        .unwrap_or_default();
+                    ui.push_nav(NavLevel::AgentDetail {
+                        project_id,
+                        conversation_id,
+                        thread_id: thread_id.clone(),
+                        agent,
+                    });
+                    return (
+                        StateChange::redraw(),
+                        vec![Effect::OpenAgentSession { thread_id }],
+                    );
                 }
+            }
+            (StateChange::none(), vec![])
+        }
+        NavAction::SubmitConversationInput => submit_conversation_input(state, ui),
+        _ => (StateChange::none(), vec![]),
+    }
+}
+
+fn handle_agent_detail_level(
+    state: &mut AppState,
+    ui: &mut UiState,
+    action: NavAction,
+) -> (StateChange, Vec<Effect>) {
+    match action {
+        NavAction::Uplevel => {
+            ui.pop_nav();
+            (StateChange::redraw(), vec![])
+        }
+        NavAction::SubmitConversationInput => submit_conversation_input(state, ui),
+        _ => (StateChange::none(), vec![]),
+    }
+}
+
+fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateChange, Vec<Effect>) {
+    let text = ui.room_input.content.clone();
+    if text.trim().is_empty() {
+        return (StateChange::redraw(), vec![]);
+    }
+    let message_body = text.trim_end().to_owned();
+    let parsed = crate::agent_route::parse_agent_routing(text.as_str());
+    let has_explicit_target = parsed.is_some();
+    let (agent, prompt_text) = match parsed.as_ref() {
+        Some((target, body)) => (target.agent, body.clone()),
+        None => {
+            let agent = ui
+                .status
+                .agents
+                .first()
+                .map(|a| a.name)
+                .unwrap_or(minos_domain::AgentName::Codex);
+            (agent, text.clone())
+        }
+    };
+    if prompt_text.trim().is_empty() && !has_explicit_target {
+        ui.set_error("Cannot start an agent session with an empty prompt.".into());
+        return (StateChange::redraw(), vec![]);
+    }
+
+    ui.room_input.take_input();
+    ui.room_input.history.record(text.as_str());
+
+    if let Some((target, _)) = parsed.as_ref() {
+        if let Some(thread_short_id) = target.thread_short_id.as_deref() {
+            let thread_id = find_conversation_thread(ui, target.agent, thread_short_id);
+            let Some(thread_id) = thread_id else {
+                ui.set_error(format!(
+                    "No existing {} session matches #{}",
+                    target.agent.bin_name(),
+                    thread_short_id
+                ));
+                return (StateChange::redraw(), vec![]);
             };
-            if prompt_text.trim().is_empty() {
-                ui.set_error("Cannot start a session with an empty prompt.".into());
-                return (StateChange::redraw(), vec![]);
-            }
-            ui.room_input.take_input();
-            ui.room_input.history.record(text.as_str());
-            let project_id = ui
-                .nav_level
-                .project_id()
-                .map(|s| s.to_owned())
-                .unwrap_or_default();
-            let workspace = state.workspace.clone();
-            (
-                StateChange::redraw(),
-                vec![Effect::StartAgentInProject {
-                    project_id,
-                    agent,
-                    workspace,
-                    prompt: prompt_text,
-                }],
-            )
-        }
-        _ => (StateChange::none(), vec![]),
-    }
-}
-
-fn handle_session_level(ui: &mut UiState, action: NavAction) -> (StateChange, Vec<Effect>) {
-    match action {
-        NavAction::Uplevel => {
-            if let Some(thread_id) = ui.nav_level.thread_id().map(str::to_owned) {
-                if let Some(idx) = ui
-                    .project_sessions
-                    .iter()
-                    .position(|session| session.thread_id == thread_id)
-                {
-                    ui.selected_thread = Some(idx);
-                    ui.room_list_state.select(Some(idx));
+            if let Some(thread) = ui
+                .threads
+                .iter()
+                .find(|thread| thread.thread_id == thread_id)
+            {
+                if !crate::agent_route::thread_can_receive_message(&thread.state) {
+                    ui.set_error(format!(
+                        "{} session #{} is closed. Use @{} to start a new session.",
+                        thread.agent.bin_name(),
+                        crate::agent_route::short_thread_id(&thread.thread_id),
+                        thread.agent.bin_name()
+                    ));
+                    return (StateChange::redraw(), vec![]);
                 }
             }
-            ui.agent_detail_visible = false;
-            ui.nav_level = ui.nav_level.go_up();
-            (StateChange::redraw(), vec![])
+            if let Some(conversation_id) = ui.nav_level().conversation_id().map(str::to_owned) {
+                super::push_pending_conversation_user_message(ui, &conversation_id, &message_body);
+            }
+            if prompt_text.trim().is_empty() {
+                return (StateChange::redraw(), vec![]);
+            }
+            return (
+                StateChange::redraw(),
+                vec![Effect::SendTextToThread {
+                    thread_id,
+                    text: prompt_text,
+                    group_text: Some(message_body),
+                }],
+            );
         }
-        _ => (StateChange::none(), vec![]),
+    }
+
+    let workspace = state.workspace.clone();
+    let current_nav = ui.nav_level().clone();
+    match current_nav {
+        NavLevel::Conversations { project_id } => (
+            StateChange::redraw(),
+            vec![Effect::CreateConversationAndStartAgent {
+                project_id,
+                agent,
+                workspace,
+                message_body,
+                prompt: prompt_text,
+            }],
+        ),
+        NavLevel::Conversation {
+            project_id,
+            conversation_id,
+        }
+        | NavLevel::AgentDetail {
+            project_id,
+            conversation_id,
+            ..
+        } => (StateChange::redraw(), {
+            super::push_pending_conversation_user_message(ui, &conversation_id, &message_body);
+            vec![Effect::StartAgentInConversation {
+                project_id,
+                conversation_id,
+                agent,
+                workspace,
+                message_body,
+                prompt: prompt_text,
+            }]
+        }),
+        NavLevel::Projects => (StateChange::none(), vec![]),
     }
 }
 
-fn handle_agent_detail_level(ui: &mut UiState, action: NavAction) -> (StateChange, Vec<Effect>) {
-    match action {
-        NavAction::Uplevel => {
-            ui.agent_detail_visible = false;
-            ui.nav_level = ui.nav_level.go_up();
-            (StateChange::redraw(), vec![])
-        }
-        _ => (StateChange::none(), vec![]),
-    }
+fn find_conversation_thread(
+    ui: &UiState,
+    agent: minos_domain::AgentName,
+    short_id: &str,
+) -> Option<String> {
+    let short_id = short_id.to_ascii_lowercase();
+    ui.conversation_agent_sessions
+        .iter()
+        .find(|session| {
+            session.agent == agent
+                && (crate::agent_route::short_thread_id(&session.thread_id).to_ascii_lowercase()
+                    == short_id
+                    || session
+                        .thread_id
+                        .to_ascii_lowercase()
+                        .starts_with(&short_id))
+        })
+        .map(|session| session.thread_id.clone())
+        .or_else(|| {
+            ui.threads
+                .iter()
+                .find(|thread| {
+                    thread.agent == agent
+                        && (crate::agent_route::short_thread_id(&thread.thread_id)
+                            .to_ascii_lowercase()
+                            == short_id
+                            || thread.thread_id.to_ascii_lowercase().starts_with(&short_id))
+                })
+                .map(|thread| thread.thread_id.clone())
+        })
 }
 
 fn navigate(selected: &mut Option<usize>, len: usize, delta: i32) {

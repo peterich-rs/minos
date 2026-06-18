@@ -39,14 +39,29 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     if ui.project_create_dialog.is_some() {
         return create_dialog_mapping(key);
     }
-    match &ui.nav_level {
+    match ui.nav_level() {
         crate::nav::NavLevel::Projects => return projects_level_mapping(key),
-        crate::nav::NavLevel::Sessions { .. } => {
-            return sessions_level_mapping(ui, key);
+        crate::nav::NavLevel::Conversations { .. } => {
+            return conversations_level_mapping(ui, key);
         }
-        crate::nav::NavLevel::Session { .. } => {
+        crate::nav::NavLevel::Conversation { .. } => {
+            if is_input_focus(ui) {
+                return KeyMapping::Input(InputTarget::Room);
+            }
             if key.code == KeyCode::Esc && !is_input_focus(ui) {
                 return KeyMapping::action(Action::Nav(crate::nav::NavAction::Uplevel));
+            }
+            match key.code {
+                KeyCode::Up => {
+                    return KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectPrev));
+                }
+                KeyCode::Down => {
+                    return KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectNext));
+                }
+                KeyCode::Enter => {
+                    return KeyMapping::action(Action::Nav(crate::nav::NavAction::Downlevel));
+                }
+                _ => {}
             }
         }
         crate::nav::NavLevel::AgentDetail { .. } => {
@@ -99,12 +114,21 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     }
 
     match ui.focus.current() {
-        PaneId::RoomInput => KeyMapping::Input(InputTarget::Room),
-        PaneId::AgentInput => KeyMapping::Input(InputTarget::Agent),
-        PaneId::RoomList => room_list_key_to_mapping(ui, key),
-        PaneId::GroupChat => room_chat_key_to_mapping(key),
-        PaneId::AgentList => agent_list_key_to_mapping(ui, key),
-        PaneId::AgentChat => agent_chat_key_to_mapping(key),
+        PaneId::Input => KeyMapping::Input(focused_input_target(ui)),
+        PaneId::MainList => room_list_key_to_mapping(ui, key),
+        PaneId::MainChat if matches!(ui.nav_level(), crate::nav::NavLevel::AgentDetail { .. }) => {
+            agent_chat_key_to_mapping(key)
+        }
+        PaneId::MainChat => room_chat_key_to_mapping(key),
+        PaneId::Sidebar => agent_list_key_to_mapping(ui, key),
+    }
+}
+
+fn focused_input_target(ui: &UiState) -> InputTarget {
+    if matches!(ui.nav_level(), crate::nav::NavLevel::AgentDetail { .. }) {
+        InputTarget::Agent
+    } else {
+        InputTarget::Room
     }
 }
 
@@ -138,22 +162,11 @@ fn agent_picker_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     }
 }
 
-fn room_list_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
+fn room_list_key_to_mapping(_ui: &UiState, key: KeyEvent) -> KeyMapping {
     match key.code {
-        KeyCode::Up => ui
-            .selected_room
-            .map(|selected| Action::Room(RoomAction::Select(selected.saturating_sub(1))))
-            .map(KeyMapping::action)
-            .unwrap_or_else(|| KeyMapping::action(Action::Global(GlobalAction::RequestRedraw))),
-        KeyCode::Down => ui
-            .selected_room
-            .map(|selected| {
-                let last = ui.rooms.len().saturating_sub(1);
-                Action::Room(RoomAction::Select((selected + 1).min(last)))
-            })
-            .map(KeyMapping::action)
-            .unwrap_or_else(|| KeyMapping::action(Action::Global(GlobalAction::RequestRedraw))),
-        KeyCode::Enter => KeyMapping::action(Action::Global(GlobalAction::Enter)),
+        KeyCode::Up => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectPrev)),
+        KeyCode::Down => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectNext)),
+        KeyCode::Enter => KeyMapping::action(Action::Nav(crate::nav::NavAction::Downlevel)),
         KeyCode::Tab => KeyMapping::action(Action::Global(GlobalAction::CycleFocus)),
         KeyCode::BackTab => KeyMapping::action(Action::Global(GlobalAction::CycleFocusPrev)),
         KeyCode::Esc => KeyMapping::action(Action::Global(GlobalAction::Escape)),
@@ -242,7 +255,7 @@ fn agent_chat_key_to_mapping(key: KeyEvent) -> KeyMapping {
 }
 
 fn is_input_focus(ui: &UiState) -> bool {
-    ui.focus.is(PaneId::RoomInput) || ui.focus.is(PaneId::AgentInput)
+    ui.focus.is(PaneId::Input)
 }
 
 fn projects_level_mapping(key: KeyEvent) -> KeyMapping {
@@ -258,7 +271,7 @@ fn projects_level_mapping(key: KeyEvent) -> KeyMapping {
     }
 }
 
-fn sessions_level_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
+fn conversations_level_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     if is_input_focus(ui) {
         return KeyMapping::Input(InputTarget::Room);
     }

@@ -16,11 +16,15 @@ pub fn handle(
         GlobalAction::OpenAgentPicker => super::open_agent_picker(ui),
         GlobalAction::Scroll(target, direction, lines) => match target {
             ScrollTarget::RoomList | ScrollTarget::AgentList => StateChange::none(),
-            ScrollTarget::GroupChat => super::scroll_group_chat(ui, direction, lines),
+            ScrollTarget::GroupChat => scroll_conversation_or_group_chat(ui, direction, lines),
             ScrollTarget::AgentChat => super::scroll_current_chat(ui, direction, lines),
             ScrollTarget::ActivePane => match ui.focus.current() {
-                PaneId::GroupChat => super::scroll_group_chat(ui, direction, lines),
-                PaneId::AgentChat => super::scroll_current_chat(ui, direction, lines),
+                PaneId::MainChat
+                    if matches!(ui.nav_level(), crate::nav::NavLevel::AgentDetail { .. }) =>
+                {
+                    super::scroll_current_chat(ui, direction, lines)
+                }
+                PaneId::MainChat => scroll_conversation_or_group_chat(ui, direction, lines),
                 _ => StateChange::none(),
             },
         },
@@ -134,49 +138,71 @@ pub fn handle(
 fn handle_mouse_click(ui: &mut UiState, target: ClickTarget, x: u16, y: u16) -> StateChange {
     match target {
         ClickTarget::RoomList => {
-            ui.focus.focus(PaneId::RoomList);
-            if let Some(index) = state::clicked_thread_index(
-                ui.panel_areas.room_list,
-                &ui.room_list_state,
-                y,
-                ui.rooms.len(),
-            ) {
-                super::select_room(ui, index);
+            ui.focus.focus(PaneId::MainList);
+            match ui.nav_level() {
+                crate::nav::NavLevel::Projects => {
+                    if let Some(index) = state::clicked_thread_index(
+                        ui.panel_areas.room_list,
+                        &ui.project_list_state,
+                        y,
+                        ui.projects.len(),
+                    ) {
+                        ui.selected_project = Some(index);
+                        ui.project_list_state.select(Some(index));
+                    }
+                }
+                crate::nav::NavLevel::Conversations { .. } => {
+                    if let Some(index) = state::clicked_thread_index(
+                        ui.panel_areas.room_list,
+                        &ui.conversation_list_state,
+                        y,
+                        ui.conversations.len(),
+                    ) {
+                        ui.selected_conversation = Some(index);
+                        ui.conversation_list_state.select(Some(index));
+                    }
+                }
+                _ => {}
             }
             StateChange::redraw()
         }
         ClickTarget::GroupChat => {
-            ui.focus.focus(PaneId::GroupChat);
+            ui.focus.focus(PaneId::MainChat);
             StateChange::redraw()
         }
         ClickTarget::AgentList => {
-            ui.focus.focus(PaneId::AgentList);
-            if let Some(index) = state::clicked_thread_index(
-                ui.panel_areas.agent_list,
-                &ui.agent_list_state,
-                y,
-                ui.threads.len(),
-            ) {
-                super::select_thread(ui, index);
-                ui.agent_detail_visible = true;
-                ui.focus.switch_layout(true);
+            ui.focus.focus(PaneId::Sidebar);
+            let len = if ui.conversation_agent_sessions.is_empty() {
+                ui.threads.len()
+            } else {
+                ui.conversation_agent_sessions.len()
+            };
+            if let Some(index) =
+                state::clicked_thread_index(ui.panel_areas.agent_list, &ui.agent_list_state, y, len)
+            {
+                if ui.conversation_agent_sessions.is_empty() {
+                    super::select_thread(ui, index);
+                } else {
+                    ui.selected_agent_session = Some(index);
+                    ui.agent_list_state.select(Some(index));
+                }
             }
             StateChange::redraw()
         }
         ClickTarget::AgentChat => {
-            ui.focus.focus(PaneId::AgentChat);
+            ui.focus.focus(PaneId::MainChat);
             super::sync_room_agent_picker(ui);
             state::begin_chat_selection(ui, x, y);
             StateChange::redraw()
         }
         ClickTarget::RoomInput => {
-            ui.focus.focus(PaneId::RoomInput);
+            ui.focus.focus(PaneId::Input);
             handle_input_click(ui, 0, x, y);
             super::sync_room_agent_picker(ui);
             StateChange::redraw()
         }
         ClickTarget::AgentInput => {
-            ui.focus.focus(PaneId::AgentInput);
+            ui.focus.focus(PaneId::Input);
             handle_input_click(ui, 1, x, y);
             StateChange::redraw()
         }
@@ -190,52 +216,113 @@ fn handle_mouse_scroll(
 ) -> StateChange {
     match target {
         ScrollTarget::RoomList => {
-            ui.focus.focus(PaneId::RoomList);
-            match direction {
-                ScrollDirection::Up => {
-                    if let Some(selected) = ui.selected_room {
-                        super::select_room(ui, selected.saturating_sub(1));
-                    }
+            ui.focus.focus(PaneId::MainList);
+            match ui.nav_level() {
+                crate::nav::NavLevel::Projects => {
+                    scroll_selection(
+                        &mut ui.selected_project,
+                        &mut ui.project_list_state,
+                        ui.projects.len(),
+                        direction,
+                    );
                 }
-                ScrollDirection::Down => {
-                    if let Some(selected) = ui.selected_room {
-                        let last = ui.rooms.len().saturating_sub(1);
-                        super::select_room(ui, (selected + 1).min(last));
-                    }
+                crate::nav::NavLevel::Conversations { .. } => {
+                    scroll_selection(
+                        &mut ui.selected_conversation,
+                        &mut ui.conversation_list_state,
+                        ui.conversations.len(),
+                        direction,
+                    );
                 }
-                ScrollDirection::Top | ScrollDirection::Bottom => {}
+                _ => {}
             }
             StateChange::redraw()
         }
         ScrollTarget::GroupChat => {
-            ui.focus.focus(PaneId::GroupChat);
-            super::scroll_group_chat(ui, direction, 3)
+            ui.focus.focus(PaneId::MainChat);
+            scroll_conversation_or_group_chat(ui, direction, 3)
         }
         ScrollTarget::AgentList => {
-            ui.focus.focus(PaneId::AgentList);
-            match direction {
-                ScrollDirection::Up => {
-                    if let Some(selected) = ui.selected_thread {
-                        super::select_thread(ui, selected.saturating_sub(1));
+            ui.focus.focus(PaneId::Sidebar);
+            if ui.conversation_agent_sessions.is_empty() {
+                match direction {
+                    ScrollDirection::Up => {
+                        if let Some(selected) = ui.selected_thread {
+                            super::select_thread(ui, selected.saturating_sub(1));
+                        }
                     }
-                }
-                ScrollDirection::Down => {
-                    if let Some(selected) = ui.selected_thread {
-                        let last = ui.threads.len().saturating_sub(1);
-                        super::select_thread(ui, (selected + 1).min(last));
+                    ScrollDirection::Down => {
+                        if let Some(selected) = ui.selected_thread {
+                            let last = ui.threads.len().saturating_sub(1);
+                            super::select_thread(ui, (selected + 1).min(last));
+                        }
                     }
+                    ScrollDirection::Top | ScrollDirection::Bottom => {}
                 }
-                ScrollDirection::Top | ScrollDirection::Bottom => {}
+            } else {
+                match direction {
+                    ScrollDirection::Up => {
+                        if let Some(selected) = ui.selected_agent_session {
+                            ui.selected_agent_session = Some(selected.saturating_sub(1));
+                            ui.agent_list_state.select(ui.selected_agent_session);
+                        }
+                    }
+                    ScrollDirection::Down => {
+                        if let Some(selected) = ui.selected_agent_session {
+                            let last = ui.conversation_agent_sessions.len().saturating_sub(1);
+                            ui.selected_agent_session = Some((selected + 1).min(last));
+                            ui.agent_list_state.select(ui.selected_agent_session);
+                        }
+                    }
+                    ScrollDirection::Top | ScrollDirection::Bottom => {}
+                }
             }
             StateChange::redraw()
         }
         ScrollTarget::AgentChat => {
-            ui.focus.focus(PaneId::AgentChat);
+            ui.focus.focus(PaneId::MainChat);
             super::sync_room_agent_picker(ui);
             super::scroll_current_chat(ui, direction, 3)
         }
         ScrollTarget::ActivePane => StateChange::none(),
     }
+}
+
+fn scroll_conversation_or_group_chat(
+    ui: &mut UiState,
+    direction: ScrollDirection,
+    lines: u16,
+) -> StateChange {
+    if matches!(
+        ui.nav_level(),
+        crate::nav::NavLevel::Conversation { .. } | crate::nav::NavLevel::AgentDetail { .. }
+    ) {
+        super::scroll_conversation(ui, direction, lines)
+    } else {
+        super::scroll_group_chat(ui, direction, lines)
+    }
+}
+
+fn scroll_selection(
+    selected: &mut Option<usize>,
+    list_state: &mut ratatui::widgets::ListState,
+    len: usize,
+    direction: ScrollDirection,
+) {
+    if len == 0 {
+        *selected = None;
+        list_state.select(None);
+        return;
+    }
+    let current = selected.unwrap_or(0);
+    let next = match direction {
+        ScrollDirection::Up => current.saturating_sub(1),
+        ScrollDirection::Down => (current + 1).min(len.saturating_sub(1)),
+        ScrollDirection::Top => 0,
+        ScrollDirection::Bottom => len.saturating_sub(1),
+    };
+    *selected = Some(next);
+    list_state.select(Some(next));
 }
 
 fn handle_input_click(ui: &mut UiState, input_index: usize, column: u16, row: u16) {
