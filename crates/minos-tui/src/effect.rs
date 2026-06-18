@@ -51,7 +51,6 @@ pub enum Effect {
     },
     ConfirmDeleteThread,
     CopyToClipboard(String),
-    LoadProjects,
     CreateProject {
         name: String,
         workspace_path: PathBuf,

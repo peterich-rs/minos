@@ -218,6 +218,7 @@ fn handle_session_level(ui: &mut UiState, action: NavAction) -> (StateChange, Ve
                     ui.room_list_state.select(Some(idx));
                 }
             }
+            ui.agent_detail_visible = false;
             ui.nav_level = ui.nav_level.go_up();
             (StateChange::redraw(), vec![])
         }
@@ -228,6 +229,7 @@ fn handle_session_level(ui: &mut UiState, action: NavAction) -> (StateChange, Ve
 fn handle_agent_detail_level(ui: &mut UiState, action: NavAction) -> (StateChange, Vec<Effect>) {
     match action {
         NavAction::Uplevel => {
+            ui.agent_detail_visible = false;
             ui.nav_level = ui.nav_level.go_up();
             (StateChange::redraw(), vec![])
         }

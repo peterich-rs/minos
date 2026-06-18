@@ -18,6 +18,7 @@ pub enum AppEvent {
         thread_id: String,
         error: String,
     },
+    #[allow(dead_code)]
     ProjectsLoaded(Vec<crate::backend::ProjectEntry>),
     ProjectCreated(crate::backend::ProjectEntry),
     ProjectThreadsLoaded {

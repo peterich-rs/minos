@@ -1,6 +1,7 @@
 use minos_domain::AgentName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum NavLevel {
     Projects,
     Sessions {
@@ -49,6 +50,7 @@ impl NavLevel {
         }
     }
 
+    #[allow(dead_code)]
     pub fn esc_quits(&self) -> bool {
         matches!(self, NavLevel::Projects)
     }

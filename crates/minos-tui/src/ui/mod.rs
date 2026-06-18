@@ -3,6 +3,9 @@ pub mod chat;
 pub mod delete_confirm;
 pub mod group_chat;
 pub mod input_bar;
+pub mod project_create_dialog;
+pub mod project_list;
+pub mod project_sessions;
 pub mod room_list;
 pub mod status_bar;
 pub mod theme;
@@ -346,12 +349,24 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
     state.room_input.focused = state.focus.is(PaneId::RoomInput);
     state.agent_input.focused = state.focus.is(PaneId::AgentInput);
 
-    if state.agent_detail_visible {
-        render_detail_tree(f, state);
-    } else {
-        render_overview_tree(f, state);
+    match &state.nav_level {
+        NavLevel::Projects => {
+            render_projects_level(f, state);
+        }
+        NavLevel::Sessions { .. } => {
+            render_sessions_level(f, state);
+        }
+        NavLevel::Session { .. } | NavLevel::AgentDetail { .. } => {
+            render_legacy(f, state);
+        }
     }
 
+    if let Some(dialog) = state.project_create_dialog.as_ref() {
+        project_create_dialog::render(f, f.area(), dialog);
+    }
+    if let Some(prompt) = state.startup_create_prompt.as_ref() {
+        render_startup_prompt(f, prompt);
+    }
     if let Some(picker) = state.agent_picker.as_ref() {
         let mut overlay =
             agent_picker::AgentPickerRenderable::new(state.status.agents.as_slice(), picker);
@@ -362,6 +377,182 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
         let mut overlay = delete_confirm::DeleteConfirmRenderable::new(confirm);
         overlay.render(f, f.area());
     }
+}
+
+fn render_legacy(f: &mut Frame, state: &mut UiState) {
+    if state.agent_detail_visible {
+        render_detail_tree(f, state);
+    } else {
+        render_overview_tree(f, state);
+    }
+}
+
+fn render_projects_level(f: &mut Frame, state: &mut UiState) {
+    let flash_active = state.is_flash_copied_active();
+    let root = f.area();
+    let [_, middle, hint_area] = root_sections(root, 1);
+    let shell = Rect {
+        height: root.height.saturating_sub(hint_area.height),
+        ..root
+    };
+    let areas = Row::areas_for(middle, &[78, 22]);
+    let main = areas[0];
+    let sidebar = areas[1];
+
+    state.panel_areas = PanelAreas {
+        room_list: main,
+        room_chat: Rect::default(),
+        agent_list: sidebar,
+        agent_chat: Rect::default(),
+        room_input: Rect::default(),
+        agent_input: Rect::default(),
+    };
+    state.input_metrics = [InputLayoutMetrics::default(); 2];
+
+    let main_row = Row::new(
+        vec![
+            Box::new(project_list::ProjectListRenderable::new(
+                &state.projects,
+                state.selected_project,
+                &mut state.project_list_state,
+                true,
+            )),
+            Box::new(project_list::ProjectSidebarRenderable::new(
+                &state.projects,
+                state.selected_project,
+            )),
+        ],
+        vec![78, 22],
+    );
+
+    let mut tree = Column::with_fill(
+        vec![
+            Box::new(status_bar::StatusBarRenderable::new(
+                &state.status,
+                flash_active,
+            )),
+            Box::new(main_row),
+        ],
+        1,
+    );
+    tree.render(f, shell);
+    if let Some(position) = tree.cursor_pos(shell) {
+        f.set_cursor_position(position);
+    }
+
+    let hint = ratatui::text::Text::from(ratatui::text::Line::from(vec![
+        ratatui::text::Span::styled("[n] ", theme::FOCUSED_BORDER),
+        ratatui::text::Span::raw("new  "),
+        ratatui::text::Span::styled("[Enter] ", theme::FOCUSED_BORDER),
+        ratatui::text::Span::raw("open  "),
+        ratatui::text::Span::styled("[Esc] ", theme::FOCUSED_BORDER),
+        ratatui::text::Span::raw("quit"),
+    ]));
+    f.render_widget(hint, hint_area);
+}
+
+fn render_sessions_level(f: &mut Frame, state: &mut UiState) {
+    let mention_candidates = state.room_agent_mention_candidates();
+    let flash_active = state.is_flash_copied_active();
+    let root = f.area();
+    let input_height = input_bar::required_height(&state.room_input, root.width);
+
+    let [_, middle, input_area] = root_sections(root, input_height);
+    let areas = Row::areas_for(middle, &[78, 22]);
+    let main = areas[0];
+    let sidebar = areas[1];
+
+    state.panel_areas = PanelAreas {
+        room_list: main,
+        room_chat: Rect::default(),
+        agent_list: sidebar,
+        agent_chat: Rect::default(),
+        room_input: input_area,
+        agent_input: Rect::default(),
+    };
+    state.input_metrics = [InputLayoutMetrics::default(); 2];
+
+    let project_name = state
+        .selected_project
+        .and_then(|idx| state.projects.get(idx))
+        .map(|p| p.name.as_str())
+        .unwrap_or("Unknown");
+
+    let main_row = Row::new(
+        vec![
+            Box::new(project_sessions::SessionListRenderable::new(
+                project_name,
+                &state.project_sessions,
+                state.selected_thread,
+                &mut state.room_list_state,
+                true,
+            )),
+            Box::new(project_sessions::SessionSidebarRenderable::new(
+                &state.project_sessions,
+                state.selected_thread,
+            )),
+        ],
+        vec![78, 22],
+    );
+
+    let input = input_bar::InputBarRenderable::new(
+        room_input_title(&state.room_input),
+        "Type a message to start a new conversation...",
+        &state.room_input,
+        mention_candidates.as_slice(),
+        &mut state.input_metrics[0],
+    );
+
+    let mut tree = Column::with_fill(
+        vec![
+            Box::new(status_bar::StatusBarRenderable::new(
+                &state.status,
+                flash_active,
+            )),
+            Box::new(main_row),
+            Box::new(input),
+        ],
+        1,
+    );
+    tree.render(f, root);
+    if let Some(position) = tree.cursor_pos(root) {
+        f.set_cursor_position(position);
+    }
+}
+
+fn render_startup_prompt(f: &mut Frame, prompt: &StartupCreatePromptState) {
+    use ratatui::layout::Flex;
+    let area = f.area();
+    let popup = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Fill(1), Constraint::Length(7), Constraint::Fill(1)])
+        .flex(Flex::Center)
+        .split(area);
+    let popup = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Fill(1), Constraint::Length(52), Constraint::Fill(1)])
+        .flex(Flex::Center)
+        .split(popup[1])[1];
+
+    f.render_widget(ratatui::widgets::Clear, popup);
+    let lines = vec![
+        ratatui::text::Line::raw(""),
+        ratatui::text::Line::from(format!(
+            "  Create project \"{}\" ({})?",
+            prompt.dir_name, prompt.path
+        )),
+        ratatui::text::Line::raw(""),
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled("[Y] ", theme::FOCUSED_BORDER),
+            ratatui::text::Span::raw("Create & enter  "),
+            ratatui::text::Span::styled("[n] ", theme::FOCUSED_BORDER),
+            ratatui::text::Span::raw("Skip"),
+        ]),
+    ];
+    let block = ratatui::widgets::Block::bordered()
+        .title("New Directory Detected")
+        .border_style(theme::FOCUSED_BORDER);
+    f.render_widget(ratatui::widgets::Paragraph::new(lines).block(block), popup);
 }
 
 fn render_overview_tree(f: &mut Frame, state: &mut UiState) {

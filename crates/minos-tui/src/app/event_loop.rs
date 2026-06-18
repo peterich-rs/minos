@@ -151,19 +151,6 @@ impl App {
                 }
                 true
             }
-            Effect::LoadProjects => {
-                if let Some(tx) = self.event_tx.clone() {
-                    let backend = Arc::clone(&self.backend);
-                    tokio::spawn(async move {
-                        let result = backend.list_projects().await;
-                        let _ = tx.send(match result {
-                            Ok(projects) => AppEvent::ProjectsLoaded(projects),
-                            Err(e) => AppEvent::ProjectFailed(e.to_string()),
-                        });
-                    });
-                }
-                false
-            }
             Effect::CreateProject {
                 name,
                 workspace_path,
