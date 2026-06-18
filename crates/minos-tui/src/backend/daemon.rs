@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use jsonrpsee::core::client::{ClientT, SubscriptionClientT};
+use jsonrpsee::core::params::{ArrayParams, ObjectParams};
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use minos_agent_runtime::{
     CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
@@ -171,7 +172,83 @@ impl DaemonBackend {
     }
 }
 
-use jsonrpsee::core::params::ArrayParams;
+fn create_project_params(name: &str, workspace_path: &Path) -> Result<ObjectParams> {
+    let workspace_str = workspace_path.to_string_lossy().into_owned();
+    let slug = workspace_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
+    let mut params = ObjectParams::new();
+    params.insert("name", name)?;
+    params.insert("workspace_slug", slug)?;
+    params.insert("workspace_path", workspace_str)?;
+    Ok(params)
+}
+
+fn list_project_threads_params(project_id: &str) -> Result<ObjectParams> {
+    let mut params = ObjectParams::new();
+    params.insert("project_id", project_id)?;
+    params.insert("limit", 100_u32)?;
+    params.insert("before_ts_ms", None::<i64>)?;
+    Ok(params)
+}
+
+fn start_agent_in_project_params(
+    project_id: &str,
+    agent: AgentName,
+    workspace: &Path,
+) -> Result<ObjectParams> {
+    let mut params = ObjectParams::new();
+    params.insert("agent", agent)?;
+    params.insert("workspace", workspace.to_string_lossy().into_owned())?;
+    params.insert("project_id", project_id)?;
+    Ok(params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonrpsee::core::traits::ToRpcParams;
+
+    fn params_json(params: ObjectParams) -> serde_json::Value {
+        let raw = params
+            .to_rpc_params()
+            .expect("params serialize")
+            .expect("params are present");
+        serde_json::from_str(raw.get()).expect("params are json")
+    }
+
+    #[test]
+    fn project_rpc_params_are_objects() {
+        assert_eq!(
+            params_json(create_project_params("Fire", Path::new("/tmp/fire")).unwrap()),
+            serde_json::json!({
+                "name": "Fire",
+                "workspace_slug": "fire",
+                "workspace_path": "/tmp/fire"
+            })
+        );
+        assert_eq!(
+            params_json(list_project_threads_params("project-1").unwrap()),
+            serde_json::json!({
+                "project_id": "project-1",
+                "limit": 100,
+                "before_ts_ms": null
+            })
+        );
+        assert_eq!(
+            params_json(
+                start_agent_in_project_params("project-1", AgentName::Codex, Path::new("/tmp/fire"))
+                    .unwrap()
+            ),
+            serde_json::json!({
+                "agent": "codex",
+                "workspace": "/tmp/fire",
+                "project_id": "project-1"
+            })
+        );
+    }
+}
 
 #[async_trait]
 impl AgentBackend for DaemonBackend {
@@ -349,19 +426,12 @@ impl AgentBackend for DaemonBackend {
     }
 
     async fn create_project(&self, name: &str, workspace_path: &Path) -> Result<ProjectEntry> {
-        let workspace_str = workspace_path.to_string_lossy().into_owned();
-        let slug = workspace_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
-        let request = minos_protocol::CreateProjectRequest {
-            name: name.to_owned(),
-            workspace_slug: slug,
-            workspace_path: Some(workspace_str),
-        };
         let response: minos_protocol::CreateProjectResponse = self
             .client
-            .request("minos_create_project", [request])
+            .request(
+                "minos_create_project",
+                create_project_params(name, workspace_path)?,
+            )
             .await
             .context("RPC minos_create_project failed")?;
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -369,14 +439,9 @@ impl AgentBackend for DaemonBackend {
     }
 
     async fn list_project_threads(&self, project_id: &str) -> Result<Vec<ThreadSummaryEntry>> {
-        let params = minos_protocol::ListProjectThreadsParams {
-            project_id: project_id.to_owned(),
-            limit: 100,
-            before_ts_ms: None,
-        };
         let response: minos_protocol::ListProjectThreadsResponse = self
             .client
-            .request("minos_list_project_threads", [params])
+            .request("minos_list_project_threads", list_project_threads_params(project_id)?)
             .await
             .context("RPC minos_list_project_threads failed")?;
         Ok(response
@@ -392,14 +457,12 @@ impl AgentBackend for DaemonBackend {
         agent: AgentName,
         workspace: PathBuf,
     ) -> Result<StartAgentOutcome> {
-        let params = serde_json::json!({
-            "agent": agent,
-            "workspace": workspace.to_string_lossy(),
-            "project_id": project_id,
-        });
         let response: StartAgentResponse = self
             .client
-            .request("minos_start_agent_in_project", [params])
+            .request(
+                "minos_start_agent_in_project",
+                start_agent_in_project_params(project_id, agent, &workspace)?,
+            )
             .await
             .context("RPC minos_start_agent_in_project failed")?;
         Ok(StartAgentOutcome {

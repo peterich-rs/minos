@@ -161,7 +161,16 @@ impl App {
                         let result = backend.create_project(&name, &workspace_path).await;
                         let _ = tx.send(match result {
                             Ok(project) => AppEvent::ProjectCreated(project),
-                            Err(e) => AppEvent::ProjectFailed(e.to_string()),
+                            Err(e) => {
+                                tracing::warn!(
+                                    target: "minos_tui::app",
+                                    error = %e,
+                                    project_name = %name,
+                                    workspace = %workspace_path.display(),
+                                    "create_project failed"
+                                );
+                                AppEvent::ProjectFailed(e.to_string())
+                            }
                         });
                     });
                 }
