@@ -24,6 +24,18 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
         return delete_confirm_key_to_mapping(key);
     }
 
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('q') => return KeyMapping::action(Action::Global(GlobalAction::Quit)),
+            KeyCode::Char('c') => {
+                return KeyMapping::action(Action::Global(GlobalAction::InterruptOrQuit));
+            }
+            KeyCode::Char('v') => return KeyMapping::ClipboardPaste,
+            KeyCode::Char('d') => return KeyMapping::action(Action::Agent(AgentAction::Close)),
+            _ => {}
+        }
+    }
+
     if ui.startup_create_prompt.is_some() {
         return startup_prompt_mapping(key);
     }
@@ -44,18 +56,6 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
             if key.code == KeyCode::Esc {
                 return KeyMapping::action(Action::Nav(crate::nav::NavAction::Uplevel));
             }
-        }
-    }
-
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        match key.code {
-            KeyCode::Char('q') => return KeyMapping::action(Action::Global(GlobalAction::Quit)),
-            KeyCode::Char('c') => {
-                return KeyMapping::action(Action::Global(GlobalAction::InterruptOrQuit));
-            }
-            KeyCode::Char('v') => return KeyMapping::ClipboardPaste,
-            KeyCode::Char('d') => return KeyMapping::action(Action::Agent(AgentAction::Close)),
-            _ => {}
         }
     }
 

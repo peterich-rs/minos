@@ -442,19 +442,36 @@ impl App {
     }
 
     pub(super) async fn ensure_project_session_visible(&mut self, thread_id: &str) {
-        if !self.ui.threads.iter().any(|t| t.thread_id == thread_id) {
-            if let Some(session) = self
+        let was_visible = self.ui.threads.iter().any(|t| t.thread_id == thread_id);
+        if !was_visible {
+            if let Some(agent) = self
                 .ui
                 .project_sessions
                 .iter()
                 .find(|s| s.thread_id == thread_id)
+                .map(|session| session.agent)
             {
-                self.ui.threads.push(crate::ui::ThreadEntry {
-                    thread_id: thread_id.to_owned(),
-                    agent: session.agent,
-                    workspace: self.state.workspace.clone(),
-                    state: minos_agent_runtime::ThreadState::Idle,
-                });
+                let workspace = self
+                    .ui
+                    .nav_level
+                    .project_id()
+                    .and_then(|project_id| {
+                        self.ui
+                            .projects
+                            .iter()
+                            .find(|project| project.project_id == project_id)
+                    })
+                    .map(|project| project.workspace_path.clone())
+                    .unwrap_or_else(|| self.state.workspace.clone());
+                self.ensure_thread_visible(thread_id.to_owned(), agent, workspace);
+                if let Some(entry) = self
+                    .ui
+                    .threads
+                    .iter_mut()
+                    .find(|thread| thread.thread_id == thread_id)
+                {
+                    entry.state = minos_agent_runtime::ThreadState::Idle;
+                }
             }
         }
         if !self.state.hydrated_threads.contains(thread_id) {

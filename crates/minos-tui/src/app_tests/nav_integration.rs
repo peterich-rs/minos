@@ -79,6 +79,14 @@ async fn esc_at_projects_quits() {
 }
 
 #[tokio::test]
+async fn ctrl_q_at_projects_quits() {
+    let (_, mut app, _rx) = app_with_projects(vec![]);
+    app.handle_key(press_with_modifiers(KeyCode::Char('q'), KeyModifiers::CONTROL))
+        .await;
+    assert!(app.should_quit());
+}
+
+#[tokio::test]
 async fn esc_at_sessions_returns_to_projects() {
     let backend = Arc::new(
         TestBackend::new().with_projects(vec![sample_project("p1", "P1", "/tmp/p1")]),
@@ -175,11 +183,13 @@ async fn open_existing_session_bridges_into_legacy_thread_list() {
     use crate::backend::ThreadSummaryEntry;
 
     let project = sample_project("p1", "P1", "/tmp/p1");
-    let backend = Arc::new(TestBackend::new().with_projects(vec![project]));
+    let backend = Arc::new(TestBackend::new().with_projects(vec![project.clone()]));
     let mut app = App::new(backend, false, PathBuf::from("/tmp/p1"));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
     app.ui.nav_level = NavLevel::Sessions { project_id: "p1".into() };
+    app.ui.projects = vec![project.clone()];
+    app.ui.selected_project = Some(0);
     app.ui.project_sessions = vec![ThreadSummaryEntry {
         thread_id: "existing-session-1".into(),
         agent: minos_domain::AgentName::Codex,
@@ -208,5 +218,16 @@ async fn open_existing_session_bridges_into_legacy_thread_list() {
             .iter()
             .any(|t| t.thread_id == "existing-session-1"),
         "ensure_project_session_visible must bridge the session into ui.threads"
+    );
+    let bridged = app
+        .ui
+        .threads
+        .iter()
+        .find(|t| t.thread_id == "existing-session-1")
+        .expect("bridged thread exists");
+    assert_eq!(bridged.workspace, project.workspace_path);
+    assert!(
+        app.ui.chat_states.contains_key("existing-session-1"),
+        "bridged project session must create chat state before hydration"
     );
 }
