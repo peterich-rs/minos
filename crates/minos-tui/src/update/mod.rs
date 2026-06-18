@@ -2,6 +2,7 @@
 
 mod agent;
 mod global;
+mod nav;
 mod room;
 
 use crate::action::{Action, EffectResult, InputAction, InputTarget};
@@ -22,7 +23,7 @@ pub fn update(
         Action::Agent(action) => agent::handle(state, ui, action),
         Action::Input(target, action) => handle_input(state, ui, target, action),
         Action::EffectCompleted(result) => handle_effect_result(state, ui, result),
-        Action::Nav(_) => (StateChange::none(), vec![]),
+        Action::Nav(nav_action) => nav::handle(state, ui, nav_action),
     }
 }
 
@@ -90,7 +91,102 @@ fn handle_effect_result(
         EffectResult::ManagerEvent(event) => {
             (StateChange::none(), vec![Effect::HandleManagerEvent(event)])
         }
-        _ => (StateChange::none(), vec![]),
+        EffectResult::ProjectsLoaded(projects) => {
+            ui.projects = projects;
+            ui.selected_project = if ui.projects.is_empty() {
+                None
+            } else {
+                Some(ui.selected_project.unwrap_or(0).min(ui.projects.len() - 1))
+            };
+            ui.project_list_state.select(ui.selected_project);
+            (StateChange::redraw(), vec![])
+        }
+        EffectResult::ProjectCreated(project) => {
+            let project_id = project.project_id.clone();
+            ui.projects.push(project);
+            ui.nav_level = crate::nav::NavLevel::Sessions {
+                project_id: project_id.clone(),
+            };
+            ui.selected_project = Some(ui.projects.len().saturating_sub(1));
+            ui.project_list_state.select(ui.selected_project);
+            (
+                StateChange::redraw(),
+                vec![Effect::LoadProjectThreads { project_id }],
+            )
+        }
+        EffectResult::ProjectThreadsLoaded { project_id, threads } => {
+            ui.project_sessions = threads;
+            ui.selected_thread = if ui.project_sessions.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+            ui.room_list_state.select(ui.selected_thread);
+            ui.nav_level = crate::nav::NavLevel::Sessions { project_id };
+            (StateChange::redraw(), vec![])
+        }
+        EffectResult::ProjectSessionStarted {
+            project_id,
+            agent,
+            thread_id,
+            cwd,
+            text,
+        } => {
+            if !ui.project_sessions.iter().any(|s| s.thread_id == thread_id) {
+                let first_line = text.lines().next().unwrap_or("").trim();
+                let title = if first_line.is_empty() {
+                    None
+                } else {
+                    Some(first_line.chars().take(80).collect::<String>())
+                };
+                ui.project_sessions.push(crate::backend::ThreadSummaryEntry {
+                    thread_id: thread_id.clone(),
+                    agent,
+                    title,
+                    first_ts_ms: 0,
+                    last_ts_ms: 0,
+                    message_count: 0,
+                    ended_at_ms: None,
+                });
+            }
+            ui.selected_thread = ui
+                .project_sessions
+                .iter()
+                .position(|session| session.thread_id == thread_id);
+            ui.room_list_state.select(ui.selected_thread);
+            ui.nav_level = crate::nav::NavLevel::Session {
+                project_id,
+                thread_id: thread_id.clone(),
+            };
+            (
+                StateChange::redraw(),
+                vec![Effect::AgentStartedForPrompt {
+                    agent,
+                    thread_id,
+                    cwd,
+                    text,
+                }],
+            )
+        }
+        EffectResult::ProjectSessionOpened { thread_id } => {
+            let project_id = ui
+                .nav_level
+                .project_id()
+                .map(|s| s.to_owned())
+                .unwrap_or_default();
+            if let Some(idx) = ui.threads.iter().position(|t| t.thread_id == thread_id) {
+                ui.selected_thread = Some(idx);
+            }
+            ui.nav_level = crate::nav::NavLevel::Session {
+                project_id,
+                thread_id,
+            };
+            (StateChange::redraw(), vec![])
+        }
+        EffectResult::ProjectFailed(error) => {
+            ui.set_error(format!("Project operation failed: {error}"));
+            (StateChange::redraw(), vec![])
+        }
     }
 }
 

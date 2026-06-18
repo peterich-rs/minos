@@ -151,7 +151,97 @@ impl App {
                 }
                 true
             }
-            _ => false,
+            Effect::LoadProjects => {
+                if let Some(tx) = self.event_tx.clone() {
+                    let backend = Arc::clone(&self.backend);
+                    tokio::spawn(async move {
+                        let result = backend.list_projects().await;
+                        let _ = tx.send(match result {
+                            Ok(projects) => AppEvent::ProjectsLoaded(projects),
+                            Err(e) => AppEvent::ProjectFailed(e.to_string()),
+                        });
+                    });
+                }
+                false
+            }
+            Effect::CreateProject {
+                name,
+                workspace_path,
+            } => {
+                if let Some(tx) = self.event_tx.clone() {
+                    let backend = Arc::clone(&self.backend);
+                    tokio::spawn(async move {
+                        let result = backend.create_project(&name, &workspace_path).await;
+                        let _ = tx.send(match result {
+                            Ok(project) => AppEvent::ProjectCreated(project),
+                            Err(e) => AppEvent::ProjectFailed(e.to_string()),
+                        });
+                    });
+                }
+                false
+            }
+            Effect::LoadProjectThreads { project_id } => {
+                if let Some(tx) = self.event_tx.clone() {
+                    let backend = Arc::clone(&self.backend);
+                    tokio::spawn(async move {
+                        let result = backend.list_project_threads(&project_id).await;
+                        let _ = tx.send(match result {
+                            Ok(threads) => AppEvent::ProjectThreadsLoaded {
+                                project_id,
+                                threads,
+                            },
+                            Err(e) => AppEvent::ProjectFailed(e.to_string()),
+                        });
+                    });
+                }
+                false
+            }
+            Effect::StartAgentInProject {
+                project_id,
+                agent,
+                workspace,
+                prompt,
+            } => {
+                if let Some(tx) = self.event_tx.clone() {
+                    let backend = Arc::clone(&self.backend);
+                    tokio::spawn(async move {
+                        match backend
+                            .start_agent_in_project(&project_id, agent, workspace)
+                            .await
+                        {
+                            Ok(outcome) => {
+                                let _ = tx.send(AppEvent::ProjectSessionStarted {
+                                    project_id,
+                                    agent,
+                                    thread_id: outcome.thread_id,
+                                    cwd: outcome.cwd,
+                                    text: prompt,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::ProjectFailed(e.to_string()));
+                            }
+                        }
+                    });
+                }
+                false
+            }
+            Effect::OpenProjectSession { thread_id } => {
+                self.ensure_project_session_visible(&thread_id).await;
+                let action = Action::EffectCompleted(
+                    crate::action::EffectResult::ProjectSessionOpened { thread_id },
+                );
+                let (change, effects) =
+                    crate::update::update(&mut self.state, &mut self.ui, action);
+                debug_assert!(
+                    effects.is_empty(),
+                    "ProjectSessionOpened must not emit follow-up effects"
+                );
+                if change.needs_redraw {
+                    self.request_frame();
+                }
+                change.needs_redraw
+            }
         }
     }
 

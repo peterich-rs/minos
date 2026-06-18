@@ -51,6 +51,48 @@ impl App {
                 ))
                 .await
             }
+            AppEvent::ProjectsLoaded(projects) => {
+                self.apply_action(Action::EffectCompleted(
+                    crate::action::EffectResult::ProjectsLoaded(projects),
+                ))
+                .await
+            }
+            AppEvent::ProjectCreated(project) => {
+                self.apply_action(Action::EffectCompleted(
+                    crate::action::EffectResult::ProjectCreated(project),
+                ))
+                .await
+            }
+            AppEvent::ProjectThreadsLoaded { project_id, threads } => {
+                self.apply_action(Action::EffectCompleted(
+                    crate::action::EffectResult::ProjectThreadsLoaded { project_id, threads },
+                ))
+                .await
+            }
+            AppEvent::ProjectSessionStarted {
+                project_id,
+                agent,
+                thread_id,
+                cwd,
+                text,
+            } => {
+                self.apply_action(Action::EffectCompleted(
+                    crate::action::EffectResult::ProjectSessionStarted {
+                        project_id,
+                        agent,
+                        thread_id,
+                        cwd,
+                        text,
+                    },
+                ))
+                .await
+            }
+            AppEvent::ProjectFailed(error) => {
+                self.apply_action(Action::EffectCompleted(
+                    crate::action::EffectResult::ProjectFailed(error),
+                ))
+                .await
+            }
             AppEvent::McpToolCall(event) => {
                 self.apply_action(Action::Global(GlobalAction::McpToolCall(event)))
                     .await
@@ -63,7 +105,6 @@ impl App {
                 self.request_frame();
                 true
             }
-            _ => false,
         }
     }
 
@@ -345,6 +386,27 @@ impl App {
             return false;
         }
         self.replay_thread_history_from(thread_id, None, true).await
+    }
+
+    pub(super) async fn ensure_project_session_visible(&mut self, thread_id: &str) {
+        if !self.ui.threads.iter().any(|t| t.thread_id == thread_id) {
+            if let Some(session) = self
+                .ui
+                .project_sessions
+                .iter()
+                .find(|s| s.thread_id == thread_id)
+            {
+                self.ui.threads.push(crate::ui::ThreadEntry {
+                    thread_id: thread_id.to_owned(),
+                    agent: session.agent,
+                    workspace: self.state.workspace.clone(),
+                    state: minos_agent_runtime::ThreadState::Idle,
+                });
+            }
+        }
+        if !self.state.hydrated_threads.contains(thread_id) {
+            self.hydrate_thread_if_needed(thread_id).await;
+        }
     }
 
     pub(super) fn ensure_chat_state_agent(&mut self, thread_id: &str, agent: AgentName) {
