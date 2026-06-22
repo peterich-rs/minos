@@ -30,7 +30,7 @@
 - `minos-agent-runtime`：线程父子关系跟踪 + codex subagent 事件路由 + opencode subagent session 自动注册
 - `minos-tui`：数据模型、翻译、sidebar 树状渲染、卡片渲染、导航
 
-不覆盖：claude/gemini 的 subagent（架构上预留，但不实现翻译器）。
+不覆盖：claude/gemini 的 subagent。原因：Claude CLI 的 `--output-format stream-json` 和 Gemini 的 ACP v1 协议均**不暴露 subagent 的实时事件流**。Claude 的 Task tool 执行是 CLI 内部黑盒（`tool_use: Task` → 静默 → `tool_result`）；Gemini 的 ACP 是单 session 协议，无 spawn 子 agent 原语。两者均无可订阅的子 transcript 事件流。Claude Code 自己的 TUI 能看到 subagent 实时数据是因为它内嵌在进程内，不经过 NDJSON stdout——这是 CLI 外部接入的根本限制，不是 Minos 的解析问题。Claude/Gemini 的 Task/subagent tool call 保持现有 `ToolCall` 展示不变。
 
 ## 2. 协议层设计 (`minos-ui-protocol`)
 
@@ -515,3 +515,4 @@ pub struct SubagentSummary {
 | Opencode parent 归属 | 基于最近 pending Task 工具 | opencode 不暴露 parent sessionID，启发式是最佳选择 |
 | 竞态处理 | 推测性注册 | 避免缓冲复杂性，orphan 线程在超时后清理 |
 | 主 agent 卡片 | 专属 `SubagentCall` 变体 | 区别于普通 tool call，展示 model/prompt/status |
+| Claude/Gemini subagent | 不做特殊处理 | CLI 协议不暴露 subagent 实时事件流（Claude stream-json 是黑盒；ACP v1 单 session）；外部接入无法获取子 transcript |
