@@ -6,4 +6,5 @@ pub struct ThreadSnapshot {
     pub thread_id: String,
     pub workspace: PathBuf,
     pub state: ThreadState,
+    pub parent_thread_id: Option<String>,
 }

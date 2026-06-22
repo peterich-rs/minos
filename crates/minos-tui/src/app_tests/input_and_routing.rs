@@ -12,6 +12,7 @@ async fn ctrl_c_interrupts_running_thread() {
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     app.select_thread(0);
 
@@ -45,6 +46,7 @@ async fn ctrl_c_quits_idle_thread_view() {
         agent: AgentName::Gemini,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.select_thread(0);
 
@@ -107,6 +109,7 @@ async fn open_agent_picker_defaults_to_current_thread_agent() {
         agent: AgentName::Claude,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.select_thread(0);
 
@@ -205,6 +208,7 @@ async fn room_input_paste_inserts_multiline_text_without_submitting() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-codex-1234".into(),
@@ -299,6 +303,7 @@ async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
         state: ThreadState::Closed {
             reason: minos_agent_runtime::CloseReason::UserClose,
         },
+        parent_thread_id: None,
     });
     app.select_thread(0);
     app.ui.focus.focus(PaneId::Input);
@@ -345,6 +350,7 @@ async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
         state: ThreadState::Closed {
             reason: minos_agent_runtime::CloseReason::UserClose,
         },
+        parent_thread_id: None,
     });
     app.select_thread(0);
     set_test_agent_detail_nav(&mut app, "test", "conversation-1");
@@ -393,6 +399,7 @@ async fn routed_prompt_to_closed_thread_reports_error_without_sending() {
         state: ThreadState::Closed {
             reason: minos_agent_runtime::CloseReason::UserClose,
         },
+        parent_thread_id: None,
     });
     app.ui.focus.focus(PaneId::Input);
     app.ui.room_input.content = "@opencode#thread-o hello".into();

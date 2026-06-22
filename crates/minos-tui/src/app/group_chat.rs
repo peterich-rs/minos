@@ -179,6 +179,7 @@ impl App {
             state: ThreadState::Suspended {
                 reason: minos_agent_runtime::PauseReason::DaemonRestart,
             },
+            parent_thread_id: None,
         });
         self.ensure_chat_state_agent(thread_id, agent);
     }

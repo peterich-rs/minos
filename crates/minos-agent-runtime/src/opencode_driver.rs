@@ -25,6 +25,13 @@ use crate::thread_handle::ThreadHandle;
 
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
 
+#[derive(Clone, Debug)]
+struct PendingTaskTool {
+    parent_thread_id: String,
+    tool_call_id: String,
+    prompt: Option<String>,
+}
+
 pub struct OpencodeServerConfig {
     pub opencode_bin: PathBuf,
     pub port: u16,
@@ -272,6 +279,7 @@ pub fn spawn_sse_pump(
     events_tx: IngestSink,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let pending_tasks = Arc::new(Mutex::new(HashMap::<String, PendingTaskTool>::new()));
         loop {
             match try_sse_connect(
                 &sse_url,
@@ -280,6 +288,7 @@ pub fn spawn_sse_pump(
                 &threads,
                 &manager_tx,
                 &events_tx,
+                &pending_tasks,
             )
             .await
             {
@@ -309,6 +318,7 @@ async fn try_sse_connect(
     threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
     manager_tx: &broadcast::Sender<ManagerEvent>,
     events_tx: &IngestSink,
+    pending_tasks: &Arc<Mutex<HashMap<String, PendingTaskTool>>>,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     info!(
@@ -338,13 +348,30 @@ async fn try_sse_connect(
                         "data": sse_event.data
                     }),
                 };
-                let Some(thread_id) = resolve_thread_id(&payload, session_map).await else {
-                    tracing::debug!(
-                        target: "minos_agent_runtime::opencode_driver",
-                        payload = %payload,
-                        "dropping opencode event without a resolved Minos thread"
-                    );
-                    continue;
+                let (thread_id, _session_id) = match resolve_thread_id(&payload, session_map).await
+                {
+                    Some(resolved) => resolved,
+                    None => {
+                        let Some(thread_id) = register_opencode_subagent_from_pending_task(
+                            &payload,
+                            session_map,
+                            threads,
+                            manager_tx,
+                            events_tx,
+                            pending_tasks,
+                        )
+                        .await
+                        else {
+                            tracing::debug!(
+                                target: "minos_agent_runtime::opencode_driver",
+                                payload = %payload,
+                                "dropping opencode event without a resolved Minos thread"
+                            );
+                            continue;
+                        };
+                        let session_id = extract_session_id(&payload).unwrap_or("").to_string();
+                        (thread_id, session_id)
+                    }
                 };
                 if let Err(error) = events_tx
                     .emit(RawIngest::from_json(
@@ -364,6 +391,7 @@ async fn try_sse_connect(
                     break;
                 }
                 sync_thread_state(&payload, &thread_id, threads, manager_tx).await;
+                update_pending_task_tool(&payload, &thread_id, pending_tasks).await;
             }
             Err(e) => {
                 warn!(
@@ -381,11 +409,166 @@ async fn try_sse_connect(
 async fn resolve_thread_id(
     payload: &Value,
     session_map: &Arc<Mutex<HashMap<String, String>>>,
-) -> Option<String> {
-    let session_id = extract_session_id(payload)?;
+) -> Option<(String, String)> {
+    let session_id = extract_session_id(payload)?.to_string();
     let map = session_map.lock().await;
     map.iter().find_map(|(thread_id, mapped_session_id)| {
-        (mapped_session_id == session_id).then(|| thread_id.clone())
+        (mapped_session_id == &session_id).then(|| (thread_id.clone(), session_id.clone()))
+    })
+}
+
+async fn register_opencode_subagent_from_pending_task(
+    payload: &Value,
+    session_map: &Arc<Mutex<HashMap<String, String>>>,
+    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    manager_tx: &broadcast::Sender<ManagerEvent>,
+    events_tx: &IngestSink,
+    pending_tasks: &Arc<Mutex<HashMap<String, PendingTaskTool>>>,
+) -> Option<String> {
+    let session_id = extract_session_id(payload)?.to_string();
+    let pending = {
+        let guard = pending_tasks.lock().await;
+        (guard.len() == 1)
+            .then(|| guard.values().next().cloned())
+            .flatten()
+    }?;
+
+    let workspace = {
+        let mut guard = threads.lock().await;
+        if guard.contains_key(&session_id) {
+            return Some(session_id);
+        }
+        let workspace = guard.get(&pending.parent_thread_id)?.workspace.clone();
+        guard.insert(
+            session_id.clone(),
+            ThreadHandle::new_subagent(
+                session_id.clone(),
+                workspace.clone(),
+                AgentName::Opencode,
+                pending.parent_thread_id.clone(),
+                Some(session_id.clone()),
+                ThreadState::Idle,
+                0,
+            ),
+        );
+        workspace
+    };
+    session_map
+        .lock()
+        .await
+        .insert(session_id.clone(), session_id.clone());
+    let parent_thread_id = pending.parent_thread_id.clone();
+    let tool_call_id = pending.tool_call_id.clone();
+    let prompt = pending.prompt.clone();
+    let _ = manager_tx.send(ManagerEvent::ThreadAdded {
+        thread_id: session_id.clone(),
+        workspace: workspace.clone(),
+        agent: AgentName::Opencode,
+        parent_thread_id: Some(parent_thread_id.clone()),
+    });
+    let synthetic = serde_json::json!({
+        "type": "minos.subagent.spawned",
+        "properties": {
+            "parent_thread_id": parent_thread_id.clone(),
+            "sub_thread_id": session_id.clone(),
+            "tool_call_id": tool_call_id.clone(),
+            "prompt": prompt.clone(),
+        }
+    });
+    if let Err(error) = events_tx
+        .emit(RawIngest::from_json(
+            AgentName::Opencode,
+            synthetic["properties"]["parent_thread_id"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            synthetic,
+            chrono::Utc::now().timestamp_millis(),
+        ))
+        .await
+    {
+        warn!(
+            target: "minos_agent_runtime::opencode_driver",
+            error = %error,
+            "durable ingest sink closed while emitting opencode subagent spawn",
+        );
+    }
+    info!(
+        target: "minos_agent_runtime::opencode_driver",
+        parent_thread_id = %pending.parent_thread_id,
+        provider_session_id = %session_id,
+        tool_call_id = %pending.tool_call_id,
+        workspace = %workspace.display(),
+        reason = "single_active_task_tool",
+        "registered opencode subagent thread",
+    );
+    Some(session_id)
+}
+
+async fn update_pending_task_tool(
+    payload: &Value,
+    parent_thread_id: &str,
+    pending_tasks: &Arc<Mutex<HashMap<String, PendingTaskTool>>>,
+) {
+    let Some(update) = task_tool_update(payload, parent_thread_id) else {
+        return;
+    };
+    let mut guard = pending_tasks.lock().await;
+    if update.active {
+        guard.insert(update.task.tool_call_id.clone(), update.task);
+    } else {
+        guard.remove(&update.task.tool_call_id);
+    }
+}
+
+struct TaskToolUpdate {
+    task: PendingTaskTool,
+    active: bool,
+}
+
+fn task_tool_update(payload: &Value, parent_thread_id: &str) -> Option<TaskToolUpdate> {
+    let part = payload
+        .get("properties")
+        .and_then(|properties| properties.get("part"))
+        .or_else(|| payload.get("part"))?;
+    if !matches!(
+        part.get("type").and_then(Value::as_str),
+        Some("tool" | "tool-call")
+    ) {
+        return None;
+    }
+    let name = part
+        .get("tool")
+        .or_else(|| part.get("name"))
+        .and_then(Value::as_str)?;
+    if name != "task" {
+        return None;
+    }
+    let tool_call_id = part
+        .get("callID")
+        .or_else(|| part.get("id"))
+        .and_then(Value::as_str)?
+        .to_string();
+    let state = part.get("state").unwrap_or(&Value::Null);
+    let status = state
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| state.as_str())
+        .unwrap_or("");
+    let active = matches!(status, "pending" | "running" | "calling");
+    let prompt = state
+        .get("input")
+        .and_then(|input| input.get("prompt"))
+        .or_else(|| part.get("args").and_then(|args| args.get("prompt")))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(TaskToolUpdate {
+        task: PendingTaskTool {
+            parent_thread_id: parent_thread_id.to_string(),
+            tool_call_id,
+            prompt,
+        },
+        active,
     })
 }
 

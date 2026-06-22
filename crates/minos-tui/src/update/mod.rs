@@ -201,13 +201,14 @@ fn handle_effect_result(
                         last_ts_ms: 0,
                         message_count: 0,
                         ended_at_ms: None,
+                        parent_thread_id: None,
                     });
                 true
             } else {
                 false
             };
             ui.selected_agent_session = ui
-                .conversation_agent_sessions
+                .flat_agent_sessions()
                 .iter()
                 .position(|session| session.thread_id == thread_id);
             ui.agent_list_state.select(ui.selected_agent_session);
@@ -387,7 +388,18 @@ pub(super) fn focus_from_enter(ui: &mut UiState) -> StateChange {
 }
 
 pub(super) fn request_delete_current_thread(ui: &mut UiState) -> StateChange {
-    let Some(selected) = ui.selected_thread else {
+    if ui.current_thread_is_subagent() {
+        ui.set_error("Subagent transcripts are read-only.".into());
+        return StateChange::redraw();
+    }
+    let Some(thread_id) = ui.current_thread_id().map(str::to_owned) else {
+        return StateChange::none();
+    };
+    let Some(selected) = ui
+        .threads
+        .iter()
+        .position(|thread| thread.thread_id == thread_id)
+    else {
         return StateChange::none();
     };
     let Some(thread) = ui.threads.get(selected) else {

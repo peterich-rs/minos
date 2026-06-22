@@ -194,14 +194,18 @@ impl App {
             debug!(
                 agent = %ingest.agent.bin_name(),
                 thread_id = %ingest.thread_id,
-                "dropping ingest event because no chat state exists"
+                "creating chat state for ingest frame",
             );
-            return false;
+            self.ui.chat_states.insert(
+                ingest.thread_id.clone(),
+                ChatState::new(ingest.thread_id.clone(), ingest.agent),
+            );
         }
         if !self.mark_ingest_applied(&ingest) {
             return false;
         }
         let marks_done = frame_marks_agent_result_done(&ingest);
+        sync_subagent_info(&mut self.ui, &ingest.ui_events);
         if let Some(chat) = self.ui.chat_states.get_mut(&ingest.thread_id) {
             debug!(
                 agent = %ingest.agent.bin_name(),
@@ -337,12 +341,17 @@ impl App {
                             entry.state = snap.state.clone();
                             changed = true;
                         }
+                        if entry.parent_thread_id != snap.parent_thread_id {
+                            entry.parent_thread_id = snap.parent_thread_id.clone();
+                            changed = true;
+                        }
                     } else {
                         self.ui.threads.push(ThreadEntry {
                             thread_id: snap.thread_id.clone(),
                             agent,
                             workspace: snap.workspace.clone(),
                             state: snap.state.clone(),
+                            parent_thread_id: snap.parent_thread_id.clone(),
                         });
                         changed = true;
                     }
@@ -409,6 +418,7 @@ impl App {
                 if !self.mark_ingest_applied(&frame) {
                     continue;
                 }
+                sync_subagent_info(&mut self.ui, &frame.ui_events);
                 if let Some(chat) = self.ui.chat_states.get_mut(thread_id) {
                     if !frame.ui_events.is_empty() {
                         changed = true;
@@ -565,6 +575,7 @@ impl App {
                 thread_id,
                 workspace,
                 agent,
+                parent_thread_id,
             } => {
                 if !self.workspace_path_belongs_to_current_workspace(&workspace) {
                     return self.remove_thread_local_state(&thread_id);
@@ -578,6 +589,7 @@ impl App {
                     if let Some(entry) = self.ui.threads.get_mut(index) {
                         entry.agent = agent;
                         entry.workspace = workspace;
+                        entry.parent_thread_id = parent_thread_id;
                     }
                     self.ensure_chat_state_agent(&thread_id, agent);
                     return true;
@@ -588,6 +600,7 @@ impl App {
                     agent,
                     workspace,
                     state: ThreadState::Starting,
+                    parent_thread_id,
                 };
                 self.ui.threads.push(entry);
                 self.ui
@@ -676,6 +689,44 @@ impl App {
                 }
                 true
             }
+        }
+    }
+}
+
+fn sync_subagent_info(ui: &mut UiState, events: &[minos_ui_protocol::UiEventMessage]) {
+    for event in events {
+        match event {
+            minos_ui_protocol::UiEventMessage::SubagentSpawned {
+                parent_thread_id,
+                sub_thread_id,
+                tool_call_id,
+                agent,
+                model,
+                prompt,
+                title,
+            } => {
+                ui.subagent_info.insert(
+                    sub_thread_id.clone(),
+                    crate::ui::SubagentInfo {
+                        parent_thread_id: parent_thread_id.clone(),
+                        tool_call_id: tool_call_id.clone(),
+                        agent: *agent,
+                        model: model.clone(),
+                        prompt: prompt.clone(),
+                        title: title.clone(),
+                        status: minos_ui_protocol::SubagentStatus::Running,
+                    },
+                );
+            }
+            minos_ui_protocol::UiEventMessage::SubagentStatusUpdated {
+                sub_thread_id,
+                status,
+            } => {
+                if let Some(info) = ui.subagent_info.get_mut(sub_thread_id) {
+                    info.status = *status;
+                }
+            }
+            _ => {}
         }
     }
 }

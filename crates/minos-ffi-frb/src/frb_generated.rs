@@ -4419,6 +4419,7 @@ const _: fn() = || {
         let _: u32 = ThreadSummary.message_count;
         let _: Option<i64> = ThreadSummary.ended_at_ms;
         let _: Option<crate::api::minos::ThreadEndReason> = ThreadSummary.end_reason;
+        let _: Option<String> = ThreadSummary.parent_thread_id;
     }
     match None::<crate::api::minos::UiEventMessage>.unwrap() {
         crate::api::minos::UiEventMessage::ThreadOpened {
@@ -6260,6 +6261,7 @@ impl SseDecode for crate::api::minos::ThreadSummary {
         let mut var_endedAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_endReason =
             <Option<crate::api::minos::ThreadEndReason>>::sse_decode(deserializer);
+        let mut var_parentThreadId = <Option<String>>::sse_decode(deserializer);
         return crate::api::minos::ThreadSummary {
             thread_id: var_threadId,
             agent: var_agent,
@@ -6269,6 +6271,7 @@ impl SseDecode for crate::api::minos::ThreadSummary {
             message_count: var_messageCount,
             ended_at_ms: var_endedAtMs,
             end_reason: var_endReason,
+            parent_thread_id: var_parentThreadId,
         };
     }
 }
@@ -10014,6 +10017,7 @@ impl SseEncode for crate::api::minos::ThreadSummary {
         <u32>::sse_encode(self.message_count, serializer);
         <Option<i64>>::sse_encode(self.ended_at_ms, serializer);
         <Option<crate::api::minos::ThreadEndReason>>::sse_encode(self.end_reason, serializer);
+        <Option<String>>::sse_encode(self.parent_thread_id, serializer);
     }
 }
 

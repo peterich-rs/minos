@@ -438,6 +438,7 @@ impl AgentBackend for DaemonBackend {
                 agent: Some(s.agent),
                 workspace: PathBuf::from(s.workspace),
                 state: proto_state_to_runtime(&s.state),
+                parent_thread_id: s.parent_thread_id,
             })
             .collect())
     }
@@ -669,10 +670,12 @@ fn local_manager_to_runtime(event: LocalManagerEvent) -> ManagerEvent {
             thread_id,
             workspace,
             agent,
+            parent_thread_id,
         } => ManagerEvent::ThreadAdded {
             thread_id,
             workspace: PathBuf::from(workspace),
             agent,
+            parent_thread_id,
         },
         LocalManagerEvent::ThreadStateChanged {
             thread_id,

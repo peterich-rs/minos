@@ -154,20 +154,14 @@ fn handle_conversation_level(
 ) -> (StateChange, Vec<Effect>) {
     match action {
         NavAction::SelectNext => {
-            navigate(
-                &mut ui.selected_agent_session,
-                ui.conversation_agent_sessions.len(),
-                1,
-            );
+            let len = ui.flat_agent_session_count();
+            navigate(&mut ui.selected_agent_session, len, 1);
             ui.agent_list_state.select(ui.selected_agent_session);
             (StateChange::redraw(), vec![])
         }
         NavAction::SelectPrev => {
-            navigate(
-                &mut ui.selected_agent_session,
-                ui.conversation_agent_sessions.len(),
-                -1,
-            );
+            let len = ui.flat_agent_session_count();
+            navigate(&mut ui.selected_agent_session, len, -1);
             ui.agent_list_state.select(ui.selected_agent_session);
             (StateChange::redraw(), vec![])
         }
@@ -177,7 +171,7 @@ fn handle_conversation_level(
         }
         NavAction::Downlevel => {
             if let Some(idx) = ui.selected_agent_session {
-                if let Some(session) = ui.conversation_agent_sessions.get(idx) {
+                if let Some(session) = ui.flat_agent_sessions().get(idx) {
                     let thread_id = session.thread_id.clone();
                     let agent = session.agent;
                     let project_id = ui
@@ -339,6 +333,7 @@ fn find_conversation_thread(
     let short_id = short_id.to_ascii_lowercase();
     ui.conversation_agent_sessions
         .iter()
+        .filter(|session| session.parent_thread_id.is_none())
         .find(|session| {
             session.agent == agent
                 && (crate::agent_route::short_thread_id(&session.thread_id).to_ascii_lowercase()

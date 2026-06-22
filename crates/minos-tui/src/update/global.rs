@@ -175,7 +175,7 @@ fn handle_mouse_click(ui: &mut UiState, target: ClickTarget, x: u16, y: u16) -> 
             let len = if ui.conversation_agent_sessions.is_empty() {
                 ui.threads.len()
             } else {
-                ui.conversation_agent_sessions.len()
+                ui.flat_agent_session_count()
             };
             if let Some(index) =
                 state::clicked_thread_index(ui.panel_areas.agent_list, &ui.agent_list_state, y, len)
@@ -269,7 +269,7 @@ fn handle_mouse_scroll(
                     }
                     ScrollDirection::Down => {
                         if let Some(selected) = ui.selected_agent_session {
-                            let last = ui.conversation_agent_sessions.len().saturating_sub(1);
+                            let last = ui.flat_agent_session_count().saturating_sub(1);
                             ui.selected_agent_session = Some((selected + 1).min(last));
                             ui.agent_list_state.select(ui.selected_agent_session);
                         }

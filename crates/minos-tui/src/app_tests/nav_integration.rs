@@ -273,6 +273,7 @@ async fn open_existing_session_bridges_into_thread_list() {
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
+        parent_thread_id: None,
     };
     let backend = Arc::new(
         TestBackend::new()

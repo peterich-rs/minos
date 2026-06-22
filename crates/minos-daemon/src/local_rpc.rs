@@ -139,6 +139,7 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
                 agent: parse_agent_label(&row.agent).map_err(rpc_err)?,
                 workspace,
                 state,
+                parent_thread_id: row.parent_thread_id.clone(),
             });
         }
         Ok(result)
@@ -496,10 +497,12 @@ fn convert_manager_event(event: ManagerEvent) -> Option<LocalManagerEvent> {
             thread_id,
             workspace,
             agent,
+            parent_thread_id,
         } => Some(LocalManagerEvent::ThreadAdded {
             thread_id,
             workspace: workspace.display().to_string(),
             agent,
+            parent_thread_id,
         }),
         ManagerEvent::ThreadStateChanged {
             thread_id,

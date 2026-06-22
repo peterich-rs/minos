@@ -352,6 +352,7 @@ impl AgentBackend for TestBackend {
                 last_ts_ms: 0,
                 message_count: 0,
                 ended_at_ms: None,
+                parent_thread_id: None,
             });
         Ok(outcome)
     }

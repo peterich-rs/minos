@@ -153,6 +153,19 @@ pub enum UiEventMessage {
         output: DisplayPayload,
         is_error: bool,
     },
+    SubagentSpawned {
+        parent_thread_id: String,
+        sub_thread_id: String,
+        tool_call_id: String,
+        agent: AgentName,
+        model: Option<String>,
+        prompt: Option<String>,
+        title: Option<String>,
+    },
+    SubagentStatusUpdated {
+        sub_thread_id: String,
+        status: SubagentStatus,
+    },
 
     // ── Meta / escape hatch ──────────
     Error {
@@ -175,6 +188,15 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentStatus {
+    Running,
+    Completed,
+    Failed,
+    Interrupted,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -278,5 +300,22 @@ mod tests {
         let r = MessageRole::Assistant;
         let json = serde_json::to_string(&r).unwrap();
         assert_eq!(json, r#""assistant""#);
+    }
+
+    #[test]
+    fn subagent_spawned_round_trip() {
+        let ev = UiEventMessage::SubagentSpawned {
+            parent_thread_id: "parent".into(),
+            sub_thread_id: "sub".into(),
+            tool_call_id: "tool-1".into(),
+            agent: AgentName::Codex,
+            model: Some("gpt-5".into()),
+            prompt: Some("inspect".into()),
+            title: None,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""kind":"subagent_spawned""#));
+        let back: UiEventMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
     }
 }

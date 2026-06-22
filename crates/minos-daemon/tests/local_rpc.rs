@@ -473,6 +473,7 @@ async fn list_local_threads_includes_persisted_suspended_threads() {
             "/tmp/persisted",
             "claude",
             None,
+            None,
             "idle",
             10,
         )

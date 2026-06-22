@@ -62,6 +62,7 @@ async fn routed_prompt_echoes_in_group_chat_before_backend_send_finishes() {
         agent: AgentName::Gemini,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-gemini-1234".into(),
@@ -249,12 +250,14 @@ async fn init_filters_daemon_threads_to_current_workspace() {
                     agent: Some(AgentName::Opencode),
                     workspace: PathBuf::from("/tmp/fire"),
                     state: ThreadState::Idle,
+                    parent_thread_id: None,
                 },
                 BackendThreadSnapshot {
                     thread_id: "thread-minos-1234".into(),
                     agent: Some(AgentName::Codex),
                     workspace: PathBuf::from("/tmp/Minos"),
                     state: ThreadState::Idle,
+                    parent_thread_id: None,
                 },
             ]),
     );
@@ -287,6 +290,7 @@ async fn manager_thread_added_ignores_other_workspace() {
             thread_id: "thread-minos-1234".into(),
             workspace: PathBuf::from("/tmp/Minos"),
             agent: AgentName::Codex,
+            parent_thread_id: None,
         }))
         .await
     );
@@ -312,6 +316,7 @@ async fn agent_input_group_echo_includes_existing_thread_short_id() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp/ws"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-codex-1234".into(),
@@ -353,6 +358,7 @@ async fn agent_input_answers_pending_question_without_group_echo_or_prompt() {
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     let mut chat = ChatState::new("thread-codex-1234".into(), AgentName::Codex);
     chat.apply_ui_events(vec![UiEventMessage::Raw {
@@ -418,6 +424,7 @@ async fn agent_input_answers_opencode_permission() {
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     let mut chat = ChatState::new("thread-opencode-1234".into(), AgentName::Opencode);
     chat.apply_ui_events(vec![UiEventMessage::Raw {
@@ -471,6 +478,7 @@ async fn agent_input_answers_opencode_question_with_selected_option() {
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     let mut chat = ChatState::new("thread-opencode-1234".into(), AgentName::Opencode);
     chat.apply_ui_events(vec![UiEventMessage::Raw {

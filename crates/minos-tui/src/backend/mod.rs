@@ -35,6 +35,7 @@ pub struct BackendThreadSnapshot {
     pub agent: Option<AgentName>,
     pub workspace: PathBuf,
     pub state: minos_agent_runtime::ThreadState,
+    pub parent_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +75,7 @@ pub struct ThreadSummaryEntry {
     pub last_ts_ms: i64,
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
+    pub parent_thread_id: Option<String>,
 }
 
 impl ThreadSummaryEntry {
@@ -86,6 +88,7 @@ impl ThreadSummaryEntry {
             last_ts_ms: s.last_ts_ms,
             message_count: s.message_count,
             ended_at_ms: s.ended_at_ms,
+            parent_thread_id: s.parent_thread_id.clone(),
         }
     }
 }

@@ -27,6 +27,16 @@ pub enum ChatItem {
         is_expanded: bool,
         is_streaming: bool,
     },
+    SubagentCall {
+        message_id: String,
+        tool_call_id: String,
+        sub_thread_id: String,
+        agent: minos_domain::AgentName,
+        model: Option<String>,
+        prompt_summary: Option<String>,
+        status: minos_ui_protocol::SubagentStatus,
+        is_streaming: bool,
+    },
     SystemMessage {
         text: String,
     },
@@ -42,7 +52,8 @@ impl ChatItem {
             ChatItem::UserMessage { message_id, .. }
             | ChatItem::AssistantText { message_id, .. }
             | ChatItem::Reasoning { message_id, .. }
-            | ChatItem::ToolCall { message_id, .. } => Some(message_id),
+            | ChatItem::ToolCall { message_id, .. }
+            | ChatItem::SubagentCall { message_id, .. } => Some(message_id),
             ChatItem::SystemMessage { .. } | ChatItem::Error { .. } => None,
         }
     }
@@ -52,7 +63,8 @@ impl ChatItem {
             ChatItem::UserMessage { is_streaming, .. }
             | ChatItem::AssistantText { is_streaming, .. }
             | ChatItem::Reasoning { is_streaming, .. }
-            | ChatItem::ToolCall { is_streaming, .. } => *is_streaming = value,
+            | ChatItem::ToolCall { is_streaming, .. }
+            | ChatItem::SubagentCall { is_streaming, .. } => *is_streaming = value,
             ChatItem::SystemMessage { .. } | ChatItem::Error { .. } => {}
         }
     }

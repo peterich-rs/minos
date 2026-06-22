@@ -11,6 +11,7 @@ pub struct ThreadHandle {
     pub workspace: PathBuf,
     pub agent: AgentKind,
     pub codex_session_id: Option<String>,
+    pub parent_thread_id: Option<String>,
     pub active_turn_id: Arc<Mutex<Option<String>>>,
     pub state_tx: Arc<watch::Sender<ThreadState>>,
     pub state_rx: watch::Receiver<ThreadState>,
@@ -31,11 +32,27 @@ impl ThreadHandle {
             workspace,
             agent,
             codex_session_id: None,
+            parent_thread_id: None,
             active_turn_id: Arc::new(Mutex::new(None)),
             state_tx: Arc::new(tx),
             state_rx: rx,
             last_seq: Arc::new(AtomicU64::new(last_seq)),
         }
+    }
+
+    pub fn new_subagent(
+        thread_id: String,
+        workspace: PathBuf,
+        agent: AgentKind,
+        parent_thread_id: String,
+        provider_session_id: Option<String>,
+        initial: ThreadState,
+        last_seq: u64,
+    ) -> Self {
+        let mut handle = Self::new(thread_id, workspace, agent, initial, last_seq);
+        handle.parent_thread_id = Some(parent_thread_id);
+        handle.codex_session_id = provider_session_id;
+        handle
     }
 
     pub fn current_state(&self) -> ThreadState {

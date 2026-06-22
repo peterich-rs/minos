@@ -171,6 +171,7 @@ impl AgentBackend for EmbeddedBackend {
                 agent: None,
                 workspace: thread.workspace,
                 state: thread.state,
+                parent_thread_id: thread.parent_thread_id,
             })
             .collect())
     }
@@ -293,6 +294,7 @@ impl AgentBackend for EmbeddedBackend {
                 last_ts_ms: now_ms(),
                 message_count: 0,
                 ended_at_ms: None,
+                parent_thread_id: None,
             });
         if let Some(conversation) = self
             .conversations

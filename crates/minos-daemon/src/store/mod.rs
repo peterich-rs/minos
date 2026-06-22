@@ -170,18 +170,20 @@ impl LocalStore {
         workspace_root: &str,
         agent: &str,
         provider_session_id: Option<&str>,
+        parent_thread_id: Option<&str>,
         status: &str,
         ts_ms: i64,
     ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT OR IGNORE INTO threads( \
-                thread_id, conversation_id, workspace_root, agent, provider_session_id, status, \
+                thread_id, conversation_id, workspace_root, parent_thread_id, agent, provider_session_id, status, \
                 last_seq, started_at, last_activity_at \
-             ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
         .bind(thread_id)
         .bind(conversation_id)
         .bind(workspace_root)
+        .bind(parent_thread_id)
         .bind(agent)
         .bind(provider_session_id)
         .bind(status)
@@ -488,19 +490,22 @@ impl LocalStore {
         workspace_root: &str,
         agent: &str,
         provider_session_id: Option<&str>,
+        parent_thread_id: Option<&str>,
         status: &str,
         ts_ms: i64,
+        count_as_agent_session: bool,
     ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT OR IGNORE INTO threads( \
-                thread_id, conversation_id, workspace_root, agent, provider_session_id, status, \
+                thread_id, conversation_id, workspace_root, parent_thread_id, agent, provider_session_id, status, \
                 last_seq, started_at, last_activity_at \
-             ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
         .bind(thread_id)
         .bind(conversation_id)
         .bind(workspace_root)
+        .bind(parent_thread_id)
         .bind(agent)
         .bind(provider_session_id)
         .bind(status)
@@ -508,7 +513,7 @@ impl LocalStore {
         .bind(ts_ms)
         .execute(&mut *tx)
         .await?;
-        if inserted.rows_affected() > 0 {
+        if count_as_agent_session && inserted.rows_affected() > 0 {
             sqlx::query(
                 "UPDATE conversations \
                  SET agent_session_count = agent_session_count + 1, updated_at_ms = ? \
@@ -671,6 +676,7 @@ pub struct ThreadRow {
     pub workspace_root: String,
     pub agent: String,
     pub provider_session_id: Option<String>,
+    pub parent_thread_id: Option<String>,
     pub status: String,
     pub last_pause_reason: Option<String>,
     pub last_close_reason: Option<String>,
@@ -688,6 +694,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
             workspace_root: row.try_get("workspace_root")?,
             agent: row.try_get("agent")?,
             provider_session_id: row.try_get("provider_session_id")?,
+            parent_thread_id: row.try_get("parent_thread_id")?,
             status: row.try_get("status")?,
             last_pause_reason: row.try_get("last_pause_reason")?,
             last_close_reason: row.try_get("last_close_reason")?,
@@ -819,6 +826,52 @@ mod tests {
         assert_eq!(threads.len(), 3);
         let one = store.get_thread("thr-1").await.unwrap();
         assert_eq!(one.unwrap().agent, "codex");
+    }
+
+    #[tokio::test]
+    async fn subagent_thread_keeps_parent_without_counting_as_agent_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        seed_conversation(&store).await;
+
+        store
+            .insert_thread_in_conversation(
+                "parent", "c", "/w", "codex", None, None, "idle", 10, true,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_thread_in_conversation(
+                "sub",
+                "c",
+                "/w",
+                "codex",
+                None,
+                Some("parent"),
+                "idle",
+                11,
+                false,
+            )
+            .await
+            .unwrap();
+
+        let sub = store.get_thread("sub").await.unwrap().unwrap();
+        assert_eq!(sub.parent_thread_id.as_deref(), Some("parent"));
+        let count: (i64,) = sqlx::query_as(
+            "SELECT agent_session_count FROM conversations WHERE conversation_id = 'c'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(count.0, 1);
     }
 
     #[tokio::test]

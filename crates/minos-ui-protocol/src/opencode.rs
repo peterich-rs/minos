@@ -61,6 +61,7 @@ pub fn translate(
             })?;
 
     match event_type {
+        "minos.subagent.spawned" => Ok(translate_synthetic_subagent_spawned(raw)),
         "session.created" => Ok(translate_session_created(state, raw)),
         "session.updated" => Ok(translate_session_updated(state, raw)),
         "message.updated" => Ok(translate_message_updated(state, raw)),
@@ -78,6 +79,45 @@ pub fn translate(
             payload_json: serde_json::to_string(raw).unwrap_or_default(),
         }]),
     }
+}
+
+fn translate_synthetic_subagent_spawned(raw: &Value) -> Vec<UiEventMessage> {
+    let properties = props(raw);
+    let parent_thread_id = properties
+        .get("parent_thread_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let sub_thread_id = properties
+        .get("sub_thread_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if parent_thread_id.is_empty() || sub_thread_id.is_empty() {
+        return Vec::new();
+    }
+    vec![UiEventMessage::SubagentSpawned {
+        parent_thread_id,
+        sub_thread_id,
+        tool_call_id: properties
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        agent: AgentName::Opencode,
+        model: properties
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        prompt: properties
+            .get("prompt")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        title: properties
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }]
 }
 
 fn translate_synthetic_user_message(
@@ -1271,5 +1311,38 @@ mod tests {
         )
         .expect("translation should succeed");
         assert!(user_part.is_empty());
+    }
+
+    #[test]
+    fn synthetic_subagent_spawned_emits_subagent_event() {
+        let mut state = OpencodeTranslatorState::new("parent".into());
+        let events = translate(
+            &mut state,
+            &val(r#"{
+                "type":"minos.subagent.spawned",
+                "properties":{
+                    "parent_thread_id":"parent",
+                    "sub_thread_id":"sub",
+                    "tool_call_id":"tool-task",
+                    "prompt":"inspect"
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        assert!(matches!(
+            events.as_slice(),
+            [UiEventMessage::SubagentSpawned {
+                parent_thread_id,
+                sub_thread_id,
+                tool_call_id,
+                agent: AgentName::Opencode,
+                prompt,
+                ..
+            }] if parent_thread_id == "parent"
+                && sub_thread_id == "sub"
+                && tool_call_id == "tool-task"
+                && prompt.as_deref() == Some("inspect")
+        ));
     }
 }

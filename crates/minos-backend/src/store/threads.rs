@@ -431,6 +431,7 @@ fn decode_thread_summary_row(
         message_count: u32::try_from(message_count).unwrap_or(u32::MAX),
         ended_at_ms,
         end_reason,
+        parent_thread_id: None,
     })
 }
 

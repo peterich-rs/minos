@@ -1208,6 +1208,7 @@ pub struct _ThreadSummary {
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
     pub end_reason: Option<ThreadEndReason>,
+    pub parent_thread_id: Option<String>,
 }
 
 pub struct AgentSessionSummaryDto {

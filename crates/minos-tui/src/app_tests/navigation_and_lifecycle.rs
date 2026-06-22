@@ -14,6 +14,7 @@ async fn daemon_tick_replays_history_and_records_opencode_result_when_live_inges
                 agent: Some(AgentName::Opencode),
                 workspace: PathBuf::from("/tmp/ws"),
                 state: ThreadState::Idle,
+                parent_thread_id: None,
             }])
             .with_history_pages(
                 "thread-opencode-1234",
@@ -75,6 +76,7 @@ async fn idle_thread_state_finishes_streaming_assistant_cursor() {
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     let mut chat = ChatState::new("thread-codex-1234".into(), AgentName::Codex);
     chat.apply_ui_events(vec![
@@ -130,6 +132,7 @@ async fn enter_on_agent_list_opens_detail_and_esc_uplevels() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-1".into(),
@@ -143,6 +146,7 @@ async fn enter_on_agent_list_opens_detail_and_esc_uplevels() {
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
+        parent_thread_id: None,
     }];
     app.ui.selected_agent_session = Some(0);
     app.ui.agent_list_state.select(Some(0));
@@ -174,6 +178,7 @@ async fn mouse_wheel_scrolls_chat_and_focuses_it() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-1".into(),
@@ -213,12 +218,14 @@ async fn mouse_wheel_over_thread_list_moves_selection() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-2".into(),
         agent: AgentName::Claude,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.select_thread(0);
     app.ui.panel_areas.agent_list = Rect::new(0, 0, 20, 10);
@@ -265,6 +272,7 @@ async fn mouse_selection_copies_chat_text_on_release() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     let mut chat = ChatState::new("thread-1".into(), AgentName::Codex);
     chat.apply_ui_events(vec![
@@ -335,12 +343,14 @@ async fn delete_key_in_thread_list_opens_confirmation() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-2".into(),
         agent: AgentName::Claude,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-1".into(),
@@ -375,12 +385,14 @@ async fn enter_confirms_thread_delete_and_removes_local_state() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.threads.push(ThreadEntry {
         thread_id: "thread-2".into(),
         agent: AgentName::Claude,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-1".into(),
@@ -420,6 +432,7 @@ async fn init_hydrates_connected_daemon_threads_with_agent_and_paginated_history
                 state: ThreadState::Suspended {
                     reason: minos_agent_runtime::PauseReason::DaemonRestart,
                 },
+                parent_thread_id: None,
             }])
             .with_history_pages(
                 "thread-1",
@@ -476,6 +489,7 @@ async fn shutdown_does_not_close_threads_for_daemon_backend() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
 
     app.shutdown().await;

@@ -123,6 +123,8 @@ DaemonInner {
 2. **`IngestCoalescer` + `EventWriter`**：预分配 seq/projection，单写者 SQLite 本地持久化
 3. **Watch channel**：镜像最新线程状态
 
+subagent 也是普通 thread，只是在 `ThreadAdded` / `ThreadSummary` / `LocalThreadSnapshot` 上携带 `parent_thread_id`。daemon 收到 `ThreadAdded { parent_thread_id: Some(parent) }` 时复用父线程的 conversation 插入子线程行，且不增加 `conversations.agent_session_count`。TUI 通过现有 `list_conversation_agent_sessions` 得到父子 thread，不新增 `list_subagents` RPC。
+
 Codex app-server 启动分两段超时：initialize handshake 默认 5 秒，`thread/start` 默认 30 秒。后者独立配置为 `AgentRuntimeConfig.thread_start_timeout`，因为线程创建会受 workspace 初始化、skills/MCP 注入和 Codex 冷启动状态影响。
 
 Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先使用 `MINOS_TEAMWORK_MCP_BIN` 或同目录 `minos-teamwork-mcp`；找不到时，`minos-daemon __minos-teamwork-mcp` hidden 子命令可直接作为 stdio MCP server。TUI 托管 daemon 时当前可执行文件是 `minos-tui`，同一逻辑会回落到 `minos-tui __minos-teamwork-mcp`，因此 `minos-tui --backend daemon` 不要求用户额外构建 MCP bin。
@@ -178,6 +180,8 @@ Starting → Idle → Running { turn_started_at_ms }
 - **0003**: `chat_rooms`, `chat_messages`, `chat_agent_sessions`, `chat_mcp_commands`
 - **0004**: teamwork MCP 状态
 - **0005**: `ingest_sync_state`，记录 backend ack 水位和 host 本地 dirty range
+
+`threads.parent_thread_id` 表示 subagent 归属。顶层 thread 为 `NULL`；subagent 行引用父 thread，事件仍写入各自 thread 的 `events`，因此历史回放和实时 fanout 不需要单独的数据面。
 
 ### `EventWriter` (`src/store/event_writer.rs`)
 

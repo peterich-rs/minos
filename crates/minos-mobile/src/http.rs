@@ -289,6 +289,7 @@ impl FormalAgentSessionSummary {
             message_count: self.message_count,
             ended_at_ms: self.ended_at_ms,
             end_reason: self.end_reason,
+            parent_thread_id: None,
         })
     }
 }

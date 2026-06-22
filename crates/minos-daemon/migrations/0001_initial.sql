@@ -48,6 +48,7 @@ CREATE TABLE threads (
     thread_id            TEXT PRIMARY KEY,
     conversation_id      TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     workspace_root       TEXT NOT NULL REFERENCES workspaces(root),
+    parent_thread_id     TEXT REFERENCES threads(thread_id) ON DELETE CASCADE,
     agent                TEXT NOT NULL,
     provider_session_id  TEXT,
     status              TEXT NOT NULL CHECK(status IN ('starting', 'idle', 'running', 'resuming', 'suspended', 'closed')),
@@ -66,6 +67,10 @@ CREATE INDEX threads_by_conversation_last
 
 CREATE INDEX threads_by_conversation_agent_last
     ON threads(conversation_id, agent, last_activity_at DESC, thread_id);
+
+CREATE INDEX threads_by_parent
+    ON threads(parent_thread_id, last_activity_at DESC, thread_id)
+    WHERE parent_thread_id IS NOT NULL;
 
 CREATE INDEX threads_by_workspace
     ON threads(workspace_root, last_activity_at DESC);

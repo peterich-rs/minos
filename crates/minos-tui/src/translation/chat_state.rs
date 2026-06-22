@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use minos_domain::AgentName;
-use minos_ui_protocol::{MessageRole, UiEventMessage};
+use minos_ui_protocol::{MessageRole, SubagentStatus, UiEventMessage};
 use tracing::{debug, warn};
 
 use super::agent::AgentTranslationState;
@@ -339,6 +339,53 @@ impl ChatState {
                     *is_streaming = false;
                 }
             }
+            UiEventMessage::SubagentSpawned {
+                sub_thread_id,
+                tool_call_id,
+                agent,
+                model,
+                prompt,
+                ..
+            } => {
+                if let Some(ChatItem::SubagentCall {
+                    model: existing_model,
+                    prompt_summary,
+                    status,
+                    is_streaming,
+                    ..
+                }) = self.find_subagent_call_mut(&sub_thread_id)
+                {
+                    *existing_model = model;
+                    *prompt_summary = prompt.as_deref().map(subagent_prompt_summary);
+                    *status = SubagentStatus::Running;
+                    *is_streaming = true;
+                } else {
+                    self.items.push(ChatItem::SubagentCall {
+                        message_id: tool_call_id.clone(),
+                        tool_call_id,
+                        sub_thread_id,
+                        agent,
+                        model,
+                        prompt_summary: prompt.as_deref().map(subagent_prompt_summary),
+                        status: SubagentStatus::Running,
+                        is_streaming: true,
+                    });
+                }
+            }
+            UiEventMessage::SubagentStatusUpdated {
+                sub_thread_id,
+                status,
+            } => {
+                if let Some(ChatItem::SubagentCall {
+                    status: existing_status,
+                    is_streaming,
+                    ..
+                }) = self.find_subagent_call_mut(&sub_thread_id)
+                {
+                    *existing_status = status;
+                    *is_streaming = status == SubagentStatus::Running;
+                }
+            }
             UiEventMessage::MessageCompleted { message_id, .. } => {
                 if self.message_is_assistant(&message_id) {
                     self.completed_assistant_message_ids
@@ -418,6 +465,12 @@ impl ChatState {
     fn find_tool_call_item_mut(&mut self, tool_call_id: &str) -> Option<&mut ChatItem> {
         self.items.iter_mut().rev().find(|item| {
             matches!(item, ChatItem::ToolCall { tool_call_id: id, .. } if id == tool_call_id)
+        })
+    }
+
+    fn find_subagent_call_mut(&mut self, sub_thread_id: &str) -> Option<&mut ChatItem> {
+        self.items.iter_mut().rev().find(|item| {
+            matches!(item, ChatItem::SubagentCall { sub_thread_id: id, .. } if id == sub_thread_id)
         })
     }
 
@@ -571,4 +624,13 @@ fn append_text_to_item(item: &mut ChatItem, text: String) {
         }
         _ => {}
     }
+}
+
+fn subagent_prompt_summary(prompt: &str) -> String {
+    let first_line = prompt.lines().next().unwrap_or("").trim();
+    let mut summary = first_line.chars().take(120).collect::<String>();
+    if first_line.chars().count() > 120 {
+        summary.push_str("...");
+    }
+    summary
 }

@@ -80,8 +80,8 @@ pub enum NavLevel {
 
 1. **Projects**: `Up/Down` 选择 project，`Enter` 加载 conversations，`n` 打开 project 创建对话框，`Esc` 退出。
 2. **Conversations**: `Up/Down` 选择 conversation，`Enter` 打开主时间线；输入 prompt 时会创建新 conversation 并启动指定/default agent。
-3. **Conversation**: 中间列显示 conversation messages，右侧显示该 conversation 下的 agent sessions；输入 `@agent message` 会写主时间线并启动 agent run，`@agent#short message` 会发给已有 run。
-4. **AgentDetail**: 显示单个 agent run 的 direct chat；Agent Input 的用户消息以 `@agent#short ...` 形式写入 conversation 主时间线，并把 clean prompt 发给该 run。
+3. **Conversation**: 中间列显示 conversation messages，右侧显示该 conversation 下的 agent sessions。session 列表按 `ThreadSummaryEntry.parent_thread_id` 扁平化为父子树；subagent 作为父 session 的只读子项展示。输入 `@agent message` 会写主时间线并启动 agent run，`@agent#short message` 只匹配顶层 agent run，不路由到 subagent。
+4. **AgentDetail**: 显示单个 agent run 的 direct chat；顶层 run 的 Agent Input 以 `@agent#short ...` 形式写入 conversation 主时间线，并把 clean prompt 发给该 run。subagent 的 AgentDetail 只读，只用于观察 transcript、工具状态和终态。
 
 ## UI 状态与布局
 
@@ -96,10 +96,11 @@ conversation_agent_sessions: Vec<ThreadSummaryEntry>,
 selected_project: Option<usize>,
 selected_conversation: Option<usize>,
 selected_agent_session: Option<usize>,
+subagent_info: HashMap<String, SubagentInfo>,
 chat_states: HashMap<String, ChatState>,
 ```
 
-`threads` / `selected_thread` 仍存在，用于 direct agent panel、daemon history hydration、thread lifecycle 和旧 MCP/teamwork 入口。用户可见的 project 层列表不再把 thread 当成 conversation。
+`ThreadSummaryEntry.parent_thread_id.is_some()` 表示 subagent。`selected_agent_session` 存储的是 sidebar 扁平树 index；键盘、鼠标、Enter 和 `current_thread_id()` 都通过同一个 flat helper 映射回原始 session。`threads` / `selected_thread` 仍存在，用于 direct agent panel、daemon history hydration、thread lifecycle 和旧 MCP/teamwork 入口。用户可见的 project 层列表不再把 thread 当成 conversation。
 
 当前主要组件:
 
@@ -180,6 +181,7 @@ daemon 的本地 SQLite 以最新目标结构为准，不维护旧 schema 兼容
 
 ```text
 projects 1:N conversations 1:N threads
+threads 1:N subagent threads via parent_thread_id
 conversations 1:N chat_messages
 threads 1:N events
 ```
@@ -189,6 +191,7 @@ threads 1:N events
 - `conversations(project_id, updated_at_ms DESC, conversation_id)` 支撑 project 下 conversation 列表。
 - `threads(conversation_id, last_activity_at DESC, thread_id)` 支撑 conversation 右侧 session 列表。
 - `threads(conversation_id, agent, last_activity_at DESC, thread_id)` 支撑 `@agent#short` 候选查找。
+- `threads(parent_thread_id, last_activity_at DESC, thread_id)` 支撑 subagent 子项查询；TUI 当前复用 conversation session 列表并在前端按 parent id 扁平化，不新增 `list_subagents` RPC。
 - `chat_messages(conversation_id, message_seq DESC)` 支撑时间线分页。
 - conversation 行冗余 `message_count`、`agent_session_count`、`last_message_preview`，避免列表页 N+1 `COUNT(*)`。
 
@@ -205,6 +208,8 @@ threads 1:N events
 | `ui/chat/cache.rs` | direct chat 可见行缓存 |
 
 `ChatState::last_completed_assistant_text()` 只从明确完成的 assistant message 取最终文本；中间 streaming 文本不会作为最终回复记录。
+
+`UiEventMessage::SubagentSpawned` 在父线程 transcript 中生成 `ChatItem::SubagentCall`；`SubagentStatusUpdated` 更新该卡片状态。subagent 自身 transcript 仍是普通 thread history，通过相同 `read_thread_raw_history` replay。
 
 ## Teamwork/MCP 现状
 

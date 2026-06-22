@@ -395,6 +395,7 @@ impl App {
             agent,
             workspace,
             state: ThreadState::Starting,
+            parent_thread_id: None,
         });
         self.ensure_chat_state_agent(&thread_id, agent);
         self.select_thread(self.ui.threads.len().saturating_sub(1));

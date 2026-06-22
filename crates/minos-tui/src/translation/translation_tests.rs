@@ -1,7 +1,7 @@
 use super::tool_summary::{is_diff_like, summarize_tool_args, summarize_tool_output};
 use super::*;
 use minos_domain::AgentName;
-use minos_ui_protocol::{MessageRole, UiEventMessage};
+use minos_ui_protocol::{MessageRole, SubagentStatus, UiEventMessage};
 
 fn plain_parts(text: &str) -> Vec<TextPart> {
     vec![TextPart::Plain(text.into())]
@@ -736,5 +736,49 @@ fn toggle_tool_expansion_bumps_version() {
     match &cs.items[0] {
         ChatItem::ToolCall { is_expanded, .. } => assert!(*is_expanded),
         other => panic!("expected ToolCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn subagent_spawn_and_status_update_render_parent_card() {
+    let mut cs = ChatState::new("parent".into(), AgentName::Codex);
+    cs.apply_ui_events(vec![UiEventMessage::SubagentSpawned {
+        parent_thread_id: "parent".into(),
+        sub_thread_id: "sub".into(),
+        tool_call_id: "collab-1".into(),
+        agent: AgentName::Codex,
+        model: Some("gpt-5".into()),
+        prompt: Some("inspect repository".into()),
+        title: None,
+    }]);
+
+    match &cs.items[0] {
+        ChatItem::SubagentCall {
+            sub_thread_id,
+            status,
+            is_streaming,
+            ..
+        } => {
+            assert_eq!(sub_thread_id, "sub");
+            assert_eq!(*status, SubagentStatus::Running);
+            assert!(*is_streaming);
+        }
+        other => panic!("expected SubagentCall, got {other:?}"),
+    }
+
+    cs.apply_ui_events(vec![UiEventMessage::SubagentStatusUpdated {
+        sub_thread_id: "sub".into(),
+        status: SubagentStatus::Completed,
+    }]);
+    match &cs.items[0] {
+        ChatItem::SubagentCall {
+            status,
+            is_streaming,
+            ..
+        } => {
+            assert_eq!(*status, SubagentStatus::Completed);
+            assert!(!*is_streaming);
+        }
+        other => panic!("expected SubagentCall, got {other:?}"),
     }
 }

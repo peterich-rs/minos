@@ -24,13 +24,14 @@ use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
 use minos_protocol::LocalGroupChatMessage;
+use minos_ui_protocol::SubagentStatus;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     widgets::ListState,
     Frame,
 };
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -39,6 +40,28 @@ pub struct ThreadEntry {
     pub agent: AgentName,
     pub workspace: PathBuf,
     pub state: ThreadState,
+    pub parent_thread_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FlatAgentSession {
+    pub source_index: usize,
+    pub thread_id: String,
+    pub agent: AgentName,
+    pub parent_thread_id: Option<String>,
+    pub depth: u8,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct SubagentInfo {
+    pub parent_thread_id: String,
+    pub tool_call_id: String,
+    pub agent: AgentName,
+    pub model: Option<String>,
+    pub prompt: Option<String>,
+    pub title: Option<String>,
+    pub status: SubagentStatus,
 }
 
 pub struct UiState {
@@ -71,6 +94,7 @@ pub struct UiState {
     pub conversation_max_scroll: u16,
     pub conversation_agent_sessions: Vec<ThreadSummaryEntry>,
     pub selected_agent_session: Option<usize>,
+    pub subagent_info: HashMap<String, SubagentInfo>,
     pub project_create_dialog: Option<ProjectCreateDialogState>,
 }
 
@@ -135,6 +159,7 @@ impl UiState {
             conversation_max_scroll: 0,
             conversation_agent_sessions: Vec::new(),
             selected_agent_session: None,
+            subagent_info: HashMap::new(),
             project_create_dialog: None,
         }
     }
@@ -158,17 +183,44 @@ impl UiState {
             self.nav_level(),
             NavLevel::Conversation { .. } | NavLevel::AgentDetail { .. }
         ) {
-            if let Some(thread_id) = self
-                .selected_agent_session
-                .and_then(|i| self.conversation_agent_sessions.get(i))
-                .map(|t| t.thread_id.as_str())
-            {
+            if let Some(thread_id) = self.selected_flat_agent_session_thread_id() {
                 return Some(thread_id);
             }
         }
         self.selected_thread
             .and_then(|i| self.threads.get(i))
             .map(|t| t.thread_id.as_str())
+    }
+
+    pub fn flat_agent_sessions(&self) -> Vec<FlatAgentSession> {
+        flat_agent_sessions(&self.conversation_agent_sessions)
+    }
+
+    pub fn flat_agent_session_count(&self) -> usize {
+        self.flat_agent_sessions().len()
+    }
+
+    pub fn selected_flat_agent_session_thread_id(&self) -> Option<&str> {
+        let selected = self.selected_agent_session?;
+        let source_index = self.flat_agent_sessions().get(selected)?.source_index;
+        self.conversation_agent_sessions
+            .get(source_index)
+            .map(|session| session.thread_id.as_str())
+    }
+
+    pub fn current_thread_is_subagent(&self) -> bool {
+        let Some(thread_id) = self.current_thread_id() else {
+            return false;
+        };
+        self.threads
+            .iter()
+            .find(|thread| thread.thread_id == thread_id)
+            .is_some_and(|thread| thread.parent_thread_id.is_some())
+            || self
+                .conversation_agent_sessions
+                .iter()
+                .find(|session| session.thread_id == thread_id)
+                .is_some_and(|session| session.parent_thread_id.is_some())
     }
 
     pub fn current_chat_mut(&mut self) -> Option<&mut ChatState> {
@@ -212,6 +264,7 @@ impl UiState {
         candidates.extend(
             self.threads
                 .iter()
+                .filter(|thread| thread.parent_thread_id.is_none())
                 .filter(|thread| !matches!(thread.state, ThreadState::Closed { .. }))
                 .map(|thread| {
                     AgentMentionCandidate::existing(
@@ -222,6 +275,85 @@ impl UiState {
                 }),
         );
         candidates
+    }
+}
+
+pub(crate) fn flat_agent_sessions(sessions: &[ThreadSummaryEntry]) -> Vec<FlatAgentSession> {
+    let mut out = Vec::with_capacity(sessions.len());
+    let mut seen = HashSet::new();
+    for (index, session) in sessions.iter().enumerate() {
+        if session.parent_thread_id.is_some() {
+            continue;
+        }
+        push_flat_session(&mut out, &mut seen, index, session, 0);
+        for (child_index, child) in sessions.iter().enumerate() {
+            if child.parent_thread_id.as_deref() == Some(session.thread_id.as_str()) {
+                push_flat_session(&mut out, &mut seen, child_index, child, 1);
+            }
+        }
+    }
+    for (index, session) in sessions.iter().enumerate() {
+        if !seen.contains(&session.thread_id) {
+            push_flat_session(&mut out, &mut seen, index, session, 0);
+        }
+    }
+    out
+}
+
+fn push_flat_session(
+    out: &mut Vec<FlatAgentSession>,
+    seen: &mut HashSet<String>,
+    source_index: usize,
+    session: &ThreadSummaryEntry,
+    depth: u8,
+) {
+    seen.insert(session.thread_id.clone());
+    out.push(FlatAgentSession {
+        source_index,
+        thread_id: session.thread_id.clone(),
+        agent: session.agent,
+        parent_thread_id: session.parent_thread_id.clone(),
+        depth,
+    });
+}
+
+#[cfg(test)]
+mod subagent_tests {
+    use super::*;
+
+    fn session(thread_id: &str, parent_thread_id: Option<&str>) -> ThreadSummaryEntry {
+        ThreadSummaryEntry {
+            thread_id: thread_id.into(),
+            agent: AgentName::Codex,
+            title: None,
+            first_ts_ms: 0,
+            last_ts_ms: 0,
+            message_count: 0,
+            ended_at_ms: None,
+            parent_thread_id: parent_thread_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn flat_agent_sessions_groups_children_under_parent() {
+        let flat = flat_agent_sessions(&[
+            session("parent-a", None),
+            session("parent-b", None),
+            session("sub-a", Some("parent-a")),
+            session("orphan", Some("missing")),
+        ]);
+
+        assert_eq!(
+            flat.iter()
+                .map(|entry| (entry.thread_id.as_str(), entry.depth))
+                .collect::<Vec<_>>(),
+            vec![
+                ("parent-a", 0),
+                ("sub-a", 1),
+                ("parent-b", 0),
+                ("orphan", 0),
+            ]
+        );
     }
 }
 
@@ -523,7 +655,7 @@ fn render_conversation_level(f: &mut Frame, state: &mut UiState) {
     let root = f.area();
     let input_height = input_bar::required_height(&state.room_input, root.width);
     let [_, middle, input_area] = root_sections(root, input_height);
-    let areas = Row::areas_for(middle, &[72, 28]);
+    let areas = Row::areas_for(middle, &[80, 20]);
 
     state.panel_areas = PanelAreas {
         room_list: Rect::default(),
@@ -553,7 +685,7 @@ fn render_conversation_level(f: &mut Frame, state: &mut UiState) {
                 state.focus.is(PaneId::Sidebar),
             )),
         ],
-        vec![72, 28],
+        vec![80, 20],
     );
 
     let input = input_bar::InputBarRenderable::new(
@@ -582,47 +714,57 @@ fn render_conversation_level(f: &mut Frame, state: &mut UiState) {
 }
 
 fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
-    let mention_candidates = state.room_agent_mention_candidates();
     let pending_agent_request = state
         .current_chat()
         .and_then(ChatState::active_pending_request)
         .is_some();
+    let is_subagent = state.current_thread_is_subagent();
     let selected_thread_id = state.current_thread_id().map(str::to_owned);
-    let room_input_title = room_input_title(&state.room_input);
-    let agent_input_title = agent_input_title(pending_agent_request, state.agent_input.multiline);
+    let agent_input_title = if is_subagent {
+        "Subagent · read-only"
+    } else {
+        agent_input_title(pending_agent_request, state.agent_input.multiline)
+    };
     let flash_active = state.is_flash_copied_active();
-    let agent_input_hint = if pending_agent_request {
+    let agent_input_hint = if is_subagent {
+        "Subagent transcript is read-only"
+    } else if pending_agent_request {
         "Reply to the pending agent request"
     } else {
         "Talk directly to the selected agent"
     };
     let root = f.area();
-    let input_widths = Row::areas_for(
-        Rect {
-            x: root.x,
-            y: root.y,
-            width: root.width,
-            height: 0,
-        },
-        &[65, 35],
-    );
-    let input_height = input_bar::required_height(&state.room_input, input_widths[0].width).max(
-        input_bar::required_height(&state.agent_input, input_widths[1].width),
-    );
-    let [_, middle, input_area] = root_sections(root, input_height);
-    let columns = Row::areas_for(middle, &[45, 20, 35]);
-    let inputs = Row::areas_for(input_area, &[65, 35]);
+    let body_area = Rect {
+        x: root.x,
+        y: root.y.saturating_add(1),
+        width: root.width,
+        height: root.height.saturating_sub(1),
+    };
+    let columns = Row::areas_for(body_area, &[80, 20]);
+    let agent_input_height =
+        input_bar::required_height(&state.agent_input, columns[0].width).min(columns[0].height);
+    let agent_chat_area = Rect {
+        x: columns[0].x,
+        y: columns[0].y,
+        width: columns[0].width,
+        height: columns[0].height.saturating_sub(agent_input_height.max(1)),
+    };
+    let agent_input_area = Rect {
+        x: columns[0].x,
+        y: columns[0].y.saturating_add(agent_chat_area.height),
+        width: columns[0].width,
+        height: agent_input_height.max(1),
+    };
 
     state.panel_areas = PanelAreas {
         room_list: Rect::default(),
-        room_chat: columns[0],
+        room_chat: Rect::default(),
         agent_list: columns[1],
-        agent_chat: columns[2],
-        room_input: inputs[0],
-        agent_input: inputs[1],
+        agent_chat: agent_chat_area,
+        room_input: Rect::default(),
+        agent_input: agent_input_area,
     };
 
-    let title = current_conversation_title(state);
     let agent_chat_target = if let Some(thread_id) = selected_thread_id.as_deref() {
         if let Some(chat) = state.chat_states.get_mut(thread_id) {
             AgentChatTarget::Chat {
@@ -636,38 +778,12 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
         AgentChatTarget::Empty
     };
 
-    let [room_metrics, agent_metrics] = &mut state.input_metrics;
-    let main_row = Row::new(
+    let [_, agent_metrics] = &mut state.input_metrics;
+    let left_column = Column::with_fill(
         vec![
-            Box::new(conversation_detail::ConversationMessagesRenderable::new(
-                title,
-                &state.conversation_messages,
-                &mut state.conversation_scroll_offset,
-                &mut state.conversation_auto_scroll,
-                &mut state.conversation_max_scroll,
-                state.focus.is(PaneId::MainChat),
-            )),
-            Box::new(conversation_detail::AgentSessionListRenderable::new(
-                &state.conversation_agent_sessions,
-                state.selected_agent_session,
-                &mut state.agent_list_state,
-                state.focus.is(PaneId::Sidebar),
-            )),
             Box::new(AgentChatRenderable::new(
                 agent_chat_target,
                 state.focus.is(PaneId::MainChat),
-            )),
-        ],
-        vec![45, 20, 35],
-    );
-    let input_row = Row::new(
-        vec![
-            Box::new(input_bar::InputBarRenderable::new(
-                room_input_title,
-                "Type @agent to run inside this conversation",
-                &state.room_input,
-                mention_candidates.as_slice(),
-                room_metrics,
             )),
             Box::new(input_bar::InputBarRenderable::new(
                 agent_input_title,
@@ -677,7 +793,19 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
                 agent_metrics,
             )),
         ],
-        vec![65, 35],
+        0,
+    );
+    let main_row = Row::new(
+        vec![
+            Box::new(left_column),
+            Box::new(conversation_detail::AgentSessionListRenderable::new(
+                &state.conversation_agent_sessions,
+                state.selected_agent_session,
+                &mut state.agent_list_state,
+                state.focus.is(PaneId::Sidebar),
+            )),
+        ],
+        vec![80, 20],
     );
     let mut tree = Column::with_fill(
         vec![
@@ -686,7 +814,6 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
                 flash_active,
             )),
             Box::new(main_row),
-            Box::new(input_row),
         ],
         1,
     );

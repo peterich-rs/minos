@@ -34,11 +34,24 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
     }
     ui.agent_input.history.record(text.as_str());
 
-    let Some(thread) = ui.selected_thread.and_then(|index| ui.threads.get(index)) else {
+    if ui.current_thread_is_subagent() {
+        ui.agent_input.take_input();
+        ui.set_error("Subagent transcripts are read-only.".into());
+        return (StateChange::redraw(), vec![]);
+    }
+
+    let Some(thread_id) = ui.current_thread_id().map(str::to_owned) else {
         ui.set_error("No agent selected for direct chat.".into());
         return (StateChange::redraw(), vec![]);
     };
-    let thread_id = thread.thread_id.clone();
+    let Some(thread) = ui
+        .threads
+        .iter()
+        .find(|thread| thread.thread_id == thread_id)
+    else {
+        ui.set_error("Selected agent thread is not active.".into());
+        return (StateChange::redraw(), vec![]);
+    };
     let agent = thread.agent;
 
     if !thread_can_receive_message(&thread.state) {

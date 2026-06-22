@@ -271,6 +271,7 @@ impl AgentManager {
         workspace: PathBuf,
         agent: AgentKind,
         codex_session_id: Option<String>,
+        parent_thread_id: Option<String>,
         initial_state: ThreadState,
         last_seq: u64,
     ) -> anyhow::Result<()> {
@@ -287,12 +288,14 @@ impl AgentManager {
             last_seq,
         );
         handle.codex_session_id = codex_session_id;
+        handle.parent_thread_id = parent_thread_id.clone();
         threads.insert(thread_id.clone(), handle);
         drop(threads);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id,
             workspace: canon,
             agent,
+            parent_thread_id,
         });
         Ok(())
     }
@@ -442,6 +445,7 @@ impl AgentManager {
             thread_id: thread_id.clone(),
             workspace: canon.clone(),
             agent,
+            parent_thread_id: None,
         });
 
         // The event pump will surface the `thread/started` notification; in
@@ -491,6 +495,7 @@ impl AgentManager {
             thread_id: thread_id.clone(),
             workspace: canon.clone(),
             agent,
+            parent_thread_id: None,
         });
         if let Some(h) = self.threads.lock().await.get(&thread_id) {
             let _ = h.transition(ThreadState::Idle);
@@ -535,6 +540,7 @@ impl AgentManager {
             thread_id: thread_id.clone(),
             workspace: canon.clone(),
             agent,
+            parent_thread_id: None,
         });
         Ok(StartAgentOutcome {
             thread_id,
@@ -567,6 +573,7 @@ impl AgentManager {
             thread_id: thread_id.clone(),
             workspace: canon.clone(),
             agent,
+            parent_thread_id: None,
         });
         Ok(StartAgentOutcome {
             thread_id,
@@ -1832,6 +1839,7 @@ impl AgentManager {
                 thread_id: h.thread_id.clone(),
                 workspace: h.workspace.clone(),
                 state: h.current_state(),
+                parent_thread_id: h.parent_thread_id.clone(),
             })
             .collect()
     }
@@ -2251,9 +2259,18 @@ async fn logical_thread_id_for_provider(
     threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
     provider_thread_id: &str,
 ) -> String {
+    logical_thread_id_for_provider_known(threads, provider_thread_id)
+        .await
+        .0
+}
+
+async fn logical_thread_id_for_provider_known(
+    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    provider_thread_id: &str,
+) -> (String, bool) {
     let guard = threads.lock().await;
     if guard.contains_key(provider_thread_id) {
-        return provider_thread_id.to_string();
+        return (provider_thread_id.to_string(), true);
     }
     guard
         .values()
@@ -2261,7 +2278,10 @@ async fn logical_thread_id_for_provider(
             (handle.codex_session_id.as_deref() == Some(provider_thread_id))
                 .then(|| handle.thread_id.clone())
         })
-        .unwrap_or_else(|| provider_thread_id.to_string())
+        .map_or_else(
+            || (provider_thread_id.to_string(), false),
+            |thread_id| (thread_id, true),
+        )
 }
 
 fn rewrite_payload_thread_id(params: &mut Value, thread_id: &str) {
@@ -2271,6 +2291,14 @@ fn rewrite_payload_thread_id(params: &mut Value, thread_id: &str) {
             "thread_id".to_string(),
             Value::String(thread_id.to_string()),
         );
+        if let Some(item) = object.get_mut("item").and_then(Value::as_object_mut) {
+            if item.contains_key("senderThreadId") {
+                item.insert(
+                    "senderThreadId".to_string(),
+                    Value::String(thread_id.to_string()),
+                );
+            }
+        }
     }
 }
 
@@ -2287,6 +2315,92 @@ fn request_turn_id(params: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+#[derive(Debug)]
+struct CodexSubagentRegistration {
+    parent_thread_id: String,
+    sub_thread_id: String,
+    tool_call_id: String,
+}
+
+fn codex_collab_subagent_registrations(
+    method: &str,
+    parent_thread_id: &str,
+    params: &Value,
+) -> Vec<CodexSubagentRegistration> {
+    if method != "item/started" && method != "item/completed" {
+        return Vec::new();
+    }
+    let item = params.get("item").unwrap_or(&Value::Null);
+    if item.get("type").and_then(Value::as_str) != Some("collabAgentToolCall") {
+        return Vec::new();
+    }
+    let parent = item
+        .get("senderThreadId")
+        .and_then(Value::as_str)
+        .unwrap_or(parent_thread_id)
+        .to_string();
+    item.get("receiverThreadIds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|sub_thread_id| CodexSubagentRegistration {
+            parent_thread_id: parent.clone(),
+            sub_thread_id: sub_thread_id.to_string(),
+            tool_call_id: item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        })
+        .collect()
+}
+
+async fn register_codex_subagent_thread(
+    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    manager_tx: &broadcast::Sender<ManagerEvent>,
+    fallback_workspace: &Path,
+    registration: &CodexSubagentRegistration,
+) {
+    let mut guard = threads.lock().await;
+    if let Some(handle) = guard.get_mut(&registration.sub_thread_id) {
+        handle.parent_thread_id = Some(registration.parent_thread_id.clone());
+        handle.codex_session_id = Some(registration.sub_thread_id.clone());
+        return;
+    }
+    let workspace = guard
+        .get(&registration.parent_thread_id)
+        .map(|handle| handle.workspace.clone())
+        .unwrap_or_else(|| fallback_workspace.to_path_buf());
+    guard.insert(
+        registration.sub_thread_id.clone(),
+        ThreadHandle::new_subagent(
+            registration.sub_thread_id.clone(),
+            workspace.clone(),
+            AgentName::Codex,
+            registration.parent_thread_id.clone(),
+            Some(registration.sub_thread_id.clone()),
+            ThreadState::Starting,
+            0,
+        ),
+    );
+    drop(guard);
+    let _ = manager_tx.send(ManagerEvent::ThreadAdded {
+        thread_id: registration.sub_thread_id.clone(),
+        workspace: workspace.clone(),
+        agent: AgentName::Codex,
+        parent_thread_id: Some(registration.parent_thread_id.clone()),
+    });
+    info!(
+        target: "minos_agent_runtime::manager",
+        parent_thread_id = %registration.parent_thread_id,
+        sub_thread_id = %registration.sub_thread_id,
+        tool_call_id = %registration.tool_call_id,
+        workspace = %workspace.display(),
+        "registered codex subagent thread",
+    );
 }
 
 async fn non_approval_context_for_request(
@@ -2423,9 +2537,25 @@ async fn event_pump_loop(
     approval_request_timeout: Duration,
     crash_tx: tokio::sync::mpsc::Sender<()>,
 ) {
+    let mut orphan_notifications: HashMap<String, Vec<(Instant, String, Value)>> = HashMap::new();
     while let Some(inbound) = client.next_inbound().await {
         match inbound {
             Inbound::Notification { method, mut params } => {
+                orphan_notifications.retain(|provider_thread_id, notifications| {
+                    notifications.retain(|(created_at, _, _)| {
+                        created_at.elapsed() < Duration::from_secs(30)
+                    });
+                    if notifications.is_empty() {
+                        tracing::debug!(
+                            target: "minos_agent_runtime::manager",
+                            provider_thread_id,
+                            "dropped expired orphan codex notifications",
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                });
                 let provider_thread_id = params
                     .get("threadId")
                     .and_then(Value::as_str)
@@ -2433,8 +2563,53 @@ async fn event_pump_loop(
                 let Some(provider_thread_id) = provider_thread_id else {
                     continue;
                 };
-                let thread_id = logical_thread_id_for_provider(&threads, &provider_thread_id).await;
+                let (thread_id, known_thread) =
+                    logical_thread_id_for_provider_known(&threads, &provider_thread_id).await;
+                if !known_thread {
+                    orphan_notifications
+                        .entry(provider_thread_id)
+                        .or_default()
+                        .push((Instant::now(), method, params));
+                    continue;
+                }
                 rewrite_payload_thread_id(&mut params, &thread_id);
+                let subagent_registrations =
+                    codex_collab_subagent_registrations(&method, &thread_id, &params);
+                for registration in &subagent_registrations {
+                    register_codex_subagent_thread(&threads, &manager_tx, &workspace, registration)
+                        .await;
+                    if let Some(orphaned) = orphan_notifications.remove(&registration.sub_thread_id)
+                    {
+                        for (_, orphan_method, mut orphan_params) in orphaned {
+                            rewrite_payload_thread_id(
+                                &mut orphan_params,
+                                &registration.sub_thread_id,
+                            );
+                            let payload = serde_json::json!({
+                                "method": orphan_method,
+                                "params": orphan_params,
+                            });
+                            if let Err(error) = broadcast_ingest(
+                                &events_tx,
+                                RawIngest::from_json(
+                                    AgentName::Codex,
+                                    registration.sub_thread_id.clone(),
+                                    payload,
+                                    current_unix_ms(),
+                                ),
+                            )
+                            .await
+                            {
+                                warn!(
+                                    target: "minos_agent_runtime::manager",
+                                    error = %error,
+                                    "event pump durable ingest sink closed",
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
                 if method == "turn/started" {
                     let turn_id = params
                         .get("turn")
@@ -3497,6 +3672,7 @@ done
             tmp.path().to_path_buf(),
             AgentName::Gemini,
             Some("resume-session".into()),
+            None,
             ThreadState::Suspended {
                 reason: PauseReason::DaemonRestart,
             },
@@ -3653,6 +3829,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             tmp.path().to_path_buf(),
             AgentName::Claude,
             Some(provider_session_id.into()),
+            None,
             ThreadState::Suspended {
                 reason: PauseReason::DaemonRestart,
             },
@@ -3742,6 +3919,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             tmp.path().to_path_buf(),
             AgentName::Claude,
             Some(provider_session_id.into()),
+            None,
             ThreadState::Running {
                 turn_started_at_ms: 1,
             },
@@ -3855,6 +4033,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             workspace.clone(),
             AgentName::Opencode,
             Some("sess_running".into()),
+            None,
             ThreadState::Running {
                 turn_started_at_ms: 1,
             },

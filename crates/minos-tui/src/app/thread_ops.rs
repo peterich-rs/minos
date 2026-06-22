@@ -2,6 +2,11 @@ use super::*;
 
 impl App {
     pub(super) async fn close_current_thread(&mut self) -> bool {
+        if self.ui.current_thread_is_subagent() {
+            self.ui
+                .set_error("Subagent transcripts are read-only.".into());
+            return true;
+        }
         if let Some(thread_id) = self.ui.current_thread_id().map(String::from) {
             if let Err(error) = self.backend.close_thread(&thread_id).await {
                 self.ui

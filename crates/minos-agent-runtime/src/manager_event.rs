@@ -8,6 +8,7 @@ pub enum ManagerEvent {
         thread_id: String,
         workspace: PathBuf,
         agent: AgentKind,
+        parent_thread_id: Option<String>,
     },
     ThreadStateChanged {
         thread_id: String,

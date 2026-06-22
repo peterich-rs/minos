@@ -4,6 +4,7 @@ use crate::action::{
     Action, AgentAction, GlobalAction, InputTarget, RoomAction, ScrollDirection, ScrollTarget,
 };
 use crate::focus::PaneId;
+use crate::nav::NavAction;
 use crate::ui::UiState;
 
 pub(super) enum KeyMapping {
@@ -201,6 +202,18 @@ fn room_chat_key_to_mapping(key: KeyEvent) -> KeyMapping {
 }
 
 fn agent_list_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
+    if !ui.conversation_agent_sessions.is_empty() {
+        return match key.code {
+            KeyCode::Up => KeyMapping::action(Action::Nav(NavAction::SelectPrev)),
+            KeyCode::Down => KeyMapping::action(Action::Nav(NavAction::SelectNext)),
+            KeyCode::Enter => KeyMapping::action(Action::Global(GlobalAction::Enter)),
+            KeyCode::Delete => KeyMapping::action(Action::Agent(AgentAction::Delete)),
+            KeyCode::Tab => KeyMapping::action(Action::Global(GlobalAction::CycleFocus)),
+            KeyCode::BackTab => KeyMapping::action(Action::Global(GlobalAction::CycleFocusPrev)),
+            KeyCode::Esc => KeyMapping::action(Action::Global(GlobalAction::Escape)),
+            _ => KeyMapping::None,
+        };
+    }
     match key.code {
         KeyCode::Up => ui
             .selected_thread

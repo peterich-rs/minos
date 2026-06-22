@@ -746,6 +746,7 @@ pub struct ThreadSummary {
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
     pub end_reason: Option<ThreadEndReason>,
+    pub parent_thread_id: Option<String>,
 }
 
 /// Parameters for `list_threads`. `before_ts_ms` paginates older entries;
@@ -1309,6 +1310,7 @@ mod new_type_tests {
             message_count: 3,
             ended_at_ms: Some(300),
             end_reason: Some(ThreadEndReason::AgentDone),
+            parent_thread_id: None,
         };
         let back: ThreadSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -1326,6 +1328,7 @@ mod new_type_tests {
             message_count: 1,
             ended_at_ms: None,
             end_reason: None,
+            parent_thread_id: Some("parent".into()),
         };
         let back: ThreadSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -1368,6 +1371,7 @@ mod new_type_tests {
                 message_count: 0,
                 ended_at_ms: None,
                 end_reason: None,
+                parent_thread_id: None,
             }],
             next_before_ts_ms: Some(1),
         };

@@ -89,6 +89,7 @@ async fn picker_can_route_prompt_to_existing_agent_session() {
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
+        parent_thread_id: None,
     });
     app.select_thread(0);
     app.ui.chat_states.insert(
@@ -153,6 +154,7 @@ async fn ingest_does_not_record_agent_result_before_message_completion() {
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-codex-1234".into(),
@@ -223,6 +225,7 @@ async fn group_chat_records_completed_assistant_message_not_earlier_turn_draft()
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-codex-1234".into(),
@@ -293,6 +296,7 @@ async fn idle_thread_records_last_assistant_message_in_group_chat_once() {
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     let mut chat = ChatState::new("thread-gemini-1234".into(), AgentName::Gemini);
     chat.apply_ui_events(vec![
@@ -348,6 +352,7 @@ async fn failed_agent_group_result_append_is_retried_on_tick() {
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     let mut chat = ChatState::new("thread-gemini-1234".into(), AgentName::Gemini);
     chat.apply_ui_events(vec![
@@ -414,6 +419,7 @@ async fn opencode_session_idle_ingest_records_group_result_without_manager_idle(
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-opencode-1234".into(),
@@ -475,6 +481,7 @@ async fn opencode_manager_idle_does_not_record_partial_result_before_final_snaps
         state: ThreadState::Running {
             turn_started_at_ms: 0,
         },
+        parent_thread_id: None,
     });
     app.ui.chat_states.insert(
         "thread-opencode-1234".into(),

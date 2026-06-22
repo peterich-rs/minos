@@ -1,6 +1,6 @@
 use crate::backend::{ConversationMessageEntry, ThreadSummaryEntry};
 use crate::render::Renderable;
-use crate::ui::theme;
+use crate::ui::{flat_agent_sessions, theme};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -132,8 +132,8 @@ impl Renderable for AgentSessionListRenderable<'_> {
         let block = Block::bordered()
             .title("Agent Sessions")
             .border_style(border_style);
-        let items = self
-            .sessions
+        let sessions = flat_agent_sessions(self.sessions);
+        let items = sessions
             .iter()
             .enumerate()
             .map(|(index, session)| {
@@ -143,9 +143,17 @@ impl Renderable for AgentSessionListRenderable<'_> {
                 } else {
                     "  "
                 };
+                let indent = if session.depth == 0 { "" } else { "  " };
+                let subagent_marker = if session.parent_thread_id.is_some() {
+                    " sub"
+                } else {
+                    ""
+                };
                 ListItem::new(Line::from(vec![
                     Span::styled(prefix, Style::new().fg(Color::Cyan)),
+                    Span::raw(indent),
                     Span::raw(session.agent.bin_name()),
+                    Span::styled(subagent_marker, Style::new().fg(Color::DarkGray)),
                     Span::styled(format!(" #{}", id_short), Style::new().fg(Color::DarkGray)),
                 ]))
             })

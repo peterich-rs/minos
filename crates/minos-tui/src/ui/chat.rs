@@ -335,6 +335,40 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
             }
             sink.push_line(Line::from(tc_spans));
         }
+        ChatItem::SubagentCall {
+            sub_thread_id,
+            agent,
+            model,
+            prompt_summary,
+            status,
+            is_streaming,
+            ..
+        } => {
+            let status_style = match status {
+                minos_ui_protocol::SubagentStatus::Completed => TOOL_SUCCESS,
+                minos_ui_protocol::SubagentStatus::Failed
+                | minos_ui_protocol::SubagentStatus::Interrupted => TOOL_ERROR,
+                minos_ui_protocol::SubagentStatus::Running => Style::default(),
+            };
+            let id_short = &sub_thread_id[..8.min(sub_thread_id.len())];
+            let mut spans = vec![
+                Span::raw("Subagent "),
+                Span::styled(agent.bin_name(), TOOL_NAME_STYLE),
+                Span::styled(format!(" #{}", id_short), REASONING_STYLE),
+                Span::raw(" · "),
+                Span::styled(format!("{status:?}").to_ascii_lowercase(), status_style),
+            ];
+            if let Some(model) = model.as_ref().filter(|value| !value.is_empty()) {
+                spans.push(Span::raw(format!(" · {model}")));
+            }
+            if *is_streaming {
+                spans.push(Span::styled(" ▓", STREAMING_CURSOR));
+            }
+            sink.push_line(Line::from(spans));
+            if let Some(prompt) = prompt_summary.as_ref().filter(|value| !value.is_empty()) {
+                sink.push_line(Line::from(Span::styled(prompt.clone(), REASONING_STYLE)));
+            }
+        }
         ChatItem::SystemMessage { text } => {
             sink.push_line(Line::from(Span::styled("[System]", REASONING_STYLE)));
             push_markdown_lines(sink, text, Style::default());

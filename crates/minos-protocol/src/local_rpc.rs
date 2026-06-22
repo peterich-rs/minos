@@ -54,6 +54,7 @@ pub struct LocalThreadSnapshot {
     pub agent: minos_domain::AgentName,
     pub workspace: String,
     pub state: crate::ThreadState,
+    pub parent_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -110,6 +111,7 @@ pub enum LocalManagerEvent {
         thread_id: String,
         workspace: String,
         agent: minos_domain::AgentName,
+        parent_thread_id: Option<String>,
     },
     ThreadStateChanged {
         thread_id: String,

@@ -188,6 +188,7 @@ impl AgentGlue {
                         thread_id,
                         workspace,
                         agent,
+                        parent_thread_id,
                     }) => {
                         let cwd = workspace.display().to_string();
                         let now_ms = current_unix_ms();
@@ -200,6 +201,17 @@ impl AgentGlue {
                                 workspace = %cwd,
                                 "store.upsert_workspace failed for ThreadAdded",
                             );
+                        }
+                        if let Some(parent_thread_id) = parent_thread_id {
+                            persist_subagent_thread_parent_row(
+                                &store_clone,
+                                &thread_id,
+                                &parent_thread_id,
+                                &cwd,
+                                agent,
+                                now_ms,
+                            )
+                            .await;
                         }
                     }
                     Ok(ManagerEvent::ThreadStateChanged {
@@ -593,6 +605,7 @@ impl AgentGlue {
                 PathBuf::from(&row.workspace_root),
                 agent,
                 provider_session_id,
+                row.parent_thread_id.clone(),
                 state,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
             )
@@ -621,6 +634,7 @@ impl AgentGlue {
                 PathBuf::from(&row.workspace_root),
                 agent,
                 provider_session_id,
+                row.parent_thread_id.clone(),
                 row_state_to_runtime(&row)?,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
             )
@@ -1333,6 +1347,7 @@ fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary
         message_count: u32::try_from(row.last_seq.max(0)).unwrap_or(u32::MAX),
         ended_at_ms: row.ended_at,
         end_reason,
+        parent_thread_id: row.parent_thread_id,
     })
 }
 
@@ -1979,8 +1994,10 @@ async fn persist_thread_parent_rows_inner(
             cwd,
             agent_label(agent),
             provider_session_id,
+            None,
             "idle",
             now_ms,
+            true,
         )
         .await
     {
@@ -2003,6 +2020,67 @@ async fn persist_thread_parent_rows_inner(
                 "store.update_thread_provider_session_id failed",
             );
         }
+    }
+}
+
+async fn persist_subagent_thread_parent_row(
+    store: &LocalStore,
+    thread_id: &str,
+    parent_thread_id: &str,
+    cwd: &str,
+    agent: minos_domain::AgentName,
+    now_ms: i64,
+) {
+    let parent = match store.get_thread(parent_thread_id).await {
+        Ok(Some(parent)) => parent,
+        Ok(None) => {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                thread_id,
+                parent_thread_id,
+                workspace = %cwd,
+                "subagent parent thread missing; events FK may reject ingest",
+            );
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %error,
+                thread_id,
+                parent_thread_id,
+                "store.get_thread failed for subagent parent",
+            );
+            return;
+        }
+    };
+
+    let workspace_root = if parent.workspace_root.is_empty() {
+        cwd
+    } else {
+        parent.workspace_root.as_str()
+    };
+    if let Err(error) = store
+        .insert_thread_in_conversation(
+            thread_id,
+            &parent.conversation_id,
+            workspace_root,
+            agent_label(agent),
+            None,
+            Some(parent_thread_id),
+            "idle",
+            now_ms,
+            false,
+        )
+        .await
+    {
+        tracing::warn!(
+            target: "minos_daemon::agent",
+            error = %error,
+            thread_id,
+            parent_thread_id,
+            "store.insert_thread failed for subagent",
+        );
     }
 }
 
@@ -2229,6 +2307,7 @@ mod tests {
                 PathBuf::from("/w"),
                 AgentName::Codex,
                 None,
+                None,
                 ThreadState::Idle,
                 3,
             )
@@ -2355,6 +2434,7 @@ mod tests {
                 workspace,
                 minos_domain::AgentName::Codex,
                 Some("thr-live".into()),
+                None,
                 ThreadState::Idle,
                 0,
             )
@@ -2430,6 +2510,7 @@ mod tests {
                 workspace,
                 minos_domain::AgentName::Codex,
                 Some("thr-snapshot".into()),
+                None,
                 state.clone(),
                 0,
             )
