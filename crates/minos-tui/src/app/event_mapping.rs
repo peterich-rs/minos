@@ -1,7 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::action::{
-    Action, AgentAction, GlobalAction, InputTarget, RoomAction, ScrollDirection, ScrollTarget,
+    Action, AgentAction, ConversationAction, GlobalAction, InputTarget, ScrollDirection,
+    ScrollTarget,
 };
 use crate::focus::PaneId;
 use crate::nav::NavAction;
@@ -21,7 +22,7 @@ impl KeyMapping {
 }
 
 pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
-    if ui.delete_confirm.is_some() {
+    if ui.overlays.delete_confirm.is_some() {
         return delete_confirm_key_to_mapping(key);
     }
 
@@ -33,12 +34,21 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
             }
             KeyCode::Char('v') => return KeyMapping::ClipboardPaste,
             KeyCode::Char('d') => return KeyMapping::action(Action::Agent(AgentAction::Close)),
+            KeyCode::Char('p') => {
+                return KeyMapping::action(Action::Nav(NavAction::JumpToProjects))
+            }
+            KeyCode::Char('t') => {
+                return KeyMapping::action(Action::Nav(NavAction::JumpToConversations));
+            }
             _ => {}
         }
     }
 
-    if ui.project_create_dialog.is_some() {
+    if ui.overlays.project_create.is_some() {
         return create_dialog_mapping(key);
+    }
+    if ui.active_approval_request().is_some() {
+        return approval_overlay_key_to_mapping(ui, key);
     }
     match ui.nav_level() {
         crate::nav::NavLevel::Projects => return projects_level_mapping(key),
@@ -47,7 +57,7 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
         }
         crate::nav::NavLevel::Conversation { .. } => {
             if is_input_focus(ui) {
-                return KeyMapping::Input(InputTarget::Room);
+                return KeyMapping::Input(InputTarget::Conversation);
             }
             if key.code == KeyCode::Esc && !is_input_focus(ui) {
                 return KeyMapping::action(Action::Nav(crate::nav::NavAction::Uplevel));
@@ -70,10 +80,6 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
                 return KeyMapping::action(Action::Nav(crate::nav::NavAction::Uplevel));
             }
         }
-    }
-
-    if ui.agent_picker.is_some() {
-        return agent_picker_key_to_mapping(ui, key);
     }
 
     match key.code {
@@ -105,9 +111,6 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
                 0,
             )));
         }
-        KeyCode::Char('n') if !is_input_focus(ui) => {
-            return KeyMapping::action(Action::Global(GlobalAction::OpenAgentPicker));
-        }
         KeyCode::BackTab => {
             return KeyMapping::action(Action::Global(GlobalAction::CycleFocusPrev));
         }
@@ -116,12 +119,13 @@ pub(super) fn key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
 
     match ui.focus.current() {
         PaneId::Input => KeyMapping::Input(focused_input_target(ui)),
-        PaneId::MainList => room_list_key_to_mapping(ui, key),
+        PaneId::MainList => main_list_key_to_mapping(ui, key),
         PaneId::MainChat if matches!(ui.nav_level(), crate::nav::NavLevel::AgentDetail { .. }) => {
             agent_chat_key_to_mapping(key)
         }
-        PaneId::MainChat => room_chat_key_to_mapping(key),
+        PaneId::MainChat => conversation_chat_key_to_mapping(key),
         PaneId::Sidebar => agent_list_key_to_mapping(ui, key),
+        PaneId::ApprovalOverlay => approval_overlay_key_to_mapping(ui, key),
     }
 }
 
@@ -129,7 +133,7 @@ fn focused_input_target(ui: &UiState) -> InputTarget {
     if matches!(ui.nav_level(), crate::nav::NavLevel::AgentDetail { .. }) {
         InputTarget::Agent
     } else {
-        InputTarget::Room
+        InputTarget::Conversation
     }
 }
 
@@ -145,25 +149,7 @@ fn delete_confirm_key_to_mapping(key: KeyEvent) -> KeyMapping {
     }
 }
 
-fn agent_picker_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
-    match key.code {
-        KeyCode::Up => KeyMapping::action(Action::Global(GlobalAction::SelectPrevious)),
-        KeyCode::Down => KeyMapping::action(Action::Global(GlobalAction::SelectNext)),
-        KeyCode::Enter => KeyMapping::action(Action::Global(GlobalAction::Enter)),
-        KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-            let index = usize::from(c as u8 - b'1');
-            if index < ui.status.agents.len() {
-                KeyMapping::action(Action::Global(GlobalAction::SelectIndex(index)))
-            } else {
-                KeyMapping::None
-            }
-        }
-        KeyCode::Esc => KeyMapping::action(Action::Global(GlobalAction::Escape)),
-        _ => KeyMapping::None,
-    }
-}
-
-fn room_list_key_to_mapping(_ui: &UiState, key: KeyEvent) -> KeyMapping {
+fn main_list_key_to_mapping(_ui: &UiState, key: KeyEvent) -> KeyMapping {
     match key.code {
         KeyCode::Up => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectPrev)),
         KeyCode::Down => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectNext)),
@@ -175,23 +161,23 @@ fn room_list_key_to_mapping(_ui: &UiState, key: KeyEvent) -> KeyMapping {
     }
 }
 
-fn room_chat_key_to_mapping(key: KeyEvent) -> KeyMapping {
+fn conversation_chat_key_to_mapping(key: KeyEvent) -> KeyMapping {
     match key.code {
-        KeyCode::Up => KeyMapping::action(Action::Room(RoomAction::Scroll(ScrollDirection::Up, 1))),
+        KeyCode::Up => KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Up, 1))),
         KeyCode::Down => {
-            KeyMapping::action(Action::Room(RoomAction::Scroll(ScrollDirection::Down, 1)))
+            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Down, 1)))
         }
         KeyCode::PageUp => {
-            KeyMapping::action(Action::Room(RoomAction::Scroll(ScrollDirection::Up, 5)))
+            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Up, 5)))
         }
         KeyCode::PageDown => {
-            KeyMapping::action(Action::Room(RoomAction::Scroll(ScrollDirection::Down, 5)))
+            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Down, 5)))
         }
         KeyCode::Home => {
-            KeyMapping::action(Action::Room(RoomAction::Scroll(ScrollDirection::Top, 0)))
+            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Top, 0)))
         }
         KeyCode::End => {
-            KeyMapping::action(Action::Room(RoomAction::Scroll(ScrollDirection::Bottom, 0)))
+            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Bottom, 0)))
         }
         KeyCode::Enter => KeyMapping::action(Action::Global(GlobalAction::Enter)),
         KeyCode::Tab => KeyMapping::action(Action::Global(GlobalAction::CycleFocus)),
@@ -202,7 +188,7 @@ fn room_chat_key_to_mapping(key: KeyEvent) -> KeyMapping {
 }
 
 fn agent_list_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
-    if !ui.conversation_agent_sessions.is_empty() {
+    if !ui.conversation.agent_sessions.items.is_empty() {
         return match key.code {
             KeyCode::Up => KeyMapping::action(Action::Nav(NavAction::SelectPrev)),
             KeyCode::Down => KeyMapping::action(Action::Nav(NavAction::SelectNext)),
@@ -216,14 +202,14 @@ fn agent_list_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     }
     match key.code {
         KeyCode::Up => ui
-            .selected_thread
+            .thread_panel.list.selected
             .map(|selected| Action::Agent(AgentAction::Select(selected.saturating_sub(1))))
             .map(KeyMapping::action)
             .unwrap_or_else(|| KeyMapping::action(Action::Global(GlobalAction::RequestRedraw))),
         KeyCode::Down => ui
-            .selected_thread
+            .thread_panel.list.selected
             .map(|selected| {
-                let last = ui.threads.len().saturating_sub(1);
+                let last = ui.thread_panel.list.items.len().saturating_sub(1);
                 Action::Agent(AgentAction::Select((selected + 1).min(last)))
             })
             .map(KeyMapping::action)
@@ -267,6 +253,34 @@ fn agent_chat_key_to_mapping(key: KeyEvent) -> KeyMapping {
     }
 }
 
+fn approval_overlay_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
+    let Some(request) = ui.active_approval_request() else {
+        return KeyMapping::None;
+    };
+    match key.code {
+        KeyCode::Up => KeyMapping::action(Action::Agent(AgentAction::ApprovalSelectPrev)),
+        KeyCode::Down => KeyMapping::action(Action::Agent(AgentAction::ApprovalSelectNext)),
+        KeyCode::Enter => KeyMapping::action(Action::Agent(AgentAction::ApprovalConfirm)),
+        KeyCode::Esc => KeyMapping::action(Action::Agent(AgentAction::ApprovalCancel)),
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            let Some(index) = c.to_digit(10).and_then(|digit| digit.checked_sub(1)) else {
+                return KeyMapping::None;
+            };
+            let index = index as usize;
+            if index < crate::ui::approval_overlay::option_count(request).min(9) {
+                KeyMapping::action(Action::Agent(AgentAction::ApprovalQuickPick(index)))
+            } else {
+                KeyMapping::None
+            }
+        }
+        KeyCode::Char(c) => crate::ui::approval_overlay::shortcut_index(request, c)
+            .map(|index| Action::Agent(AgentAction::ApprovalQuickPick(index)))
+            .map(KeyMapping::action)
+            .unwrap_or(KeyMapping::None),
+        _ => KeyMapping::None,
+    }
+}
+
 fn is_input_focus(ui: &UiState) -> bool {
     ui.focus.is(PaneId::Input)
 }
@@ -279,14 +293,14 @@ fn projects_level_mapping(key: KeyEvent) -> KeyMapping {
         KeyCode::Char('n') => {
             KeyMapping::action(Action::Nav(crate::nav::NavAction::OpenCreateProject))
         }
-        KeyCode::Esc => KeyMapping::action(Action::Global(GlobalAction::Quit)),
+        KeyCode::Esc => KeyMapping::action(Action::Global(GlobalAction::Escape)),
         _ => KeyMapping::None,
     }
 }
 
 fn conversations_level_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     if is_input_focus(ui) {
-        return KeyMapping::Input(InputTarget::Room);
+        return KeyMapping::Input(InputTarget::Conversation);
     }
     match key.code {
         KeyCode::Up => KeyMapping::action(Action::Nav(crate::nav::NavAction::SelectPrev)),

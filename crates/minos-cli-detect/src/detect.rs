@@ -131,10 +131,11 @@ mod tests {
                 ("claude", ScriptStep::Which(None)),
                 ("gemini", ScriptStep::Which(None)),
                 ("opencode", ScriptStep::Which(None)),
+                ("grok", ScriptStep::Which(None)),
             ]),
         });
         let out = detect_all(runner).await;
-        assert_eq!(out.len(), 4);
+        assert_eq!(out.len(), 5);
         for d in out {
             assert_eq!(d.status, AgentStatus::Missing);
             assert!(d.path.is_none());
@@ -150,6 +151,7 @@ mod tests {
                 ("claude", ScriptStep::Which(None)),
                 ("gemini", ScriptStep::Which(None)),
                 ("opencode", ScriptStep::Which(None)),
+                ("grok", ScriptStep::Which(None)),
             ]),
         });
         let out = detect_all(runner).await;
@@ -173,6 +175,7 @@ mod tests {
                 ("claude", ScriptStep::Which(None)),
                 ("gemini", ScriptStep::Which(None)),
                 ("opencode", ScriptStep::Which(None)),
+                ("grok", ScriptStep::Which(None)),
             ]),
         });
         let out = detect_all(runner).await;
@@ -191,12 +194,32 @@ mod tests {
                     ScriptStep::Which(Some("/usr/local/bin/opencode")),
                 ),
                 ("opencode", outcome_ok("opencode 1.0.0\n")),
+                ("grok", ScriptStep::Which(None)),
             ]),
         });
         let out = detect_all(runner).await;
-        assert_eq!(out.len(), 4);
+        assert_eq!(out.len(), 5);
         assert_eq!(out[3].name, AgentName::Opencode);
         assert_eq!(out[3].status, AgentStatus::Ok);
         assert_eq!(out[3].version.as_deref(), Some("1.0.0"));
+    }
+
+    #[tokio::test]
+    async fn detect_all_probes_grok() {
+        let runner = Arc::new(ScriptRunner {
+            script: Mutex::new(vec![
+                ("codex", ScriptStep::Which(None)),
+                ("claude", ScriptStep::Which(None)),
+                ("gemini", ScriptStep::Which(None)),
+                ("opencode", ScriptStep::Which(None)),
+                ("grok", ScriptStep::Which(Some("/usr/local/bin/grok"))),
+                ("grok", outcome_ok("grok 1.0.0\n")),
+            ]),
+        });
+        let out = detect_all(runner).await;
+        assert_eq!(out.len(), 5);
+        assert_eq!(out[4].name, AgentName::Grok);
+        assert_eq!(out[4].status, AgentStatus::Ok);
+        assert_eq!(out[4].version.as_deref(), Some("1.0.0"));
     }
 }

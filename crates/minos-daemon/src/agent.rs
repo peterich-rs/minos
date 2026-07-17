@@ -14,10 +14,10 @@ use minos_protocol::{
     ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams,
     GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
     ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
-    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, LocalGroupChatMessage,
-    LocalGroupChatMessageKind, LocalIngestFrame, PauseReason as ProtoPauseReason,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState,
-    ThreadSummary, WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, LocalConversationEvent,
+    LocalIngestFrame, LocalManagerEvent, PauseReason as ProtoPauseReason, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::ThreadEndReason;
 use tokio::sync::{broadcast, watch};
@@ -59,6 +59,8 @@ pub struct AgentGlue {
     state_tx: Arc<watch::Sender<ThreadState>>,
     state_rx: watch::Receiver<ThreadState>,
     persisted_ingest_tx: broadcast::Sender<LocalIngestFrame>,
+    local_manager_event_tx: broadcast::Sender<LocalManagerEvent>,
+    local_conversation_event_tx: broadcast::Sender<LocalConversationEvent>,
     ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
     /// Default workspace dir used when `start_agent` is invoked under the
     /// legacy surface (no workspace param). Resolved once at construction
@@ -92,7 +94,13 @@ impl AgentGlue {
         let writer = Arc::new(EventWriter::spawn(store.clone()));
         let glue = Self::wire_with(manager.clone(), writer, store, workspace_root.clone());
         if let Some(mcp_config) = mcp_config {
-            spawn_mcp_socket_handler(mcp_config, manager, workspace_root);
+            spawn_mcp_socket_handler(
+                mcp_config,
+                manager,
+                glue.store.clone(),
+                glue.local_conversation_event_tx.clone(),
+                workspace_root,
+            );
         }
         glue
     }
@@ -115,6 +123,14 @@ impl AgentGlue {
         // user couldn't tell whether codex was active. Volume is bounded
         // by codex's own emit rate (~tens/s/thread per spec §8.7).
         let (persisted_ingest_tx, _) = broadcast::channel(256);
+        let (local_manager_event_tx, _) = broadcast::channel(256);
+        let (local_conversation_event_tx, _) = broadcast::channel(256);
+        let completion = crate::conversation_completion::ConversationCompletion::new(
+            store.clone(),
+            manager.clone(),
+            default_workspace.clone(),
+            local_conversation_event_tx.clone(),
+        );
         let ingest_sync = Arc::new(StdMutex::new(None::<IngestSyncHandle>));
         let coalescer = IngestCoalescer::new(store.clone());
         let mut rx = manager.install_durable_ingest_stream();
@@ -122,6 +138,7 @@ impl AgentGlue {
         let coalescer_clone = coalescer.clone();
         let ingest_sync_clone = ingest_sync.clone();
         let persisted_ingest_tx_clone = persisted_ingest_tx.clone();
+        let completion_for_ingest = completion.clone();
         tokio::spawn(async move {
             while let Some(ingest) = rx.recv().await {
                 let thread_id = ingest.thread_id.clone();
@@ -151,6 +168,9 @@ impl AgentGlue {
                     Ok(committed) => {
                         let seq = committed.seq;
                         let ui_events = committed.projection;
+                        completion_for_ingest
+                            .on_ingest_frame(&thread_id, agent, &ui_events)
+                            .await;
                         let _ = persisted_ingest_tx_clone.send(LocalIngestFrame {
                             thread_id: thread_id.clone(),
                             seq,
@@ -181,65 +201,88 @@ impl AgentGlue {
         let mut manager_events = manager.manager_event_stream();
         let store_clone = store.clone();
         let state_tx_clone = state_tx.clone();
+        let local_manager_event_tx_clone = local_manager_event_tx.clone();
+        let completion_for_state = completion.clone();
         tokio::spawn(async move {
             loop {
                 match manager_events.recv().await {
-                    Ok(ManagerEvent::ThreadAdded {
-                        thread_id,
-                        workspace,
-                        agent,
-                        parent_thread_id,
-                    }) => {
-                        let cwd = workspace.display().to_string();
-                        let now_ms = current_unix_ms();
-                        if let Err(e) = store_clone.upsert_workspace(&cwd, now_ms).await {
-                            tracing::warn!(
-                                target: "minos_daemon::agent",
-                                error = %e,
-                                thread_id = %thread_id,
-                                agent = %agent_label(agent),
-                                workspace = %cwd,
-                                "store.upsert_workspace failed for ThreadAdded",
-                            );
-                        }
-                        if let Some(parent_thread_id) = parent_thread_id {
-                            persist_subagent_thread_parent_row(
-                                &store_clone,
-                                &thread_id,
-                                &parent_thread_id,
-                                &cwd,
+                    Ok(event) => {
+                        let _ = local_manager_event_tx_clone.send(local_event_from_manager(&event));
+                        match event {
+                            ManagerEvent::ThreadAdded {
+                                thread_id,
+                                workspace,
                                 agent,
-                                now_ms,
-                            )
-                            .await;
-                        }
-                    }
-                    Ok(ManagerEvent::ThreadStateChanged {
-                        thread_id,
-                        new,
-                        at_ms,
-                        ..
-                    }) => {
-                        persist_runtime_state_inner(&store_clone, &thread_id, &new, at_ms).await;
-                        let _ = state_tx_clone.send(new);
-                    }
-                    Ok(ManagerEvent::ThreadClosed { thread_id, reason }) => {
-                        let state = ThreadState::Closed { reason };
-                        let at_ms = current_unix_ms();
-                        persist_runtime_state_inner(&store_clone, &thread_id, &state, at_ms).await;
-                        let _ = state_tx_clone.send(state);
-                    }
-                    Ok(ManagerEvent::InstanceCrashed {
-                        affected_threads,
-                        reason,
-                        ..
-                    }) => {
-                        let state = ThreadState::Suspended { reason };
-                        let at_ms = current_unix_ms();
-                        for thread_id in affected_threads {
-                            persist_runtime_state_inner(&store_clone, &thread_id, &state, at_ms)
+                                parent_thread_id,
+                            } => {
+                                let cwd = workspace.display().to_string();
+                                let now_ms = current_unix_ms();
+                                if let Err(e) = store_clone.upsert_workspace(&cwd, now_ms).await {
+                                    tracing::warn!(
+                                        target: "minos_daemon::agent",
+                                        error = %e,
+                                        thread_id = %thread_id,
+                                        agent = %agent_label(agent),
+                                        workspace = %cwd,
+                                        "store.upsert_workspace failed for ThreadAdded",
+                                    );
+                                }
+                                if let Some(parent_thread_id) = parent_thread_id {
+                                    persist_subagent_thread_parent_row(
+                                        &store_clone,
+                                        &thread_id,
+                                        &parent_thread_id,
+                                        &cwd,
+                                        agent,
+                                        now_ms,
+                                    )
+                                    .await;
+                                }
+                            }
+                            ManagerEvent::ThreadStateChanged {
+                                thread_id,
+                                new,
+                                at_ms,
+                                ..
+                            } => {
+                                persist_runtime_state_inner(&store_clone, &thread_id, &new, at_ms)
+                                    .await;
+                                completion_for_state.on_thread_state(&thread_id, &new).await;
+                                let _ = state_tx_clone.send(new);
+                            }
+                            ManagerEvent::ThreadClosed { thread_id, reason } => {
+                                let state = ThreadState::Closed { reason };
+                                let at_ms = current_unix_ms();
+                                persist_runtime_state_inner(
+                                    &store_clone,
+                                    &thread_id,
+                                    &state,
+                                    at_ms,
+                                )
                                 .await;
-                            let _ = state_tx_clone.send(state.clone());
+                                completion_for_state
+                                    .on_thread_state(&thread_id, &state)
+                                    .await;
+                                let _ = state_tx_clone.send(state);
+                            }
+                            ManagerEvent::InstanceCrashed {
+                                affected_threads,
+                                reason,
+                                ..
+                            } => {
+                                let state = ThreadState::Suspended { reason };
+                                let at_ms = current_unix_ms();
+                                for thread_id in affected_threads {
+                                    persist_runtime_state_inner(
+                                        &store_clone,
+                                        &thread_id,
+                                        &state,
+                                        at_ms,
+                                    )
+                                    .await;
+                                    let _ = state_tx_clone.send(state.clone());
+                                }
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => tracing::warn!(
@@ -259,6 +302,8 @@ impl AgentGlue {
             state_tx,
             state_rx,
             persisted_ingest_tx,
+            local_manager_event_tx,
+            local_conversation_event_tx,
             ingest_sync,
             default_workspace,
         }
@@ -606,6 +651,7 @@ impl AgentGlue {
                 agent,
                 provider_session_id,
                 row.parent_thread_id.clone(),
+                Some(row.conversation_id.clone()),
                 state,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
             )
@@ -635,6 +681,7 @@ impl AgentGlue {
                 agent,
                 provider_session_id,
                 row.parent_thread_id.clone(),
+                Some(row.conversation_id.clone()),
                 row_state_to_runtime(&row)?,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
             )
@@ -859,6 +906,24 @@ impl AgentGlue {
     #[must_use]
     pub fn persisted_ingest_stream(&self) -> broadcast::Receiver<LocalIngestFrame> {
         self.persisted_ingest_tx.subscribe()
+    }
+
+    #[must_use]
+    pub fn local_manager_event_stream(&self) -> broadcast::Receiver<LocalManagerEvent> {
+        self.local_manager_event_tx.subscribe()
+    }
+
+    #[must_use]
+    pub fn local_conversation_event_stream(&self) -> broadcast::Receiver<LocalConversationEvent> {
+        self.local_conversation_event_tx.subscribe()
+    }
+
+    fn publish_conversation_message_appended(&self, conversation_id: &str, message_seq: i64) {
+        publish_conversation_message_appended(
+            &self.local_conversation_event_tx,
+            conversation_id,
+            message_seq,
+        );
     }
 
     pub async fn shutdown(&self) -> Result<(), MinosError> {
@@ -1095,13 +1160,26 @@ impl AgentGlue {
         &self,
         req: minos_protocol::ListConversationAgentSessionsParams,
     ) -> Result<minos_protocol::ListConversationAgentSessionsResponse, MinosError> {
+        let live_states: HashMap<String, ProtoThreadState> = self
+            .manager
+            .list_threads()
+            .await
+            .into_iter()
+            .map(|snapshot| (snapshot.thread_id.clone(), state_to_proto(&snapshot.state)))
+            .collect();
         let threads = self
             .store
             .list_threads_by_conversation(&req.conversation_id)
             .await
             .map_err(|e| map_store_error("list_conversation_agent_sessions", e))?
             .into_iter()
-            .map(thread_summary_from_row)
+            .map(|row| {
+                let mut summary = thread_summary_from_row(row.clone())?;
+                if let Some(state) = live_states.get(&summary.thread_id) {
+                    summary.state = state.clone();
+                }
+                Ok(summary)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(minos_protocol::ListConversationAgentSessionsResponse { threads })
     }
@@ -1112,6 +1190,7 @@ impl AgentGlue {
     ) -> Result<minos_protocol::AppendConversationMessageResponse, MinosError> {
         let now_ms = current_unix_ms();
         let agent = req.agent.map(agent_label);
+        let mentions_json = serde_json::to_string(&req.mentions).unwrap_or_else(|_| "[]".into());
         let message_seq = self
             .store
             .upsert_conversation_message(
@@ -1122,9 +1201,13 @@ impl AgentGlue {
                 agent,
                 &req.body,
                 now_ms,
+                req.reply_to_message_id.as_deref(),
+                req.delegation_id.as_deref(),
+                &mentions_json,
             )
             .await
             .map_err(|e| map_store_error("append_conversation_message", e))?;
+        self.publish_conversation_message_appended(&req.conversation_id, message_seq);
         Ok(minos_protocol::AppendConversationMessageResponse { message_seq })
     }
 
@@ -1176,7 +1259,7 @@ impl AgentGlue {
         }
         let outcome = self
             .manager
-            .start_agent(req.agent, workspace)
+            .start_agent_in_conversation(req.agent, workspace, req.conversation_id.clone())
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
@@ -1338,6 +1421,7 @@ fn project_workspace_dir(default_workspace: &std::path::Path, workspace_slug: &s
 
 fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary, MinosError> {
     let end_reason = row_end_reason(&row);
+    let state = row_state_to_proto(&row)?;
     Ok(ThreadSummary {
         thread_id: row.thread_id,
         agent: parse_agent_label(&row.agent)?,
@@ -1348,6 +1432,7 @@ fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary
         ended_at_ms: row.ended_at,
         end_reason,
         parent_thread_id: row.parent_thread_id,
+        state,
     })
 }
 
@@ -1371,6 +1456,16 @@ fn conversation_summary_from_row(
 fn local_conversation_message_from_row(
     row: ChatMessageRow,
 ) -> Result<minos_protocol::LocalConversationMessage, MinosError> {
+    let mentions = if row.mentions_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(&row.mentions_json).map_err(|error| {
+            MinosError::CodexProtocolError {
+                method: "list_conversation_messages".into(),
+                message: format!("invalid mentions_json: {error}"),
+            }
+        })?
+    };
     Ok(minos_protocol::LocalConversationMessage {
         message_seq: row.message_seq,
         message_id: row.message_id,
@@ -1380,6 +1475,9 @@ fn local_conversation_message_from_row(
         sender_role: row.sender_role,
         agent: row.agent.as_deref().map(parse_agent_label).transpose()?,
         body: row.body,
+        reply_to_message_id: row.reply_to_message_id,
+        delegation_id: row.delegation_id,
+        mentions,
     })
 }
 
@@ -1448,6 +1546,7 @@ pub(crate) fn parse_agent_label(agent: &str) -> Result<minos_domain::AgentName, 
         "claude" => Ok(minos_domain::AgentName::Claude),
         "gemini" => Ok(minos_domain::AgentName::Gemini),
         "opencode" => Ok(minos_domain::AgentName::Opencode),
+        "grok" => Ok(minos_domain::AgentName::Grok),
         other => Err(MinosError::CodexProtocolError {
             method: "local_store.thread_agent".into(),
             message: format!("unknown persisted agent: {other}"),
@@ -1461,6 +1560,7 @@ fn agent_label(agent: minos_domain::AgentName) -> &'static str {
         minos_domain::AgentName::Claude => "claude",
         minos_domain::AgentName::Gemini => "gemini",
         minos_domain::AgentName::Opencode => "opencode",
+        minos_domain::AgentName::Grok => "grok",
     }
 }
 
@@ -1655,16 +1755,28 @@ fn map_anyhow(e: anyhow::Error) -> MinosError {
 fn spawn_mcp_socket_handler(
     mcp_config: minos_agent_runtime::config::McpConfig,
     manager: Arc<AgentManager>,
+    store: Arc<LocalStore>,
+    local_conversation_event_tx: broadcast::Sender<LocalConversationEvent>,
     default_workspace: PathBuf,
 ) {
     let socket_path = mcp_config.socket_path.clone();
     let db_path = mcp_config.db_path.clone();
     let callback: minos_chat_store::mcp_handler::ToolCallback = Arc::new(move |request| {
         let manager = manager.clone();
+        let store = store.clone();
         let db_path = db_path.clone();
         let default_workspace = default_workspace.clone();
+        let local_conversation_event_tx = local_conversation_event_tx.clone();
         tokio::spawn(async move {
-            handle_daemon_mcp_request(manager, db_path, default_workspace, request).await
+            handle_daemon_mcp_request(
+                manager,
+                store,
+                db_path,
+                default_workspace,
+                local_conversation_event_tx,
+                request,
+            )
+            .await
         })
     });
     tokio::spawn(async move {
@@ -1681,28 +1793,50 @@ fn spawn_mcp_socket_handler(
 
 async fn handle_daemon_mcp_request(
     manager: Arc<AgentManager>,
+    store: Arc<LocalStore>,
     db_path: PathBuf,
     default_workspace: PathBuf,
+    local_conversation_event_tx: broadcast::Sender<LocalConversationEvent>,
     request: SocketRequest,
 ) -> anyhow::Result<SocketResponse> {
     match request {
         SocketRequest::Ping => Ok(SocketResponse::Pong),
-        SocketRequest::ListRoomMessages {
-            room_id,
+        SocketRequest::ListConversationMessages {
+            conversation_id,
             before_seq,
             limit,
         } => {
-            let store = minos_chat_store::ChatStore::open(&db_path).await?;
-            let page = store
-                .list_messages_desc(&room_id, before_seq, limit)
-                .await?;
+            let messages = store
+                .list_conversation_messages(
+                    &conversation_id,
+                    before_seq.map(|seq| i64::try_from(seq).unwrap_or(i64::MAX)),
+                    limit,
+                )
+                .await?
+                .into_iter()
+                .map(local_conversation_message_from_row)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            let limit = limit.unwrap_or(100).clamp(1, 500) as usize;
+            let has_more = messages.len() >= limit;
+            let next_before_seq = if has_more {
+                messages.last().map(|message| message.message_seq)
+            } else {
+                None
+            };
             Ok(SocketResponse::Ok {
-                data: Some(serde_json::to_value(page)?),
+                data: Some(serde_json::json!({
+                    "conversation_id": conversation_id,
+                    "messages": messages,
+                    "next_before_seq": next_before_seq,
+                    "has_more": has_more,
+                })),
             })
         }
         SocketRequest::DelegateToAgent {
-            room_id,
+            conversation_id,
             source_agent,
+            source_thread_id,
             target_agent,
             prompt,
         } => {
@@ -1713,67 +1847,184 @@ async fn handle_daemon_mcp_request(
                 .transpose()?;
             let prompt = prompt.trim().to_owned();
             anyhow::ensure!(!prompt.is_empty(), "delegate_to_agent prompt is empty");
-            let outcome = manager
-                .dispatch_message(
-                    target_agent,
-                    default_workspace.clone(),
-                    None,
-                    prompt.clone(),
-                    None,
-                )
-                .await?;
-            let group_text = format!("@{} {prompt}", target_agent.bin_name());
-            append_daemon_group_message(
-                &db_path,
-                &room_id,
-                Some(target_agent),
-                Some(outcome.session_id.clone()),
-                Some(short_thread_id(&outcome.session_id)),
-                outcome.cwd.clone(),
-                LocalGroupChatMessageKind::User,
-                group_text,
+            validate_mcp_source_thread(
+                &store,
+                &conversation_id,
+                source_agent,
+                source_thread_id.as_deref(),
             )
             .await?;
-            let store = minos_chat_store::ChatStore::open(&db_path).await?;
-            let delegation = store
-                .create_delegation(
-                    &room_id,
-                    source_agent,
+            let teamwork_store = open_teamwork_store_for_conversation(
+                &db_path,
+                &conversation_id,
+                &default_workspace,
+            )
+            .await?;
+            teamwork_store
+                .ensure_delegate_target_allowed(
+                    &conversation_id,
+                    source_thread_id.as_deref(),
                     target_agent,
-                    prompt,
-                    Some(outcome.session_id.clone()),
                 )
                 .await?;
+            let workspace =
+                workspace_for_mcp_conversation(&store, &conversation_id, &default_workspace)
+                    .await?;
+            let outcome = manager
+                .start_agent_in_conversation(
+                    target_agent,
+                    workspace.clone(),
+                    conversation_id.clone(),
+                )
+                .await?;
+            persist_thread_parent_rows_inner(
+                &store,
+                &outcome.thread_id,
+                &outcome.cwd.display().to_string(),
+                target_agent,
+                outcome.provider_session_id.as_deref(),
+                Some(&conversation_id),
+            )
+            .await;
+            manager
+                .send_user_message(&outcome.thread_id, prompt.clone())
+                .await?;
+            let delegation = teamwork_store
+                .create_delegation(
+                    &conversation_id,
+                    source_agent,
+                    source_thread_id.clone(),
+                    target_agent,
+                    prompt,
+                    Some(outcome.thread_id.clone()),
+                )
+                .await?;
+            let short_target = short_mcp_thread_id(&outcome.thread_id);
+            let visible_prompt = format!(
+                "@{}#{} {}",
+                target_agent.bin_name(),
+                short_target,
+                delegation.prompt.trim()
+            );
+            let visible_message_id = format!(
+                "mcp-delegation:{}:{}",
+                conversation_id,
+                uuid::Uuid::new_v4()
+            );
+            let sender_role = if source_agent.is_some() {
+                "agent"
+            } else {
+                "user"
+            };
+            let mentions = vec![minos_protocol::ConversationMention {
+                agent: target_agent,
+                thread_id: Some(outcome.thread_id.clone()),
+                thread_short_id: Some(short_target),
+            }];
+            let mentions_json = serde_json::to_string(&mentions).unwrap_or_else(|_| "[]".into());
+            // Bind request message so completion can set reply_to.
+            let _ = teamwork_store
+                .set_delegation_request_message_id(
+                    &conversation_id,
+                    &delegation.delegation_id,
+                    &visible_message_id,
+                )
+                .await;
+            let message_seq = store
+                .upsert_conversation_message(
+                    &conversation_id,
+                    &visible_message_id,
+                    source_thread_id.as_deref(),
+                    sender_role,
+                    source_agent.map(agent_label),
+                    &visible_prompt,
+                    current_unix_ms(),
+                    None,
+                    Some(delegation.delegation_id.as_str()),
+                    &mentions_json,
+                )
+                .await?;
+            publish_conversation_message_appended(
+                &local_conversation_event_tx,
+                &conversation_id,
+                message_seq,
+            );
             Ok(SocketResponse::Ok {
                 data: Some(serde_json::json!({
                     "accepted": true,
                     "target_agent": target_agent.bin_name(),
-                    "session_id": outcome.session_id,
+                    "thread_id": outcome.thread_id,
                     "delegation": delegation,
                 })),
             })
         }
         SocketRequest::GetDelegationStatus {
-            room_id,
+            conversation_id,
             delegation_id,
         } => {
-            let store = minos_chat_store::ChatStore::open(&db_path).await?;
-            let delegation = store
-                .get_delegation(&room_id, &delegation_id)
+            let teamwork_store = open_teamwork_store_for_conversation(
+                &db_path,
+                &conversation_id,
+                &default_workspace,
+            )
+            .await?;
+            let delegation = teamwork_store
+                .get_delegation(&conversation_id, &delegation_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("delegation not found: {delegation_id}"))?;
             Ok(SocketResponse::Ok {
                 data: Some(serde_json::to_value(delegation)?),
             })
         }
+        SocketRequest::WaitDelegation {
+            conversation_id,
+            delegation_id,
+            timeout_ms,
+        } => {
+            let teamwork_store = open_teamwork_store_for_conversation(
+                &db_path,
+                &conversation_id,
+                &default_workspace,
+            )
+            .await?;
+            let timeout = std::time::Duration::from_millis(timeout_ms as u64);
+            let poll = std::time::Duration::from_millis(200);
+            let (delegation, timed_out) = teamwork_store
+                .wait_delegation(&conversation_id, &delegation_id, timeout, poll)
+                .await?;
+            let source_delivery = teamwork_store
+                .latest_source_delivery_for_delegation(&conversation_id, &delegation_id)
+                .await?
+                .map(|delivery| match delivery.status {
+                    minos_chat_store::TeamworkSourceDeliveryStatus::Pending => "pending",
+                    minos_chat_store::TeamworkSourceDeliveryStatus::Delivered => "delivered",
+                    minos_chat_store::TeamworkSourceDeliveryStatus::Failed => "failed",
+                });
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::json!({
+                    "status": delegation.status,
+                    "timed_out": timed_out,
+                    "result_text": delegation.result_text,
+                    "error": delegation.error,
+                    "result_message_id": delegation.result_message_id,
+                    "source_delivery": source_delivery,
+                    "delegation": delegation,
+                })),
+            })
+        }
         SocketRequest::CancelDelegation {
-            room_id,
+            conversation_id,
             delegation_id,
             reason,
         } => {
-            let store = minos_chat_store::ChatStore::open(&db_path).await?;
-            let delegation = store
-                .cancel_delegation(&room_id, &delegation_id, reason)
+            let teamwork_store = open_teamwork_store_for_conversation(
+                &db_path,
+                &conversation_id,
+                &default_workspace,
+            )
+            .await?;
+            let delegation = teamwork_store
+                .cancel_delegation(&conversation_id, &delegation_id, reason)
                 .await?;
             if let Some(thread_id) = delegation.thread_id.as_deref() {
                 let _ = manager.interrupt_thread(thread_id).await;
@@ -1782,145 +2033,247 @@ async fn handle_daemon_mcp_request(
                 data: Some(serde_json::to_value(delegation)?),
             })
         }
-        SocketRequest::AskUserQuestion {
-            room_id,
+        SocketRequest::PostConversationUpdate {
+            conversation_id,
             source_agent,
-            question,
-        } => {
-            let source_agent = source_agent
-                .as_deref()
-                .map(parse_socket_agent)
-                .transpose()?;
-            let body = question.trim();
-            anyhow::ensure!(!body.is_empty(), "ask_user_question question is empty");
-            let text = if body.starts_with("@user") {
-                body.to_owned()
-            } else {
-                format!("@user {body}")
-            };
-            let message = append_daemon_group_message(
-                &db_path,
-                &room_id,
-                source_agent,
-                None,
-                None,
-                default_workspace.clone(),
-                LocalGroupChatMessageKind::AgentResult,
-                text,
-            )
-            .await?;
-            let store = minos_chat_store::ChatStore::open(&db_path).await?;
-            let feedback = store
-                .create_user_feedback(&room_id, source_agent, body.to_owned(), message.seq)
-                .await?;
-            Ok(SocketResponse::Ok {
-                data: Some(serde_json::to_value(feedback)?),
-            })
-        }
-        SocketRequest::CheckUserFeedback {
-            room_id,
-            feedback_id,
-        } => {
-            let store = minos_chat_store::ChatStore::open(&db_path).await?;
-            let feedback = store.check_user_feedback(&room_id, &feedback_id).await?;
-            Ok(SocketResponse::Ok {
-                data: Some(serde_json::to_value(feedback)?),
-            })
-        }
-        SocketRequest::PostRoomUpdate {
-            room_id,
-            source_agent,
+            source_thread_id,
             message,
         } => {
-            let body = message.trim();
-            anyhow::ensure!(!body.is_empty(), "post_room_update message is empty");
-            let text = if body.starts_with("@user") {
-                body.to_owned()
-            } else {
-                format!("@user {body}")
-            };
             let source_agent = source_agent
                 .as_deref()
                 .map(parse_socket_agent)
                 .transpose()?;
-            append_daemon_group_message(
-                &db_path,
-                &room_id,
+            validate_mcp_source_thread(
+                &store,
+                &conversation_id,
                 source_agent,
-                None,
-                None,
-                default_workspace,
-                LocalGroupChatMessageKind::AgentResult,
-                text,
+                source_thread_id.as_deref(),
             )
             .await?;
-            Ok(SocketResponse::Ok {
-                data: Some(serde_json::json!({ "accepted": true })),
-            })
-        }
-        SocketRequest::ReactToMessage {
-            room_id,
-            source_agent,
-            message_id,
-            message_seq,
-            emoji,
-            action,
-        } => {
-            let source_agent = source_agent
-                .as_deref()
-                .map(parse_socket_agent)
-                .transpose()?;
-            let store = minos_chat_store::ChatStore::open(&db_path).await?;
-            let reaction = store
-                .react_to_message(
-                    &room_id,
-                    source_agent,
-                    message_id,
-                    message_seq,
-                    emoji,
-                    action,
+            let body = message.trim();
+            anyhow::ensure!(
+                !body.is_empty(),
+                "post_conversation_update message is empty"
+            );
+            let text = deliver_daemon_post_update_target(
+                manager.clone(),
+                store.clone(),
+                &conversation_id,
+                &default_workspace,
+                body,
+            )
+            .await?;
+            let message_id = format!("mcp:{}:{}", conversation_id, uuid::Uuid::new_v4());
+            let sender_role = if source_agent.is_some() {
+                "agent"
+            } else {
+                "user"
+            };
+            let mentions = parse_conversation_mentions_from_body(&text);
+            let mentions_json = serde_json::to_string(&mentions).unwrap_or_else(|_| "[]".into());
+            let message_seq = store
+                .upsert_conversation_message(
+                    &conversation_id,
+                    &message_id,
+                    source_thread_id.as_deref(),
+                    sender_role,
+                    source_agent.map(agent_label),
+                    &text,
+                    current_unix_ms(),
+                    None,
+                    None,
+                    &mentions_json,
                 )
                 .await?;
+            publish_conversation_message_appended(
+                &local_conversation_event_tx,
+                &conversation_id,
+                message_seq,
+            );
             Ok(SocketResponse::Ok {
-                data: Some(serde_json::to_value(reaction)?),
+                data: Some(serde_json::json!({ "accepted": true })),
             })
         }
     }
 }
 
-async fn append_daemon_group_message(
+async fn open_teamwork_store_for_conversation(
     db_path: &Path,
-    room_id: &str,
-    agent: Option<AgentName>,
-    thread_id: Option<String>,
-    thread_short_id: Option<String>,
-    workspace: PathBuf,
-    kind: LocalGroupChatMessageKind,
-    text: String,
-) -> anyhow::Result<LocalGroupChatMessage> {
-    let store = minos_chat_store::ChatStore::open(db_path).await?;
-    let room_title = minos_chat_store::room_title_for_workspace(&workspace);
+    conversation_id: &str,
+    workspace: &Path,
+) -> anyhow::Result<minos_chat_store::TeamworkStore> {
+    let store = minos_chat_store::TeamworkStore::open(db_path).await?;
     let workspace_root = workspace.display().to_string();
     store
-        .ensure_room(room_id, &room_title, &workspace_root)
+        .ensure_conversation(conversation_id, conversation_id, &workspace_root)
         .await?;
-    let message = store
-        .append_message(
-            room_id,
-            minos_chat_store::NewChatMessage::from(LocalGroupChatMessage {
-                seq: 0,
-                message_id: String::new(),
-                created_at_ms: current_unix_ms(),
-                kind,
-                text,
-                agent,
-                thread_id,
-                thread_short_id,
-                workspace: Some(workspace_root),
-            }),
+    Ok(store)
+}
+
+async fn workspace_for_mcp_conversation(
+    store: &LocalStore,
+    conversation_id: &str,
+    default_workspace: &Path,
+) -> anyhow::Result<PathBuf> {
+    let Some(conversation) = store.get_conversation(conversation_id).await? else {
+        anyhow::bail!("conversation not found: {conversation_id}");
+    };
+    let Some(project) = store.get_project(&conversation.project_id).await? else {
+        return Ok(default_workspace.to_path_buf());
+    };
+    Ok(project
+        .workspace_path
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_workspace.to_path_buf()))
+}
+
+async fn validate_mcp_source_thread(
+    store: &LocalStore,
+    conversation_id: &str,
+    source_agent: Option<AgentName>,
+    source_thread_id: Option<&str>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        source_agent.is_none() || source_thread_id.is_some(),
+        "MCP source_thread_id is required when source_agent is set"
+    );
+    let Some(source_thread_id) = source_thread_id else {
+        return Ok(());
+    };
+    let rows = store.list_threads_by_conversation(conversation_id).await?;
+    let Some(row) = rows.iter().find(|row| row.thread_id == source_thread_id) else {
+        anyhow::bail!(
+            "MCP source thread {source_thread_id} does not belong to conversation {conversation_id}"
+        );
+    };
+    if let Some(source_agent) = source_agent {
+        let actual = parse_socket_agent(&row.agent)?;
+        anyhow::ensure!(
+            actual == source_agent,
+            "MCP source thread {source_thread_id} belongs to {}, not {}",
+            actual.bin_name(),
+            source_agent.bin_name()
+        );
+    }
+    Ok(())
+}
+
+async fn deliver_daemon_post_update_target(
+    manager: Arc<AgentManager>,
+    store: Arc<LocalStore>,
+    conversation_id: &str,
+    default_workspace: &Path,
+    body: &str,
+) -> anyhow::Result<String> {
+    let Some((target_agent, thread_short_id, prompt)) = parse_mcp_agent_routing(body) else {
+        return Ok(body.to_owned());
+    };
+    let prompt = prompt.trim().to_owned();
+    if prompt.is_empty() {
+        return Ok(body.to_owned());
+    }
+    if let Some(thread_short_id) = thread_short_id {
+        let thread_id = mcp_thread_id_for_agent_short_id(
+            &manager,
+            &store,
+            conversation_id,
+            target_agent,
+            &thread_short_id,
         )
         .await?;
-    Ok(message.into())
+        manager.send_user_message(&thread_id, prompt).await?;
+        return Ok(body.to_owned());
+    }
+
+    let workspace =
+        workspace_for_mcp_conversation(&store, conversation_id, default_workspace).await?;
+    let outcome = manager
+        .start_agent_in_conversation(target_agent, workspace.clone(), conversation_id.to_owned())
+        .await?;
+    persist_thread_parent_rows_inner(
+        &store,
+        &outcome.thread_id,
+        &outcome.cwd.display().to_string(),
+        target_agent,
+        outcome.provider_session_id.as_deref(),
+        Some(conversation_id),
+    )
+    .await;
+    manager
+        .send_user_message(&outcome.thread_id, prompt.clone())
+        .await?;
+    Ok(format!(
+        "@{}#{} {}",
+        target_agent.bin_name(),
+        short_mcp_thread_id(&outcome.thread_id),
+        prompt
+    ))
+}
+
+async fn mcp_thread_id_for_agent_short_id(
+    manager: &AgentManager,
+    store: &LocalStore,
+    conversation_id: &str,
+    agent: AgentName,
+    thread_short_id: &str,
+) -> anyhow::Result<String> {
+    let short_id = thread_short_id.to_ascii_lowercase();
+    let rows = store.list_threads_by_conversation(conversation_id).await?;
+    let Some(row) = rows.into_iter().find(|row| {
+        row.parent_thread_id.is_none()
+            && row.agent == agent.bin_name()
+            && (short_mcp_thread_id(&row.thread_id).to_ascii_lowercase() == short_id
+                || row.thread_id.to_ascii_lowercase().starts_with(&short_id))
+    }) else {
+        anyhow::bail!(
+            "No existing {} session matches #{}",
+            agent.bin_name(),
+            thread_short_id
+        );
+    };
+    let state = row_state_to_runtime(&row)?;
+    anyhow::ensure!(
+        !matches!(state, ThreadState::Closed { .. }),
+        "{} session #{} is closed",
+        agent.bin_name(),
+        short_mcp_thread_id(&row.thread_id)
+    );
+    if !manager.has_thread(&row.thread_id).await {
+        manager
+            .register_persisted_thread(
+                row.thread_id.clone(),
+                PathBuf::from(&row.workspace_root),
+                agent,
+                row.provider_session_id.clone(),
+                row.parent_thread_id.clone(),
+                Some(row.conversation_id.clone()),
+                state,
+                u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
+            )
+            .await?;
+    }
+    Ok(row.thread_id)
+}
+
+fn parse_mcp_agent_routing(text: &str) -> Option<(AgentName, Option<String>, String)> {
+    let rest = text.trim_start().strip_prefix('@')?;
+    let split_at = rest
+        .char_indices()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(index, _)| index)
+        .unwrap_or(rest.len());
+    let target = &rest[..split_at];
+    let body = rest[split_at..].trim_start().to_owned();
+    let (agent, thread_short_id) = match target.split_once('#') {
+        Some((agent, thread_short_id)) if !thread_short_id.is_empty() => (
+            parse_socket_agent(agent).ok()?,
+            Some(thread_short_id.to_owned()),
+        ),
+        Some(_) => return None,
+        None => (parse_socket_agent(target).ok()?, None),
+    };
+    Some((agent, thread_short_id, body))
 }
 
 fn parse_socket_agent(value: &str) -> anyhow::Result<AgentName> {
@@ -1932,7 +2285,37 @@ fn parse_socket_agent(value: &str) -> anyhow::Result<AgentName> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent: {value}"))
 }
 
-fn short_thread_id(thread_id: &str) -> String {
+fn parse_conversation_mentions_from_body(body: &str) -> Vec<minos_protocol::ConversationMention> {
+    let mut mentions = Vec::new();
+    let mut rest = body;
+    while let Some(at) = rest.find('@') {
+        rest = &rest[at + 1..];
+        let token_end = rest
+            .find(|ch: char| ch.is_whitespace() || ch == ',' || ch == ';' || ch == ')' || ch == ']')
+            .unwrap_or(rest.len());
+        let token = &rest[..token_end];
+        rest = &rest[token_end..];
+        if token.is_empty() {
+            continue;
+        }
+        let (agent_name, short_id) = match token.split_once('#') {
+            Some((agent, short)) if !short.is_empty() => (agent, Some(short.to_owned())),
+            Some(_) => continue,
+            None => (token, None),
+        };
+        let Ok(agent) = parse_socket_agent(agent_name) else {
+            continue;
+        };
+        mentions.push(minos_protocol::ConversationMention {
+            agent,
+            thread_id: None,
+            thread_short_id: short_id,
+        });
+    }
+    mentions
+}
+
+fn short_mcp_thread_id(thread_id: &str) -> String {
     thread_id[..8.min(thread_id.len())].to_owned()
 }
 
@@ -2189,6 +2572,57 @@ fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState 
     }
 }
 
+fn local_event_from_manager(event: &ManagerEvent) -> LocalManagerEvent {
+    match event {
+        ManagerEvent::ThreadAdded {
+            thread_id,
+            workspace,
+            agent,
+            parent_thread_id,
+        } => LocalManagerEvent::ThreadAdded {
+            thread_id: thread_id.clone(),
+            workspace: workspace.display().to_string(),
+            agent: *agent,
+            parent_thread_id: parent_thread_id.clone(),
+        },
+        ManagerEvent::ThreadStateChanged {
+            thread_id,
+            old,
+            new,
+            at_ms,
+        } => LocalManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.clone(),
+            old: state_to_proto(old),
+            new: state_to_proto(new),
+            at_ms: *at_ms,
+        },
+        ManagerEvent::ThreadClosed { thread_id, reason } => LocalManagerEvent::ThreadClosed {
+            thread_id: thread_id.clone(),
+            reason: close_to_proto(reason),
+        },
+        ManagerEvent::InstanceCrashed {
+            workspace,
+            affected_threads,
+            reason,
+        } => LocalManagerEvent::InstanceCrashed {
+            workspace: workspace.display().to_string(),
+            affected_threads: affected_threads.clone(),
+            reason: pause_to_proto(reason),
+        },
+    }
+}
+
+fn publish_conversation_message_appended(
+    tx: &broadcast::Sender<LocalConversationEvent>,
+    conversation_id: &str,
+    message_seq: i64,
+) {
+    let _ = tx.send(LocalConversationEvent::ConversationMessageAppended {
+        conversation_id: conversation_id.to_owned(),
+        message_seq,
+    });
+}
+
 fn pause_to_proto(r: &minos_agent_runtime::PauseReason) -> ProtoPauseReason {
     use minos_agent_runtime::PauseReason as Rt;
     match r {
@@ -2272,6 +2706,151 @@ mod tests {
         .unwrap();
     }
 
+    async fn seed_conversation(glue: &AgentGlue, conversation_id: &str) {
+        glue.store
+            .create_project("p-test", "Test", "test", Some("/w"), 0)
+            .await
+            .unwrap();
+        glue.store
+            .create_conversation(conversation_id, "p-test", "Test", 0)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn daemon_mcp_post_conversation_update_appends_and_emits_local_event() {
+        let test = test_glue().await;
+        seed_conversation(&test.glue, "conversation-mcp").await;
+        test.glue.store.upsert_workspace("/w", 1).await.unwrap();
+        test.glue
+            .store
+            .insert_thread_in_conversation(
+                "thread-codex-1234",
+                "conversation-mcp",
+                "/w",
+                "codex",
+                Some("thread-codex-1234"),
+                None,
+                "idle",
+                1,
+                true,
+            )
+            .await
+            .unwrap();
+        let (event_tx, mut event_rx) = broadcast::channel(4);
+
+        let response = handle_daemon_mcp_request(
+            test.glue.manager.clone(),
+            test.glue.store.clone(),
+            PathBuf::from("unused-teamwork.sqlite"),
+            test.glue.default_workspace.clone(),
+            event_tx,
+            SocketRequest::PostConversationUpdate {
+                conversation_id: "conversation-mcp".into(),
+                source_agent: Some("codex".into()),
+                source_thread_id: Some("thread-codex-1234".into()),
+                message: "review posted".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(response, SocketResponse::Ok { .. }));
+        let rows = test
+            .glue
+            .store
+            .list_conversation_messages("conversation-mcp", None, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sender_role, "agent");
+        assert_eq!(rows[0].agent.as_deref(), Some("codex"));
+        assert_eq!(rows[0].thread_id.as_deref(), Some("thread-codex-1234"));
+        assert_eq!(rows[0].body, "review posted");
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("conversation append event should be emitted")
+            .expect("event channel should stay open");
+        assert_eq!(
+            event,
+            LocalConversationEvent::ConversationMessageAppended {
+                conversation_id: "conversation-mcp".into(),
+                message_seq: rows[0].message_seq,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_mcp_delegate_blocks_third_agent_from_delegated_thread() {
+        let test = test_glue().await;
+        seed_conversation(&test.glue, "conversation-mcp").await;
+        test.glue.store.upsert_workspace("/w", 1).await.unwrap();
+        test.glue
+            .store
+            .insert_thread_in_conversation(
+                "thread-opencode-1234",
+                "conversation-mcp",
+                "/w",
+                "opencode",
+                Some("thread-opencode-1234"),
+                None,
+                "idle",
+                1,
+                true,
+            )
+            .await
+            .unwrap();
+        let teamwork_db = test._tmp.path().join("teamwork.sqlite");
+        let teamwork_store = minos_chat_store::TeamworkStore::open(&teamwork_db)
+            .await
+            .unwrap();
+        teamwork_store
+            .ensure_conversation("conversation-mcp", "main", "/w")
+            .await
+            .unwrap();
+        teamwork_store
+            .create_delegation(
+                "conversation-mcp",
+                Some(AgentName::Codex),
+                Some("thread-codex-1234".into()),
+                AgentName::Opencode,
+                "check this".into(),
+                Some("thread-opencode-1234".into()),
+            )
+            .await
+            .unwrap();
+        let (event_tx, _) = broadcast::channel(4);
+
+        let error = handle_daemon_mcp_request(
+            test.glue.manager.clone(),
+            test.glue.store.clone(),
+            teamwork_db,
+            test.glue.default_workspace.clone(),
+            event_tx,
+            SocketRequest::DelegateToAgent {
+                conversation_id: "conversation-mcp".into(),
+                source_agent: Some("opencode".into()),
+                source_thread_id: Some("thread-opencode-1234".into()),
+                target_agent: "gemini".into(),
+                prompt: "say hi".into(),
+            },
+        )
+        .await
+        .expect_err("third-agent delegation should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("may only delegate back to codex"));
+        assert!(test
+            .glue
+            .store
+            .list_conversation_messages("conversation-mcp", None, Some(10))
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
     #[tokio::test]
     async fn list_threads_reads_persisted_rows_and_filters_agent() {
         let test = test_glue().await;
@@ -2308,6 +2887,7 @@ mod tests {
                 AgentName::Codex,
                 None,
                 None,
+                Some("c-live".into()),
                 ThreadState::Idle,
                 3,
             )
@@ -2435,6 +3015,7 @@ mod tests {
                 minos_domain::AgentName::Codex,
                 Some("thr-live".into()),
                 None,
+                Some("c-live".into()),
                 ThreadState::Idle,
                 0,
             )
@@ -2511,6 +3092,7 @@ mod tests {
                 minos_domain::AgentName::Codex,
                 Some("thr-snapshot".into()),
                 None,
+                Some("c-live".into()),
                 state.clone(),
                 0,
             )

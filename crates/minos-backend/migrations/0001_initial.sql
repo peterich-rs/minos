@@ -182,7 +182,7 @@ CREATE TABLE agents (
     owner_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     name              TEXT NOT NULL,
     description       TEXT NOT NULL DEFAULT '',
-    runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini')),
+    runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
     model             TEXT NOT NULL DEFAULT '',
     created_at_ms     INTEGER NOT NULL,
     updated_at_ms     INTEGER NOT NULL
@@ -310,7 +310,7 @@ CREATE INDEX idx_approval_deadline_state
 
 CREATE TABLE threads (
     thread_id        TEXT PRIMARY KEY,
-    agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini')),
+    agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
     owner_device_id  TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
     title            TEXT,
     first_ts_ms      INTEGER NOT NULL,
@@ -335,7 +335,7 @@ CREATE TABLE raw_events (
     seq              INTEGER NOT NULL,
     event_id         TEXT NOT NULL DEFAULT '',
     kind             TEXT NOT NULL DEFAULT 'agent_event',
-    agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode')),
+    agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
     payload_json     TEXT NOT NULL,
     ts_ms            INTEGER NOT NULL,
     checksum_sha256  TEXT NOT NULL DEFAULT '',

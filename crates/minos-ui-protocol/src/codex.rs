@@ -633,10 +633,11 @@ fn stable_item_tool_call_id(item_id: &str, item_type: &str) -> String {
 }
 
 fn completed_tool_item_is_error(item: &Value) -> bool {
+    let has_error_payload = item.get("error").is_some_and(|error| !error.is_null());
     matches!(
         item.get("status").and_then(Value::as_str),
         Some("failed" | "errored" | "cancelled" | "denied")
-    ) || item.get("error").is_some()
+    ) || has_error_payload
         || item.get("success").and_then(Value::as_bool) == Some(false)
 }
 
@@ -828,6 +829,55 @@ mod state_tests {
             completed.as_slice(),
             [UiEventMessage::ToolCallPlaced { message_id, tool_call_id, .. }, UiEventMessage::ToolCallCompleted { tool_call_id: done_id, output, is_error: false }]
                 if message_id == "a1" && tool_call_id == done_id && output == "ok"
+        ));
+    }
+
+    #[test]
+    fn completed_mcp_tool_with_null_error_is_success() {
+        let mut s = CodexTranslatorState::new("thr".into());
+
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"a1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"mcpToolCall","id":"mcp1","tool":"list_conversation_messages","status":"running"},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+
+        let completed = translate(
+            &mut s,
+            &val(r#"{"method":"item/completed","params":{
+                    "item":{
+                        "type":"mcpToolCall",
+                        "id":"mcp1",
+                        "tool":"list_conversation_messages",
+                        "status":"completed",
+                        "result":{"ok":true},
+                        "error":null
+                    },
+                    "threadId":"thr","turnId":"t1","completedAtMs":2
+                }}"#),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            completed.as_slice(),
+            [
+                UiEventMessage::ToolCallPlaced { .. },
+                UiEventMessage::ToolCallCompleted {
+                    is_error: false,
+                    ..
+                }
+            ]
         ));
     }
 

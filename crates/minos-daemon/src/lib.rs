@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
+pub mod conversation_completion;
 pub mod config;
 pub mod device_secret_store;
 pub mod handle;

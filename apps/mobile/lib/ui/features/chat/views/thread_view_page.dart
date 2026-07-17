@@ -10,6 +10,7 @@ import 'package:minos/application/flutter_log.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/preferred_agent_provider.dart';
 import 'package:minos/application/thread_commands.dart';
+import 'package:minos/application/thread_event_timeline.dart';
 import 'package:minos/application/thread_events_provider.dart';
 import 'package:minos/application/thread_view_state.dart';
 import 'package:minos/domain/active_session.dart';
@@ -839,26 +840,22 @@ class _LoadingThreadState extends StatelessWidget {
   }
 }
 
-/// Translates a flat ordered list of `UiEventMessage`s into a list of
-/// chat widgets. Event-to-widget mapping (per plan §10.6 step 2):
+/// Translates a flat ordered list of `UiEventMessage`s into chat widgets.
 ///
-///   - MessageStarted{user}      → opens a user MessageBubble buffer
-///   - MessageStarted{assistant} → opens a StreamingText buffer
-///   - TextDelta/TextReplace     → appends to or replaces that buffer
-///   - MessageCompleted          → flips bubble to non-streaming
-///   - ReasoningDelta            → accumulates into a ReasoningSection
-///   - ToolCallPlaced            → emits a ToolCallCard (in-flight)
-///   - ToolCallCompleted         → mutates the matching card to done
-///   - ThreadClosed              → renders a divider
-///   - Error                     → renders a destructive bubble
-///   - ThreadOpened/Title/Raw    → ignored in chat view (metadata)
+/// Projection rules (timeline-first, matching TUI `ChatState`):
+///
+///   - Each content kind is its own row at the **first event** that produced it
+///   - Contiguous streaming deltas update that row in place
+///   - Text/reasoning interrupted by tools (or each other) opens a **new** row
+///     at the timeline tail — intermediate ACP `agent_message_chunk`s are not
+///     merged into the later final reply
+///   - Only the still-open text segment of a live turn shows a streaming cursor
+///   - Tool cards stay visible while the turn is live
 ///
 /// Optimistic user messages are interleaved by their `anchorEventCount`
 /// (events.length at enqueue): each optimistic renders just before the
-/// first event whose index >= its anchor. Anything anchored past the end
-/// of the events list trails. This keeps a just-sent user bubble above an
-/// assistant reply that streams in before our own `MessageStarted{user}`
-/// echo arrives.
+/// first timeline row whose eventIndex >= its anchor. Anything anchored
+/// past the end of the events list trails.
 class _GroupedEvents {
   _GroupedEvents._(this.items);
   final List<Widget> items;
@@ -869,141 +866,12 @@ class _GroupedEvents {
         const <ThreadOptimisticUserMessage>[],
     bool showLiveAssistantState = false,
   }) {
-    final widgets = <Widget>[];
-    // Per-message buffers, keyed by message_id.
-    final textByMsg = <String, StringBuffer>{};
-    final reasoningByMsg = <String, StringBuffer>{};
-    final reasoningStatusByMsg = <String, MessageBubbleStatusLine>{};
-    final toolStatusByMsg = <String, MessageBubbleStatusLine>{};
-    final completedMsgs = <String>{};
-    final roleByMsg = <String, MessageRole>{};
-    // Tool calls: maintain insertion order so we can render their cards
-    // inline. Mutated when ToolCallCompleted lands.
-    final toolCalls = <String, _ToolCallEntry>{};
-    String? lastAssistantMessageId;
-
-    final messageStartIndex = <String, int>{};
-    for (var eventIndex = 0; eventIndex < events.length; eventIndex++) {
-      final e = events[eventIndex];
-      switch (e) {
-        case UiEventMessage_MessageStarted(:final messageId, :final role):
-          messageStartIndex.putIfAbsent(messageId, () => eventIndex);
-          roleByMsg[messageId] = role;
-          textByMsg.putIfAbsent(messageId, StringBuffer.new);
-          if (role == MessageRole.assistant) {
-            lastAssistantMessageId = messageId;
-          }
-        case UiEventMessage_TextDelta(:final messageId, :final text):
-          textByMsg
-              .putIfAbsent(messageId, StringBuffer.new)
-              .write(text.renderPreview());
-        case UiEventMessage_TextReplace(:final messageId, :final text):
-          textByMsg[messageId] = StringBuffer(text.renderPreview());
-        case UiEventMessage_ReasoningDelta(:final messageId, :final text):
-          reasoningByMsg
-              .putIfAbsent(messageId, StringBuffer.new)
-              .write(text.renderPreview());
-          final preview = _statusPreview(text.renderPreview());
-          if (preview != null) {
-            reasoningStatusByMsg[messageId] = MessageBubbleStatusLine(
-              icon: Icons.psychology_outlined,
-              label: '思考中 · $preview',
-              tone: MessageBubbleStatusTone.info,
-            );
-          }
-        case UiEventMessage_ReasoningReplace(:final messageId, :final text):
-          reasoningByMsg[messageId] = StringBuffer(text.renderPreview());
-          final preview = _statusPreview(text.renderPreview());
-          if (preview != null) {
-            reasoningStatusByMsg[messageId] = MessageBubbleStatusLine(
-              icon: Icons.psychology_outlined,
-              label: '思考中 · $preview',
-              tone: MessageBubbleStatusTone.info,
-            );
-          }
-        case UiEventMessage_MessageCompleted(:final messageId):
-          completedMsgs.add(messageId);
-        case UiEventMessage_ToolCallPlaced(
-          :final messageId,
-          :final toolCallId,
-          :final name,
-          :final argsJson,
-        ):
-          toolCalls[toolCallId] = _ToolCallEntry(
-            messageId: messageId,
-            name: name,
-            args: argsJson.renderPreview(),
-          );
-          toolStatusByMsg[messageId] = MessageBubbleStatusLine(
-            icon: Icons.build_outlined,
-            label: '调用工具 · $name',
-            tone: MessageBubbleStatusTone.info,
-          );
-        case UiEventMessage_ToolCallCompleted(
-          :final toolCallId,
-          :final output,
-          :final isError,
-        ):
-          final existing = toolCalls[toolCallId];
-          if (existing != null) {
-            existing.output = output.renderPreview();
-            existing.isError = isError;
-            if (existing.messageId.isNotEmpty) {
-              toolStatusByMsg[existing.messageId] = MessageBubbleStatusLine(
-                icon: isError
-                    ? Icons.error_outline
-                    : Icons.check_circle_outline,
-                label: isError
-                    ? '工具失败 · ${existing.name}'
-                    : '工具完成 · ${existing.name}',
-                tone: isError
-                    ? MessageBubbleStatusTone.error
-                    : MessageBubbleStatusTone.success,
-              );
-            }
-          } else {
-            // Out-of-order: synthesise a placeholder entry.
-            toolCalls[toolCallId] = _ToolCallEntry(
-              messageId: lastAssistantMessageId ?? '',
-              name: '(unknown)',
-              args: '{}',
-              output: output.renderPreview(),
-              isError: isError,
-            );
-            if (lastAssistantMessageId != null) {
-              toolStatusByMsg[lastAssistantMessageId] = MessageBubbleStatusLine(
-                icon: isError
-                    ? Icons.error_outline
-                    : Icons.check_circle_outline,
-                label: isError ? '工具失败 · 未知工具' : '工具完成 · 未知工具',
-                tone: isError
-                    ? MessageBubbleStatusTone.error
-                    : MessageBubbleStatusTone.success,
-              );
-            }
-          }
-        case UiEventMessage_ThreadClosed():
-          widgets.add(const _ClosedDivider());
-        case UiEventMessage_Error(:final code, :final message):
-          widgets.add(_ErrorBubble(code: code, message: message));
-        case UiEventMessage_ThreadOpened():
-        case UiEventMessage_ThreadTitleUpdated():
-        case UiEventMessage_Raw():
-          // Metadata — not surfaced as a chat row.
-          break;
-      }
-    }
-
-    final userEchoes = _extractUserMessageEchoes(
+    final timeline = buildThreadEventTimeline(
       events,
-      roleByMsg: roleByMsg,
-      textByMsg: textByMsg,
-      messageStartIndex: messageStartIndex,
+      showLiveAssistantState: showLiveAssistantState,
     );
+    final userEchoes = _extractUserMessageEchoes(events);
 
-    // Optimistic anchors: render each optimistic bubble before the first
-    // event whose index >= its anchor. Sort defensively in case enqueue
-    // order ever diverges from anchor monotonicity.
     final pendingOptimistic =
         optimistic
             .where((message) => !threadOptimisticHasEcho(message, userEchoes))
@@ -1020,117 +888,77 @@ class _GroupedEvents {
       },
     );
 
-    // Render bubbles in role-ordered insertion order. We deliberately walk
-    // the events again to preserve message ordering relative to
-    // ThreadClosed / Error markers that were already appended above.
-    final renderedMessages = <String>{};
-    final renderedToolCalls = <String>{};
     final ordered = <Widget>[];
     var optimisticIdx = 0;
-    final liveAssistantMessageId = showLiveAssistantState
-        ? lastAssistantMessageId
-        : null;
-    for (var i = 0; i < events.length; i++) {
+
+    void flushOptimisticThrough(int eventIndex) {
       while (optimisticIdx < pendingOptimistic.length &&
-          pendingOptimistic[optimisticIdx].anchorEventCount <= i) {
+          pendingOptimistic[optimisticIdx].anchorEventCount <= eventIndex) {
         ordered.add(optimisticWidget(pendingOptimistic[optimisticIdx]));
         optimisticIdx++;
       }
-      final e = events[i];
-      final String? msgId = switch (e) {
-        UiEventMessage_MessageStarted(:final messageId) => messageId,
-        UiEventMessage_TextDelta(:final messageId) => messageId,
-        UiEventMessage_TextReplace(:final messageId) => messageId,
-        UiEventMessage_ReasoningDelta(:final messageId) => messageId,
-        UiEventMessage_ReasoningReplace(:final messageId) => messageId,
-        UiEventMessage_MessageCompleted(:final messageId) => messageId,
-        _ => null,
-      };
-      final String? tcId = switch (e) {
-        UiEventMessage_ToolCallPlaced(:final toolCallId) => toolCallId,
-        UiEventMessage_ToolCallCompleted(:final toolCallId) => toolCallId,
-        _ => null,
-      };
-
-      if (msgId != null && !renderedMessages.contains(msgId)) {
-        renderedMessages.add(msgId);
-        final role = roleByMsg[msgId] ?? MessageRole.assistant;
-        final text = textByMsg[msgId]?.toString() ?? '';
-        final reasoning = reasoningByMsg[msgId]?.toString() ?? '';
-        final isComplete = completedMsgs.contains(msgId);
-        final isLiveAssistantMessage =
-            role == MessageRole.assistant &&
-            liveAssistantMessageId == msgId &&
-            !isComplete;
-        if (role == MessageRole.user) {
-          // Live fan-out can transiently deliver MessageStarted{user}
-          // before the matching TextDelta. Skip that empty interim row so
-          // the optimistic bubble doesn't collapse into an air bubble.
-          if (text.trim().isNotEmpty) {
-            ordered.add(
-              MessageBubble(
-                isUser: true,
-                markdownContent: text,
-                isStreaming: false,
-              ),
-            );
-          }
-        } else {
-          final statusLines = <MessageBubbleStatusLine>[
-            if (isLiveAssistantMessage && reasoningStatusByMsg[msgId] != null)
-              reasoningStatusByMsg[msgId]!,
-            if (isLiveAssistantMessage && toolStatusByMsg[msgId] != null)
-              toolStatusByMsg[msgId]!,
-          ];
-          ordered.add(
-            StreamingText(
-              messageId: msgId,
-              accumulatedText: text,
-              showCursor: isLiveAssistantMessage,
-              statusLines: statusLines,
-            ),
-          );
-        }
-        if (reasoning.isNotEmpty && !isLiveAssistantMessage) {
-          ordered.add(
-            ReasoningSection(messageId: msgId, reasoningText: reasoning),
-          );
-        }
-      }
-
-      if (tcId != null && !renderedToolCalls.contains(tcId)) {
-        renderedToolCalls.add(tcId);
-        final entry = toolCalls[tcId]!;
-        final hideDetailedCard =
-            showLiveAssistantState &&
-            liveAssistantMessageId != null &&
-            entry.messageId == liveAssistantMessageId &&
-            !completedMsgs.contains(entry.messageId);
-        if (!hideDetailedCard) {
-          ordered.add(
-            ToolCallCard(
-              toolCallId: tcId,
-              toolName: entry.name,
-              argsJson: entry.args,
-              output: entry.output,
-              isError: entry.isError,
-            ),
-          );
-        }
-      }
     }
 
-    // Anything anchored past the end of the events list (no event arrived
-    // yet) trails the rendered bubbles.
+    for (final row in timeline) {
+      flushOptimisticThrough(row.eventIndex);
+      ordered.add(_widgetForTimelineItem(row));
+    }
+
     while (optimisticIdx < pendingOptimistic.length) {
       ordered.add(optimisticWidget(pendingOptimistic[optimisticIdx]));
       optimisticIdx++;
     }
 
-    // Append the trailing markers (ThreadClosed / Error) that we already
-    // captured in `widgets`. Order: bubbles → markers.
-    return _GroupedEvents._([...ordered, ...widgets]);
+    return _GroupedEvents._(ordered);
   }
+}
+
+Widget _widgetForTimelineItem(ThreadTimelineItem item) {
+  return switch (item) {
+    TimelineUserMessage(:final text) => MessageBubble(
+      isUser: true,
+      markdownContent: text,
+      isStreaming: false,
+    ),
+    TimelineAssistantText(
+      :final messageId,
+      :final text,
+      :final showCursor,
+    ) =>
+      StreamingText(
+        messageId: messageId,
+        accumulatedText: text,
+        showCursor: showCursor,
+      ),
+    TimelineAssistantPlaceholder(:final messageId) => StreamingText(
+      messageId: messageId,
+      accumulatedText: '',
+      showCursor: true,
+    ),
+    TimelineReasoning(:final messageId, :final text, :final isLive) =>
+      ReasoningSection(
+        messageId: messageId,
+        reasoningText: text,
+        initiallyExpanded: isLive,
+      ),
+    TimelineToolCall(
+      :final toolCallId,
+      :final name,
+      :final argsJson,
+      :final output,
+      :final isError,
+    ) =>
+      ToolCallCard(
+        toolCallId: toolCallId,
+        toolName: name,
+        argsJson: argsJson,
+        output: output,
+        isError: isError,
+      ),
+    TimelineError(:final code, :final message) =>
+      _ErrorBubble(code: code, message: message),
+    TimelineClosed() => const _ClosedDivider(),
+  };
 }
 
 List<ThreadUserMessageEcho> _extractUserMessageEchoes(
@@ -1173,29 +1001,6 @@ List<ThreadUserMessageEcho> _extractUserMessageEchoes(
   }
   echoes.sort((a, b) => a.eventIndex.compareTo(b.eventIndex));
   return echoes;
-}
-
-class _ToolCallEntry {
-  _ToolCallEntry({
-    required this.messageId,
-    required this.name,
-    required this.args,
-    this.output,
-    this.isError = false,
-  });
-  final String messageId;
-  final String name;
-  final String args;
-  String? output;
-  bool isError;
-}
-
-String? _statusPreview(String raw) {
-  final collapsed = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
-  if (collapsed.isEmpty) return null;
-  const maxChars = 48;
-  if (collapsed.length <= maxChars) return collapsed;
-  return '${collapsed.substring(0, maxChars - 1)}…';
 }
 
 class _ClosedDivider extends StatelessWidget {

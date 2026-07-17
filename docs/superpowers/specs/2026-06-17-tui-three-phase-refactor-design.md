@@ -103,7 +103,7 @@ enum GlobalAction {
     Quit,
     CycleFocus,
     ToggleAgentDetail,
-    OpenAgentPicker,
+    // Superseded on 2026-06-23: modal agent picker removed; use input @agent routing.
     Scroll(ScrollTarget, ScrollDirection, u16),
     CopySelection,
     Paste(String),
@@ -229,7 +229,6 @@ src/
 │   ├── room_list.rs
 │   ├── thread_list.rs
 │   ├── status_bar.rs
-│   ├── agent_picker.rs
 │   └── theme.rs
 ├── skills.rs                   # 不变
 └── logging.rs                  # 不变

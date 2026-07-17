@@ -1,13 +1,21 @@
 use crossterm::event::{KeyEvent, MouseEvent};
 use minos_agent_runtime::ManagerEvent;
-use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_domain::AgentName;
 use minos_protocol::LocalIngestFrame;
 use std::path::PathBuf;
 
+use crate::action::InputTarget;
+use crate::backend::BackendThreadSnapshot;
+use crate::path_complete::PathCandidate;
+
 pub enum AppEvent {
     Ingest(LocalIngestFrame),
     ManagerEvent(ManagerEvent),
+    /// Background tick listed daemon threads; apply on the main loop without
+    /// blocking input/draw on the network round-trip.
+    DaemonThreadsListed {
+        threads: Vec<BackendThreadSnapshot>,
+    },
     AgentStartedForPrompt {
         agent: AgentName,
         thread_id: String,
@@ -19,6 +27,11 @@ pub enum AppEvent {
         error: String,
     },
     ProjectCreated(crate::backend::ProjectEntry),
+    PathCandidatesResolved {
+        target: InputTarget,
+        sequence: u64,
+        candidates: Vec<PathCandidate>,
+    },
     ConversationsLoaded {
         project_id: String,
         conversations: Vec<crate::backend::ConversationEntry>,
@@ -36,19 +49,17 @@ pub enum AppEvent {
         cwd: PathBuf,
         text: String,
     },
+    ConversationMessageAppended {
+        conversation_id: String,
+        message_seq: i64,
+    },
     ProjectFailed(String),
-    McpToolCall(McpToolEvent),
     Key(KeyEvent),
     Paste(String),
     Mouse(MouseEvent),
     #[allow(dead_code)]
     Resize(u16, u16),
     Tick,
-}
-
-pub struct McpToolEvent {
-    pub request: SocketRequest,
-    pub response_tx: tokio::sync::oneshot::Sender<anyhow::Result<SocketResponse>>,
 }
 
 pub fn spawn_ingest_pump(
@@ -79,6 +90,31 @@ pub fn spawn_manager_event_pump(
             match rx.recv().await {
                 Ok(event) => {
                     if tx.send(AppEvent::ManagerEvent(event)).is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+pub fn spawn_conversation_message_event_pump(
+    mut rx: tokio::sync::broadcast::Receiver<crate::backend::ConversationMessageEvent>,
+    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if tx
+                        .send(AppEvent::ConversationMessageAppended {
+                            conversation_id: event.conversation_id,
+                            message_seq: event.message_seq,
+                        })
+                        .is_err()
+                    {
                         break;
                     }
                 }

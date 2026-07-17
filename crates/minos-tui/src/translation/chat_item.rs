@@ -14,6 +14,8 @@ pub enum ChatItem {
         message_id: String,
         text: String,
         is_streaming: bool,
+        /// When `None`, expanded only while streaming (idle thinking is collapsed).
+        is_user_toggled: Option<bool>,
     },
     ToolCall {
         message_id: String,
@@ -25,6 +27,7 @@ pub enum ChatItem {
         output_detail: Option<String>,
         is_error: bool,
         is_expanded: bool,
+        is_user_toggled: Option<bool>,
         is_streaming: bool,
     },
     SubagentCall {
@@ -67,6 +70,38 @@ impl ChatItem {
             | ChatItem::SubagentCall { is_streaming, .. } => *is_streaming = value,
             ChatItem::SystemMessage { .. } | ChatItem::Error { .. } => {}
         }
+    }
+
+    pub(super) fn is_streaming(&self) -> bool {
+        match self {
+            ChatItem::UserMessage { is_streaming, .. }
+            | ChatItem::AssistantText { is_streaming, .. }
+            | ChatItem::Reasoning { is_streaming, .. }
+            | ChatItem::ToolCall { is_streaming, .. }
+            | ChatItem::SubagentCall { is_streaming, .. } => *is_streaming,
+            ChatItem::SystemMessage { .. } | ChatItem::Error { .. } => false,
+        }
+    }
+
+    /// Whether a foldable item (tool / thinking) currently shows its body.
+    pub(crate) fn is_fold_expanded(&self) -> bool {
+        match self {
+            ChatItem::ToolCall {
+                is_expanded,
+                is_user_toggled,
+                ..
+            } => is_user_toggled.unwrap_or(*is_expanded),
+            ChatItem::Reasoning {
+                is_streaming,
+                is_user_toggled,
+                ..
+            } => is_user_toggled.unwrap_or(*is_streaming),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_foldable(&self) -> bool {
+        matches!(self, ChatItem::ToolCall { .. } | ChatItem::Reasoning { .. })
     }
 }
 

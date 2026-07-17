@@ -4420,6 +4420,13 @@ const _: fn() = || {
         let _: Option<i64> = ThreadSummary.ended_at_ms;
         let _: Option<crate::api::minos::ThreadEndReason> = ThreadSummary.end_reason;
         let _: Option<String> = ThreadSummary.parent_thread_id;
+        let _: crate::api::minos::ThreadState = ThreadSummary.state;
+    }
+    match None::<crate::api::minos::SubagentStatus>.unwrap() {
+        crate::api::minos::SubagentStatus::Running => {}
+        crate::api::minos::SubagentStatus::Completed => {}
+        crate::api::minos::SubagentStatus::Failed => {}
+        crate::api::minos::SubagentStatus::Interrupted => {}
     }
     match None::<crate::api::minos::UiEventMessage>.unwrap() {
         crate::api::minos::UiEventMessage::ThreadOpened {
@@ -4497,6 +4504,30 @@ const _: fn() = || {
             let _: String = tool_call_id;
             let _: crate::api::minos::DisplayPayload = output;
             let _: bool = is_error;
+        }
+        crate::api::minos::UiEventMessage::SubagentSpawned {
+            parent_thread_id,
+            sub_thread_id,
+            tool_call_id,
+            agent,
+            model,
+            prompt,
+            title,
+        } => {
+            let _: String = parent_thread_id;
+            let _: String = sub_thread_id;
+            let _: String = tool_call_id;
+            let _: crate::api::minos::AgentName = agent;
+            let _: Option<String> = model;
+            let _: Option<String> = prompt;
+            let _: Option<String> = title;
+        }
+        crate::api::minos::UiEventMessage::SubagentStatusUpdated {
+            sub_thread_id,
+            status,
+        } => {
+            let _: String = sub_thread_id;
+            let _: crate::api::minos::SubagentStatus = status;
         }
         crate::api::minos::UiEventMessage::Error {
             code,
@@ -6249,6 +6280,64 @@ impl SseDecode for crate::api::minos::ThreadEndReason {
     }
 }
 
+impl SseDecode for crate::api::minos::PauseReason {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        match <i32>::sse_decode(deserializer) {
+            0 => crate::api::minos::PauseReason::UserInterrupt,
+            1 => crate::api::minos::PauseReason::CodexCrashed,
+            2 => crate::api::minos::PauseReason::DaemonRestart,
+            3 => crate::api::minos::PauseReason::InstanceReaped,
+            inner => unreachable!("Invalid variant for PauseReason: {}", inner),
+        }
+    }
+}
+
+impl SseDecode for crate::api::minos::CloseReason {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        match <i32>::sse_decode(deserializer) {
+            0 => crate::api::minos::CloseReason::UserClose,
+            1 => crate::api::minos::CloseReason::TerminalError,
+            inner => unreachable!("Invalid variant for CloseReason: {}", inner),
+        }
+    }
+}
+
+impl SseDecode for crate::api::minos::ThreadState {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        match <i32>::sse_decode(deserializer) {
+            0 => crate::api::minos::ThreadState::Starting,
+            1 => crate::api::minos::ThreadState::Idle,
+            2 => crate::api::minos::ThreadState::Running {
+                turn_started_at_ms: <i64>::sse_decode(deserializer),
+            },
+            3 => crate::api::minos::ThreadState::Suspended {
+                reason: <crate::api::minos::PauseReason>::sse_decode(deserializer),
+            },
+            4 => crate::api::minos::ThreadState::Resuming,
+            5 => crate::api::minos::ThreadState::Closed {
+                reason: <crate::api::minos::CloseReason>::sse_decode(deserializer),
+            },
+            inner => unreachable!("Invalid variant for ThreadState: {}", inner),
+        }
+    }
+}
+
+impl SseDecode for crate::api::minos::SubagentStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        match <i32>::sse_decode(deserializer) {
+            0 => crate::api::minos::SubagentStatus::Running,
+            1 => crate::api::minos::SubagentStatus::Completed,
+            2 => crate::api::minos::SubagentStatus::Failed,
+            3 => crate::api::minos::SubagentStatus::Interrupted,
+            inner => unreachable!("Invalid variant for SubagentStatus: {}", inner),
+        }
+    }
+}
+
 impl SseDecode for crate::api::minos::ThreadSummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -6262,6 +6351,7 @@ impl SseDecode for crate::api::minos::ThreadSummary {
         let mut var_endReason =
             <Option<crate::api::minos::ThreadEndReason>>::sse_decode(deserializer);
         let mut var_parentThreadId = <Option<String>>::sse_decode(deserializer);
+        let mut var_state = <crate::api::minos::ThreadState>::sse_decode(deserializer);
         return crate::api::minos::ThreadSummary {
             thread_id: var_threadId,
             agent: var_agent,
@@ -6272,6 +6362,7 @@ impl SseDecode for crate::api::minos::ThreadSummary {
             ended_at_ms: var_endedAtMs,
             end_reason: var_endReason,
             parent_thread_id: var_parentThreadId,
+            state: var_state,
         };
     }
 }
@@ -6426,6 +6517,32 @@ impl SseDecode for crate::api::minos::UiEventMessage {
                     tool_call_id: var_toolCallId,
                     output: var_output,
                     is_error: var_isError,
+                };
+            }
+            13 => {
+                let mut var_parentThreadId = <String>::sse_decode(deserializer);
+                let mut var_subThreadId = <String>::sse_decode(deserializer);
+                let mut var_toolCallId = <String>::sse_decode(deserializer);
+                let mut var_agent = <crate::api::minos::AgentName>::sse_decode(deserializer);
+                let mut var_model = <Option<String>>::sse_decode(deserializer);
+                let mut var_prompt = <Option<String>>::sse_decode(deserializer);
+                let mut var_title = <Option<String>>::sse_decode(deserializer);
+                return crate::api::minos::UiEventMessage::SubagentSpawned {
+                    parent_thread_id: var_parentThreadId,
+                    sub_thread_id: var_subThreadId,
+                    tool_call_id: var_toolCallId,
+                    agent: var_agent,
+                    model: var_model,
+                    prompt: var_prompt,
+                    title: var_title,
+                };
+            }
+            14 => {
+                let mut var_subThreadId = <String>::sse_decode(deserializer);
+                let mut var_status = <crate::api::minos::SubagentStatus>::sse_decode(deserializer);
+                return crate::api::minos::UiEventMessage::SubagentStatusUpdated {
+                    sub_thread_id: var_subThreadId,
+                    status: var_status,
                 };
             }
             11 => {
@@ -7965,6 +8082,28 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::MessageRole
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::SubagentStatus> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::SubagentStatus::Running => 0.into_dart(),
+            crate::api::minos::SubagentStatus::Completed => 1.into_dart(),
+            crate::api::minos::SubagentStatus::Failed => 2.into_dart(),
+            crate::api::minos::SubagentStatus::Interrupted => 3.into_dart(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::SubagentStatus>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::SubagentStatus>>
+    for crate::api::minos::SubagentStatus
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::SubagentStatus> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::MinosError> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self.0 {
@@ -8408,6 +8547,80 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ThreadEndRe
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::PauseReason> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::PauseReason::UserInterrupt => 0.into_dart(),
+            crate::api::minos::PauseReason::CodexCrashed => 1.into_dart(),
+            crate::api::minos::PauseReason::DaemonRestart => 2.into_dart(),
+            crate::api::minos::PauseReason::InstanceReaped => 3.into_dart(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::PauseReason>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::PauseReason>>
+    for crate::api::minos::PauseReason
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::PauseReason> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::CloseReason> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::CloseReason::UserClose => 0.into_dart(),
+            crate::api::minos::CloseReason::TerminalError => 1.into_dart(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::CloseReason>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::CloseReason>>
+    for crate::api::minos::CloseReason
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::CloseReason> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ThreadState> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::ThreadState::Starting => [0.into_dart()].into_dart(),
+            crate::api::minos::ThreadState::Idle => [1.into_dart()].into_dart(),
+            crate::api::minos::ThreadState::Running { turn_started_at_ms } => [
+                2.into_dart(),
+                turn_started_at_ms.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::ThreadState::Suspended { reason } => {
+                [3.into_dart(), reason.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::minos::ThreadState::Resuming => [4.into_dart()].into_dart(),
+            crate::api::minos::ThreadState::Closed { reason } => {
+                [5.into_dart(), reason.into_into_dart().into_dart()].into_dart()
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ThreadState>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ThreadState>>
+    for crate::api::minos::ThreadState
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ThreadState> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ThreadSummary> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -8419,6 +8632,8 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ThreadSumma
             self.0.message_count.into_into_dart().into_dart(),
             self.0.ended_at_ms.into_into_dart().into_dart(),
             self.0.end_reason.into_into_dart().into_dart(),
+            self.0.parent_thread_id.into_into_dart().into_dart(),
+            self.0.state.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -8557,6 +8772,34 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::UiEventMess
                 tool_call_id.into_into_dart().into_dart(),
                 output.into_into_dart().into_dart(),
                 is_error.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::UiEventMessage::SubagentSpawned {
+                parent_thread_id,
+                sub_thread_id,
+                tool_call_id,
+                agent,
+                model,
+                prompt,
+                title,
+            } => [
+                13.into_dart(),
+                parent_thread_id.into_into_dart().into_dart(),
+                sub_thread_id.into_into_dart().into_dart(),
+                tool_call_id.into_into_dart().into_dart(),
+                agent.into_into_dart().into_dart(),
+                model.into_into_dart().into_dart(),
+                prompt.into_into_dart().into_dart(),
+                title.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::UiEventMessage::SubagentStatusUpdated {
+                sub_thread_id,
+                status,
+            } => [
+                14.into_dart(),
+                sub_thread_id.into_into_dart().into_dart(),
+                status.into_into_dart().into_dart(),
             ]
             .into_dart(),
             crate::api::minos::UiEventMessage::Error {
@@ -10006,6 +10249,63 @@ impl SseEncode for crate::api::minos::ThreadEndReason {
     }
 }
 
+impl SseEncode for crate::api::minos::PauseReason {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::minos::PauseReason::UserInterrupt => <i32>::sse_encode(0, serializer),
+            crate::api::minos::PauseReason::CodexCrashed => <i32>::sse_encode(1, serializer),
+            crate::api::minos::PauseReason::DaemonRestart => <i32>::sse_encode(2, serializer),
+            crate::api::minos::PauseReason::InstanceReaped => <i32>::sse_encode(3, serializer),
+        }
+    }
+}
+
+impl SseEncode for crate::api::minos::CloseReason {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::minos::CloseReason::UserClose => <i32>::sse_encode(0, serializer),
+            crate::api::minos::CloseReason::TerminalError => <i32>::sse_encode(1, serializer),
+        }
+    }
+}
+
+impl SseEncode for crate::api::minos::ThreadState {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::minos::ThreadState::Starting => <i32>::sse_encode(0, serializer),
+            crate::api::minos::ThreadState::Idle => <i32>::sse_encode(1, serializer),
+            crate::api::minos::ThreadState::Running { turn_started_at_ms } => {
+                <i32>::sse_encode(2, serializer);
+                <i64>::sse_encode(turn_started_at_ms, serializer);
+            }
+            crate::api::minos::ThreadState::Suspended { reason } => {
+                <i32>::sse_encode(3, serializer);
+                <crate::api::minos::PauseReason>::sse_encode(reason, serializer);
+            }
+            crate::api::minos::ThreadState::Resuming => <i32>::sse_encode(4, serializer),
+            crate::api::minos::ThreadState::Closed { reason } => {
+                <i32>::sse_encode(5, serializer);
+                <crate::api::minos::CloseReason>::sse_encode(reason, serializer);
+            }
+        }
+    }
+}
+
+impl SseEncode for crate::api::minos::SubagentStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::minos::SubagentStatus::Running => <i32>::sse_encode(0, serializer),
+            crate::api::minos::SubagentStatus::Completed => <i32>::sse_encode(1, serializer),
+            crate::api::minos::SubagentStatus::Failed => <i32>::sse_encode(2, serializer),
+            crate::api::minos::SubagentStatus::Interrupted => <i32>::sse_encode(3, serializer),
+        }
+    }
+}
+
 impl SseEncode for crate::api::minos::ThreadSummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -10018,6 +10318,7 @@ impl SseEncode for crate::api::minos::ThreadSummary {
         <Option<i64>>::sse_encode(self.ended_at_ms, serializer);
         <Option<crate::api::minos::ThreadEndReason>>::sse_encode(self.end_reason, serializer);
         <Option<String>>::sse_encode(self.parent_thread_id, serializer);
+        <crate::api::minos::ThreadState>::sse_encode(self.state, serializer);
     }
 }
 
@@ -10149,6 +10450,32 @@ impl SseEncode for crate::api::minos::UiEventMessage {
                 <String>::sse_encode(tool_call_id, serializer);
                 <crate::api::minos::DisplayPayload>::sse_encode(output, serializer);
                 <bool>::sse_encode(is_error, serializer);
+            }
+            crate::api::minos::UiEventMessage::SubagentSpawned {
+                parent_thread_id,
+                sub_thread_id,
+                tool_call_id,
+                agent,
+                model,
+                prompt,
+                title,
+            } => {
+                <i32>::sse_encode(13, serializer);
+                <String>::sse_encode(parent_thread_id, serializer);
+                <String>::sse_encode(sub_thread_id, serializer);
+                <String>::sse_encode(tool_call_id, serializer);
+                <crate::api::minos::AgentName>::sse_encode(agent, serializer);
+                <Option<String>>::sse_encode(model, serializer);
+                <Option<String>>::sse_encode(prompt, serializer);
+                <Option<String>>::sse_encode(title, serializer);
+            }
+            crate::api::minos::UiEventMessage::SubagentStatusUpdated {
+                sub_thread_id,
+                status,
+            } => {
+                <i32>::sse_encode(14, serializer);
+                <String>::sse_encode(sub_thread_id, serializer);
+                <crate::api::minos::SubagentStatus>::sse_encode(status, serializer);
             }
             crate::api::minos::UiEventMessage::Error {
                 code,

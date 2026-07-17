@@ -9,15 +9,16 @@ use serde_json::{json, Value};
 use crate::mcp_socket::{SocketRequest, SocketResponse};
 use crate::teamwork_mcp::{TeamworkMcpToolCatalog, ToolCallContext};
 
-const SERVER_INSTRUCTIONS: &str = "This MCP server exposes the Minos teamwork room bound to the current agent session. Use list_room_messages to read recent room history before answering when room context matters. Use delegate_to_agent for focused work assigned to another Minos agent, then get_delegation_status or cancel_delegation when tracking that work. Use ask_user_question for concise non-blocking user clarification and check_user_feedback before acting on the answer. Use post_room_update only for concise user-visible room updates. Use react_to_message for lightweight emoji acknowledgement on specific room messages.";
+const SERVER_INSTRUCTIONS: &str = "This MCP server exposes the Minos conversation bound to the current agent session. Use list_conversation_messages to read recent conversation history before answering when conversation context matters. Use delegate_to_agent for focused work assigned to another Minos agent, then wait_delegation when the next critical-path step needs the result, or get_delegation_status/cancel_delegation when tracking that work. If this session was itself delegated from another agent, delegate_to_agent may only delegate back to that source agent. Use post_conversation_update only for concise user-visible updates.";
 
 pub use crate::teamwork_mcp::TeamworkMcpPermissions as McpToolPermissions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpServerConfig {
     pub socket_path: PathBuf,
-    pub room_id: String,
+    pub conversation_id: String,
     pub source_agent: Option<AgentName>,
+    pub source_thread_id: Option<String>,
     pub permissions: McpToolPermissions,
 }
 
@@ -121,8 +122,9 @@ async fn handle_tool_call(
     let request = TeamworkMcpToolCatalog::default_catalog().socket_request_for_call(
         config.permissions,
         ToolCallContext {
-            room_id: config.room_id.clone(),
+            conversation_id: config.conversation_id.clone(),
             source_agent: config.source_agent,
+            source_thread_id: config.source_thread_id.clone(),
         },
         name,
         args,

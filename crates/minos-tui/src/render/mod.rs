@@ -2,6 +2,10 @@
 
 use ratatui::{layout::Rect, Frame};
 
+pub(crate) mod highlight;
+pub(crate) mod markdown;
+pub(crate) mod table_detect;
+
 pub trait Renderable {
     fn render(&mut self, frame: &mut Frame, area: Rect);
 

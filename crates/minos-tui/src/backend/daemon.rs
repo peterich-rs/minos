@@ -1,6 +1,6 @@
 use super::{
     AgentBackend, BackendConnectionState, BackendThreadSnapshot, ConversationEntry,
-    ConversationMessageEntry, ProjectEntry, ThreadSummaryEntry,
+    ConversationMessageEntry, ConversationMessageEvent, ProjectEntry, ThreadSummaryEntry,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -17,8 +17,8 @@ use minos_protocol::{
     AppendConversationMessageParams, ApprovalDecisionRequest, CloseReason as ProtoCloseReason,
     CloseThreadRequest, CreateConversationParams, GetThreadParams, InterruptThreadRequest,
     ListClisResponse, ListConversationAgentSessionsParams, ListConversationMessagesParams,
-    ListConversationsParams, LocalGroupChatMessage, LocalIngestFrame, LocalManagerEvent,
-    LocalThreadSnapshot, PauseReason as ProtoPauseReason, ReadGroupChatParams, ReadThreadParams,
+    ListConversationsParams, LocalConversationEvent, LocalIngestFrame, LocalManagerEvent,
+    LocalThreadSnapshot, PauseReason as ProtoPauseReason, ReadThreadParams,
     ReadThreadRawHistoryResponse, RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest,
     SendUserMessageRequest, StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
     ThreadState as ProtoThreadState,
@@ -34,6 +34,7 @@ pub struct DaemonBackend {
     endpoint: String,
     ingest_tx: broadcast::Sender<LocalIngestFrame>,
     manager_tx: broadcast::Sender<ManagerEvent>,
+    conversation_message_tx: broadcast::Sender<ConversationMessageEvent>,
     state: Arc<StdMutex<BackendConnectionState>>,
 }
 
@@ -46,6 +47,7 @@ impl DaemonBackend {
 
         let (ingest_tx, _) = broadcast::channel(256);
         let (manager_tx, _) = broadcast::channel(64);
+        let (conversation_message_tx, _) = broadcast::channel(64);
 
         let endpoint = url.to_owned();
         let state = Arc::new(StdMutex::new(BackendConnectionState::Connected {
@@ -66,12 +68,19 @@ impl DaemonBackend {
             state.clone(),
             endpoint.clone(),
         );
+        Self::start_conversation_event_pump(
+            client.clone(),
+            conversation_message_tx.clone(),
+            state.clone(),
+            endpoint.clone(),
+        );
 
         Ok(Self {
             client,
             endpoint,
             ingest_tx,
             manager_tx,
+            conversation_message_tx,
             state,
         })
     }
@@ -175,6 +184,57 @@ impl DaemonBackend {
             );
         });
     }
+
+    fn start_conversation_event_pump(
+        client: Arc<WsClient>,
+        tx: broadcast::Sender<ConversationMessageEvent>,
+        state: Arc<StdMutex<BackendConnectionState>>,
+        endpoint: String,
+    ) {
+        tokio::spawn(async move {
+            let sub = match client
+                .subscribe::<LocalConversationEvent, ArrayParams>(
+                    "minos_local_subscribe_conversation_events",
+                    ArrayParams::new(),
+                    "minos_local_unsubscribe_conversation_events",
+                )
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("conversation event subscription failed: {e}");
+                    Self::mark_disconnected(&state, &endpoint, Some(e.to_string()));
+                    return;
+                }
+            };
+
+            let mut stream = sub.into_stream();
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(LocalConversationEvent::ConversationMessageAppended {
+                        conversation_id,
+                        message_seq,
+                    }) => {
+                        let _ = tx.send(ConversationMessageEvent {
+                            conversation_id,
+                            message_seq,
+                        });
+                    }
+                    Err(e) => {
+                        warn!("conversation event subscription error: {e}");
+                        Self::mark_disconnected(&state, &endpoint, Some(e.to_string()));
+                        return;
+                    }
+                }
+            }
+            warn!("conversation event subscription ended");
+            Self::mark_disconnected(
+                &state,
+                &endpoint,
+                Some("conversation event subscription ended".into()),
+            );
+        });
+    }
 }
 
 fn create_project_request(
@@ -238,6 +298,7 @@ fn start_agent_in_conversation_request(
 
 fn append_conversation_message_request(
     conversation_id: &str,
+    message_id: Option<&str>,
     thread_id: Option<&str>,
     sender_role: &str,
     agent: Option<AgentName>,
@@ -245,11 +306,16 @@ fn append_conversation_message_request(
 ) -> AppendConversationMessageParams {
     AppendConversationMessageParams {
         conversation_id: conversation_id.to_owned(),
-        message_id: format!("tui-{}-{}", conversation_id, now_ms()),
+        message_id: message_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("tui-{}-{}", conversation_id, now_ms())),
         thread_id: thread_id.map(str::to_owned),
         sender_role: sender_role.to_owned(),
         agent,
         body: body.to_owned(),
+        reply_to_message_id: None,
+        delegation_id: None,
+        mentions: Vec::new(),
     }
 }
 
@@ -530,11 +596,13 @@ impl AgentBackend for DaemonBackend {
             )
             .await
             .context("RPC minos_local_list_conversation_messages failed")?;
-        Ok(response
+        let mut messages = response
             .messages
             .iter()
             .map(ConversationMessageEntry::from_message)
-            .collect())
+            .collect::<Vec<_>>();
+        messages.reverse();
+        Ok(messages)
     }
 
     async fn list_conversation_agent_sessions(
@@ -584,6 +652,7 @@ impl AgentBackend for DaemonBackend {
     async fn append_conversation_message(
         &self,
         conversation_id: &str,
+        message_id: Option<&str>,
         thread_id: Option<&str>,
         sender_role: &str,
         agent: Option<AgentName>,
@@ -591,6 +660,7 @@ impl AgentBackend for DaemonBackend {
     ) -> Result<()> {
         let request = append_conversation_message_request(
             conversation_id,
+            message_id,
             thread_id,
             sender_role,
             agent,
@@ -623,34 +693,18 @@ impl AgentBackend for DaemonBackend {
             .context("RPC minos_local_read_thread_raw_history failed")
     }
 
-    async fn read_group_chat(
-        &self,
-        room_id: &str,
-        after_seq: Option<u64>,
-        before_seq: Option<u64>,
-        limit: u32,
-    ) -> Result<Vec<LocalGroupChatMessage>> {
-        let request = ReadGroupChatParams {
-            room_id: Some(room_id.to_owned()),
-            after_seq,
-            before_seq,
-            limit: Some(limit),
-        };
-        let mut response: minos_protocol::ReadGroupChatResponse = self
-            .client
-            .request("minos_local_read_group_chat", [request])
-            .await
-            .context("RPC minos_local_read_group_chat failed")?;
-        response.messages.sort_by_key(|message| message.seq);
-        Ok(response.messages)
-    }
-
     async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame> {
         self.ingest_tx.subscribe()
     }
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent> {
         self.manager_tx.subscribe()
+    }
+
+    async fn subscribe_conversation_message_events(
+        &self,
+    ) -> broadcast::Receiver<ConversationMessageEvent> {
+        self.conversation_message_tx.subscribe()
     }
 
     fn connection_state(&self) -> BackendConnectionState {

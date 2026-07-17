@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use crate::backend::BackendKind;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use crossterm::{
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
+    SynchronizedUpdate,
 };
 use minos_daemon::local_rpc::LocalRpcConfig;
 use minos_domain::AgentName;
 use ratatui::DefaultTerminal;
+use std::io::stdout;
 
 mod action;
 mod agent_route;
@@ -19,13 +20,14 @@ mod effect;
 mod event;
 mod focus;
 mod frame;
-mod group_chat;
 mod input;
 mod logging;
 mod nav;
+mod path_complete;
 mod render;
 mod skills;
 mod state;
+mod teamwork;
 mod translation;
 mod ui;
 mod update;
@@ -46,40 +48,12 @@ struct Cli {
     readonly: bool,
 
     #[arg(long)]
-    max_instances: Option<usize>,
-
-    #[arg(long)]
     log_file: Option<std::path::PathBuf>,
 
-    #[arg(long, value_enum, default_value = "embedded")]
-    backend: BackendKind,
-
+    /// Explicit daemon local RPC URL. When omitted, discovery is used and a
+    /// managed daemon is started if needed.
     #[arg(long)]
     daemon_url: Option<String>,
-
-    #[arg(long)]
-    mcp_disable_list_room_messages: bool,
-
-    #[arg(long)]
-    mcp_disable_delegate_to_agent: bool,
-
-    #[arg(long)]
-    mcp_disable_get_delegation_status: bool,
-
-    #[arg(long)]
-    mcp_disable_cancel_delegation: bool,
-
-    #[arg(long)]
-    mcp_disable_ask_user_question: bool,
-
-    #[arg(long)]
-    mcp_disable_check_user_feedback: bool,
-
-    #[arg(long)]
-    mcp_disable_post_room_update: bool,
-
-    #[arg(long)]
-    mcp_disable_react_to_message: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -94,13 +68,16 @@ struct McpSidecarArgs {
     socket_path: std::path::PathBuf,
 
     #[arg(long)]
-    room_id: String,
+    conversation_id: String,
 
     #[arg(long)]
     source_agent: Option<String>,
 
     #[arg(long)]
-    disable_list_room_messages: bool,
+    source_thread_id: Option<String>,
+
+    #[arg(long)]
+    disable_list_conversation_messages: bool,
 
     #[arg(long)]
     disable_delegate_to_agent: bool,
@@ -109,19 +86,13 @@ struct McpSidecarArgs {
     disable_get_delegation_status: bool,
 
     #[arg(long)]
+    disable_wait_delegation: bool,
+
+    #[arg(long)]
     disable_cancel_delegation: bool,
 
     #[arg(long)]
-    disable_ask_user_question: bool,
-
-    #[arg(long)]
-    disable_check_user_feedback: bool,
-
-    #[arg(long)]
-    disable_post_room_update: bool,
-
-    #[arg(long)]
-    disable_react_to_message: bool,
+    disable_post_conversation_update: bool,
 }
 
 impl McpSidecarArgs {
@@ -133,17 +104,16 @@ impl McpSidecarArgs {
             .transpose()?;
         minos_chat_store::mcp_server::serve_stdio(minos_chat_store::mcp_server::McpServerConfig {
             socket_path: self.socket_path,
-            room_id: self.room_id,
+            conversation_id: self.conversation_id,
             source_agent,
+            source_thread_id: self.source_thread_id,
             permissions: minos_chat_store::mcp_server::McpToolPermissions {
-                list_room_messages: !self.disable_list_room_messages,
+                list_conversation_messages: !self.disable_list_conversation_messages,
                 delegate_to_agent: !self.disable_delegate_to_agent,
                 get_delegation_status: !self.disable_get_delegation_status,
+                wait_delegation: !self.disable_wait_delegation,
                 cancel_delegation: !self.disable_cancel_delegation,
-                ask_user_question: !self.disable_ask_user_question,
-                check_user_feedback: !self.disable_check_user_feedback,
-                post_room_update: !self.disable_post_room_update,
-                react_to_message: !self.disable_react_to_message,
+                post_conversation_update: !self.disable_post_conversation_update,
             },
         })
         .await
@@ -156,44 +126,8 @@ fn parse_agent_name(s: &str) -> Result<AgentName> {
         "claude" => Ok(AgentName::Claude),
         "gemini" => Ok(AgentName::Gemini),
         "opencode" => Ok(AgentName::Opencode),
-        _ => anyhow::bail!("unknown agent: {s} (expected codex|claude|gemini|opencode)"),
-    }
-}
-
-fn validate_backend_args(cli: &Cli) -> Result<()> {
-    if matches!(cli.backend, BackendKind::Daemon) && cli.max_instances.is_some() {
-        anyhow::bail!("--max-instances only applies to --backend embedded");
-    }
-    if matches!(cli.backend, BackendKind::Embedded) && cli.daemon_url.is_some() {
-        anyhow::bail!("--daemon-url only applies to --backend daemon");
-    }
-    if matches!(cli.backend, BackendKind::Daemon) && has_mcp_policy_overrides(cli) {
-        anyhow::bail!("--mcp-* policy flags only apply to --backend embedded");
-    }
-    Ok(())
-}
-
-fn has_mcp_policy_overrides(cli: &Cli) -> bool {
-    cli.mcp_disable_list_room_messages
-        || cli.mcp_disable_delegate_to_agent
-        || cli.mcp_disable_get_delegation_status
-        || cli.mcp_disable_cancel_delegation
-        || cli.mcp_disable_ask_user_question
-        || cli.mcp_disable_check_user_feedback
-        || cli.mcp_disable_post_room_update
-        || cli.mcp_disable_react_to_message
-}
-
-fn mcp_permissions_from_cli(cli: &Cli) -> minos_chat_store::mcp_server::McpToolPermissions {
-    minos_chat_store::mcp_server::McpToolPermissions {
-        list_room_messages: !cli.mcp_disable_list_room_messages,
-        delegate_to_agent: !cli.mcp_disable_delegate_to_agent,
-        get_delegation_status: !cli.mcp_disable_get_delegation_status,
-        cancel_delegation: !cli.mcp_disable_cancel_delegation,
-        ask_user_question: !cli.mcp_disable_ask_user_question,
-        check_user_feedback: !cli.mcp_disable_check_user_feedback,
-        post_room_update: !cli.mcp_disable_post_room_update,
-        react_to_message: !cli.mcp_disable_react_to_message,
+        "grok" => Ok(AgentName::Grok),
+        _ => anyhow::bail!("unknown agent: {s} (expected codex|claude|gemini|opencode|grok)"),
     }
 }
 
@@ -270,11 +204,9 @@ async fn start_managed_daemon_for_tui() -> Result<Arc<minos_daemon::DaemonHandle
     let local_state_path = minos_home.join("local-state.json");
     let local_state = minos_daemon::LocalState::load_or_init(&local_state_path)?;
     let discovery_path = minos_daemon::paths::run_dir()?.join("tui-daemon-rpc.json");
-    let group_chat_db_path = minos_home.join("daemon.sqlite");
     let local_rpc_config = LocalRpcConfig {
         addr: "127.0.0.1:0".parse()?,
         discovery_path: discovery_path.clone(),
-        group_chat_db_path,
     };
     let handle = minos_daemon::DaemonHandle::start_with_local_rpc(
         relay_config_from_env(),
@@ -330,20 +262,66 @@ async fn connect_or_start_daemon_backend(
 
 fn setup_terminal() -> Result<DefaultTerminal> {
     let mut terminal = ratatui::try_init()?;
-    execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(stdout(), EnableMouseCapture, EnableBracketedPaste)?;
     terminal.clear()?;
     Ok(terminal)
 }
 
 fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
     execute!(
-        std::io::stdout(),
+        stdout(),
         DisableBracketedPaste,
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
     ratatui::try_restore()?;
     Ok(())
+}
+
+/// Draw the full UI inside a terminal synchronized-update block to reduce flicker.
+fn draw_ui(terminal: &mut DefaultTerminal, app: &mut app::App) -> Result<()> {
+    stdout().sync_update(|_stdout| {
+        terminal.draw(|f| {
+            ui::render_ui(f, app.ui());
+        })
+    })??;
+    Ok(())
+}
+
+/// Merge consecutive wheel events of the same direction/position so a trackpad
+/// burst becomes one larger scroll step. Tick count is stored in
+/// `MouseEvent.modifiers.bits()` for `wheel_lines` in the event loop.
+fn coalesce_scroll_batch(events: Vec<event::AppEvent>) -> Vec<event::AppEvent> {
+    use crossterm::event::MouseEventKind;
+    use event::AppEvent;
+
+    let mut out: Vec<AppEvent> = Vec::with_capacity(events.len());
+    for event in events {
+        let AppEvent::Mouse(mouse) = &event else {
+            out.push(event);
+            continue;
+        };
+        let is_wheel = matches!(
+            mouse.kind,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+        );
+        if !is_wheel {
+            out.push(event);
+            continue;
+        }
+
+        if let Some(AppEvent::Mouse(prev)) = out.last_mut() {
+            if prev.kind == mouse.kind && prev.column == mouse.column && prev.row == mouse.row {
+                let count = prev.modifiers.bits().saturating_add(1).min(40);
+                prev.modifiers = crossterm::event::KeyModifiers::from_bits_truncate(count);
+                continue;
+            }
+        }
+        let mut first = *mouse;
+        first.modifiers = crossterm::event::KeyModifiers::from_bits_truncate(1);
+        out.push(AppEvent::Mouse(first));
+    }
+    out
 }
 
 #[tokio::main]
@@ -354,11 +332,10 @@ async fn main() -> Result<()> {
             SidecarCommand::MinosTeamworkMcp(args) => return args.serve().await,
         }
     }
-    validate_backend_args(&cli)?;
     let workspace = std::fs::canonicalize(&cli.workspace).unwrap_or_else(|_| cli.workspace.clone());
     let log_path = logging::resolve_log_path(&workspace, cli.log_file.clone());
     logging::init(&log_path)?;
-    let mcp_permissions = mcp_permissions_from_cli(&cli);
+    let mcp_permissions = minos_chat_store::mcp_server::McpToolPermissions::default();
     let mcp_skill_refs = minos_chat_store::teamwork_mcp::TeamworkMcpToolCatalog::default_catalog()
         .skill_refs(mcp_permissions);
     match skills::install_global_agent_skills(&mcp_skill_refs) {
@@ -376,25 +353,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let max_instances = cli.max_instances.unwrap_or(3);
-    let (backend, managed_daemon): (
-        Arc<dyn crate::backend::AgentBackend>,
-        Option<Arc<minos_daemon::DaemonHandle>>,
-    ) = match cli.backend {
-        BackendKind::Embedded => (
-            Arc::new(
-                crate::backend::EmbeddedBackend::new(
-                    workspace.clone(),
-                    max_instances,
-                    std::time::Duration::from_secs(300),
-                    mcp_permissions,
-                )
-                .await?,
-            ),
-            None,
-        ),
-        BackendKind::Daemon => connect_or_start_daemon_backend(cli.daemon_url.clone()).await?,
-    };
+    let (backend, managed_daemon) = connect_or_start_daemon_backend(cli.daemon_url.clone()).await?;
 
     let mut app = app::App::new(backend.clone(), cli.readonly, workspace.clone());
     app.init().await?;
@@ -405,13 +364,15 @@ async fn main() -> Result<()> {
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx.clone());
-    backend.start_mcp_socket_handler(tx.clone())?;
 
     let ingest_rx = backend.subscribe_ingest().await;
     event::spawn_ingest_pump(ingest_rx, tx.clone());
 
     let manager_rx = backend.subscribe_manager_events().await;
     event::spawn_manager_event_pump(manager_rx, tx.clone());
+
+    let conversation_message_rx = backend.subscribe_conversation_message_events().await;
+    event::spawn_conversation_message_event_pump(conversation_message_rx, tx.clone());
 
     event::spawn_terminal_pump(tx.clone());
     event::spawn_tick_pump(tx, 200);
@@ -421,24 +382,41 @@ async fn main() -> Result<()> {
         backend.start_agent(agent, workspace.clone()).await?;
     }
 
-    terminal.draw(|f| {
-        ui::render_ui(f, app.ui());
-    })?;
+    draw_ui(&mut terminal, &mut app)?;
     loop {
+        // Prefer draws over event floods so wheel/key scroll stays smooth when
+        // the terminal pump dumps many events between frames.
         tokio::select! {
-            event = rx.recv() => {
-                let Some(event) = event else {
-                    break;
-                };
-                let _ = app.handle_event(event).await;
-            }
+            biased;
             frame = frame_rx.recv() => {
                 if frame.is_none() {
                     break;
                 }
-                terminal.draw(|f| {
-                    ui::render_ui(f, app.ui());
-                })?;
+                // Coalesce: one paint for any queued frame tokens.
+                while frame_rx.try_recv().is_some() {}
+                draw_ui(&mut terminal, &mut app)?;
+                // Viewport overscan materialization may need another pass.
+                if app.ui().take_render_followup() {
+                    app.request_frame_public();
+                }
+            }
+            event = rx.recv() => {
+                let Some(event) = event else {
+                    break;
+                };
+                // Drain a burst of ready events so a trackpad wheel dump is
+                // applied as one scroll jump before the next paint.
+                let mut batch = vec![event];
+                while batch.len() < 64 {
+                    match rx.try_recv() {
+                        Ok(next) => batch.push(next),
+                        Err(_) => break,
+                    }
+                }
+                let batch = coalesce_scroll_batch(batch);
+                for event in batch {
+                    let _ = app.handle_event(event).await;
+                }
             }
         }
 
@@ -461,42 +439,6 @@ mod tests {
     use super::*;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn test_cli(backend: BackendKind) -> Cli {
-        Cli {
-            command: None,
-            agent: None,
-            workspace: ".".into(),
-            readonly: false,
-            max_instances: None,
-            log_file: None,
-            backend,
-            daemon_url: None,
-            mcp_disable_list_room_messages: false,
-            mcp_disable_delegate_to_agent: false,
-            mcp_disable_get_delegation_status: false,
-            mcp_disable_cancel_delegation: false,
-            mcp_disable_ask_user_question: false,
-            mcp_disable_check_user_feedback: false,
-            mcp_disable_post_room_update: false,
-            mcp_disable_react_to_message: false,
-        }
-    }
-
-    #[test]
-    fn validate_backend_args_rejects_incompatible_flags() {
-        let mut daemon_cli = test_cli(BackendKind::Daemon);
-        daemon_cli.max_instances = Some(3);
-        assert!(validate_backend_args(&daemon_cli).is_err());
-
-        let mut embedded_cli = test_cli(BackendKind::Embedded);
-        embedded_cli.daemon_url = Some("ws://127.0.0.1:43123".into());
-        assert!(validate_backend_args(&embedded_cli).is_err());
-
-        let mut daemon_cli = test_cli(BackendKind::Daemon);
-        daemon_cli.mcp_disable_post_room_update = true;
-        assert!(validate_backend_args(&daemon_cli).is_err());
-    }
 
     #[test]
     fn resolve_daemon_url_reads_discovery_file_from_minos_home() {

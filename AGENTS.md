@@ -60,14 +60,18 @@ Minos 当前处于主动开发阶段，没有需要支持的历史发布版本�
 ## 5. Demand Elegance (Balanced)
 - For non-trivial changes: pause and ask "is there a more elegant way?"
 - If a fix feels hacky: know everything you know, implement the elegant solution
-- Skip this for simple, obvious fixes — don't over-engineer
+- Skip this for simple, obvious fixes — don't over-engineer, but do not use "minimal fix" as permission to patch only the visible symptom
 - Challenge your own work before presenting it
 
 ## 6. Autonomous Bug Fixing
-- When given a bug report: just fix it. Don't ask for hand-holding
-- Point at logs, errors, failing tests — then resolve them
-- Zero context switching required from the user
-- Go fix failing CI tests without being told how
+- When given a bug report: just fix it. Don't ask for hand-holding.
+- Diagnose the full affected code path before editing: reproduce or inspect the failing behavior, trace caller/callee boundaries, storage/schema/protocol contracts, runtime state, UI presentation, and existing tests/docs that define the intended behavior.
+- Fix the root cause at the correct ownership boundary. Do not hide symptoms with local guards, UI-only rewrites, broad fallbacks, silent defaults, retries, compatibility shims, or defensive special cases unless that boundary is demonstrably where the invariant belongs.
+- Prefer the smallest correct change, not the smallest diff. A larger change is required when the bug is caused by a broken shared invariant, wrong data model, incorrect lifecycle ordering, or missing contract propagation.
+- Preserve and strengthen existing architecture: integrate with current abstractions and state flows, keep code clear and direct, remove obsolete wrong paths, and avoid new redundant layers.
+- Add regression coverage that would have failed for the real bug. Tests should assert the corrected invariant or end-to-end behavior at the narrowest reliable boundary.
+- Point at logs, errors, failing tests, schema constraints, or code-path evidence — then resolve them.
+- Go fix failing CI tests without being told how.
 
 ## 7. Unit Test Discipline
 - Unit tests must target isolated logic only: business rules, state changes, parsing, validation, serialization, and error handling

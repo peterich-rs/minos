@@ -67,8 +67,7 @@ impl AppServerInstance {
         self.threads.lock().await.iter().cloned().collect()
     }
 
-    /// Issue `thread/start` and return the result describing the new thread
-    /// id (which doubles as the codex session id for resume) and cwd metadata.
+    /// Issue `thread/start` and return the provider id used for resume.
     pub(crate) async fn start_thread(
         &self,
         cwd: &Path,

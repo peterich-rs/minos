@@ -76,13 +76,16 @@ struct McpSidecarArgs {
     socket_path: PathBuf,
 
     #[arg(long)]
-    room_id: String,
+    conversation_id: String,
 
     #[arg(long)]
     source_agent: Option<String>,
 
     #[arg(long)]
-    disable_list_room_messages: bool,
+    source_thread_id: Option<String>,
+
+    #[arg(long)]
+    disable_list_conversation_messages: bool,
 
     #[arg(long)]
     disable_delegate_to_agent: bool,
@@ -91,19 +94,13 @@ struct McpSidecarArgs {
     disable_get_delegation_status: bool,
 
     #[arg(long)]
+    disable_wait_delegation: bool,
+
+    #[arg(long)]
     disable_cancel_delegation: bool,
 
     #[arg(long)]
-    disable_ask_user_question: bool,
-
-    #[arg(long)]
-    disable_check_user_feedback: bool,
-
-    #[arg(long)]
-    disable_post_room_update: bool,
-
-    #[arg(long)]
-    disable_react_to_message: bool,
+    disable_post_conversation_update: bool,
 }
 
 impl McpSidecarArgs {
@@ -115,17 +112,16 @@ impl McpSidecarArgs {
             .transpose()?;
         minos_chat_store::mcp_server::serve_stdio(minos_chat_store::mcp_server::McpServerConfig {
             socket_path: self.socket_path,
-            room_id: self.room_id,
+            conversation_id: self.conversation_id,
             source_agent,
+            source_thread_id: self.source_thread_id,
             permissions: minos_chat_store::mcp_server::McpToolPermissions {
-                list_room_messages: !self.disable_list_room_messages,
+                list_conversation_messages: !self.disable_list_conversation_messages,
                 delegate_to_agent: !self.disable_delegate_to_agent,
                 get_delegation_status: !self.disable_get_delegation_status,
+                wait_delegation: !self.disable_wait_delegation,
                 cancel_delegation: !self.disable_cancel_delegation,
-                ask_user_question: !self.disable_ask_user_question,
-                check_user_feedback: !self.disable_check_user_feedback,
-                post_room_update: !self.disable_post_room_update,
-                react_to_message: !self.disable_react_to_message,
+                post_conversation_update: !self.disable_post_conversation_update,
             },
         })
         .await?;
@@ -406,11 +402,9 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
             .map_err(|e| std::io::Error::other(format!("invalid --local-rpc-addr: {e}")))?;
         let run_dir = paths::run_dir()?;
         let discovery_path = run_dir.join("tui-daemon-rpc.json");
-        let group_chat_db_path = paths::minos_home()?.join("daemon.sqlite");
         Some(LocalRpcConfig {
             addr,
             discovery_path: discovery_path.clone(),
-            group_chat_db_path,
         })
     } else {
         None
@@ -891,8 +885,9 @@ fn parse_agent_name(value: &str) -> Result<AgentName, Box<dyn std::error::Error>
         "claude" => Ok(AgentName::Claude),
         "gemini" => Ok(AgentName::Gemini),
         "opencode" => Ok(AgentName::Opencode),
+        "grok" => Ok(AgentName::Grok),
         other => {
-            Err(format!("unknown agent {other:?}; want one of codex/claude/gemini/opencode").into())
+            Err(format!("unknown agent {other:?}; want one of codex/claude/gemini/opencode/grok").into())
         }
     }
 }
@@ -903,6 +898,7 @@ fn format_agent_name(agent: AgentName) -> &'static str {
         AgentName::Claude => "claude",
         AgentName::Gemini => "gemini",
         AgentName::Opencode => "opencode",
+        AgentName::Grok => "grok",
     }
 }
 

@@ -2040,7 +2040,7 @@ In `src/ui/status_bar.rs`, update the hint text in the `Span::raw` string (line 
 
 ```rust
     spans.push(Span::raw(
-        "  n new-agent  @agent route  Tab focus  Enter inspect/send  Esc back/close-detail  wheel/PgUp/PgDn scroll  Ctrl+C interrupt/copy  Ctrl+V paste  Ctrl+J newline  Ctrl+Q quit",
+        "  ^P projects  ^T conversations  @agent route  Tab focus  Enter inspect/send  Esc back/close-detail  wheel/PgUp/PgDn scroll  Ctrl+C interrupt/copy  Ctrl+V paste  Ctrl+J newline  Ctrl+Q quit",
     ));
 ```
 

@@ -231,7 +231,9 @@ fn sync_path_picker_lists_directory_entries() {
     state.content = "edit src/f".to_owned();
     state.cursor_pos = state.content.len();
 
-    state.sync_path_picker(root);
+    let (sequence, token) = state.sync_path_picker().expect("request");
+    let candidates = list_path_candidates(&token, root).expect("candidates");
+    assert!(state.apply_path_candidates(sequence, candidates));
 
     match &state.picker {
         InputPicker::Path(p) => {
@@ -254,7 +256,9 @@ fn accept_path_completion_inserts_file_name() {
     let mut state = InputState::new(false);
     state.content = "edit src/f".to_owned();
     state.cursor_pos = state.content.len();
-    state.sync_path_picker(root);
+    let (sequence, token) = state.sync_path_picker().expect("request");
+    let candidates = list_path_candidates(&token, root).expect("candidates");
+    assert!(state.apply_path_candidates(sequence, candidates));
 
     let completed = state.accept_path_completion();
     assert!(completed);
@@ -274,11 +278,109 @@ fn accept_path_completion_dir_triggers_re_sync() {
     let mut state = InputState::new(false);
     state.content = "edit src/su".to_owned();
     state.cursor_pos = state.content.len();
-    state.sync_path_picker(root);
+    let (sequence, token) = state.sync_path_picker().expect("request");
+    let candidates = list_path_candidates(&token, root).expect("candidates");
+    assert!(state.apply_path_candidates(sequence, candidates));
 
     let completed = state.accept_path_completion();
     assert!(!completed); // dir → caller should re-sync
     assert!(state.content.ends_with("src/sub/"));
+}
+
+#[test]
+fn path_accept_clears_picker_when_selected_out_of_bounds() {
+    let mut state = InputState::new(false);
+    state.content = "edit foo".to_owned();
+    state.cursor_pos = state.content.len();
+    state.picker = InputPicker::Path(super::InputPathPickerState {
+        candidates: vec![PathCandidate {
+            name: "bar.rs".to_owned(),
+            is_dir: false,
+        }],
+        selected: 5,
+        replace_range: 5..8,
+    });
+    assert!(!state.accept_path_completion());
+    assert!(matches!(state.picker, InputPicker::None));
+    assert_eq!(state.content, "edit foo");
+}
+
+#[test]
+fn path_accept_clears_picker_when_replace_range_is_stale() {
+    let mut state = InputState::new(false);
+    state.content = "x".to_owned();
+    state.cursor_pos = 1;
+    state.picker = InputPicker::Path(super::InputPathPickerState {
+        candidates: vec![PathCandidate {
+            name: "bar.rs".to_owned(),
+            is_dir: false,
+        }],
+        selected: 0,
+        replace_range: 0..10, // beyond content length
+    });
+    assert!(!state.accept_path_completion());
+    assert!(matches!(state.picker, InputPicker::None));
+    assert_eq!(state.content, "x");
+}
+
+#[test]
+fn path_picker_ignores_stale_async_results() {
+    let mut state = InputState::new(false);
+    state.content = "edit src/f".to_owned();
+    state.cursor_pos = state.content.len();
+    let (old_sequence, _) = state.sync_path_picker().expect("old request");
+
+    state.content = "edit src/b".to_owned();
+    state.cursor_pos = state.content.len();
+    let (new_sequence, _) = state.sync_path_picker().expect("new request");
+
+    assert!(!state.apply_path_candidates(
+        old_sequence,
+        vec![PathCandidate {
+            name: "foo.rs".to_owned(),
+            is_dir: false,
+        }],
+    ));
+    assert!(matches!(state.picker, InputPicker::None));
+
+    assert!(state.apply_path_candidates(
+        new_sequence,
+        vec![PathCandidate {
+            name: "bar.rs".to_owned(),
+            is_dir: false,
+        }],
+    ));
+    assert!(state.has_path_picker());
+}
+
+#[test]
+fn path_candidates_match_case_insensitive_substrings() {
+    use std::fs;
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("src")).expect("mkdir src");
+    fs::write(root.join("src/AlphaThing.rs"), "").expect("write file");
+
+    let candidates = list_path_candidates("src/thing", root).expect("candidates");
+    assert_eq!(candidates[0].name, "AlphaThing.rs");
+}
+
+#[test]
+fn agent_picker_matches_case_insensitive_substrings() {
+    let candidates = vec![AgentMentionCandidate::installed(
+        AgentName::Opencode,
+        AgentStatus::Ok,
+    )];
+    let mut state = InputState::new(false);
+    state.content = "@CODE".to_owned();
+    state.cursor_pos = state.content.len();
+
+    state.sync_agent_picker(&candidates, true);
+
+    match &state.picker {
+        InputPicker::Agent(p) => assert_eq!(p.candidate_indices, vec![0]),
+        _ => panic!("expected agent picker"),
+    }
 }
 
 #[test]

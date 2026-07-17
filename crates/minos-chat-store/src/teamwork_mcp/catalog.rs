@@ -4,9 +4,8 @@ use serde_json::Value;
 
 use super::permissions::TeamworkMcpPermissions;
 use super::tools::{
-    AskUserQuestionTool, CancelDelegationTool, CheckUserFeedbackTool, DelegateToAgentTool,
-    GetDelegationStatusTool, ListRoomMessagesTool, PostRoomUpdateTool, ReactToMessageTool,
-    TeamworkMcpTool,
+    CancelDelegationTool, DelegateToAgentTool, GetDelegationStatusTool, ListConversationMessagesTool,
+    PostConversationUpdateTool, TeamworkMcpTool, WaitDelegationTool,
 };
 use crate::mcp_socket::SocketRequest;
 
@@ -31,8 +30,9 @@ pub const MINOS_TEAMWORK_SKILL: SkillRef = SkillRef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallContext {
-    pub room_id: String,
+    pub conversation_id: String,
     pub source_agent: Option<AgentName>,
+    pub source_thread_id: Option<String>,
 }
 
 pub struct TeamworkMcpToolCatalog {
@@ -43,14 +43,12 @@ impl TeamworkMcpToolCatalog {
     pub fn default_catalog() -> Self {
         Self {
             tools: vec![
-                Box::new(ListRoomMessagesTool),
+                Box::new(ListConversationMessagesTool),
                 Box::new(DelegateToAgentTool),
                 Box::new(GetDelegationStatusTool),
+                Box::new(WaitDelegationTool),
                 Box::new(CancelDelegationTool),
-                Box::new(AskUserQuestionTool),
-                Box::new(CheckUserFeedbackTool),
-                Box::new(PostRoomUpdateTool),
-                Box::new(ReactToMessageTool),
+                Box::new(PostConversationUpdateTool),
             ],
         }
     }
@@ -111,14 +109,12 @@ mod tests {
     fn catalog_lists_enabled_tool_schemas() {
         let catalog = TeamworkMcpToolCatalog::default_catalog();
         let schemas = catalog.tool_schemas(TeamworkMcpPermissions {
-            list_room_messages: true,
+            list_conversation_messages: true,
             delegate_to_agent: false,
             get_delegation_status: true,
+            wait_delegation: true,
             cancel_delegation: true,
-            ask_user_question: true,
-            check_user_feedback: true,
-            post_room_update: true,
-            react_to_message: true,
+            post_conversation_update: true,
         });
         let names: Vec<_> = schemas
             .iter()
@@ -128,13 +124,11 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "list_room_messages",
+                "list_conversation_messages",
                 "get_delegation_status",
+                "wait_delegation",
                 "cancel_delegation",
-                "ask_user_question",
-                "check_user_feedback",
-                "post_room_update",
-                "react_to_message"
+                "post_conversation_update"
             ]
         );
     }
@@ -145,18 +139,17 @@ mod tests {
         let err = catalog
             .socket_request_for_call(
                 TeamworkMcpPermissions {
-                    list_room_messages: true,
+                    list_conversation_messages: true,
                     delegate_to_agent: false,
                     get_delegation_status: true,
+                    wait_delegation: true,
                     cancel_delegation: true,
-                    ask_user_question: true,
-                    check_user_feedback: true,
-                    post_room_update: true,
-                    react_to_message: true,
+                    post_conversation_update: true,
                 },
                 ToolCallContext {
-                    room_id: "room-main".into(),
+                    conversation_id: "conversation-main".into(),
                     source_agent: None,
+                    source_thread_id: None,
                 },
                 "delegate_to_agent",
                 json!({"target_agent": "codex", "prompt": "help"}),

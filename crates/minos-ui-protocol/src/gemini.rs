@@ -74,6 +74,20 @@ pub fn translate(
     state: &mut GeminiTranslatorState,
     raw: &Value,
 ) -> Result<Vec<UiEventMessage>, TranslationError> {
+    // Minos synthetic envelopes shared with Codex (approval overlay path).
+    if let Some(method) = raw.get("method").and_then(Value::as_str) {
+        match method {
+            "approval/request" | "approval/timeout" => {
+                let params = raw.get("params").cloned().unwrap_or(Value::Null);
+                return Ok(vec![UiEventMessage::Raw {
+                    kind: method.to_string(),
+                    payload_json: serde_json::to_string(&params).unwrap_or_default(),
+                }]);
+            }
+            _ => {}
+        }
+    }
+
     let kind =
         raw.get("kind")
             .and_then(Value::as_str)
@@ -785,6 +799,20 @@ mod tests {
         .unwrap();
         assert!(out.iter().any(
             |e| matches!(e, UiEventMessage::Raw { kind, .. } if kind == "gemini/acp/custom_event")
+        ));
+    }
+
+    #[test]
+    fn approval_request_envelope_becomes_raw_for_overlay() {
+        let mut s = GeminiTranslatorState::new("thr_x".into());
+        let raw = val(
+            r#"{"method":"approval/request","params":{"request_id":"perm-1","thread_id":"thr_x","turn_id":"","method":"session/request_permission","params":{"toolCall":{"title":"ls","kind":"other"}}}}"#,
+        );
+        let out = translate(&mut s, &raw).unwrap();
+        assert!(matches!(
+            &out[0],
+            UiEventMessage::Raw { kind, payload_json }
+                if kind == "approval/request" && payload_json.contains("perm-1")
         ));
     }
 }

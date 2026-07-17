@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::action::{
     CursorDirection, CursorLineDirection, HistoryDirection, InputAction, InputTarget,
 };
-use crate::effect::StateChange;
+use crate::effect::{Effect, StateChange};
 use crate::ui::input_bar::{self, AgentMentionCandidate, InputState};
 
 pub fn is_text_input_key(key: KeyEvent) -> bool {
@@ -24,7 +24,7 @@ pub fn key_to_input_action(
     visual_width: u16,
     target: InputTarget,
 ) -> Option<InputAction> {
-    let is_room_input = matches!(target, InputTarget::Room);
+    let is_conversation_input = matches!(target, InputTarget::Conversation);
 
     match key.code {
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
@@ -39,7 +39,7 @@ pub fn key_to_input_action(
                 }
             } else if input.has_path_picker() {
                 Some(InputAction::AcceptPathCompletion)
-            } else if is_room_input && input.has_agent_picker() {
+            } else if is_conversation_input && input.has_agent_picker() {
                 Some(InputAction::AcceptMentionCompletion)
             } else if input.multiline {
                 Some(InputAction::NewLine)
@@ -107,10 +107,10 @@ pub fn key_to_input_action(
         KeyCode::Backspace => Some(InputAction::DeleteBackward),
         KeyCode::Up if input.has_path_picker() => Some(InputAction::SelectPreviousPickerItem),
         KeyCode::Down if input.has_path_picker() => Some(InputAction::SelectNextPickerItem),
-        KeyCode::Up if is_room_input && input.has_agent_picker() => {
+        KeyCode::Up if is_conversation_input && input.has_agent_picker() => {
             Some(InputAction::SelectPreviousPickerItem)
         }
-        KeyCode::Down if is_room_input && input.has_agent_picker() => {
+        KeyCode::Down if is_conversation_input && input.has_agent_picker() => {
             Some(InputAction::SelectNextPickerItem)
         }
         KeyCode::Up => {
@@ -147,7 +147,7 @@ pub fn key_to_input_action(
         KeyCode::Tab => {
             if input.has_path_picker() {
                 Some(InputAction::AcceptPathCompletion)
-            } else if is_room_input && input.has_agent_picker() {
+            } else if is_conversation_input && input.has_agent_picker() {
                 Some(InputAction::Consume)
             } else if input_bar::active_path_range(input.content.as_str(), input.cursor_pos)
                 .is_some()
@@ -171,9 +171,11 @@ pub fn key_to_input_action(
 pub fn apply_input_action(
     input: &mut InputState,
     action: InputAction,
+    target: InputTarget,
     path_workspace: Option<&std::path::Path>,
     mention_candidates: &[AgentMentionCandidate],
-) -> StateChange {
+) -> (StateChange, Vec<Effect>) {
+    let mut effects = Vec::new();
     let changed = match action {
         InputAction::InsertChar(c) => {
             input.insert_char(c);
@@ -237,12 +239,7 @@ pub fn apply_input_action(
             true
         }
         InputAction::TogglePathPicker => {
-            if let Some(workspace) = path_workspace {
-                input.sync_path_picker(workspace);
-                true
-            } else {
-                false
-            }
+            request_path_candidates(input, target, path_workspace, &mut effects)
         }
         InputAction::AcceptMentionCompletion => {
             input.accept_agent_completion(mention_candidates);
@@ -251,9 +248,7 @@ pub fn apply_input_action(
         InputAction::AcceptPathCompletion => {
             let re_trigger = !input.accept_path_completion();
             if re_trigger {
-                if let Some(workspace) = path_workspace {
-                    input.sync_path_picker(workspace);
-                }
+                request_path_candidates(input, target, path_workspace, &mut effects);
             }
             true
         }
@@ -289,9 +284,31 @@ pub fn apply_input_action(
         InputAction::Consume => true,
     };
 
-    if changed {
+    let change = if changed {
         StateChange::redraw()
     } else {
         StateChange::none()
-    }
+    };
+    (change, effects)
+}
+
+fn request_path_candidates(
+    input: &mut InputState,
+    target: InputTarget,
+    path_workspace: Option<&std::path::Path>,
+    effects: &mut Vec<Effect>,
+) -> bool {
+    let Some(workspace_root) = path_workspace else {
+        return false;
+    };
+    let Some((sequence, token)) = input.sync_path_picker() else {
+        return false;
+    };
+    effects.push(Effect::ResolvePathCandidates {
+        target,
+        sequence,
+        token,
+        workspace_root: workspace_root.to_path_buf(),
+    });
+    true
 }

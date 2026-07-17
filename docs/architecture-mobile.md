@@ -207,6 +207,7 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
 - 基于 seq 水位线去重
 - `keepAlive: true`，导航离开不丢失状态
 - `UiEventMessage` 文本字段使用 `DisplayPayload`，Dart 通过 `display_payload_preview.dart` 渲染 inline/windowed preview；artifact 引用保留在线程归属内，后续完整展开走 range read API。
+- 聊天 transcript 投影由 `application/thread_event_timeline.dart` 的 `buildThreadEventTimeline` 完成：按事件**首次出现**顺序生成 row（user / reasoning / tool / assistant text），**连续**流式片段原地更新；Gemini/Grok ACP 虽把 thinking、tool、text 挂在同一 `message_id` 上，也必须按时间线切开——中间产物（早期 `agent_message_chunk` / thought）与 tool 之后的最终回复各自独立 row，不能拼成一条钉在用户消息后的“假最终回复”。tool / text 插入后新 thinking 开新 reasoning 段；tool / reasoning 插入后新 text 开新 assistant text 段，都排在时间线末尾。仅仍 open 的 text 段在 live turn 上显示 streaming cursor；已结束的中间消息与 thinking 不带光标。
 - `Raw(kind="opencode/question.asked")` 由 `ThreadViewPage` 解析为 `AgentQuestionRequestData`，通过 `agent_question_sheet.dart` 展示问题和选项；提交后走 `ThreadCommands.respondOpencodeQuestion()` → `ThreadRepository` → `MinosCore` → FRB → `MobileClient.respond_opencode_question()` → `POST /v1/agent-sessions/respond-opencode-question`。
 
 ### Agent 配置文件

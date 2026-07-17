@@ -4,11 +4,15 @@ use minos_domain::{AgentName, AgentStatus};
 
 mod render;
 
-use render::{active_agent_range, list_path_candidates};
+use render::active_agent_range;
 pub use render::{
     active_path_range, byte_offset_for_visual_position, last_visual_row, required_height,
     visual_cursor_row, InputBarRenderable, InputLayoutMetrics,
 };
+// Re-export so UI callers can keep importing from input_bar.
+pub use crate::path_complete::PathCandidate;
+#[cfg(test)]
+pub use crate::path_complete::list_path_candidates;
 
 #[cfg(test)]
 use render::agent_picker_status_label;
@@ -44,10 +48,10 @@ pub struct InputPathPickerState {
     pub replace_range: Range<usize>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PathCandidate {
-    pub name: String,
-    pub is_dir: bool,
+struct PendingPathCompletion {
+    sequence: u64,
+    token: String,
+    replace_range: Range<usize>,
 }
 
 /// Prompt history for an input bar, browsable with Up/Down arrow keys.
@@ -181,6 +185,8 @@ pub struct InputState {
     pub multiline: bool,
     pub picker: InputPicker,
     pub history: PromptHistory,
+    path_completion_sequence: u64,
+    pending_path_completion: Option<PendingPathCompletion>,
 }
 
 impl InputState {
@@ -195,6 +201,8 @@ impl InputState {
             multiline: false,
             picker: InputPicker::None,
             history: PromptHistory::new(),
+            path_completion_sequence: 0,
+            pending_path_completion: None,
         }
     }
 
@@ -458,7 +466,11 @@ impl InputState {
             .iter()
             .enumerate()
             .filter_map(|(index, candidate)| {
-                candidate.token.starts_with(query.as_str()).then_some(index)
+                candidate
+                    .token
+                    .to_ascii_lowercase()
+                    .contains(query.as_str())
+                    .then_some(index)
             })
             .collect();
 
@@ -541,25 +553,56 @@ impl InputState {
         true
     }
 
-    pub fn sync_path_picker(&mut self, workspace_root: &std::path::Path) {
+    pub fn sync_path_picker(&mut self) -> Option<(u64, String)> {
         if self.readonly {
-            return;
+            self.pending_path_completion = None;
+            self.clear_path_picker();
+            return None;
         }
         let Some(replace_range) = active_path_range(&self.content, self.cursor_pos) else {
-            return;
+            self.pending_path_completion = None;
+            self.clear_path_picker();
+            return None;
         };
         let token = self.content[replace_range.start..replace_range.end].to_owned();
-        let Some(candidates) = list_path_candidates(&token, workspace_root) else {
-            return;
+        self.path_completion_sequence = self.path_completion_sequence.wrapping_add(1);
+        let sequence = self.path_completion_sequence;
+        self.pending_path_completion = Some(PendingPathCompletion {
+            sequence,
+            token: token.clone(),
+            replace_range,
+        });
+        self.picker = InputPicker::None;
+        Some((sequence, token))
+    }
+
+    pub fn apply_path_candidates(&mut self, sequence: u64, candidates: Vec<PathCandidate>) -> bool {
+        let Some(pending) = self.pending_path_completion.as_ref() else {
+            return false;
         };
+        if pending.sequence != sequence {
+            return false;
+        }
+        let Some(pending) = self.pending_path_completion.take() else {
+            return false;
+        };
+
+        if self.content.get(pending.replace_range.clone()) != Some(pending.token.as_str()) {
+            return false;
+        }
+        if candidates.is_empty() {
+            return false;
+        }
         self.picker = InputPicker::Path(InputPathPickerState {
             candidates,
             selected: 0,
-            replace_range,
+            replace_range: pending.replace_range,
         });
+        true
     }
 
     pub fn clear_path_picker(&mut self) {
+        self.pending_path_completion = None;
         if matches!(self.picker, InputPicker::Path(_)) {
             self.picker = InputPicker::None;
         }
@@ -596,11 +639,23 @@ impl InputState {
     pub fn accept_path_completion(&mut self) -> bool {
         let (candidate, replace_range) = match &self.picker {
             InputPicker::Path(p) => {
-                let candidate = p.candidates[p.selected].clone();
+                let Some(candidate) = p.candidates.get(p.selected).cloned() else {
+                    self.picker = InputPicker::None;
+                    return false;
+                };
                 (candidate, p.replace_range.clone())
             }
             _ => return false,
         };
+
+        if replace_range.end > self.content.len()
+            || !self.content.is_char_boundary(replace_range.start)
+            || !self.content.is_char_boundary(replace_range.end)
+        {
+            self.picker = InputPicker::None;
+            return false;
+        }
+
         let existing_token = self.content[replace_range.start..replace_range.end].to_owned();
         let last_slash = existing_token.rfind('/').unwrap_or(0);
         let dir_prefix = &existing_token[..=last_slash];

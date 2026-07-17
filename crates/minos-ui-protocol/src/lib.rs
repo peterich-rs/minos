@@ -18,6 +18,7 @@ mod claude;
 mod codex;
 mod error;
 mod gemini;
+mod grok;
 mod message;
 mod opencode;
 
@@ -30,6 +31,7 @@ pub use minos_domain::AgentName as AgentKind;
 pub use claude::{translate as translate_claude, ClaudeTranslatorState};
 pub use codex::{translate as translate_codex, CodexTranslatorState};
 pub use gemini::{translate as translate_gemini, GeminiTranslatorState};
+pub use grok::{translate as translate_grok, GrokTranslatorState};
 pub use opencode::{translate as translate_opencode, OpencodeTranslatorState};
 
 /// One-shot dispatch convenience for the backend: given an agent kind
@@ -56,6 +58,10 @@ pub fn translate_stateless(
         AgentKind::Gemini => {
             let mut s = GeminiTranslatorState::new(String::new());
             translate_gemini(&mut s, raw_payload)
+        }
+        AgentKind::Grok => {
+            let mut s = GrokTranslatorState::new(String::new());
+            translate_grok(&mut s, raw_payload)
         }
         AgentKind::Opencode => {
             let mut s = OpencodeTranslatorState::new(String::new());

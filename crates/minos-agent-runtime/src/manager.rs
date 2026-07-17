@@ -29,10 +29,10 @@ use tracing::{info, warn};
 use url::Url;
 
 pub const MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS: &str = "\
-You are running inside Minos teamwork mode, where CLI coding agents work in a shared chat room with the user and other agents. \
-Treat the Minos room as coordination context, not as a generic terminal session. \
-When room history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_teamwork` MCP server to inspect the bound room before answering. \
-Use `list_room_messages` for recent room history, `delegate_to_agent` with `get_delegation_status`/`cancel_delegation` for focused cross-agent work, `ask_user_question` with `check_user_feedback` for user clarification, `post_room_update` only for concise user-visible room updates, and `react_to_message` for lightweight acknowledgement.";
+You are running inside Minos teamwork mode, where CLI coding agents work in a shared conversation with the user and other agents. \
+Treat the Minos conversation as coordination context, not as a generic terminal session. \
+When conversation history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_teamwork` MCP server to inspect the bound conversation before answering. \
+Use `list_conversation_messages` for recent conversation history, `delegate_to_agent` with `wait_delegation` when blocked on the result (or `get_delegation_status`/`cancel_delegation` for tracking), and `post_conversation_update` only for concise user-visible updates.";
 
 #[derive(Clone, Debug)]
 pub struct InstanceCaps {
@@ -40,16 +40,70 @@ pub struct InstanceCaps {
     pub idle_timeout: std::time::Duration,
 }
 
+/// Where an interactive approval reply must be delivered.
+#[derive(Clone, Debug)]
+pub(crate) enum PendingApprovalTarget {
+    Codex {
+        request_id: Value,
+        request: ServerRequest,
+        client: Arc<CodexClient>,
+    },
+    /// ACP `session/request_permission` (Gemini / Grok).
+    Acp {
+        request_id: Value,
+        client: Arc<crate::acp_client::AcpClient>,
+        allow_option_id: Option<String>,
+        reject_option_id: Option<String>,
+    },
+    /// Grok ACP `ext_method` reverse-request (e.g. `x.ai/exit_plan_mode`).
+    /// Reply body is `{ outcome, feedback? }`, not permission option ids.
+    GrokExtMethod {
+        request_id: Value,
+        client: Arc<crate::acp_client::AcpClient>,
+        nested_method: String,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PendingApproval {
     pub thread_id: String,
-    pub codex_request_id: Value,
-    pub request: ServerRequest,
-    pub client: Arc<CodexClient>,
-    pub created_at: Instant,
+    pub target: PendingApprovalTarget,
 }
 
 pub(crate) type PendingApprovals = Arc<DashMap<String, PendingApproval>>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct InstanceKey {
+    workspace: PathBuf,
+    conversation_id: Option<String>,
+    source_thread_id: Option<String>,
+}
+
+impl InstanceKey {
+    fn new(
+        workspace: &Path,
+        conversation_id: Option<&str>,
+        source_thread_id: Option<&str>,
+    ) -> Self {
+        Self {
+            workspace: workspace.to_path_buf(),
+            conversation_id: conversation_id.map(str::to_owned),
+            source_thread_id: source_thread_id.map(str::to_owned),
+        }
+    }
+
+    fn for_handle(handle: &ThreadHandle) -> Self {
+        let source_thread_id = handle
+            .mcp_conversation_id
+            .as_ref()
+            .map(|_| handle.thread_id.as_str());
+        Self::new(
+            &handle.workspace,
+            handle.mcp_conversation_id.as_deref(),
+            source_thread_id,
+        )
+    }
+}
 
 const DURABLE_INGEST_QUEUE_CAPACITY: usize = 1024;
 
@@ -128,18 +182,21 @@ impl Default for InstanceCaps {
 pub struct AgentManager {
     pub config: Arc<AgentRuntimeConfig>,
     pub caps: InstanceCaps,
-    pub(crate) instances: Arc<Mutex<HashMap<PathBuf, Arc<AppServerInstance>>>>,
+    pub(crate) instances: Arc<Mutex<HashMap<InstanceKey, Arc<AppServerInstance>>>>,
     pub(crate) threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
     pub(crate) pending_approvals: PendingApprovals,
     pub(crate) events_tx: IngestSink,
     pub(crate) manager_tx: broadcast::Sender<ManagerEvent>,
     pub(crate) claude_sessions:
         Arc<Mutex<HashMap<String, crate::claude_driver::ClaudeNdjsonSession>>>,
-    pub(crate) opencode_instances:
-        Arc<Mutex<HashMap<PathBuf, Arc<Mutex<crate::opencode_driver::OpencodeServerInstance>>>>>,
+    pub(crate) opencode_instances: Arc<
+        Mutex<HashMap<InstanceKey, Arc<Mutex<crate::opencode_driver::OpencodeServerInstance>>>>,
+    >,
     pub(crate) opencode_session_map: Arc<Mutex<HashMap<String, String>>>,
     pub(crate) gemini_instances:
         Arc<Mutex<HashMap<String, Arc<crate::gemini_driver::GeminiAcpInstance>>>>,
+    pub(crate) grok_instances:
+        Arc<Mutex<HashMap<String, Arc<crate::grok_driver::GrokAcpInstance>>>>,
 }
 
 impl AgentManager {
@@ -158,6 +215,7 @@ impl AgentManager {
             opencode_instances: Arc::new(Mutex::new(HashMap::new())),
             opencode_session_map: Arc::new(Mutex::new(HashMap::new())),
             gemini_instances: Arc::new(Mutex::new(HashMap::new())),
+            grok_instances: Arc::new(Mutex::new(HashMap::new())),
         };
         mgr.spawn_reaper();
         mgr
@@ -172,10 +230,10 @@ impl AgentManager {
             let mut tick = tokio::time::interval(std::time::Duration::from_mins(1));
             loop {
                 tick.tick().await;
-                let mut to_reap: Vec<PathBuf> = Vec::new();
+                let mut to_reap: Vec<InstanceKey> = Vec::new();
                 {
                     let ig = instances.lock().await;
-                    for (ws, inst) in ig.iter() {
+                    for (key, inst) in ig.iter() {
                         let last = *inst.last_activity_at.lock().await;
                         let idle = last.elapsed() >= caps.idle_timeout;
                         let tids = inst.thread_ids().await;
@@ -187,24 +245,24 @@ impl AgentManager {
                         });
                         drop(tg);
                         if idle && !any_running {
-                            to_reap.push(ws.clone());
+                            to_reap.push(key.clone());
                         }
                     }
                 }
-                for ws in to_reap {
-                    Self::reap_static(&instances, &threads, &manager_tx, &ws).await;
+                for key in to_reap {
+                    Self::reap_static(&instances, &threads, &manager_tx, &key).await;
                 }
             }
         });
     }
 
     async fn reap_static(
-        instances: &Arc<Mutex<HashMap<PathBuf, Arc<AppServerInstance>>>>,
+        instances: &Arc<Mutex<HashMap<InstanceKey, Arc<AppServerInstance>>>>,
         threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
         manager_tx: &broadcast::Sender<ManagerEvent>,
-        ws: &Path,
+        key: &InstanceKey,
     ) {
-        let Some(inst) = instances.lock().await.remove(ws) else {
+        let Some(inst) = instances.lock().await.remove(key) else {
             return;
         };
         let tids = inst.thread_ids().await;
@@ -272,6 +330,7 @@ impl AgentManager {
         agent: AgentKind,
         codex_session_id: Option<String>,
         parent_thread_id: Option<String>,
+        mcp_conversation_id: Option<String>,
         initial_state: ThreadState,
         last_seq: u64,
     ) -> anyhow::Result<()> {
@@ -289,6 +348,7 @@ impl AgentManager {
         );
         handle.codex_session_id = codex_session_id;
         handle.parent_thread_id = parent_thread_id.clone();
+        handle.mcp_conversation_id = mcp_conversation_id;
         threads.insert(thread_id.clone(), handle);
         drop(threads);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
@@ -355,17 +415,59 @@ impl AgentManager {
         self.start_agent_with_policies(agent, workspace, None).await
     }
 
+    pub async fn start_agent_in_conversation(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        conversation_id: String,
+    ) -> anyhow::Result<StartAgentOutcome> {
+        self.start_agent_with_policies_and_conversation(
+            agent,
+            workspace,
+            None,
+            Some(conversation_id),
+        )
+        .await
+    }
+
     pub async fn start_agent_with_policies(
         &self,
         agent: AgentKind,
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
     ) -> anyhow::Result<StartAgentOutcome> {
+        self.start_agent_with_policies_and_conversation(agent, workspace, policies, None)
+            .await
+    }
+
+    async fn start_agent_with_policies_and_conversation(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        policies: Option<SessionPolicies>,
+        conversation_id: Option<String>,
+    ) -> anyhow::Result<StartAgentOutcome> {
         match agent {
-            AgentName::Codex => self.start_codex_agent(agent, workspace, policies).await,
-            AgentName::Claude => self.start_claude_agent(agent, workspace, None).await,
-            AgentName::Opencode => self.start_opencode_agent(agent, workspace, None).await,
-            AgentName::Gemini => self.start_gemini_agent(agent, workspace, None).await,
+            AgentName::Codex => {
+                self.start_codex_agent(agent, workspace, policies, conversation_id.as_deref())
+                    .await
+            }
+            AgentName::Claude => {
+                self.start_claude_agent(agent, workspace, None, conversation_id)
+                    .await
+            }
+            AgentName::Opencode => {
+                self.start_opencode_agent(agent, workspace, None, conversation_id.as_deref())
+                    .await
+            }
+            AgentName::Gemini => {
+                self.start_gemini_agent(agent, workspace, None, conversation_id.as_deref())
+                    .await
+            }
+            AgentName::Grok => {
+                self.start_grok_agent(agent, workspace, None, conversation_id.as_deref())
+                    .await
+            }
         }
     }
 
@@ -386,19 +488,29 @@ impl AgentManager {
 
         match agent {
             AgentName::Codex => {
-                self.start_codex_agent_with_thread_id(agent, workspace, policies, Some(thread_id))
-                    .await
+                self.start_codex_agent_with_thread_id(
+                    agent,
+                    workspace,
+                    policies,
+                    Some(thread_id),
+                    None,
+                )
+                .await
             }
             AgentName::Claude => {
-                self.start_claude_agent(agent, workspace, Some(thread_id))
+                self.start_claude_agent(agent, workspace, Some(thread_id), None)
                     .await
             }
             AgentName::Opencode => {
-                self.start_opencode_agent(agent, workspace, Some(thread_id))
+                self.start_opencode_agent(agent, workspace, Some(thread_id), None)
                     .await
             }
             AgentName::Gemini => {
-                self.start_gemini_agent(agent, workspace, Some(thread_id))
+                self.start_gemini_agent(agent, workspace, Some(thread_id), None)
+                    .await
+            }
+            AgentName::Grok => {
+                self.start_grok_agent(agent, workspace, Some(thread_id), None)
                     .await
             }
         }
@@ -409,8 +521,9 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
+        conversation_id: Option<&str>,
     ) -> anyhow::Result<StartAgentOutcome> {
-        self.start_codex_agent_with_thread_id(agent, workspace, policies, None)
+        self.start_codex_agent_with_thread_id(agent, workspace, policies, None, conversation_id)
             .await
     }
 
@@ -420,26 +533,34 @@ impl AgentManager {
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
         logical_thread_id: Option<String>,
+        conversation_id: Option<&str>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
-        let instance = self.ensure_instance(&canon, policies.as_ref()).await?;
+        let preallocated_thread_id =
+            logical_thread_id.or_else(|| conversation_id.map(|_| uuid::Uuid::new_v4().to_string()));
+        let source_thread_id = conversation_id.and(preallocated_thread_id.as_deref());
+        let instance = self
+            .ensure_instance(&canon, policies.as_ref(), conversation_id, source_thread_id)
+            .await?;
 
         // Allocate a fresh thread on the codex app-server. The
         // `thread/started` notification arrives later via the event pump and
         // populates `codex_session_id` + flips state Starting -> Idle.
         let resp = instance.start_thread(&canon).await?;
-        let provider_thread_id = resp.thread_id.clone();
-        let thread_id = logical_thread_id.unwrap_or_else(|| provider_thread_id.clone());
+        let thread_id = preallocated_thread_id.unwrap_or_else(|| resp.codex_session_id.clone());
         instance.add_thread(thread_id.clone()).await;
         instance.touch().await;
 
-        let handle = ThreadHandle::new(
+        let mut handle = ThreadHandle::new(
             thread_id.clone(),
             canon.clone(),
             agent,
             ThreadState::Starting,
             0,
         );
+        handle.mcp_conversation_id = conversation_id.map(str::to_owned);
+        handle.codex_session_id = Some(resp.codex_session_id.clone());
+        let _ = handle.transition(ThreadState::Idle);
         self.threads.lock().await.insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
@@ -448,17 +569,6 @@ impl AgentManager {
             parent_thread_id: None,
         });
 
-        // The event pump will surface the `thread/started` notification; in
-        // the absence of an explicit notification we still flip to Idle so
-        // callers can dispatch turns. Real codex emits the notification before
-        // returning the response, so by the time we get here the pump has
-        // already advanced the state if it was going to. To match the codex
-        // app-server contract documented in spec §6.1, mark the thread Idle
-        // synchronously once the response carries `thread.id`.
-        if let Some(handle) = self.threads.lock().await.get_mut(&thread_id) {
-            handle.codex_session_id = Some(resp.codex_session_id.clone());
-            let _ = handle.transition(ThreadState::Idle);
-        }
         let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
             thread_id: thread_id.clone(),
             old: ThreadState::Starting,
@@ -478,6 +588,7 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
         logical_thread_id: Option<String>,
+        conversation_id: Option<String>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -490,6 +601,7 @@ impl AgentManager {
             0,
         );
         handle.codex_session_id = Some(provider_session_id.clone());
+        handle.mcp_conversation_id = conversation_id;
         self.threads.lock().await.insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
@@ -518,10 +630,14 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
         logical_thread_id: Option<String>,
+        conversation_id: Option<&str>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let instance = self.ensure_opencode_instance(&canon).await?;
+        let source_thread_id = conversation_id.map(|_| thread_id.as_str());
+        let instance = self
+            .ensure_opencode_instance(&canon, conversation_id, source_thread_id)
+            .await?;
         let oc_session_id = instance.lock().await.create_session().await?;
         self.opencode_session_map
             .lock()
@@ -535,6 +651,7 @@ impl AgentManager {
             0,
         );
         handle.codex_session_id = Some(oc_session_id.clone());
+        handle.mcp_conversation_id = conversation_id.map(str::to_owned);
         self.threads.lock().await.insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
@@ -554,11 +671,12 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
         logical_thread_id: Option<String>,
+        conversation_id: Option<&str>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let provider_session_id = self
-            .ensure_gemini_instance_for_thread(&thread_id, &canon, None)
+            .ensure_gemini_instance_for_thread(&thread_id, &canon, None, conversation_id)
             .await?;
         let mut handle = ThreadHandle::new(
             thread_id.clone(),
@@ -568,6 +686,7 @@ impl AgentManager {
             0,
         );
         handle.codex_session_id = Some(provider_session_id.clone());
+        handle.mcp_conversation_id = conversation_id.map(str::to_owned);
         self.threads.lock().await.insert(thread_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
             thread_id: thread_id.clone(),
@@ -587,6 +706,7 @@ impl AgentManager {
         thread_id: &str,
         workspace: &Path,
         resume_session_id: Option<&str>,
+        conversation_id: Option<&str>,
     ) -> anyhow::Result<String> {
         if let Some(existing) = self.gemini_instances.lock().await.get(thread_id).cloned() {
             return existing.get_session_id().await.ok_or_else(|| {
@@ -622,7 +742,13 @@ impl AgentManager {
         }
         let mut resumed = false;
         let mut provider_session_id = None;
-        let mcp_server = resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Gemini);
+        let mcp_server = resolve_mcp_server(
+            self.config.mcp.as_ref(),
+            workspace,
+            AgentName::Gemini,
+            conversation_id,
+            Some(thread_id),
+        );
         if let Some(session_id) = resume_session_id {
             match instance
                 .resume_session(
@@ -663,8 +789,149 @@ impl AgentManager {
             instance.client.clone(),
             thread_id.to_string(),
             self.events_tx.clone(),
+            self.pending_approvals.clone(),
         );
         self.gemini_instances
+            .lock()
+            .await
+            .insert(thread_id.to_string(), instance);
+        Ok(provider_session_id)
+    }
+
+
+    async fn start_grok_agent(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        logical_thread_id: Option<String>,
+        conversation_id: Option<&str>,
+    ) -> anyhow::Result<StartAgentOutcome> {
+        let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+        let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let provider_session_id = self
+            .ensure_grok_instance_for_thread(&thread_id, &canon, None, conversation_id)
+            .await?;
+        let mut handle = ThreadHandle::new(
+            thread_id.clone(),
+            canon.clone(),
+            agent,
+            ThreadState::Idle,
+            0,
+        );
+        handle.codex_session_id = Some(provider_session_id.clone());
+        handle.mcp_conversation_id = conversation_id.map(str::to_owned);
+        self.threads.lock().await.insert(thread_id.clone(), handle);
+        let _ = self.manager_tx.send(ManagerEvent::ThreadAdded {
+            thread_id: thread_id.clone(),
+            workspace: canon.clone(),
+            agent,
+            parent_thread_id: None,
+        });
+        Ok(StartAgentOutcome {
+            thread_id,
+            cwd: canon,
+            provider_session_id: Some(provider_session_id),
+        })
+    }
+
+    async fn ensure_grok_instance_for_thread(
+        &self,
+        thread_id: &str,
+        workspace: &Path,
+        resume_session_id: Option<&str>,
+        conversation_id: Option<&str>,
+    ) -> anyhow::Result<String> {
+        if let Some(existing) = self.grok_instances.lock().await.get(thread_id).cloned() {
+            return existing.get_session_id().await.ok_or_else(|| {
+                anyhow::anyhow!("grok ACP instance has no active session: {thread_id}")
+            });
+        }
+
+        let bin_path = self
+            .config
+            .grok_bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(AgentName::Grok.bin_name()));
+        let (crash_tx, _crash_rx) = tokio::sync::mpsc::channel::<()>(1);
+        // Conversation-bound sessions get teamwork guidance via top-level
+        // `grok --rules ...` (appended to the system prompt), matching Claude's
+        // `--append-system-prompt` / Codex developerInstructions.
+        let teamwork_rules = conversation_id
+            .is_some()
+            .then_some(MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS);
+        let instance = crate::grok_driver::GrokAcpInstance::spawn(
+            &bin_path,
+            workspace,
+            &self.config.subprocess_env,
+            crash_tx,
+            teamwork_rules,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("grok ACP spawn failed: {error}"))?;
+        let instance = Arc::new(instance);
+        let initialize = instance
+            .initialize()
+            .await
+            .map_err(|error| anyhow::anyhow!("grok ACP initialize failed: {error}"))?;
+        if initialize.protocol_version != 1 {
+            warn!(
+                target: "minos_agent_runtime::manager",
+                protocol_version = initialize.protocol_version,
+                "grok ACP returned unexpected protocol version",
+            );
+        }
+        let mut resumed = false;
+        let mut provider_session_id = None;
+        let mcp_server = resolve_mcp_server(
+            self.config.mcp.as_ref(),
+            workspace,
+            AgentName::Grok,
+            conversation_id,
+            Some(thread_id),
+        );
+        if let Some(session_id) = resume_session_id {
+            match instance
+                .resume_session(
+                    session_id,
+                    workspace,
+                    Some(mcp_server.iter().map(gemini_mcp_server).collect()),
+                )
+                .await
+            {
+                Ok(_) => {
+                    resumed = true;
+                    provider_session_id = Some(session_id.to_string());
+                }
+                Err(error) => {
+                    warn!(
+                        target: "minos_agent_runtime::manager",
+                        thread_id,
+                        session_id,
+                        error = %error,
+                        "grok ACP session/resume failed; starting a fresh session",
+                    );
+                }
+            }
+        }
+        if !resumed {
+            let response = instance
+                .new_session(
+                    workspace,
+                    mcp_server.iter().map(gemini_mcp_server).collect(),
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!("grok ACP session/new failed: {error}"))?;
+            provider_session_id = Some(response.session_id);
+        }
+        let provider_session_id = provider_session_id
+            .ok_or_else(|| anyhow::anyhow!("grok ACP session setup did not return session id"))?;
+        crate::grok_driver::spawn_acp_pump(
+            instance.client.clone(),
+            thread_id.to_string(),
+            self.events_tx.clone(),
+            self.pending_approvals.clone(),
+        );
+        self.grok_instances
             .lock()
             .await
             .insert(thread_id.to_string(), instance);
@@ -674,9 +941,12 @@ impl AgentManager {
     async fn ensure_opencode_instance(
         &self,
         workspace: &Path,
+        conversation_id: Option<&str>,
+        source_thread_id: Option<&str>,
     ) -> anyhow::Result<Arc<Mutex<crate::opencode_driver::OpencodeServerInstance>>> {
+        let key = InstanceKey::new(workspace, conversation_id, source_thread_id);
         let mut map = self.opencode_instances.lock().await;
-        if let Some(existing) = map.get(workspace) {
+        if let Some(existing) = map.get(&key) {
             return Ok(existing.clone());
         }
         let bin = self
@@ -686,8 +956,13 @@ impl AgentManager {
             .unwrap_or_else(|| PathBuf::from(AgentName::Opencode.bin_name()));
         let port = pick_free_port(self.config.opencode_port_range.clone())?;
         let password = uuid::Uuid::new_v4().to_string();
-        let mcp_server =
-            resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Opencode);
+        let mcp_server = resolve_mcp_server(
+            self.config.mcp.as_ref(),
+            workspace,
+            AgentName::Opencode,
+            conversation_id,
+            source_thread_id,
+        );
         let config = crate::opencode_driver::OpencodeServerConfig {
             opencode_bin: bin,
             port,
@@ -710,7 +985,7 @@ impl AgentManager {
             self.manager_tx.clone(),
             self.events_tx.clone(),
         );
-        map.insert(workspace.to_path_buf(), instance.clone());
+        map.insert(key, instance.clone());
         Ok(instance)
     }
 
@@ -718,16 +993,21 @@ impl AgentManager {
         &self,
         workspace: &Path,
         policies: Option<&SessionPolicies>,
+        conversation_id: Option<&str>,
+        source_thread_id: Option<&str>,
     ) -> anyhow::Result<Arc<AppServerInstance>> {
+        let key = InstanceKey::new(workspace, conversation_id, source_thread_id);
         let mut guard = self.instances.lock().await;
-        if let Some(existing) = guard.get(workspace) {
+        if let Some(existing) = guard.get(&key) {
             return Ok(existing.clone());
         }
         if guard.len() >= self.caps.max_instances {
             self.lru_evict(&mut guard).await?;
         }
-        let inst = self.spawn_instance(workspace, policies).await?;
-        guard.insert(workspace.to_path_buf(), inst.clone());
+        let inst = self
+            .spawn_instance(workspace, policies, conversation_id, source_thread_id)
+            .await?;
+        guard.insert(key, inst.clone());
         Ok(inst)
     }
 
@@ -736,6 +1016,8 @@ impl AgentManager {
         &self,
         workspace: &Path,
         policies: Option<&SessionPolicies>,
+        conversation_id: Option<&str>,
+        source_thread_id: Option<&str>,
     ) -> anyhow::Result<Arc<AppServerInstance>> {
         let workspace_buf = workspace.to_path_buf();
         let workspace_display = workspace_buf.display().to_string();
@@ -772,7 +1054,6 @@ impl AgentManager {
                 self.pending_approvals.clone(),
                 self.manager_tx.clone(),
                 pump_workspace,
-                self.config.approval_request_timeout,
                 pump_crash,
             ));
 
@@ -813,7 +1094,13 @@ impl AgentManager {
 
         let listen_arg = format!("ws://127.0.0.1:{port}");
         let spawn_policies = resolve_session_policies(policies, &self.config.subprocess_env);
-        let mcp_server = resolve_mcp_server(self.config.mcp.as_ref(), workspace, AgentName::Codex);
+        let mcp_server = resolve_mcp_server(
+            self.config.mcp.as_ref(),
+            workspace,
+            AgentName::Codex,
+            conversation_id,
+            source_thread_id,
+        );
         let args = build_codex_spawn_args(
             &listen_arg,
             &workspace_display,
@@ -894,7 +1181,6 @@ impl AgentManager {
             self.pending_approvals.clone(),
             self.manager_tx.clone(),
             pump_workspace,
-            self.config.approval_request_timeout,
             pump_crash,
         ));
 
@@ -928,18 +1214,18 @@ impl AgentManager {
 
     async fn lru_evict(
         &self,
-        map: &mut HashMap<PathBuf, Arc<AppServerInstance>>,
+        map: &mut HashMap<InstanceKey, Arc<AppServerInstance>>,
     ) -> anyhow::Result<()> {
-        let mut candidates: Vec<(PathBuf, std::time::Instant)> = Vec::new();
+        let mut candidates: Vec<(InstanceKey, std::time::Instant)> = Vec::new();
         let tg = self.threads.lock().await;
-        for (ws, inst) in map.iter() {
+        for (key, inst) in map.iter() {
             let tids = inst.thread_ids().await;
             let any_running = tids.iter().any(|t| {
                 tg.get(t)
                     .is_some_and(|h| matches!(h.current_state(), ThreadState::Running { .. }))
             });
             if !any_running {
-                candidates.push((ws.clone(), *inst.last_activity_at.lock().await));
+                candidates.push((key.clone(), *inst.last_activity_at.lock().await));
             }
         }
         drop(tg);
@@ -975,7 +1261,12 @@ impl AgentManager {
     /// Test-only snapshot of which workspaces have an open instance.
     #[cfg(any(test, feature = "test-support"))]
     pub async fn open_workspaces(&self) -> Vec<PathBuf> {
-        self.instances.lock().await.keys().cloned().collect()
+        self.instances
+            .lock()
+            .await
+            .keys()
+            .map(|key| key.workspace.clone())
+            .collect()
     }
 
     /// Test-only count of currently tracked threads.
@@ -998,10 +1289,10 @@ impl AgentManager {
     /// code spawns the periodic loop in [`AgentManager::spawn_reaper`].
     #[doc(hidden)]
     pub async fn tick_reaper_once(&self) {
-        let mut to_reap: Vec<PathBuf> = Vec::new();
+        let mut to_reap: Vec<InstanceKey> = Vec::new();
         {
             let ig = self.instances.lock().await;
-            for (ws, inst) in ig.iter() {
+            for (key, inst) in ig.iter() {
                 let last = *inst.last_activity_at.lock().await;
                 let idle = last.elapsed() >= self.caps.idle_timeout;
                 let tids = inst.thread_ids().await;
@@ -1012,17 +1303,17 @@ impl AgentManager {
                 });
                 drop(tg);
                 if idle && !any_running {
-                    to_reap.push(ws.clone());
+                    to_reap.push(key.clone());
                 }
             }
         }
-        for ws in to_reap {
-            self.reap_instance(&ws).await;
+        for key in to_reap {
+            self.reap_instance(&key).await;
         }
     }
 
-    async fn reap_instance(&self, ws: &Path) {
-        Self::reap_static(&self.instances, &self.threads, &self.manager_tx, ws).await;
+    async fn reap_instance(&self, key: &InstanceKey) {
+        Self::reap_static(&self.instances, &self.threads, &self.manager_tx, key).await;
     }
 
     pub async fn send_user_message(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
@@ -1050,14 +1341,14 @@ impl AgentManager {
                     .await?;
                 match handle.agent {
                     AgentName::Codex => {
-                        let workspace = handle.workspace.clone();
+                        let key = InstanceKey::for_handle(&handle);
                         let inst = self
                             .instances
                             .lock()
                             .await
-                            .get(&workspace)
+                            .get(&key)
                             .cloned()
-                            .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
+                            .ok_or_else(|| anyhow::anyhow!("instance for conversation gone"))?;
                         inst.touch().await;
                         let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
                         let turn_id = inst.send_user_message(&provider_thread_id, &text).await?;
@@ -1070,12 +1361,12 @@ impl AgentManager {
                         let oc_session_id = self
                             .ensure_opencode_session_for_thread(thread_id, &handle)
                             .await?;
-                        let workspace = handle.workspace.clone();
+                        let key = InstanceKey::for_handle(&handle);
                         let instance = self
                             .opencode_instances
                             .lock()
                             .await
-                            .get(&workspace)
+                            .get(&key)
                             .cloned()
                             .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
                         instance
@@ -1088,6 +1379,10 @@ impl AgentManager {
                         self.spawn_gemini_prompt_task(thread_id.to_string(), text, handle.clone())
                             .await?;
                     }
+                    AgentName::Grok => {
+                        self.spawn_grok_prompt_task(thread_id.to_string(), text, handle.clone())
+                            .await?;
+                    }
                 }
                 Ok(())
             }
@@ -1096,6 +1391,7 @@ impl AgentManager {
                 AgentName::Opencode => self.send_opencode_prompt(thread_id, &text, &handle).await,
                 AgentName::Claude => self.send_claude_prompt(thread_id, &text, &handle).await,
                 AgentName::Gemini => anyhow::bail!("gemini turn is already running"),
+                AgentName::Grok => anyhow::bail!("grok turn is already running"),
             },
             ThreadState::Suspended { .. } => {
                 match handle.agent {
@@ -1107,6 +1403,7 @@ impl AgentManager {
                         self.resume_opencode_thread(thread_id, &handle).await?;
                     }
                     AgentName::Gemini => self.resume_gemini_thread(thread_id, &handle).await?,
+                    AgentName::Grok => self.resume_grok_thread(thread_id, &handle).await?,
                 }
                 let now_ms = chrono::Utc::now().timestamp_millis();
                 let new_state = ThreadState::Running {
@@ -1127,12 +1424,12 @@ impl AgentManager {
                         let oc_session_id = self
                             .ensure_opencode_session_for_thread(thread_id, &handle)
                             .await?;
-                        let workspace = handle.workspace.clone();
+                        let key = InstanceKey::for_handle(&handle);
                         let instance = self
                             .opencode_instances
                             .lock()
                             .await
-                            .get(&workspace)
+                            .get(&key)
                             .cloned()
                             .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
                         let result = instance
@@ -1144,6 +1441,10 @@ impl AgentManager {
                     }
                     AgentName::Gemini => {
                         self.spawn_gemini_prompt_task(thread_id.to_string(), text, handle)
+                            .await
+                    }
+                    AgentName::Grok => {
+                        self.spawn_grok_prompt_task(thread_id.to_string(), text, handle)
                             .await
                     }
                     AgentName::Codex => unreachable!("codex suspended branch returns above"),
@@ -1178,6 +1479,8 @@ impl AgentManager {
             self.config.mcp.as_ref(),
             &handle.workspace,
             AgentName::Claude,
+            handle.mcp_conversation_id.as_deref(),
+            Some(thread_id),
         );
         let claude_mcp_config = mcp_server.as_ref().map(claude_mcp_config_json);
         let session = crate::claude_driver::ClaudeNdjsonSession::start_turn(
@@ -1228,7 +1531,14 @@ impl AgentManager {
         }
 
         let workspace = handle.workspace.clone();
-        let instance = self.ensure_opencode_instance(&workspace).await?;
+        let source_thread_id = handle.mcp_conversation_id.as_ref().map(|_| thread_id);
+        let instance = self
+            .ensure_opencode_instance(
+                &workspace,
+                handle.mcp_conversation_id.as_deref(),
+                source_thread_id,
+            )
+            .await?;
         let session_id = match provider_resume_session_id(thread_id, handle) {
             Some(session_id) => session_id.to_string(),
             None => instance.lock().await.create_session().await?,
@@ -1251,12 +1561,12 @@ impl AgentManager {
         let oc_session_id = self
             .ensure_opencode_session_for_thread(thread_id, handle)
             .await?;
-        let workspace = handle.workspace.clone();
+        let key = InstanceKey::for_handle(handle);
         let instance = self
             .opencode_instances
             .lock()
             .await
-            .get(&workspace)
+            .get(&key)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
         self.synth_user_message_ingest(thread_id, text, handle.agent)
@@ -1327,6 +1637,7 @@ impl AgentManager {
                 thread_id,
                 &handle.workspace,
                 provider_resume_session_id(thread_id, handle),
+                handle.mcp_conversation_id.as_deref(),
             )
             .await?;
         self.set_thread_provider_session_id(thread_id, provider_session_id)
@@ -1384,6 +1695,75 @@ impl AgentManager {
         Ok(())
     }
 
+
+    async fn resume_grok_thread(
+        &self,
+        thread_id: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        let provider_session_id = self
+            .ensure_grok_instance_for_thread(
+                thread_id,
+                &handle.workspace,
+                provider_resume_session_id(thread_id, handle),
+                handle.mcp_conversation_id.as_deref(),
+            )
+            .await?;
+        self.set_thread_provider_session_id(thread_id, provider_session_id)
+            .await;
+        self.transition_resumed_thread_to_idle(thread_id, handle)
+    }
+
+    async fn spawn_grok_prompt_task(
+        &self,
+        thread_id: String,
+        text: String,
+        handle: ThreadHandle,
+    ) -> anyhow::Result<()> {
+        let instance = self
+            .grok_instances
+            .lock()
+            .await
+            .get(&thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("grok ACP instance not found: {thread_id}"))?;
+        let events_tx = self.events_tx.clone();
+        let manager_tx = self.manager_tx.clone();
+        tokio::spawn(async move {
+            instance.touch().await;
+            let result = instance.prompt(&text).await;
+            let payload = match result {
+                Ok(response) => serde_json::json!({
+                    "kind": "acp_prompt_response",
+                    "stopReason": response.stop_reason,
+                }),
+                Err(error) => serde_json::json!({
+                    "kind": "acp_error",
+                    "code": "session/prompt",
+                    "message": error.to_string(),
+                }),
+            };
+            if let Err(error) = events_tx
+                .emit(RawIngest::from_json(
+                    AgentName::Grok,
+                    thread_id.clone(),
+                    payload,
+                    current_unix_ms(),
+                ))
+                .await
+            {
+                warn!(
+                    target: "minos_agent_runtime::manager",
+                    error = %error,
+                    thread_id,
+                    "failed to emit grok prompt result ingest",
+                );
+            }
+            mark_thread_idle_with_tx(&thread_id, &handle, &manager_tx);
+        });
+        Ok(())
+    }
+
     pub async fn steer_turn(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
         let handle = self
             .threads
@@ -1399,14 +1779,14 @@ impl AgentManager {
         let expected_turn_id = handle
             .active_turn_id()
             .ok_or_else(|| anyhow::anyhow!("steer_turn rejected: missing active turn id"))?;
-        let workspace = handle.workspace.clone();
+        let key = InstanceKey::for_handle(&handle);
         let inst = self
             .instances
             .lock()
             .await
-            .get(&workspace)
+            .get(&key)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("instance for workspace gone"))?;
+            .ok_or_else(|| anyhow::anyhow!("instance for conversation gone"))?;
         inst.touch().await;
         self.synth_user_message_ingest(thread_id, &text, handle.agent)
             .await?;
@@ -1443,7 +1823,7 @@ impl AgentManager {
     ) -> anyhow::Result<()> {
         let item_id = uuid::Uuid::new_v4().to_string();
         let payload = match agent {
-            AgentName::Gemini => serde_json::json!({
+            AgentName::Gemini | AgentName::Grok => serde_json::json!({
                 "kind": "user_message",
                 "messageId": item_id,
                 "text": text,
@@ -1485,8 +1865,16 @@ impl AgentManager {
         });
         let workspace = handle.workspace.clone();
         let codex_session_id = handle.codex_session_id.clone();
+        let source_thread_id = handle.mcp_conversation_id.as_ref().map(|_| thread_id);
 
-        let inst = self.ensure_instance(&workspace, None).await?;
+        let inst = self
+            .ensure_instance(
+                &workspace,
+                None,
+                handle.mcp_conversation_id.as_deref(),
+                source_thread_id,
+            )
+            .await?;
         if let Some(sid) = codex_session_id {
             let provider_thread_id = sid.clone();
             inst.add_thread(thread_id.to_string()).await;
@@ -1537,8 +1925,8 @@ impl AgentManager {
         }
         match handle.agent {
             AgentName::Codex => {
-                let workspace = handle.workspace.clone();
-                if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
+                let key = InstanceKey::for_handle(&handle);
+                if let Some(inst) = self.instances.lock().await.get(&key).cloned() {
                     let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
                     let _ = inst.interrupt_turn(&provider_thread_id).await;
                 }
@@ -1558,13 +1946,8 @@ impl AgentManager {
                     .get(thread_id)
                     .cloned();
                 if let Some(oc_sid) = oc_session_id {
-                    let workspace = handle.workspace.clone();
-                    let instance = self
-                        .opencode_instances
-                        .lock()
-                        .await
-                        .get(&workspace)
-                        .cloned();
+                    let key = InstanceKey::for_handle(&handle);
+                    let instance = self.opencode_instances.lock().await.get(&key).cloned();
                     if let Some(inst) = instance {
                         let _ = inst.lock().await.abort_session(&oc_sid).await;
                     }
@@ -1572,6 +1955,11 @@ impl AgentManager {
             }
             AgentName::Gemini => {
                 if let Some(instance) = self.gemini_instances.lock().await.get(thread_id).cloned() {
+                    let _ = instance.cancel().await;
+                }
+            }
+            AgentName::Grok => {
+                if let Some(instance) = self.grok_instances.lock().await.get(thread_id).cloned() {
                     let _ = instance.cancel().await;
                 }
             }
@@ -1598,7 +1986,7 @@ impl AgentManager {
         force_reload: bool,
     ) -> anyhow::Result<SkillsListResponse> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or(workspace);
-        let inst = self.ensure_instance(&canon, None).await?;
+        let inst = self.ensure_instance(&canon, None, None, None).await?;
         inst.touch().await;
         inst.list_host_skills(&canon, force_reload).await
     }
@@ -1610,7 +1998,7 @@ impl AgentManager {
         enabled: bool,
     ) -> anyhow::Result<SkillsConfigWriteResponse> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or(workspace);
-        let inst = self.ensure_instance(&canon, None).await?;
+        let inst = self.ensure_instance(&canon, None, None, None).await?;
         inst.touch().await;
         inst.write_host_skill_config(&path, enabled).await
     }
@@ -1629,10 +2017,10 @@ impl AgentManager {
         handle.transition(ThreadState::Closed {
             reason: crate::state_machine::CloseReason::UserClose,
         })?;
-        let workspace = handle.workspace.clone();
         match handle.agent {
             AgentName::Codex => {
-                if let Some(inst) = self.instances.lock().await.get(&workspace).cloned() {
+                let key = InstanceKey::for_handle(&handle);
+                if let Some(inst) = self.instances.lock().await.get(&key).cloned() {
                     inst.remove_thread(thread_id).await;
                 }
             }
@@ -1646,6 +2034,11 @@ impl AgentManager {
             }
             AgentName::Gemini => {
                 if let Some(instance) = self.gemini_instances.lock().await.remove(thread_id) {
+                    let _ = instance.close_session().await;
+                }
+            }
+            AgentName::Grok => {
+                if let Some(instance) = self.grok_instances.lock().await.remove(thread_id) {
                     let _ = instance.close_session().await;
                 }
             }
@@ -1678,15 +2071,49 @@ impl AgentManager {
             );
         }
 
-        let reply = crate::approvals::validate_decision(&pending.request, &decision)?;
+        let reply = match &pending.target {
+            PendingApprovalTarget::Codex { request, .. } => {
+                crate::approvals::validate_decision(request, &decision)?
+            }
+            PendingApprovalTarget::Acp {
+                allow_option_id,
+                reject_option_id,
+                ..
+            } => crate::approvals::validate_acp_permission_decision(
+                &decision,
+                allow_option_id.as_deref(),
+                reject_option_id.as_deref(),
+            )?,
+            PendingApprovalTarget::GrokExtMethod { nested_method, .. } => {
+                crate::approvals::validate_grok_ext_method_decision(nested_method, &decision)?
+            }
+        };
         let Some((_, pending)) = self.pending_approvals.remove(request_id) else {
             return Ok(());
         };
-        pending
-            .client
-            .reply(pending.codex_request_id, reply)
-            .await
-            .map_err(|error| anyhow::anyhow!("approval reply failed: {error}"))
+        match pending.target {
+            PendingApprovalTarget::Codex {
+                request_id,
+                client,
+                ..
+            } => client
+                .reply(request_id, reply)
+                .await
+                .map_err(|error| anyhow::anyhow!("approval reply failed: {error}")),
+            PendingApprovalTarget::Acp {
+                request_id,
+                client,
+                ..
+            }
+            | PendingApprovalTarget::GrokExtMethod {
+                request_id,
+                client,
+                ..
+            } => client
+                .reply(request_id, reply)
+                .await
+                .map_err(|error| anyhow::anyhow!("ACP approval reply failed: {error}")),
+        }
     }
 
     pub async fn respond_opencode_permission(
@@ -1718,7 +2145,7 @@ impl AgentManager {
             .opencode_instances
             .lock()
             .await
-            .get(&handle.workspace)
+            .get(&InstanceKey::for_handle(&handle))
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
 
@@ -1752,7 +2179,7 @@ impl AgentManager {
             .opencode_instances
             .lock()
             .await
-            .get(&handle.workspace)
+            .get(&InstanceKey::for_handle(&handle))
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
 
@@ -1902,7 +2329,7 @@ fn pick_free_port(range: std::ops::RangeInclusive<u16>) -> anyhow::Result<u16> {
     ))
 }
 
-fn current_unix_ms() -> i64 {
+pub(crate) fn current_unix_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2091,19 +2518,25 @@ struct ResolvedMcpServer {
 
 fn resolve_mcp_server(
     config: Option<&McpConfig>,
-    workspace: &Path,
+    _workspace: &Path,
     source_agent: AgentName,
+    conversation_id: Option<&str>,
+    source_thread_id: Option<&str>,
 ) -> Option<ResolvedMcpServer> {
     let config = config?;
+    let conversation_id = conversation_id?;
     let mut args = config.server_args.clone();
     args.extend([
-        "--room-id".into(),
-        minos_chat_store::room_id_for_workspace(workspace),
+        "--conversation-id".into(),
+        conversation_id.to_owned(),
         "--source-agent".into(),
         source_agent.bin_name().into(),
         "--socket-path".into(),
         config.socket_path.display().to_string(),
     ]);
+    if let Some(source_thread_id) = source_thread_id {
+        args.extend(["--source-thread-id".into(), source_thread_id.to_owned()]);
+    }
     args.extend(mcp_permission_args(config.permissions));
     Some(ResolvedMcpServer {
         name: "minos_teamwork".into(),
@@ -2116,8 +2549,8 @@ fn mcp_permission_args(
     permissions: minos_chat_store::mcp_server::McpToolPermissions,
 ) -> Vec<String> {
     let mut args = Vec::new();
-    if !permissions.list_room_messages {
-        args.push("--disable-list-room-messages".into());
+    if !permissions.list_conversation_messages {
+        args.push("--disable-list-conversation-messages".into());
     }
     if !permissions.delegate_to_agent {
         args.push("--disable-delegate-to-agent".into());
@@ -2125,20 +2558,14 @@ fn mcp_permission_args(
     if !permissions.get_delegation_status {
         args.push("--disable-get-delegation-status".into());
     }
+    if !permissions.wait_delegation {
+        args.push("--disable-wait-delegation".into());
+    }
     if !permissions.cancel_delegation {
         args.push("--disable-cancel-delegation".into());
     }
-    if !permissions.ask_user_question {
-        args.push("--disable-ask-user-question".into());
-    }
-    if !permissions.check_user_feedback {
-        args.push("--disable-check-user-feedback".into());
-    }
-    if !permissions.post_room_update {
-        args.push("--disable-post-room-update".into());
-    }
-    if !permissions.react_to_message {
-        args.push("--disable-react-to-message".into());
+    if !permissions.post_conversation_update {
+        args.push("--disable-post-conversation-update".into());
     }
     args
 }
@@ -2259,9 +2686,17 @@ async fn logical_thread_id_for_provider(
     threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
     provider_thread_id: &str,
 ) -> String {
-    logical_thread_id_for_provider_known(threads, provider_thread_id)
-        .await
-        .0
+    // Provider server-requests can arrive immediately after `thread/start`,
+    // before the manager has inserted the logical handle with its provider id.
+    for _ in 0..20 {
+        let (thread_id, known) =
+            logical_thread_id_for_provider_known(threads, provider_thread_id).await;
+        if known {
+            return thread_id;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    provider_thread_id.to_string()
 }
 
 async fn logical_thread_id_for_provider_known(
@@ -2405,38 +2840,35 @@ async fn register_codex_subagent_thread(
 
 async fn non_approval_context_for_request(
     threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
-    instance_workspace: &Path,
+    _instance_workspace: &Path,
     thread_id: Option<&str>,
 ) -> NonApprovalContext {
-    let request_workspace = if let Some(thread_id) = thread_id {
+    let conversation_id = if let Some(thread_id) = thread_id {
         threads
             .lock()
             .await
             .get(thread_id)
-            .map(|handle| handle.workspace.clone())
+            .and_then(|handle| handle.mcp_conversation_id.clone())
     } else {
         None
     };
-    let workspace = request_workspace.unwrap_or_else(|| instance_workspace.to_path_buf());
-    NonApprovalContext {
-        chat_room_id: Some(minos_chat_store::room_id_for_workspace(&workspace)),
-    }
+    NonApprovalContext { conversation_id }
 }
 
 async fn broadcast_ingest(events_tx: &IngestSink, ingest: RawIngest) -> Result<(), IngestClosed> {
     events_tx.emit(ingest).await
 }
 
-fn approval_request_ingest(
+pub(crate) fn approval_request_ingest(
     agent: AgentName,
     thread_id: String,
     request_id: String,
     turn_id: String,
     method: String,
     params: Value,
-    timeout: Duration,
 ) -> RawIngest {
     let payload_thread_id = thread_id.clone();
+    // Approvals wait until the user decides (or the agent process dies).
     RawIngest::from_json(
         agent,
         thread_id,
@@ -2448,79 +2880,10 @@ fn approval_request_ingest(
                 "turn_id": turn_id,
                 "method": method,
                 "params": params,
-                "timeout_ms": u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
             }
         }),
         current_unix_ms(),
     )
-}
-
-fn approval_timeout_ingest(agent: AgentName, thread_id: String, request_id: String) -> RawIngest {
-    let payload_thread_id = thread_id.clone();
-    RawIngest::from_json(
-        agent,
-        thread_id,
-        serde_json::json!({
-            "method": "approval/timeout",
-            "params": {
-                "thread_id": payload_thread_id,
-                "request_id": request_id,
-                "reason": "timeout",
-            }
-        }),
-        current_unix_ms(),
-    )
-}
-
-fn spawn_approval_timeout(
-    pending_approvals: PendingApprovals,
-    events_tx: IngestSink,
-    timeout: Duration,
-    request_id: String,
-    thread_id: String,
-    agent: AgentName,
-) {
-    tokio::spawn(async move {
-        tokio::time::sleep(timeout).await;
-        let Some((_, pending)) = pending_approvals.remove(&request_id) else {
-            return;
-        };
-
-        let elapsed_ms = pending.created_at.elapsed().as_millis();
-        if let Some(reply) = crate::approvals::timeout_reply(&pending.request) {
-            if let Err(error) = pending.client.reply(pending.codex_request_id, reply).await {
-                warn!(
-                    target: "minos_agent_runtime::manager",
-                    error = %error,
-                    request_id,
-                    thread_id,
-                    elapsed_ms,
-                    "approval timeout reply failed",
-                );
-            }
-        } else {
-            warn!(
-                target: "minos_agent_runtime::manager",
-                request_id,
-                thread_id,
-                elapsed_ms,
-                "request timeout fired without a fallback reply",
-            );
-        }
-
-        if let Err(error) = broadcast_ingest(
-            &events_tx,
-            approval_timeout_ingest(agent, thread_id, request_id),
-        )
-        .await
-        {
-            warn!(
-                target: "minos_agent_runtime::manager",
-                error = %error,
-                "failed to emit approval timeout ingest",
-            );
-        }
-    });
 }
 
 /// Long-running event-pump task per instance: drains every inbound frame from
@@ -2534,7 +2897,6 @@ async fn event_pump_loop(
     pending_approvals: PendingApprovals,
     manager_tx: broadcast::Sender<ManagerEvent>,
     workspace: PathBuf,
-    approval_request_timeout: Duration,
     crash_tx: tokio::sync::mpsc::Sender<()>,
 ) {
     let mut orphan_notifications: HashMap<String, Vec<(Instant, String, Value)>> = HashMap::new();
@@ -2709,10 +3071,11 @@ async fn event_pump_loop(
                             request_id.clone(),
                             PendingApproval {
                                 thread_id: thread_id.clone(),
-                                codex_request_id: id.clone(),
-                                request: req,
-                                client: client.clone(),
-                                created_at: Instant::now(),
+                                target: PendingApprovalTarget::Codex {
+                                    request_id: id.clone(),
+                                    request: req,
+                                    client: client.clone(),
+                                },
                             },
                         );
 
@@ -2725,7 +3088,6 @@ async fn event_pump_loop(
                                 turn_id,
                                 method.clone(),
                                 params.clone(),
-                                approval_request_timeout,
                             ),
                         )
                         .await
@@ -2737,14 +3099,6 @@ async fn event_pump_loop(
                             );
                             break;
                         }
-                        spawn_approval_timeout(
-                            pending_approvals.clone(),
-                            events_tx.clone(),
-                            approval_request_timeout,
-                            request_id,
-                            thread_id,
-                            agent,
-                        );
                     }
                     Ok(req) => {
                         let thread_id = request_thread_id(&params);
@@ -2889,13 +3243,11 @@ pub(crate) async fn rpc_start_thread(
     let thread_id = resp.thread.id;
     Ok(StartThreadResult {
         codex_session_id: thread_id.clone(),
-        thread_id,
     })
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct StartThreadResult {
-    pub thread_id: String,
     pub codex_session_id: String,
 }
 
@@ -3033,8 +3385,8 @@ mod tests {
             name: "minos_teamwork".into(),
             command: "/tmp/minos-teamwork-mcp".into(),
             args: vec![
-                "--room-id".into(),
-                "room-main".into(),
+                "--conversation-id".into(),
+                "conversation-main".into(),
                 "--source-agent".into(),
                 "codex".into(),
                 "--socket-path".into(),
@@ -3051,7 +3403,7 @@ mod tests {
         ));
         assert!(has_arg(
             &args,
-            "mcp_servers.minos_teamwork.args=[\"--room-id\",\"room-main\",\"--source-agent\",\"codex\",\"--socket-path\",\"/tmp/mcp-daemon.sock\"]"
+            "mcp_servers.minos_teamwork.args=[\"--conversation-id\",\"conversation-main\",\"--source-agent\",\"codex\",\"--socket-path\",\"/tmp/mcp-daemon.sock\"]"
         ));
         assert!(has_arg(&args, "mcp_servers.minos_teamwork.enabled=true"));
     }
@@ -3070,6 +3422,8 @@ mod tests {
             Some(&config),
             std::path::Path::new("/tmp/minos"),
             AgentName::Gemini,
+            Some("conversation-main"),
+            Some("thread-source-1234"),
         )
         .expect("chat MCP should resolve");
 
@@ -3078,25 +3432,27 @@ mod tests {
             server.args,
             vec![
                 "minos-teamwork-mcp",
-                "--room-id",
-                "room-minos",
+                "--conversation-id",
+                "conversation-main",
                 "--source-agent",
                 "gemini",
                 "--socket-path",
-                "/tmp/mcp-test.sock"
+                "/tmp/mcp-test.sock",
+                "--source-thread-id",
+                "thread-source-1234"
             ]
         );
     }
 
     #[test]
-    fn claude_mcp_config_json_includes_bound_room_and_source_agent() {
+    fn claude_mcp_config_json_includes_bound_conversation_and_source_agent() {
         let server = ResolvedMcpServer {
             name: "minos_teamwork".into(),
             command: "/tmp/minos-tui".into(),
             args: vec![
                 "minos-teamwork-mcp".into(),
-                "--room-id".into(),
-                "room-minos".into(),
+                "--conversation-id".into(),
+                "conversation-main".into(),
                 "--source-agent".into(),
                 "claude".into(),
                 "--socket-path".into(),
@@ -3119,7 +3475,7 @@ mod tests {
             .as_array()
             .unwrap()
             .windows(2)
-            .any(|pair| pair[0] == "--room-id" && pair[1] == "room-minos"));
+            .any(|pair| pair[0] == "--conversation-id" && pair[1] == "conversation-main"));
         assert!(config["mcpServers"]["minos_teamwork"]["args"]
             .as_array()
             .unwrap()
@@ -3139,8 +3495,8 @@ mod tests {
             command: "/tmp/minos-tui".into(),
             args: vec![
                 "minos-teamwork-mcp".into(),
-                "--room-id".into(),
-                "room-minos".into(),
+                "--conversation-id".into(),
+                "conversation-main".into(),
                 "--source-agent".into(),
                 "opencode".into(),
                 "--socket-path".into(),
@@ -3169,14 +3525,14 @@ mod tests {
     }
 
     #[test]
-    fn gemini_mcp_server_includes_bound_room_and_source_agent() {
+    fn gemini_mcp_server_includes_bound_conversation_and_source_agent() {
         let server = ResolvedMcpServer {
             name: "minos_teamwork".into(),
             command: "/tmp/minos-tui".into(),
             args: vec![
                 "minos-teamwork-mcp".into(),
-                "--room-id".into(),
-                "room-minos".into(),
+                "--conversation-id".into(),
+                "conversation-main".into(),
                 "--source-agent".into(),
                 "gemini".into(),
                 "--socket-path".into(),
@@ -3193,7 +3549,7 @@ mod tests {
             .as_array()
             .unwrap()
             .windows(2)
-            .any(|pair| pair[0] == "--room-id" && pair[1] == "room-minos"));
+            .any(|pair| pair[0] == "--conversation-id" && pair[1] == "conversation-main"));
         assert!(config["args"]
             .as_array()
             .unwrap()
@@ -3407,6 +3763,127 @@ done
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn grok_send_user_message_runs_acp_prompt_and_returns_idle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script_path = tmp.path().join("fake-grok.sh");
+        std::fs::write(
+            &script_path,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"authMethods":[],"agentCapabilities":{}}}\n' "$id"
+      ;;
+    session/new)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"session-1"}}\n' "$id"
+      ;;
+    session/prompt)
+      printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"grok says hi"}}}}\n'
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id"
+      ;;
+    session/close)
+      printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.grok_bin = Some(script_path);
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let started = mgr
+            .start_agent(AgentName::Grok, tmp.path().to_path_buf())
+            .await
+            .unwrap();
+        let thread_id = started.thread_id.clone();
+
+        let mut rx = mgr.ingest_stream();
+        mgr.send_user_message(&thread_id, "ping".into())
+            .await
+            .unwrap();
+
+        let user = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("synthetic Grok user message should arrive")
+            .expect("ingest stream should stay open");
+        assert_eq!(user.thread_id, thread_id);
+        assert_eq!(
+            user.json_value()
+                .expect("raw ingest should contain JSON payload")
+                .get("kind")
+                .and_then(Value::as_str),
+            Some("user_message")
+        );
+        assert_eq!(
+            user.json_value()
+                .expect("raw ingest should contain JSON payload")
+                .get("text")
+                .and_then(Value::as_str),
+            Some("ping")
+        );
+        assert!(user
+            .json_value()
+            .expect("raw ingest should contain JSON payload")
+            .get("messageId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()));
+
+        let chunk = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest stream should stay open");
+                if ingest.thread_id == thread_id
+                    && ingest
+                        .json_value()
+                        .expect("raw ingest should contain JSON payload")
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        == Some("acp_notification")
+                {
+                    break ingest;
+                }
+            }
+        })
+        .await
+        .expect("fake Grok ACP notification should arrive");
+
+        assert_eq!(
+            chunk
+                .json_value()
+                .expect("raw ingest should contain JSON payload")["params"]["update"]["content"]
+                ["text"],
+            "grok says hi"
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if matches!(mgr.thread_state(&thread_id).await, Some(ThreadState::Idle)) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Grok prompt task should return thread to idle");
+        assert!(matches!(
+            mgr.thread_state(&thread_id).await,
+            Some(ThreadState::Idle)
+        ));
+
+        mgr.close_thread(&thread_id).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn gemini_session_new_uses_gemini_acp_mcp_server_shape() {
         let tmp = tempfile::tempdir().unwrap();
         let script_path = tmp.path().join("fake-gemini-mcp-shape.sh");
@@ -3456,7 +3933,11 @@ done
         )]));
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
         let started = mgr
-            .start_agent(AgentName::Gemini, tmp.path().to_path_buf())
+            .start_agent_in_conversation(
+                AgentName::Gemini,
+                tmp.path().to_path_buf(),
+                "conversation-main".into(),
+            )
             .await
             .unwrap();
 
@@ -3475,12 +3956,22 @@ done
             .as_array()
             .unwrap()
             .windows(2)
+            .any(|pair| pair[0] == "--conversation-id" && pair[1] == "conversation-main"));
+        assert!(mcp_server["args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
             .any(|pair| pair[0] == "--source-agent" && pair[1] == "gemini"));
         assert!(mcp_server["args"]
             .as_array()
             .unwrap()
             .windows(2)
             .any(|pair| pair[0] == "--socket-path" && pair[1] == "/tmp/mcp-test.sock"));
+        assert!(mcp_server["args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--source-thread-id" && pair[1] == started.thread_id.as_str()));
         assert!(mcp_server.get("transportType").is_none());
         assert!(mcp_server.get("type").is_none());
         assert_eq!(mcp_server["env"], json!([]));
@@ -3488,9 +3979,40 @@ done
         mgr.close_thread(&started.thread_id).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn persisted_thread_restores_mcp_conversation_context() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = AgentManager::new(
+            AgentRuntimeConfig::new(tmp.path().to_path_buf()),
+            InstanceCaps::default(),
+        );
+
+        mgr.register_persisted_thread(
+            "thread-codex-1234".into(),
+            tmp.path().to_path_buf(),
+            AgentName::Codex,
+            Some("provider-codex-1234".into()),
+            None,
+            Some("conversation-main".into()),
+            ThreadState::Idle,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let threads = mgr.threads.lock().await;
+        let handle = threads
+            .get("thread-codex-1234")
+            .expect("thread should be registered");
+        assert_eq!(
+            handle.mcp_conversation_id.as_deref(),
+            Some("conversation-main")
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
-    async fn gemini_server_permission_request_is_cancelled_and_does_not_block_prompt() {
+    async fn gemini_server_permission_request_waits_for_user_decision() {
         let tmp = tempfile::tempdir().unwrap();
         let script_path = tmp.path().join("fake-gemini-permission.sh");
         let reply_path = tmp.path().join("permission-reply.json");
@@ -3512,8 +4034,8 @@ while IFS= read -r line; do
       IFS= read -r reply || exit 1
       printf '%s\n' "$reply" > "$FAKE_GEMINI_PERMISSION_REPLY"
       case "$reply" in
-        *'"outcome":{"outcome":"cancelled"}'*)
-          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"permission was cancelled"}}}}\n'
+        *'"optionId":"proceed_once"'*)
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"permission was allowed"}}}}\n'
           printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id"
           ;;
         *)
@@ -3555,31 +4077,39 @@ done
             .await
             .unwrap();
 
-        let request = tokio::time::timeout(Duration::from_secs(2), async {
+        let approval = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
+                let payload = ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload");
                 if ingest.thread_id == thread_id
-                    && ingest
-                        .json_value()
-                        .expect("raw ingest should contain JSON payload")
-                        .get("kind")
-                        .and_then(Value::as_str)
-                        == Some("acp_server_request")
+                    && payload.get("method").and_then(Value::as_str) == Some("approval/request")
                 {
                     break ingest;
                 }
             }
         })
         .await
-        .expect("Gemini ACP server request should be forwarded");
-        assert_eq!(
-            request
-                .json_value()
-                .expect("raw ingest should contain JSON payload")
-                .get("method")
-                .and_then(Value::as_str),
-            Some("session/request_permission")
-        );
+        .expect("Gemini ACP permission should surface as approval/request");
+
+        let request_id = approval
+            .json_value()
+            .expect("payload")
+            .get("params")
+            .and_then(|p| p.get("request_id"))
+            .and_then(Value::as_str)
+            .expect("request_id")
+            .to_string();
+        assert_eq!(request_id, "perm-1");
+
+        mgr.resolve_approval(
+            &request_id,
+            &thread_id,
+            serde_json::json!({ "approved": true }),
+        )
+        .await
+        .expect("user approval should resolve");
 
         let chunk = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
@@ -3597,17 +4127,21 @@ done
             }
         })
         .await
-        .expect("fake Gemini should continue after permission cancellation");
+        .expect("fake Gemini should continue after permission approval");
         assert_eq!(
             chunk
                 .json_value()
                 .expect("raw ingest should contain JSON payload")["params"]["update"]["content"]
                 ["text"],
-            "permission was cancelled"
+            "permission was allowed"
         );
 
-        let reply = std::fs::read_to_string(reply_path).unwrap();
-        assert!(reply.contains(r#""outcome":{"outcome":"cancelled"}"#));
+        let reply = std::fs::read_to_string(&reply_path).unwrap();
+        assert!(
+            reply.contains(r#""optionId":"proceed_once""#)
+                || reply.contains(r#""option_id":"proceed_once""#),
+            "reply was: {reply}"
+        );
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if matches!(mgr.thread_state(&thread_id).await, Some(ThreadState::Idle)) {
@@ -3621,6 +4155,7 @@ done
 
         mgr.close_thread(&thread_id).await.unwrap();
     }
+
 
     #[cfg(unix)]
     #[tokio::test]
@@ -3672,6 +4207,7 @@ done
             tmp.path().to_path_buf(),
             AgentName::Gemini,
             Some("resume-session".into()),
+            None,
             None,
             ThreadState::Suspended {
                 reason: PauseReason::DaemonRestart,
@@ -3830,6 +4366,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             AgentName::Claude,
             Some(provider_session_id.into()),
             None,
+            None,
             ThreadState::Suspended {
                 reason: PauseReason::DaemonRestart,
             },
@@ -3919,6 +4456,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             tmp.path().to_path_buf(),
             AgentName::Claude,
             Some(provider_session_id.into()),
+            None,
             None,
             ThreadState::Running {
                 turn_started_at_ms: 1,
@@ -4034,6 +4572,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             AgentName::Opencode,
             Some("sess_running".into()),
             None,
+            None,
             ThreadState::Running {
                 turn_started_at_ms: 1,
             },
@@ -4058,10 +4597,11 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             base_url: format!("http://{addr}"),
             auth_header: "Basic test".into(),
         };
-        mgr.opencode_instances
-            .lock()
-            .await
-            .insert(workspace, Arc::new(Mutex::new(instance)));
+        let handle = mgr.threads.lock().await.get(thread_id).cloned().unwrap();
+        mgr.opencode_instances.lock().await.insert(
+            InstanceKey::for_handle(&handle),
+            Arc::new(Mutex::new(instance)),
+        );
 
         let mut rx = mgr.ingest_stream();
         let outcome = mgr
@@ -4471,7 +5011,6 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         cfg.test_ws_url = Some(
             url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
         );
-        cfg.approval_request_timeout = Duration::from_secs(5);
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
         let mut ingest_rx = mgr.ingest_stream();
 
@@ -4617,12 +5156,12 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn minos_teamwork_form_elicitation_is_forwarded_and_auto_accepted_with_room() {
+    async fn minos_teamwork_form_elicitation_is_forwarded_and_auto_accepted_with_conversation() {
         let tmp = tempfile::tempdir().unwrap();
         let thread_id = "thr-mcp-chat";
         let turn_id = "turn-mcp-chat";
         let workspace = PathBuf::from("/w-mcp-chat");
-        let room_id = minos_chat_store::room_id_for_workspace(&workspace);
+        let conversation_id = "conversation-main";
         let script = vec![
             Step::ExpectRequest {
                 method: "thread/start".into(),
@@ -4631,14 +5170,14 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             Step::EmitServerRequest {
                 method: "mcpServer/elicitation/request".into(),
                 params: json!({
-                    "message": "Select the Minos chat room to read",
+                    "message": "Select the Minos conversation to read",
                     "mode": "form",
                     "requestedSchema": {
                         "type": "object",
                         "properties": {
-                            "room_id": { "type": "string" }
+                            "conversation_id": { "type": "string" }
                         },
-                        "required": ["room_id"]
+                        "required": ["conversation_id"]
                     },
                     "serverName": "minos_teamwork",
                     "threadId": thread_id,
@@ -4648,7 +5187,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             Step::ExpectResponse {
                 result: json!({
                     "action": "accept",
-                    "content": { "room_id": room_id }
+                    "content": { "conversation_id": conversation_id }
                 }),
             },
             Step::Sleep { ms: 20 },
@@ -4662,8 +5201,12 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
         let mut ingest_rx = mgr.ingest_stream();
 
-        let started = mgr.start_agent(AgentKind::Codex, workspace).await.unwrap();
-        assert_eq!(started.thread_id, thread_id);
+        let started = mgr
+            .start_agent_in_conversation(AgentKind::Codex, workspace, conversation_id.to_owned())
+            .await
+            .unwrap();
+        assert_ne!(started.thread_id, thread_id);
+        assert_eq!(started.provider_session_id.as_deref(), Some(thread_id));
 
         let ingest = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
@@ -4685,7 +5228,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         .await
         .expect("mcp elicitation synthetic ingest should arrive");
 
-        assert_eq!(ingest.thread_id, thread_id);
+        assert_eq!(ingest.thread_id, started.thread_id);
         assert_eq!(
             ingest
                 .json_value()
@@ -4696,7 +5239,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             ingest
                 .json_value()
                 .expect("raw ingest should contain JSON payload")["params"]["threadId"],
-            json!(thread_id)
+            json!(started.thread_id)
         );
         assert_eq!(
             ingest
@@ -4742,7 +5285,6 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         cfg.test_ws_url = Some(
             url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
         );
-        cfg.approval_request_timeout = Duration::from_secs(5);
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
         let mut ingest_rx = mgr.ingest_stream();
 
@@ -4808,10 +5350,10 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn approval_requests_time_out_and_send_typed_reject() {
+    async fn approval_requests_do_not_auto_timeout() {
         let tmp = tempfile::tempdir().unwrap();
-        let thread_id = "thr-approval-timeout";
-        let turn_id = "turn-approval-timeout";
+        let thread_id = "thr-approval-no-timeout";
+        let turn_id = "turn-approval-no-timeout";
         let script = vec![
             Step::ExpectRequest {
                 method: "thread/start".into(),
@@ -4821,6 +5363,8 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                 method: "item/commandExecution/requestApproval".into(),
                 params: command_approval_params(thread_id, turn_id),
             },
+            // Stay open long enough for a short wait; no timeout reply expected.
+            Step::Sleep { ms: 200 },
             Step::ExpectResponse {
                 result: json!({ "decision": "decline" }),
             },
@@ -4832,15 +5376,15 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         cfg.test_ws_url = Some(
             url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
         );
-        cfg.approval_request_timeout = Duration::from_millis(50);
+        // Host must not auto-cancel approvals.
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
         let mut ingest_rx = mgr.ingest_stream();
 
-        mgr.start_agent(AgentKind::Codex, "/w-approval-timeout".into())
+        mgr.start_agent(AgentKind::Codex, "/w-approval-no-timeout".into())
             .await
             .unwrap();
 
-        let timed_out = tokio::time::timeout(Duration::from_secs(1), async {
+        let request = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 let ingest = ingest_rx
                     .recv()
@@ -4851,32 +5395,43 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
                     .expect("raw ingest should contain JSON payload")
                     .get("method")
                     .and_then(Value::as_str)
-                    == Some("approval/timeout")
+                    == Some("approval/request")
                 {
                     break ingest;
                 }
             }
         })
         .await
-        .expect("approval/timeout ingest should arrive");
+        .expect("approval/request ingest should arrive");
 
-        let request_id = timed_out
+        let request_id = request
             .json_value()
             .expect("raw ingest should contain JSON payload")["params"]["request_id"]
             .as_str()
-            .expect("timeout ingest should carry request_id")
+            .expect("request should carry request_id")
             .to_string();
-        assert_eq!(timed_out.thread_id, thread_id);
-        assert_eq!(
-            timed_out
-                .json_value()
-                .expect("raw ingest should contain JSON payload")["params"]["reason"],
-            json!("timeout")
+        assert!(mgr.pending_approvals.contains_key(&request_id));
+
+        // Wait longer than the old default auto-timeout would have been.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            mgr.pending_approvals.contains_key(&request_id),
+            "pending approval must stay open until the user decides"
         );
+
+        // Explicit reject still works.
+        mgr.resolve_approval(
+            &request_id,
+            thread_id,
+            json!({ "decision": "decline" }),
+        )
+        .await
+        .unwrap();
         assert!(!mgr.pending_approvals.contains_key(&request_id));
 
         server.stop().await;
     }
+
 
     #[tokio::test(flavor = "multi_thread")]
     async fn resolve_approval_replies_to_codex_and_clears_pending_entry() {
@@ -4903,7 +5458,6 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         cfg.test_ws_url = Some(
             url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
         );
-        cfg.approval_request_timeout = Duration::from_secs(5);
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
         let mut ingest_rx = mgr.ingest_stream();
 

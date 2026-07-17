@@ -1,38 +1,32 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TeamworkMcpPermission {
-    ListRoomMessages,
+    ListConversationMessages,
     DelegateToAgent,
     GetDelegationStatus,
+    WaitDelegation,
     CancelDelegation,
-    AskUserQuestion,
-    CheckUserFeedback,
-    PostRoomUpdate,
-    ReactToMessage,
+    PostConversationUpdate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TeamworkMcpPermissions {
-    pub list_room_messages: bool,
+    pub list_conversation_messages: bool,
     pub delegate_to_agent: bool,
     pub get_delegation_status: bool,
+    pub wait_delegation: bool,
     pub cancel_delegation: bool,
-    pub ask_user_question: bool,
-    pub check_user_feedback: bool,
-    pub post_room_update: bool,
-    pub react_to_message: bool,
+    pub post_conversation_update: bool,
 }
 
 impl TeamworkMcpPermissions {
     pub fn allows(self, permission: TeamworkMcpPermission) -> bool {
         match permission {
-            TeamworkMcpPermission::ListRoomMessages => self.list_room_messages,
+            TeamworkMcpPermission::ListConversationMessages => self.list_conversation_messages,
             TeamworkMcpPermission::DelegateToAgent => self.delegate_to_agent,
             TeamworkMcpPermission::GetDelegationStatus => self.get_delegation_status,
+            TeamworkMcpPermission::WaitDelegation => self.wait_delegation,
             TeamworkMcpPermission::CancelDelegation => self.cancel_delegation,
-            TeamworkMcpPermission::AskUserQuestion => self.ask_user_question,
-            TeamworkMcpPermission::CheckUserFeedback => self.check_user_feedback,
-            TeamworkMcpPermission::PostRoomUpdate => self.post_room_update,
-            TeamworkMcpPermission::ReactToMessage => self.react_to_message,
+            TeamworkMcpPermission::PostConversationUpdate => self.post_conversation_update,
         }
     }
 }
@@ -40,14 +34,12 @@ impl TeamworkMcpPermissions {
 impl Default for TeamworkMcpPermissions {
     fn default() -> Self {
         Self {
-            list_room_messages: true,
+            list_conversation_messages: true,
             delegate_to_agent: true,
             get_delegation_status: true,
+            wait_delegation: true,
             cancel_delegation: true,
-            ask_user_question: true,
-            check_user_feedback: true,
-            post_room_update: true,
-            react_to_message: true,
+            post_conversation_update: true,
         }
     }
 }

@@ -55,7 +55,7 @@
 | `envelope` | `Envelope` (Forward, Forwarded, Event, Ingest), `EventKind` | WebSocket relay 帧格式 |
 | `auth` | `AuthRequest/Response`, `RefreshRequest/Response` | 认证 HTTP DTO |
 | `realtime` | `ClientFrame`, `ServerFrame`, `DurableEvent` (17 变体), `RealtimeTopic` | Topic-based 实时网关线类型 |
-| `local_rpc` | `ReadGroupChatParams/Response`, `LocalGroupChatMessage` | TUI 本地 RPC 类型 |
+| `local_rpc` | `ListConversationMessagesParams/Response`, `AppendConversationMessageParams`, `StartAgentInConversationRequest` | TUI 本地 RPC 类型 |
 
 ---
 

@@ -2,15 +2,11 @@
 
 use std::path::PathBuf;
 
-use minos_agent_runtime::ManagerEvent;
 use minos_domain::AgentName;
-use minos_protocol::LocalIngestFrame;
-
-use crate::event::McpToolEvent;
 
 pub enum Action {
     Global(GlobalAction),
-    Room(RoomAction),
+    Conversation(ConversationAction),
     Agent(AgentAction),
     Input(InputTarget, InputAction),
     EffectCompleted(EffectResult),
@@ -21,7 +17,6 @@ pub enum GlobalAction {
     Quit,
     CycleFocus,
     CycleFocusPrev,
-    OpenAgentPicker,
     Scroll(ScrollTarget, ScrollDirection, u16),
     InterruptOrQuit,
     MouseClick {
@@ -37,20 +32,18 @@ pub enum GlobalAction {
     MouseScroll {
         target: ScrollTarget,
         direction: ScrollDirection,
+        /// Wheel ticks × lines-per-tick (coalesced bursts accumulate here).
+        lines: u16,
     },
-    McpToolCall(McpToolEvent),
     Tick,
     RequestRedraw,
     ConfirmDelete,
     CancelDelete,
-    SelectPrevious,
-    SelectNext,
     Escape,
     Enter,
-    SelectIndex(usize),
 }
 
-pub enum RoomAction {
+pub enum ConversationAction {
     Scroll(ScrollDirection, u16),
 }
 
@@ -60,11 +53,16 @@ pub enum AgentAction {
     Close,
     Delete,
     ToggleToolExpansion,
+    ApprovalSelectNext,
+    ApprovalSelectPrev,
+    ApprovalConfirm,
+    ApprovalQuickPick(usize),
+    ApprovalCancel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputTarget {
-    Room,
+    Conversation,
     Agent,
 }
 
@@ -121,19 +119,19 @@ pub enum ScrollDirection {
 }
 
 pub enum ScrollTarget {
-    RoomList,
-    GroupChat,
+    MainList,
+    ConversationChat,
     AgentList,
     AgentChat,
     ActivePane,
 }
 
 pub enum ClickTarget {
-    RoomList,
-    GroupChat,
+    MainList,
+    ConversationChat,
     AgentList,
     AgentChat,
-    RoomInput,
+    ConversationInput,
     AgentInput,
 }
 
@@ -148,8 +146,6 @@ pub enum EffectResult {
         thread_id: String,
         error: String,
     },
-    IngestArrived(LocalIngestFrame),
-    ManagerEvent(ManagerEvent),
     ProjectCreated(crate::backend::ProjectEntry),
     ConversationsLoaded {
         project_id: String,

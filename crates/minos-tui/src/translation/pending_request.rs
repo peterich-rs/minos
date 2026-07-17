@@ -18,6 +18,10 @@ pub enum PendingAgentRequestKind {
         request_id: String,
         method: String,
     },
+    /// Grok `x.ai/exit_plan_mode` reverse-request (plan approval).
+    GrokPlanApproval {
+        request_id: String,
+    },
     OpencodePermission {
         permission_id: String,
         approve_response: String,
@@ -48,7 +52,8 @@ impl PendingAgentRequest {
     pub fn id(&self) -> &str {
         match &self.kind {
             PendingAgentRequestKind::CodexUserInput { request_id, .. }
-            | PendingAgentRequestKind::CodexApproval { request_id, .. } => request_id,
+            | PendingAgentRequestKind::CodexApproval { request_id, .. }
+            | PendingAgentRequestKind::GrokPlanApproval { request_id } => request_id,
             PendingAgentRequestKind::OpencodePermission { permission_id, .. } => permission_id,
             PendingAgentRequestKind::OpencodeQuestion { question_id, .. } => question_id,
         }
@@ -77,6 +82,14 @@ impl PendingAgentRequest {
                     request_id,
                     question_ids,
                 },
+            });
+        }
+
+        if method == "x.ai/exit_plan_mode" {
+            let prompt = format_grok_plan_approval_prompt(params);
+            return Some(Self {
+                prompt,
+                kind: PendingAgentRequestKind::GrokPlanApproval { request_id },
             });
         }
 
@@ -252,6 +265,32 @@ fn format_user_input_prompt(questions: &[serde_json::Value]) -> String {
     format_pending_question_prompt("Agent asks for input:", &parsed)
 }
 
+fn format_grok_plan_approval_prompt(params: &serde_json::Value) -> String {
+    let plan = params
+        .get("planContent")
+        .or_else(|| params.get("plan_content"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let preview: String = plan.lines().take(12).collect::<Vec<_>>().join("\n");
+    if preview.is_empty() {
+        "Grok plan approval: no plan content was written yet.\n\
+         [a] Approve  [s] Request changes  [q] Abandon"
+            .into()
+    } else {
+        let truncated = if plan.lines().count() > 12 {
+            format!("{preview}\n…")
+        } else {
+            preview
+        };
+        format!(
+            "Grok plan approval — review plan, then choose:\n\
+             [a] Approve  [s] Request changes  [q] Abandon\n\n\
+             {truncated}"
+        )
+    }
+}
+
 fn format_approval_prompt(method: &str, params: &serde_json::Value) -> String {
     let summary = match method {
         "item/commandExecution/requestApproval" => {
@@ -260,6 +299,18 @@ fn format_approval_prompt(method: &str, params: &serde_json::Value) -> String {
         "item/fileChange/requestApproval" => {
             find_string_by_keys(params, &["file", "path", "file_path", "filePath"])
                 .unwrap_or_default()
+        }
+        "session/request_permission" => {
+            let tool_call = params.get("toolCall").unwrap_or(params);
+            let title = find_string_by_keys(tool_call, &["title", "name"]).unwrap_or_default();
+            let kind = find_string_by_keys(tool_call, &["kind"]).unwrap_or_default();
+            match (title.is_empty(), kind.is_empty()) {
+                (false, false) => format!("{kind}: {title}"),
+                (false, true) => title,
+                (true, false) => kind,
+                (true, true) => find_string_by_keys(params, &["reason", "message", "title"])
+                    .unwrap_or_default(),
+            }
         }
         _ => find_string_by_keys(params, &["reason", "message", "title"]).unwrap_or_default(),
     };

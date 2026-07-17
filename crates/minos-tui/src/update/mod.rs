@@ -3,14 +3,14 @@
 mod agent;
 mod global;
 mod nav;
-mod room;
+mod conversation;
 
 use crate::action::{Action, EffectResult, InputAction, InputTarget};
 use crate::agent_route::short_thread_id;
 use crate::effect::{Effect, StateChange};
 use crate::focus::PaneId;
 use crate::state::AppState;
-use crate::ui::{AgentPickerState, DeleteConfirmState, UiState};
+use crate::ui::{DeleteConfirmState, UiState};
 
 pub fn update(
     state: &mut AppState,
@@ -19,7 +19,7 @@ pub fn update(
 ) -> (StateChange, Vec<Effect>) {
     match action {
         Action::Global(action) => global::handle(state, ui, action),
-        Action::Room(action) => room::handle(state, ui, action),
+        Action::Conversation(action) => conversation::handle(state, ui, action),
         Action::Agent(action) => agent::handle(state, ui, action),
         Action::Input(target, action) => handle_input(state, ui, target, action),
         Action::EffectCompleted(result) => handle_effect_result(state, ui, result),
@@ -34,42 +34,40 @@ fn handle_input(
     action: InputAction,
 ) -> (StateChange, Vec<Effect>) {
     if matches!(action, InputAction::Submit) {
-        if matches!(target, InputTarget::Room)
-            && matches!(
-                ui.nav_level(),
-                crate::nav::NavLevel::Conversations { .. }
-                    | crate::nav::NavLevel::Conversation { .. }
-                    | crate::nav::NavLevel::AgentDetail { .. }
-            )
-        {
-            return nav::handle(state, ui, crate::nav::NavAction::SubmitConversationInput);
-        }
         return match target {
-            InputTarget::Room => room::handle_submit(state, ui),
+            // Conversation input always goes through the conversation-centric submit path.
+            InputTarget::Conversation => {
+                nav::handle(state, ui, crate::nav::NavAction::SubmitConversationInput)
+            }
             InputTarget::Agent => agent::handle_submit(state, ui),
         };
     }
 
     let workspace = state.workspace.as_path();
-    let change = match target {
-        InputTarget::Room => {
-            let candidates = ui.room_agent_mention_candidates();
+    let (change, effects) = match target {
+        InputTarget::Conversation => {
+            let candidates = ui.conversation_agent_mention_candidates();
             crate::input::apply_input_action(
-                &mut ui.room_input,
+                &mut ui.inputs.conversation,
                 action,
+                target,
                 Some(workspace),
                 candidates.as_slice(),
             )
         }
-        InputTarget::Agent => {
-            crate::input::apply_input_action(&mut ui.agent_input, action, Some(workspace), &[])
-        }
+        InputTarget::Agent => crate::input::apply_input_action(
+            &mut ui.inputs.agent,
+            action,
+            target,
+            Some(workspace),
+            &[],
+        ),
     };
-    (change, vec![])
+    (change, effects)
 }
 
 fn handle_effect_result(
-    _state: &mut AppState,
+    state: &mut AppState,
     ui: &mut UiState,
     result: EffectResult,
 ) -> (StateChange, Vec<Effect>) {
@@ -95,23 +93,16 @@ fn handle_effect_result(
             ));
             (StateChange::redraw(), vec![])
         }
-        EffectResult::IngestArrived(frame) => {
-            (StateChange::none(), vec![Effect::HandleIngest(frame)])
-        }
-        EffectResult::ManagerEvent(event) => {
-            (StateChange::none(), vec![Effect::HandleManagerEvent(event)])
-        }
         EffectResult::ProjectCreated(project) => {
             let project_id = project.project_id.clone();
-            ui.projects.push(project);
-            ui.nav_stack = vec![
+            ui.projects.items.push(project);
+            ui.nav.stack = vec![
                 crate::nav::NavLevel::Projects,
                 crate::nav::NavLevel::Conversations {
                     project_id: project_id.clone(),
                 },
             ];
-            ui.selected_project = Some(ui.projects.len().saturating_sub(1));
-            ui.project_list_state.select(ui.selected_project);
+            ui.projects.select(Some(ui.projects.items.len().saturating_sub(1)));
             (
                 StateChange::redraw(),
                 vec![Effect::LoadConversations { project_id }],
@@ -121,21 +112,11 @@ fn handle_effect_result(
             project_id,
             conversations,
         } => {
-            ui.conversations = conversations;
-            ui.selected_conversation = if ui.conversations.is_empty() {
-                None
-            } else {
-                Some(0)
-            };
-            ui.conversation_list_state.select(ui.selected_conversation);
-            ui.conversation_messages.clear();
-            ui.conversation_scroll_offset = 0;
-            ui.conversation_auto_scroll = true;
-            ui.conversation_max_scroll = 0;
-            ui.conversation_agent_sessions.clear();
-            ui.selected_agent_session = None;
-            ui.agent_list_state.select(None);
-            ui.nav_stack = vec![
+            ui.conversations.replace_items(conversations);
+            ui.conversation.clear_messages();
+            ui.conversation.reset_scroll();
+            ui.conversation.agent_sessions.clear();
+            ui.nav.stack = vec![
                 crate::nav::NavLevel::Projects,
                 crate::nav::NavLevel::Conversations { project_id },
             ];
@@ -147,22 +128,28 @@ fn handle_effect_result(
             messages,
             sessions,
         } => {
-            ui.selected_conversation = ui
-                .conversations
-                .iter()
-                .position(|conversation| conversation.conversation_id == conversation_id);
-            ui.conversation_list_state.select(ui.selected_conversation);
-            ui.conversation_messages = messages;
-            ui.conversation_auto_scroll = true;
-            ui.conversation_scroll_offset = 0;
-            ui.conversation_agent_sessions = sessions;
-            ui.selected_agent_session = if ui.conversation_agent_sessions.is_empty() {
-                None
-            } else {
-                Some(0)
-            };
-            ui.agent_list_state.select(ui.selected_agent_session);
-            ui.nav_stack = vec![
+            for session in &sessions {
+                state
+                    .thread_conversations
+                    .insert(session.thread_id.clone(), conversation_id.clone());
+            }
+            ui.conversations.select(
+                ui.conversations
+                    .items
+                    .iter()
+                    .position(|conversation| conversation.conversation_id == conversation_id),
+            );
+            ui.conversation.set_messages(messages);
+            ui.conversation.reset_scroll();
+            ui.conversation.agent_sessions.items = sessions;
+            ui.conversation.agent_sessions.select(
+                if ui.conversation.agent_sessions.items.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                },
+            );
+            ui.nav.stack = vec![
                 crate::nav::NavLevel::Projects,
                 crate::nav::NavLevel::Conversations {
                     project_id: project_id.clone(),
@@ -181,8 +168,11 @@ fn handle_effect_result(
             cwd,
             text,
         } => {
+            state
+                .thread_conversations
+                .insert(thread_id.clone(), conversation_id.clone());
             let inserted_session = if !ui
-                .conversation_agent_sessions
+                .conversation.agent_sessions.items
                 .iter()
                 .any(|s| s.thread_id == thread_id)
             {
@@ -192,7 +182,7 @@ fn handle_effect_result(
                 } else {
                     Some(first_line.chars().take(80).collect::<String>())
                 };
-                ui.conversation_agent_sessions
+                ui.conversation.agent_sessions.items
                     .push(crate::backend::ThreadSummaryEntry {
                         thread_id: thread_id.clone(),
                         agent,
@@ -202,19 +192,17 @@ fn handle_effect_result(
                         message_count: 0,
                         ended_at_ms: None,
                         parent_thread_id: None,
+                        state: minos_agent_runtime::ThreadState::Starting,
                     });
                 true
             } else {
                 false
             };
-            ui.selected_agent_session = ui
-                .flat_agent_sessions()
-                .iter()
-                .position(|session| session.thread_id == thread_id);
-            ui.agent_list_state.select(ui.selected_agent_session);
+            ui.conversation.agent_sessions.select(ui.flat_session_index_for_thread(&thread_id));
             if inserted_session {
                 if let Some(conversation) = ui
                     .conversations
+                    .items
                     .iter_mut()
                     .find(|conversation| conversation.conversation_id == conversation_id)
                 {
@@ -245,17 +233,16 @@ fn handle_effect_result(
 }
 
 pub(super) fn select_thread(ui: &mut UiState, index: usize) -> StateChange {
-    if index >= ui.threads.len() {
+    if index >= ui.thread_panel.list.items.len() {
         return StateChange::none();
     }
-    ui.selected_thread = Some(index);
-    ui.agent_list_state.select(Some(index));
+    ui.thread_panel.list.select(Some(index));
     StateChange::redraw()
 }
 
-pub(super) fn sync_room_agent_picker(ui: &mut UiState) {
-    let candidates = ui.room_agent_mention_candidates();
-    ui.room_input
+pub(super) fn sync_conversation_agent_picker(ui: &mut UiState) {
+    let candidates = ui.conversation_agent_mention_candidates();
+    ui.inputs.conversation
         .sync_agent_picker(candidates.as_slice(), ui.focus.is(PaneId::Input));
 }
 
@@ -264,19 +251,42 @@ pub(super) fn group_user_text_for_thread(
     thread_id: &str,
     text: &str,
 ) -> Option<String> {
-    let thread = ui
-        .threads
+    let agent = ui
+        .conversation.agent_sessions.items
         .iter()
-        .find(|thread| thread.thread_id == thread_id)?;
+        .find(|session| session.thread_id == thread_id)
+        .map(|session| session.agent)
+        .or_else(|| {
+            ui.thread_panel.list.items
+                .iter()
+                .find(|thread| thread.thread_id == thread_id)
+                .map(|thread| thread.agent)
+        })?;
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
     }
     Some(format!(
         "@{}#{} {trimmed}",
-        thread.agent.bin_name(),
-        short_thread_id(&thread.thread_id)
+        agent.bin_name(),
+        short_thread_id(thread_id)
     ))
+}
+
+pub(super) fn thread_runtime_state<'a>(
+    ui: &'a UiState,
+    thread_id: &str,
+) -> Option<&'a minos_agent_runtime::ThreadState> {
+    ui.conversation.agent_sessions.items
+        .iter()
+        .find(|session| session.thread_id == thread_id)
+        .map(|session| &session.state)
+        .or_else(|| {
+            ui.thread_panel.list.items
+                .iter()
+                .find(|thread| thread.thread_id == thread_id)
+                .map(|thread| &thread.state)
+        })
 }
 
 pub(super) fn push_pending_conversation_user_message(
@@ -285,11 +295,11 @@ pub(super) fn push_pending_conversation_user_message(
     body: &str,
 ) {
     let message_seq = ui
-        .conversation_messages
+        .conversation.messages
         .last()
         .map(|message| message.message_seq.saturating_add(1))
         .unwrap_or(1);
-    ui.conversation_messages
+    ui.conversation.messages
         .push(crate::backend::ConversationMessageEntry {
             message_seq,
             message_id: format!("pending-{conversation_id}-{message_seq}"),
@@ -299,11 +309,14 @@ pub(super) fn push_pending_conversation_user_message(
             sender_role: "user".to_owned(),
             agent: None,
             body: body.to_owned(),
+            reply_to_message_id: None,
+            delegation_id: None,
+            mentions: Vec::new(),
         });
-    ui.conversation_auto_scroll = true;
+    ui.conversation.auto_scroll = true;
     if let Some(conversation) = ui
         .conversations
-        .iter_mut()
+        .items.iter_mut()
         .find(|conversation| conversation.conversation_id == conversation_id)
     {
         conversation.message_count = conversation.message_count.saturating_add(1);
@@ -313,24 +326,19 @@ pub(super) fn push_pending_conversation_user_message(
 
 pub(super) fn cycle_focus(ui: &mut UiState) -> StateChange {
     ui.focus.cycle_next();
-    sync_room_agent_picker(ui);
+    sync_conversation_agent_picker(ui);
     StateChange::redraw()
 }
 
 pub(super) fn cycle_focus_prev(ui: &mut UiState) -> StateChange {
     ui.focus.cycle_prev();
-    sync_room_agent_picker(ui);
+    sync_conversation_agent_picker(ui);
     StateChange::redraw()
 }
 
 pub(super) fn handle_escape(ui: &mut UiState) -> StateChange {
-    if ui.agent_picker.is_some() {
-        ui.agent_picker = None;
-        return StateChange::redraw();
-    }
-
-    if ui.room_input.has_agent_picker() {
-        ui.room_input.clear_agent_picker();
+    if ui.inputs.conversation.has_agent_picker() {
+        ui.inputs.conversation.clear_agent_picker();
         return StateChange::redraw();
     }
 
@@ -338,32 +346,11 @@ pub(super) fn handle_escape(ui: &mut UiState) -> StateChange {
 
     if !ui.focus.is(fallback_focus) {
         ui.focus.focus(fallback_focus);
-        sync_room_agent_picker(ui);
+        sync_conversation_agent_picker(ui);
         return StateChange::redraw();
     }
 
     StateChange::none()
-}
-
-pub(super) fn open_agent_picker(ui: &mut UiState) -> StateChange {
-    let selected = ui
-        .selected_thread
-        .and_then(|index| ui.threads.get(index))
-        .and_then(|thread| {
-            ui.status
-                .agents
-                .iter()
-                .position(|agent| agent.name == thread.agent)
-        })
-        .or_else(|| {
-            ui.status
-                .agents
-                .iter()
-                .position(|agent| matches!(agent.status, minos_domain::AgentStatus::Ok))
-        })
-        .unwrap_or(0);
-    ui.agent_picker = Some(AgentPickerState { selected });
-    StateChange::redraw()
 }
 
 pub(super) fn focus_from_enter(ui: &mut UiState) -> StateChange {
@@ -377,12 +364,13 @@ pub(super) fn focus_from_enter(ui: &mut UiState) -> StateChange {
             StateChange::redraw()
         }
         PaneId::Sidebar => {
-            if ui.selected_agent_session.is_none() {
+            if ui.conversation.agent_sessions.selected.is_none() {
                 return StateChange::none();
             }
             ui.focus.focus(PaneId::MainChat);
             StateChange::redraw()
         }
+        PaneId::ApprovalOverlay => StateChange::none(),
         PaneId::Input => StateChange::none(),
     }
 }
@@ -396,42 +384,22 @@ pub(super) fn request_delete_current_thread(ui: &mut UiState) -> StateChange {
         return StateChange::none();
     };
     let Some(selected) = ui
-        .threads
+        .thread_panel.list.items
         .iter()
         .position(|thread| thread.thread_id == thread_id)
     else {
         return StateChange::none();
     };
-    let Some(thread) = ui.threads.get(selected) else {
+    let Some(thread) = ui.thread_panel.list.items.get(selected) else {
         return StateChange::none();
     };
 
-    ui.delete_confirm = Some(DeleteConfirmState {
+    ui.overlays.delete_confirm = Some(DeleteConfirmState {
         thread_id: thread.thread_id.clone(),
         agent: thread.agent,
         workspace: thread.workspace.clone(),
         selected_index: selected,
     });
-    StateChange::redraw()
-}
-
-pub(super) fn scroll_group_chat(
-    ui: &mut UiState,
-    direction: crate::action::ScrollDirection,
-    lines: u16,
-) -> StateChange {
-    match direction {
-        crate::action::ScrollDirection::Up => ui.group_chat.scroll_up(lines),
-        crate::action::ScrollDirection::Down => ui.group_chat.scroll_down(lines),
-        crate::action::ScrollDirection::Top => {
-            ui.group_chat.auto_scroll = false;
-            ui.group_chat.scroll_offset = 0;
-        }
-        crate::action::ScrollDirection::Bottom => {
-            ui.group_chat.auto_scroll = true;
-            ui.group_chat.scroll_offset = 0;
-        }
-    }
     StateChange::redraw()
 }
 
@@ -442,23 +410,25 @@ pub(super) fn scroll_conversation(
 ) -> StateChange {
     match direction {
         crate::action::ScrollDirection::Up => {
-            ui.conversation_auto_scroll = false;
-            ui.conversation_scroll_offset = ui.conversation_scroll_offset.saturating_sub(lines);
+            ui.conversation.auto_scroll = false;
+            ui.conversation.scroll_offset = ui
+                .conversation.scroll_offset
+                .saturating_sub(u32::from(lines));
         }
         crate::action::ScrollDirection::Down => {
-            ui.conversation_auto_scroll = false;
-            ui.conversation_scroll_offset = ui
-                .conversation_scroll_offset
-                .saturating_add(lines)
-                .min(ui.conversation_max_scroll);
+            ui.conversation.auto_scroll = false;
+            ui.conversation.scroll_offset = ui
+                .conversation.scroll_offset
+                .saturating_add(u32::from(lines))
+                .min(ui.conversation.max_scroll);
         }
         crate::action::ScrollDirection::Top => {
-            ui.conversation_auto_scroll = false;
-            ui.conversation_scroll_offset = 0;
+            ui.conversation.auto_scroll = false;
+            ui.conversation.scroll_offset = 0;
         }
         crate::action::ScrollDirection::Bottom => {
-            ui.conversation_auto_scroll = true;
-            ui.conversation_scroll_offset = ui.conversation_max_scroll;
+            ui.conversation.auto_scroll = true;
+            ui.conversation.scroll_offset = ui.conversation.max_scroll;
         }
     }
     StateChange::redraw()

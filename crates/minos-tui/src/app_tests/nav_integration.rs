@@ -13,13 +13,13 @@ fn app_with_projects(
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
     set_test_projects_nav(&mut app);
-    app.ui.projects = projects;
-    app.ui.selected_project = if app.ui.projects.is_empty() {
+    app.ui.projects.items = projects;
+    app.ui.projects.selected = if app.ui.projects.items.is_empty() {
         None
     } else {
         Some(0)
     };
-    app.ui.project_list_state.select(app.ui.selected_project);
+    app.ui.projects.list_state.select(app.ui.projects.selected);
     (backend, app, rx)
 }
 
@@ -66,7 +66,7 @@ async fn projects_navigate_down_then_open() {
         sample_project("p2", "P2", "/tmp/p2"),
     ]);
     app.handle_key(press(KeyCode::Down)).await;
-    assert_eq!(app.ui.selected_project, Some(1));
+    assert_eq!(app.ui.projects.selected, Some(1));
     app.handle_key(press(KeyCode::Enter)).await;
     pump_events(&mut app, &mut rx).await;
     assert_eq!(
@@ -84,14 +84,14 @@ async fn projects_up_wraps_to_last() {
         sample_project("p2", "P2", "/tmp/p2"),
     ]);
     app.handle_key(press(KeyCode::Up)).await;
-    assert_eq!(app.ui.selected_project, Some(1));
+    assert_eq!(app.ui.projects.selected, Some(1));
 }
 
 #[tokio::test]
-async fn esc_at_projects_quits() {
+async fn esc_at_projects_does_not_quit() {
     let (_, mut app, _rx) = app_with_projects(vec![]);
     app.handle_key(press(KeyCode::Esc)).await;
-    assert!(app.should_quit());
+    assert!(!app.should_quit());
 }
 
 #[tokio::test]
@@ -103,6 +103,100 @@ async fn ctrl_q_at_projects_quits() {
     ))
     .await;
     assert!(app.should_quit());
+}
+
+#[tokio::test]
+async fn ctrl_p_from_agent_detail_jumps_to_projects() {
+    let backend = Arc::new(TestBackend::new());
+    let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+    set_test_agent_detail_nav(&mut app, "p1", "c1");
+
+    assert!(
+        app.handle_key(press_with_modifiers(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL
+        ))
+        .await
+    );
+
+    assert_eq!(app.ui.nav.stack, vec![NavLevel::Projects]);
+}
+
+#[tokio::test]
+async fn ctrl_t_from_agent_detail_jumps_to_current_project_conversations() {
+    let backend = Arc::new(TestBackend::new());
+    let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+    set_test_agent_detail_nav(&mut app, "p1", "c1");
+    app.ui.conversations.selected = Some(2);
+
+    assert!(
+        app.handle_key(press_with_modifiers(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL
+        ))
+        .await
+    );
+
+    assert_eq!(
+        app.ui.nav.stack,
+        vec![
+            NavLevel::Projects,
+            NavLevel::Conversations {
+                project_id: "p1".into()
+            }
+        ]
+    );
+    assert_eq!(app.ui.conversations.selected, Some(2));
+}
+
+#[tokio::test]
+async fn ctrl_t_at_projects_is_noop() {
+    let (_, mut app, _rx) = app_with_projects(vec![]);
+
+    assert!(
+        !app.handle_key(press_with_modifiers(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL
+        ))
+        .await
+    );
+
+    assert_eq!(app.ui.nav.stack, vec![NavLevel::Projects]);
+}
+
+#[tokio::test]
+async fn ctrl_nav_shortcuts_do_not_interrupt_project_create_dialog() {
+    let backend = Arc::new(TestBackend::new());
+    let mut app = App::new(backend, false, PathBuf::from("/tmp/newproj"));
+    set_test_projects_nav(&mut app);
+    app.handle_key(press(KeyCode::Char('n'))).await;
+    app.handle_key(press_with_modifiers(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL,
+    ))
+    .await;
+
+    assert!(app.ui.overlays.project_create.is_some());
+    assert_eq!(app.ui.nav.stack, vec![NavLevel::Projects]);
+}
+
+#[tokio::test]
+async fn n_key_at_conversations_no_longer_opens_modal_picker() {
+    let backend = Arc::new(TestBackend::new());
+    let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+    set_test_conversations_nav(&mut app, "p1");
+
+    assert!(!app.handle_key(press(KeyCode::Char('n'))).await);
+    assert!(app.ui.overlays.project_create.is_none());
+    assert_eq!(
+        app.ui.nav.stack,
+        vec![
+            NavLevel::Projects,
+            NavLevel::Conversations {
+                project_id: "p1".into()
+            }
+        ]
+    );
 }
 
 #[tokio::test]
@@ -124,7 +218,7 @@ async fn open_project_dialog_with_n_key() {
     app.handle_key(press(KeyCode::Char('n'))).await;
     let dialog = app
         .ui
-        .project_create_dialog
+        .overlays.project_create
         .as_ref()
         .expect("project dialog opens");
     assert_eq!(dialog.name, "newproj");
@@ -140,7 +234,7 @@ async fn init_opens_project_dialog_for_unmatched_workspace() {
 
     let dialog = app
         .ui
-        .project_create_dialog
+        .overlays.project_create
         .as_ref()
         .expect("startup opens project create dialog");
     assert_eq!(dialog.name, "fire");
@@ -158,7 +252,7 @@ async fn create_project_dialog_types_and_confirms() {
     app.handle_key(press(KeyCode::Char('M'))).await;
     assert!(app
         .ui
-        .project_create_dialog
+        .overlays.project_create
         .as_ref()
         .map(|d| d.name.ends_with('M'))
         .unwrap_or(false));
@@ -176,12 +270,13 @@ async fn start_new_session_via_input_transitions_to_conversation_level() {
     use crate::focus::PaneId;
     use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
 
-    let project = sample_project("p1", "P1", "/tmp/p1");
-    let backend = Arc::new(TestBackend::new().with_projects(vec![project]));
-    let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/p1"));
+    let project = sample_project("p1", "P1", "/tmp/minos");
+    let backend = Arc::new(TestBackend::new().with_projects(vec![project.clone()]));
+    let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/fire"));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
     set_test_conversations_nav(&mut app, "p1");
+    app.ui.projects.items = vec![project];
     app.ui.status.update_agents(vec![AgentDescriptor {
         name: AgentName::Codex,
         path: None,
@@ -189,7 +284,7 @@ async fn start_new_session_via_input_transitions_to_conversation_level() {
         status: AgentStatus::Ok,
     }]);
     app.ui.focus.focus(PaneId::Input);
-    app.ui.room_input.content = "hello world".to_owned();
+    app.ui.inputs.conversation.content = "hello world".to_owned();
 
     app.handle_key(press(KeyCode::Enter)).await;
     pump_events(&mut app, &mut rx).await;
@@ -209,14 +304,23 @@ async fn start_new_session_via_input_transitions_to_conversation_level() {
     );
     assert!(
         app.ui
-            .conversation_agent_sessions
+            .conversation.agent_sessions.items
             .iter()
             .any(|s| s.agent == AgentName::Codex),
-        "new session must appear in conversation_agent_sessions"
+        "new session must appear in conversation.agent_sessions.items"
     );
     assert!(
-        app.ui.room_input.content.is_empty(),
+        app.ui.inputs.conversation.content.is_empty(),
         "input must be cleared"
+    );
+    assert_eq!(
+        backend
+            .started_workspaces
+            .lock()
+            .expect("started workspaces lock")
+            .as_slice(),
+        &[PathBuf::from("/tmp/minos")],
+        "agent must start in selected project workspace, not the TUI launch workspace"
     );
 }
 
@@ -236,13 +340,13 @@ async fn session_input_accepts_agent_completion_before_submit() {
 
     assert!(app.handle_key(press(KeyCode::Char('@'))).await);
     assert!(app.handle_key(press(KeyCode::Char('c'))).await);
-    assert!(app.ui.room_input.has_agent_picker());
+    assert!(app.ui.inputs.conversation.has_agent_picker());
     assert!(app.handle_key(press(KeyCode::Down)).await);
     assert!(app.handle_key(press(KeyCode::Enter)).await);
 
-    assert_eq!(app.ui.room_input.content, "@claude ");
-    assert_eq!(app.ui.room_input.cursor_pos, "@claude ".len());
-    assert!(!app.ui.room_input.has_agent_picker());
+    assert_eq!(app.ui.inputs.conversation.content, "@claude ");
+    assert_eq!(app.ui.inputs.conversation.cursor_pos, "@claude ".len());
+    assert!(!app.ui.inputs.conversation.has_agent_picker());
     assert_eq!(
         app.ui.nav_level(),
         &NavLevel::Conversations {
@@ -274,6 +378,7 @@ async fn open_existing_session_bridges_into_thread_list() {
         message_count: 0,
         ended_at_ms: None,
         parent_thread_id: None,
+        state: minos_agent_runtime::ThreadState::Idle,
     };
     let backend = Arc::new(
         TestBackend::new()
@@ -285,11 +390,11 @@ async fn open_existing_session_bridges_into_thread_list() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.set_event_sender(tx);
     set_test_conversations_nav(&mut app, "p1");
-    app.ui.projects = vec![project.clone()];
-    app.ui.selected_project = Some(0);
-    app.ui.conversations = vec![conversation];
-    app.ui.selected_conversation = Some(0);
-    app.ui.conversation_list_state.select(Some(0));
+    app.ui.projects.items = vec![project.clone()];
+    app.ui.projects.selected = Some(0);
+    app.ui.conversations.items = vec![conversation];
+    app.ui.conversations.selected = Some(0);
+    app.ui.conversations.list_state.select(Some(0));
 
     app.handle_key(press(KeyCode::Enter)).await;
     pump_events(&mut app, &mut rx).await;
@@ -301,24 +406,24 @@ async fn open_existing_session_bridges_into_thread_list() {
             conversation_id: "c1".into(),
         }
     );
-    assert_eq!(app.ui.conversation_agent_sessions, vec![session]);
+    assert_eq!(app.ui.conversation.agent_sessions.items, vec![session]);
     app.handle_key(press(KeyCode::Enter)).await;
     assert!(
         app.ui
-            .threads
+            .thread_panel.list.items
             .iter()
             .any(|t| t.thread_id == "existing-session-1"),
-        "ensure_conversation_agent_session_visible must bridge the session into ui.threads"
+        "ensure_conversation_agent_session_visible must bridge the session into ui.thread_panel.list.items"
     );
     let bridged = app
         .ui
-        .threads
+        .thread_panel.list.items
         .iter()
         .find(|t| t.thread_id == "existing-session-1")
         .expect("bridged thread exists");
     assert_eq!(bridged.workspace, project.workspace_path);
     assert!(
-        app.ui.chat_states.contains_key("existing-session-1"),
+        app.ui.thread_panel.chat_states.contains_key("existing-session-1"),
         "bridged conversation session must create chat state before hydration"
     );
 }

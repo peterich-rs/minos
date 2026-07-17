@@ -1,11 +1,9 @@
-mod ask_user_question;
 mod cancel_delegation;
-mod check_user_feedback;
 mod delegate_to_agent;
 mod get_delegation_status;
-mod list_room_messages;
-mod post_room_update;
-mod react_to_message;
+mod list_conversation_messages;
+mod post_conversation_update;
+mod wait_delegation;
 
 use anyhow::{Context, Result};
 use minos_domain::AgentName;
@@ -15,14 +13,12 @@ use super::catalog::{SkillRef, ToolCallContext};
 use super::permissions::TeamworkMcpPermission;
 use crate::mcp_socket::SocketRequest;
 
-pub use ask_user_question::AskUserQuestionTool;
 pub use cancel_delegation::CancelDelegationTool;
-pub use check_user_feedback::CheckUserFeedbackTool;
 pub use delegate_to_agent::DelegateToAgentTool;
 pub use get_delegation_status::GetDelegationStatusTool;
-pub use list_room_messages::ListRoomMessagesTool;
-pub use post_room_update::PostRoomUpdateTool;
-pub use react_to_message::ReactToMessageTool;
+pub use list_conversation_messages::ListConversationMessagesTool;
+pub use post_conversation_update::PostConversationUpdateTool;
+pub use wait_delegation::WaitDelegationTool;
 
 pub trait TeamworkMcpTool: Send + Sync {
     fn name(&self) -> &'static str;
@@ -44,12 +40,12 @@ pub trait TeamworkMcpTool: Send + Sync {
     }
 }
 
-fn bound_room_id(args: &Value, ctx: &ToolCallContext, tool_name: &str) -> Result<String> {
+fn bound_conversation_id(args: &Value, ctx: &ToolCallContext, tool_name: &str) -> Result<String> {
     anyhow::ensure!(
-        args.get("room_id").is_none(),
-        "{tool_name} does not accept room_id; this MCP server is bound to a single room at startup"
+        args.get("conversation_id").is_none(),
+        "{tool_name} does not accept conversation_id; this MCP server is bound to one conversation at startup"
     );
-    Ok(ctx.room_id.clone())
+    Ok(ctx.conversation_id.clone())
 }
 
 fn required_string_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str> {

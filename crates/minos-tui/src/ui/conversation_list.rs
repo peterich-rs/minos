@@ -70,7 +70,7 @@ impl Renderable for ConversationListRenderable<'_> {
                 ListItem::new(Line::from(vec![
                     Span::styled(prefix, Style::new().fg(Color::Cyan)),
                     Span::styled(format!("#{} ", id_short), Style::new().fg(Color::DarkGray)),
-                    Span::raw(conversation.title.clone()),
+                    Span::raw(conversation.title.as_str()),
                     Span::raw(agents),
                 ]))
             })
@@ -109,7 +109,7 @@ impl Renderable for ConversationSidebarRenderable<'_> {
             Some(conversation) => Paragraph::new(vec![
                 Line::from(vec![
                     Span::styled("Title: ", Style::new().fg(theme::BORDER_FG)),
-                    Span::raw(conversation.title.clone()),
+                    Span::raw(conversation.title.as_str()),
                 ]),
                 Line::from(vec![
                     Span::styled("Messages: ", Style::new().fg(theme::BORDER_FG)),

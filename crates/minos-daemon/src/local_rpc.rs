@@ -5,21 +5,19 @@ use std::time::Instant;
 
 use jsonrpsee::core::async_trait;
 use jsonrpsee::server::Server;
-use minos_agent_runtime::ManagerEvent;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
     AppendConversationMessageParams, AppendConversationMessageResponse, ApprovalDecisionRequest,
-    CloseReason, CloseThreadRequest, CreateConversationParams, CreateConversationResponse,
-    CreateProjectRequest, CreateProjectResponse, GetThreadParams, HealthResponse,
-    InterruptThreadRequest, ListClisResponse, ListConversationAgentSessionsParams,
-    ListConversationAgentSessionsResponse, ListConversationMessagesParams,
-    ListConversationMessagesResponse, ListConversationsParams, ListConversationsResponse,
-    ListProjectsResponse, LocalDaemonRpcServer, LocalIngestFrame, LocalManagerEvent,
-    LocalThreadSnapshot, ReadArtifactRangeRequest, ReadArtifactRangeResponse, ReadGroupChatParams,
-    ReadGroupChatResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
+    CloseThreadRequest, CreateConversationParams, CreateConversationResponse, CreateProjectRequest,
+    CreateProjectResponse, GetThreadParams, HealthResponse, InterruptThreadRequest,
+    ListClisResponse, ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
+    ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
+    ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, LocalDaemonRpcServer,
+    LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot, ReadArtifactRangeRequest,
+    ReadArtifactRangeResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
-    StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse, ThreadState,
+    StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -31,7 +29,6 @@ use crate::rpc_server::rpc_err;
 pub struct LocalRpcConfig {
     pub addr: SocketAddr,
     pub discovery_path: PathBuf,
-    pub group_chat_db_path: PathBuf,
 }
 
 pub struct LocalRpcImpl {
@@ -40,7 +37,7 @@ pub struct LocalRpcImpl {
     pub agent: Arc<AgentGlue>,
     pub ingest_broadcaster: broadcast::Sender<LocalIngestFrame>,
     pub manager_event_broadcaster: broadcast::Sender<LocalManagerEvent>,
-    pub group_chat_db_path: PathBuf,
+    pub conversation_event_broadcaster: broadcast::Sender<LocalConversationEvent>,
 }
 
 #[async_trait]
@@ -242,21 +239,6 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         Ok(ReadThreadRawHistoryResponse { events, next_seq })
     }
 
-    async fn read_group_chat(
-        &self,
-        req: ReadGroupChatParams,
-    ) -> jsonrpsee::core::RpcResult<ReadGroupChatResponse> {
-        let page = read_group_chat_messages(&self.group_chat_db_path, &req)
-            .await
-            .map_err(rpc_err)?;
-        Ok(ReadGroupChatResponse {
-            log_path: self.group_chat_db_path.display().to_string(),
-            messages: page.messages.into_iter().map(Into::into).collect(),
-            next_before_seq: page.next_before_seq,
-            has_more: page.has_more,
-        })
-    }
-
     async fn read_artifact_range(
         &self,
         req: ReadArtifactRangeRequest,
@@ -326,6 +308,32 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         });
         Ok(())
     }
+
+    async fn subscribe_conversation_events(
+        &self,
+        pending: jsonrpsee::PendingSubscriptionSink,
+    ) -> jsonrpsee::core::SubscriptionResult {
+        let sink = pending.accept().await?;
+        let mut rx = self.conversation_event_broadcaster.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        let msg = match jsonrpsee::server::SubscriptionMessage::from_json(&event) {
+                            Ok(m) => m,
+                            Err(_) => break,
+                        };
+                        if sink.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        Ok(())
+    }
 }
 
 pub async fn start_local_rpc_server(
@@ -335,6 +343,7 @@ pub async fn start_local_rpc_server(
 ) -> Result<jsonrpsee::server::ServerHandle, MinosError> {
     let (ingest_tx, _) = broadcast::channel(256);
     let (mgr_evt_tx, _) = broadcast::channel(256);
+    let (conversation_evt_tx, _) = broadcast::channel(256);
 
     let impl_ = LocalRpcImpl {
         started_at: Instant::now(),
@@ -342,7 +351,7 @@ pub async fn start_local_rpc_server(
         agent: agent.clone(),
         ingest_broadcaster: ingest_tx.clone(),
         manager_event_broadcaster: mgr_evt_tx.clone(),
-        group_chat_db_path: config.group_chat_db_path.clone(),
+        conversation_event_broadcaster: conversation_evt_tx.clone(),
     };
 
     let server =
@@ -368,6 +377,7 @@ pub async fn start_local_rpc_server(
     spawn_ingest_bridge(agent.clone(), ingest_tx);
 
     spawn_manager_event_bridge(agent.clone(), mgr_evt_tx);
+    spawn_conversation_event_bridge(agent.clone(), conversation_evt_tx);
 
     tracing::info!(
         target: "minos_daemon::local_rpc",
@@ -376,45 +386,6 @@ pub async fn start_local_rpc_server(
     );
 
     Ok(handle)
-}
-
-async fn read_group_chat_messages(
-    db_path: &std::path::Path,
-    req: &ReadGroupChatParams,
-) -> Result<minos_chat_store::ChatMessagePage, MinosError> {
-    let store = minos_chat_store::ChatStore::open(db_path)
-        .await
-        .map_err(|error| MinosError::StoreIo {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
-    let room_id = req
-        .room_id
-        .clone()
-        .unwrap_or_else(|| "room-main".to_owned());
-    if let Some(after_seq) = req.after_seq {
-        let messages = store
-            .list_messages_after_asc(&room_id, after_seq, req.limit)
-            .await
-            .map_err(|error| MinosError::StoreIo {
-                path: db_path.display().to_string(),
-                message: error.to_string(),
-            })?;
-        return Ok(minos_chat_store::ChatMessagePage {
-            room_id,
-            messages,
-            next_before_seq: None,
-            has_more: false,
-        });
-    }
-
-    store
-        .list_messages_desc(&room_id, req.before_seq, req.limit)
-        .await
-        .map_err(|error| MinosError::StoreIo {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })
 }
 
 fn write_discovery_file(path: &PathBuf, addr: SocketAddr) {
@@ -467,16 +438,12 @@ fn spawn_ingest_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<LocalIngestF
 }
 
 fn spawn_manager_event_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<LocalManagerEvent>) {
-    let mut rx = agent.manager.manager_event_stream();
+    let mut rx = agent.local_manager_event_stream();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    let local_event = match convert_manager_event(event) {
-                        Some(e) => e,
-                        None => continue,
-                    };
-                    let _ = tx.send(local_event);
+                    let _ = tx.send(event);
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
@@ -491,80 +458,26 @@ fn spawn_manager_event_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<Local
     });
 }
 
-fn convert_manager_event(event: ManagerEvent) -> Option<LocalManagerEvent> {
-    match event {
-        ManagerEvent::ThreadAdded {
-            thread_id,
-            workspace,
-            agent,
-            parent_thread_id,
-        } => Some(LocalManagerEvent::ThreadAdded {
-            thread_id,
-            workspace: workspace.display().to_string(),
-            agent,
-            parent_thread_id,
-        }),
-        ManagerEvent::ThreadStateChanged {
-            thread_id,
-            old,
-            new,
-            at_ms,
-        } => Some(LocalManagerEvent::ThreadStateChanged {
-            thread_id,
-            old: runtime_state_to_proto(&old),
-            new: runtime_state_to_proto(&new),
-            at_ms,
-        }),
-        ManagerEvent::ThreadClosed { thread_id, reason } => Some(LocalManagerEvent::ThreadClosed {
-            thread_id,
-            reason: runtime_close_reason_to_proto(&reason),
-        }),
-        ManagerEvent::InstanceCrashed {
-            workspace,
-            affected_threads,
-            reason,
-        } => Some(LocalManagerEvent::InstanceCrashed {
-            workspace: workspace.display().to_string(),
-            affected_threads,
-            reason: runtime_pause_reason_to_proto(&reason),
-        }),
-    }
-}
-
-fn runtime_state_to_proto(state: &minos_agent_runtime::ThreadState) -> ThreadState {
-    use minos_agent_runtime::ThreadState as RtState;
-    match state {
-        RtState::Starting => ThreadState::Starting,
-        RtState::Idle => ThreadState::Idle,
-        RtState::Running { turn_started_at_ms } => ThreadState::Running {
-            turn_started_at_ms: *turn_started_at_ms,
-        },
-        RtState::Suspended { reason } => ThreadState::Suspended {
-            reason: runtime_pause_reason_to_proto(reason),
-        },
-        RtState::Resuming => ThreadState::Resuming,
-        RtState::Closed { reason } => ThreadState::Closed {
-            reason: runtime_close_reason_to_proto(reason),
-        },
-    }
-}
-
-fn runtime_pause_reason_to_proto(
-    reason: &minos_agent_runtime::PauseReason,
-) -> minos_protocol::PauseReason {
-    use minos_agent_runtime::PauseReason as Rt;
-    match reason {
-        Rt::UserInterrupt => minos_protocol::PauseReason::UserInterrupt,
-        Rt::CodexCrashed => minos_protocol::PauseReason::CodexCrashed,
-        Rt::DaemonRestart => minos_protocol::PauseReason::DaemonRestart,
-        Rt::InstanceReaped => minos_protocol::PauseReason::InstanceReaped,
-    }
-}
-
-fn runtime_close_reason_to_proto(reason: &minos_agent_runtime::CloseReason) -> CloseReason {
-    use minos_agent_runtime::CloseReason as Rt;
-    match reason {
-        Rt::UserClose => CloseReason::UserClose,
-        Rt::TerminalError => CloseReason::TerminalError,
-    }
+fn spawn_conversation_event_bridge(
+    agent: Arc<AgentGlue>,
+    tx: broadcast::Sender<LocalConversationEvent>,
+) {
+    let mut rx = agent.local_conversation_event_stream();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let _ = tx.send(event);
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        target: "minos_daemon::local_rpc",
+                        n,
+                        "conversation event bridge lagged, dropping events",
+                    );
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 }

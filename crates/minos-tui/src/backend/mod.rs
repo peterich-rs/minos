@@ -1,18 +1,18 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use minos_agent_runtime::{ManagerEvent, StartAgentOutcome};
+use minos_agent_runtime::{
+    CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
+    StartAgentOutcome, ThreadState as RuntimeThreadState,
+};
 use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;
-use minos_protocol::{LocalGroupChatMessage, LocalIngestFrame};
+use minos_protocol::LocalIngestFrame;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::sync::broadcast;
 
-use crate::event::AppEvent;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendConnectionState {
-    Embedded,
     Connected {
         endpoint: String,
     },
@@ -20,13 +20,6 @@ pub enum BackendConnectionState {
         endpoint: String,
         last_error: Option<String>,
     },
-}
-
-#[derive(clap::ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum BackendKind {
-    #[default]
-    Embedded,
-    Daemon,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +69,7 @@ pub struct ThreadSummaryEntry {
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
     pub parent_thread_id: Option<String>,
+    pub state: RuntimeThreadState,
 }
 
 impl ThreadSummaryEntry {
@@ -89,7 +83,43 @@ impl ThreadSummaryEntry {
             message_count: s.message_count,
             ended_at_ms: s.ended_at_ms,
             parent_thread_id: s.parent_thread_id.clone(),
+            state: protocol_thread_state_to_runtime(&s.state),
         }
+    }
+}
+
+fn protocol_thread_state_to_runtime(state: &minos_protocol::ThreadState) -> RuntimeThreadState {
+    match state {
+        minos_protocol::ThreadState::Starting => RuntimeThreadState::Starting,
+        minos_protocol::ThreadState::Idle => RuntimeThreadState::Idle,
+        minos_protocol::ThreadState::Running { turn_started_at_ms } => {
+            RuntimeThreadState::Running {
+                turn_started_at_ms: *turn_started_at_ms,
+            }
+        }
+        minos_protocol::ThreadState::Suspended { reason } => RuntimeThreadState::Suspended {
+            reason: protocol_pause_reason_to_runtime(reason),
+        },
+        minos_protocol::ThreadState::Resuming => RuntimeThreadState::Resuming,
+        minos_protocol::ThreadState::Closed { reason } => RuntimeThreadState::Closed {
+            reason: protocol_close_reason_to_runtime(reason),
+        },
+    }
+}
+
+fn protocol_pause_reason_to_runtime(reason: &minos_protocol::PauseReason) -> RuntimePauseReason {
+    match reason {
+        minos_protocol::PauseReason::UserInterrupt => RuntimePauseReason::UserInterrupt,
+        minos_protocol::PauseReason::CodexCrashed => RuntimePauseReason::CodexCrashed,
+        minos_protocol::PauseReason::DaemonRestart => RuntimePauseReason::DaemonRestart,
+        minos_protocol::PauseReason::InstanceReaped => RuntimePauseReason::InstanceReaped,
+    }
+}
+
+fn protocol_close_reason_to_runtime(reason: &minos_protocol::CloseReason) -> RuntimeCloseReason {
+    match reason {
+        minos_protocol::CloseReason::UserClose => RuntimeCloseReason::UserClose,
+        minos_protocol::CloseReason::TerminalError => RuntimeCloseReason::TerminalError,
     }
 }
 
@@ -132,6 +162,15 @@ pub struct ConversationMessageEntry {
     pub sender_role: String,
     pub agent: Option<AgentName>,
     pub body: String,
+    pub reply_to_message_id: Option<String>,
+    pub delegation_id: Option<String>,
+    pub mentions: Vec<minos_protocol::ConversationMention>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMessageEvent {
+    pub conversation_id: String,
+    pub message_seq: i64,
 }
 
 impl ConversationMessageEntry {
@@ -145,6 +184,9 @@ impl ConversationMessageEntry {
             sender_role: s.sender_role.clone(),
             agent: s.agent,
             body: s.body.clone(),
+            reply_to_message_id: s.reply_to_message_id.clone(),
+            delegation_id: s.delegation_id.clone(),
+            mentions: s.mentions.clone(),
         }
     }
 }
@@ -215,6 +257,7 @@ pub trait AgentBackend: Send + Sync {
     async fn append_conversation_message(
         &self,
         conversation_id: &str,
+        message_id: Option<&str>,
         thread_id: Option<&str>,
         sender_role: &str,
         agent: Option<AgentName>,
@@ -230,29 +273,16 @@ pub trait AgentBackend: Send + Sync {
         limit: u32,
     ) -> Result<minos_protocol::local_rpc::ReadThreadRawHistoryResponse>;
 
-    async fn read_group_chat(
-        &self,
-        room_id: &str,
-        after_seq: Option<u64>,
-        before_seq: Option<u64>,
-        limit: u32,
-    ) -> Result<Vec<LocalGroupChatMessage>>;
-
     async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame>;
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent>;
 
-    fn start_mcp_socket_handler(
+    async fn subscribe_conversation_message_events(
         &self,
-        _event_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
-    ) -> Result<()> {
-        Ok(())
-    }
+    ) -> broadcast::Receiver<ConversationMessageEvent>;
 
     fn connection_state(&self) -> BackendConnectionState;
 }
 
 pub mod daemon;
-pub mod embedded;
 pub use daemon::DaemonBackend;
-pub use embedded::EmbeddedBackend;

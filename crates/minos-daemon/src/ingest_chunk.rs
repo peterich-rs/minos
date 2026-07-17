@@ -104,6 +104,7 @@ fn agent_from_thread(thread: &ThreadRow) -> AgentName {
         "claude" => AgentName::Claude,
         "gemini" => AgentName::Gemini,
         "opencode" => AgentName::Opencode,
+        "grok" => AgentName::Grok,
         _ => AgentName::Codex,
     }
 }

@@ -1,8 +1,18 @@
-use crate::render::Renderable;
-use crate::translation::{ChatItem, ChatSelection, ChatState, TextPart};
+use crate::render::{
+    markdown::{
+        looks_like_diff, render_code_block, render_markdown, render_tool_diff,
+        render_tool_preformatted, render_tool_read_body, MarkdownStyles,
+    },
+    Renderable,
+};
+use crate::translation::{
+    find_runs, header_label, paint_mode_with_runs, parse_diffstat, ChatItem, ChatSelection,
+    ChatState, PaintMode, TextPart, ToolKind, VerbGroupRun,
+};
+use std::collections::HashSet;
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -10,12 +20,14 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::theme::{
-    ASSISTANT_LABEL, BORDER_FG, ERROR_STYLE, FOCUSED_BORDER, REASONING_STYLE, STREAMING_CURSOR,
-    TOOL_ERROR, TOOL_NAME_STYLE, TOOL_SUCCESS, USER_LABEL,
+    ASSISTANT_BODY, BORDER_FG, DIFF_ADD, DIFF_DEL, DIM, ERROR_STYLE, FOCUSED_BORDER, MUTED,
+    PROMPT_ARROW, REASONING_STYLE, STREAMING_CURSOR, THINKING_BAR, THINKING_BODY, THINKING_LABEL,
+    TOOL_ERROR, TOOL_PATH, TOOL_PATH_MUTED, TOOL_RUNNING, TOOL_SUCCESS, TOOL_VERB, TOOL_VERB_MUTED,
+    USER_BODY, USER_PREFIX,
 };
 
 mod cache;
-pub use cache::RenderCache;
+pub use cache::{LayoutPass, RenderCache};
 
 trait LineSink {
     fn push_line(&mut self, line: Line<'static>);
@@ -49,22 +61,8 @@ impl LineSink for CountingSink {
 
 #[cfg(test)]
 fn visual_line_count(line: &Line<'static>, width: u16) -> usize {
-    let width = usize::from(width.max(1));
-    let mut rows = 1usize;
-    let mut current_width = 0usize;
-
-    for span in &line.spans {
-        for ch in span.content.chars() {
-            let ch_width = char_width(ch);
-            if current_width > 0 && ch_width > 0 && current_width + ch_width > width {
-                rows += 1;
-                current_width = 0;
-            }
-            current_width = current_width.saturating_add(ch_width);
-        }
-    }
-
-    rows
+    // Must match `visual_lines` wrap rules (including flush when width is filled).
+    visual_lines(vec![line.clone()], width).len()
 }
 
 pub enum AgentChatTarget<'a> {
@@ -134,7 +132,7 @@ pub fn render_chat(
     let title = format!(
         "Chat: {} #{}{}",
         chat.agent.bin_name(),
-        short_thread_id(&chat.thread_id),
+        crate::agent_route::short_thread_id(&chat.thread_id),
         if chat.auto_scroll {
             ""
         } else {
@@ -162,21 +160,33 @@ pub fn render_chat(
     )
     .entered();
 
-    cache.rebuild_if_stale(
-        chat.thread_id.as_str(),
-        &chat.items,
-        chat.version,
-        inner.width,
-    );
+    let height = usize::from(inner.height);
+    // Grok-style prepare: estimate full transcript, exact-measure only the
+    // viewport window (+ below margin). No above-margin so the top stays anchored.
+    let scroll = cache.prepare_layout(cache::LayoutPass {
+        thread_id: chat.thread_id.as_str(),
+        items: &chat.items,
+        version: chat.version,
+        structure_version: chat.structure_version,
+        width: inner.width,
+        verb_group_expanded: &chat.verb_group_expanded,
+        viewport_height: inner.height,
+        follow_mode: chat.auto_scroll,
+        scroll_offset: chat.active_scroll(),
+    });
+    if !chat.auto_scroll {
+        chat.scroll_offset = scroll;
+    }
 
-    let max_scroll = cache
-        .total_lines()
-        .saturating_sub(usize::from(inner.height))
-        .min(usize::from(u16::MAX)) as u16;
+    let max_scroll = u32::try_from(
+        cache
+            .total_lines()
+            .saturating_sub(usize::from(inner.height)),
+    )
+    .unwrap_or(u32::MAX);
     chat.update_max_scroll(max_scroll);
 
-    let base_row = usize::from(chat.active_scroll());
-    let height = usize::from(inner.height);
+    let base_row = chat.active_scroll() as usize;
 
     if cache.total_lines() == 0 {
         let lines = vec![Line::from(Span::styled(
@@ -204,8 +214,14 @@ pub fn render_chat(
         base_row,
     );
 
-    let lines: Vec<Line<'static>> = visible_visual_lines.into_iter().map(|vl| vl.line).collect();
+    let max_cols = usize::from(inner.width);
+    let lines: Vec<Line<'static>> = visible_visual_lines
+        .into_iter()
+        .map(|vl| truncate_line_to_width(vl.line, max_cols))
+        .collect();
 
+    // Pre-wrapped + hard-truncated lines: no Paragraph wrap (would re-flow).
+    // Truncation guarantees we never paint past the chat column into the sidebar.
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -218,18 +234,37 @@ pub fn selected_text(chat: &ChatState, width: u16, _cache: &RenderCache) -> Opti
         return None;
     }
 
-    let lines = visual_lines(build_lines(chat.items.as_slice(), width), width);
+    let lines = visual_lines(
+        build_lines(
+            chat.items.as_slice(),
+            &chat.verb_group_expanded,
+            width,
+        ),
+        width,
+    );
     selected_text_from_lines(lines.as_slice(), selection)
 }
 
-fn build_lines(items: &[ChatItem], separator_width: u16) -> Vec<Line<'static>> {
+fn build_lines(
+    items: &[ChatItem],
+    expanded_ids: &HashSet<String>,
+    _width: u16,
+) -> Vec<Line<'static>> {
     let mut sink = VecSink(Vec::new());
+    let runs = find_runs(items, expanded_ids);
+    let mut saw_visible = false;
 
     for (idx, item) in items.iter().enumerate() {
-        if idx > 0 {
-            sink.push_line(separator_line(separator_width));
+        let mode = paint_mode_with_runs(items, idx, &runs);
+        if matches!(mode, PaintMode::Hidden) {
+            continue;
         }
-        build_item_lines(&mut sink, item);
+        if saw_visible {
+            // Grok-style gap: blank row between blocks (no full-width ─ rules).
+            sink.push_line(item_gap_line());
+        }
+        saw_visible = true;
+        push_segment_content(&mut sink, items, idx, item, mode, &runs);
     }
 
     if sink.0.is_empty() {
@@ -242,20 +277,234 @@ fn build_lines(items: &[ChatItem], separator_width: u16) -> Vec<Line<'static>> {
     sink.0
 }
 
-fn build_segment_visual_lines(item_index: usize, item: &ChatItem, width: u16) -> Vec<VisualLine> {
-    let mut lines = Vec::new();
-    if item_index > 0 {
-        lines.push(separator_line(width));
+/// Build one cache segment for `item_index`, respecting verb-group hide/header.
+///
+/// Callers must pass precomputed `runs` (from a single `find_runs` / cache hit).
+/// Recomputing runs here used to cost an extra O(n) scan per exact measure.
+pub(super) fn build_segment_visual_lines(
+    item_index: usize,
+    item: &ChatItem,
+    items: &[ChatItem],
+    width: u16,
+    runs: &[VerbGroupRun],
+) -> Vec<VisualLine> {
+    let mode = paint_mode_with_runs(items, item_index, runs);
+    if matches!(mode, PaintMode::Hidden) {
+        return Vec::new();
     }
-    build_item_lines(&mut VecSinkRef(&mut lines), item);
+
+    let mut lines = Vec::new();
+    // Gap only when a previous *visible* segment exists.
+    let has_prior_visible = (0..item_index).any(|i| {
+        !matches!(
+            paint_mode_with_runs(items, i, runs),
+            PaintMode::Hidden
+        )
+    });
+    if has_prior_visible {
+        lines.push(item_gap_line());
+    }
+    push_segment_content(
+        &mut VecSinkRef(&mut lines),
+        items,
+        item_index,
+        item,
+        mode,
+        runs,
+    );
     visual_lines(lines, width)
 }
 
-fn separator_line(separator_width: u16) -> Line<'static> {
-    Line::from(Span::styled(
-        "─".repeat(usize::from(separator_width.max(1))),
-        ratatui::style::Style::new().fg(BORDER_FG),
-    ))
+fn push_segment_content<S: LineSink>(
+    sink: &mut S,
+    items: &[ChatItem],
+    idx: usize,
+    item: &ChatItem,
+    mode: PaintMode,
+    runs: &[crate::translation::VerbGroupRun],
+) {
+    match mode {
+        PaintMode::Hidden => {}
+        PaintMode::CollapsedHeader => {
+            if let Some(run) = runs.iter().find(|r| r.start == idx) {
+                let label = header_label(items, run.start, run.end);
+                sink.push_line(label.line);
+            } else {
+                build_item_lines(sink, item);
+            }
+        }
+        PaintMode::ExpandedHeader => {
+            if let Some(run) = runs.iter().find(|r| r.start == idx) {
+                let label = header_label(items, run.start, run.end);
+                sink.push_line(label.line);
+            }
+            build_item_lines(sink, item);
+        }
+        PaintMode::Normal | PaintMode::ExpandedMember => {
+            build_item_lines(sink, item);
+        }
+    }
+}
+
+/// Plain source + streaming flag for items that support commit-style holdback.
+pub(super) fn streaming_text_source(item: &ChatItem) -> Option<(String, bool)> {
+    match item {
+        ChatItem::AssistantText {
+            text_parts,
+            is_streaming,
+            ..
+        }
+        | ChatItem::UserMessage {
+            text_parts,
+            is_streaming,
+            ..
+        } => Some((plain_parts_to_string(text_parts), *is_streaming)),
+        ChatItem::Reasoning {
+            text,
+            is_streaming,
+            ..
+        } => {
+            // Collapsed thinking skips the streaming commit path; header-only render.
+            if !item.is_fold_expanded() {
+                return None;
+            }
+            Some((text.clone(), *is_streaming))
+        }
+        _ => None,
+    }
+}
+
+fn plain_parts_to_string(parts: &[TextPart]) -> String {
+    let mut out = String::new();
+    for part in parts {
+        match part {
+            TextPart::Plain(text) => out.push_str(text),
+            TextPart::Code { lang, code } => {
+                out.push_str("```");
+                out.push_str(lang);
+                out.push('\n');
+                out.push_str(code);
+                out.push_str("\n```");
+            }
+        }
+    }
+    out
+}
+
+/// Role label line for streaming text items (before markdown body).
+fn streaming_role_label(item: &ChatItem) -> Option<Line<'static>> {
+    match item {
+        // User prefix is painted with the first body line in the non-streaming path;
+        // streaming commit path uses a bare arrow row before the body.
+        ChatItem::UserMessage { .. } => {
+            Some(Line::from(Span::styled(PROMPT_ARROW, USER_PREFIX)))
+        }
+        // Grok agent messages have no role chrome.
+        ChatItem::AssistantText { .. } => None,
+        ChatItem::Reasoning { is_streaming, .. } => Some(thinking_header_line(*is_streaming)),
+        _ => None,
+    }
+}
+
+fn thinking_header_line(is_streaming: bool) -> Line<'static> {
+    if is_streaming {
+        Line::from(Span::styled("Thinking…", THINKING_LABEL))
+    } else {
+        Line::from(Span::styled("Thought", THINKING_LABEL))
+    }
+}
+
+/// Build visual lines for a streaming item, reusing a frozen stable-source prefix
+/// when the holdback region only grew (lightweight commit queue).
+///
+/// `runs` must match `items` (same precomputed fold groups as non-streaming paths).
+pub(super) fn build_streaming_segment_with_commit(
+    item_index: usize,
+    item: &ChatItem,
+    items: &[ChatItem],
+    width: u16,
+    runs: &[VerbGroupRun],
+    previous: Option<&StreamCommitSnapshot>,
+) -> (Vec<VisualLine>, Option<StreamCommitSnapshot>) {
+    let Some((source, is_streaming)) = streaming_text_source(item) else {
+        return (
+            build_segment_visual_lines(item_index, item, items, width, runs),
+            None,
+        );
+    };
+
+    if !is_streaming {
+        return (
+            build_segment_visual_lines(item_index, item, items, width, runs),
+            None,
+        );
+    }
+
+    let stable = crate::ui::stream_holdback::holdback_streaming_source(&source);
+    let style = match item {
+        ChatItem::Reasoning { .. } => THINKING_BODY,
+        ChatItem::UserMessage { .. } => USER_BODY,
+        ChatItem::AssistantText { .. } => ASSISTANT_BODY,
+        _ => Style::default(),
+    };
+
+    let mut header_logical: Vec<Line<'static>> = Vec::new();
+    let has_prior_visible = (0..item_index).any(|i| {
+        !matches!(
+            paint_mode_with_runs(items, i, runs),
+            PaintMode::Hidden
+        )
+    });
+    if has_prior_visible {
+        header_logical.push(item_gap_line());
+    }
+    if let Some(label) = streaming_role_label(item) {
+        header_logical.push(label);
+    }
+    let header_visual = visual_lines(header_logical, width);
+    let header_line_count = header_visual.len();
+
+    // Always re-render the full holdback-stable source as one markdown document.
+    // Appending a delta fragment as its own `render_markdown` input forces each
+    // fragment into a Paragraph → fake visual line breaks mid-prose, and cannot
+    // re-wrap the previous last visual line when width still has room.
+    // `previous` is only used to detect whether the stable prefix grew (for
+    // cache invalidation call sites); body lines are never delta-appended.
+    let _ = previous;
+    let mut body_logical = Vec::new();
+    push_markdown_lines(&mut VecSinkRef(&mut body_logical), stable, style);
+    let body_visual = visual_lines(body_logical, width);
+    let snapshot = Some(StreamCommitSnapshot {
+        stable_source: stable.to_owned(),
+        body_visual_lines: body_visual.clone(),
+    });
+
+    let mut out = header_visual;
+    out.extend(body_visual);
+    out.push(VisualLine {
+        line: Line::from(Span::styled("█", STREAMING_CURSOR)),
+        text: "█".to_owned(),
+    });
+    let _ = header_line_count;
+    (out, snapshot)
+}
+
+/// Frozen stable-source commit state for one streaming chat segment.
+#[derive(Clone, Default)]
+pub(super) struct StreamCommitSnapshot {
+    pub stable_source: String,
+    pub body_visual_lines: Vec<VisualLine>,
+}
+
+/// Inter-item spacing (blank line). Full-width rule lines are intentionally not
+/// used — they are noisy and can paint past the chat column into the sidebar.
+fn item_gap_line() -> Line<'static> {
+    Line::from("")
+}
+
+#[cfg(test)]
+fn separator_line(_separator_width: u16) -> Line<'static> {
+    item_gap_line()
 }
 
 fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
@@ -265,10 +514,10 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
             is_streaming,
             ..
         } => {
-            sink.push_line(Line::from(Span::styled("[You]", USER_LABEL)));
-            push_text_parts(sink, text_parts, Style::default());
+            // Grok user prompt: `❯ ` prefix + body (no [You] chrome).
+            push_user_text_parts(sink, text_parts, *is_streaming);
             if *is_streaming {
-                sink.push_line(Line::from(Span::styled("▓", STREAMING_CURSOR)));
+                sink.push_line(Line::from(Span::styled("▍", STREAMING_CURSOR)));
             }
         }
         ChatItem::AssistantText {
@@ -276,19 +525,41 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
             is_streaming,
             ..
         } => {
-            sink.push_line(Line::from(Span::styled("[Agent]", ASSISTANT_LABEL)));
-            push_text_parts(sink, text_parts, Style::default());
+            // Grok agent message: bare markdown, no role label.
+            push_text_parts(sink, text_parts, ASSISTANT_BODY, *is_streaming);
             if *is_streaming {
-                sink.push_line(Line::from(Span::styled("▓", STREAMING_CURSOR)));
+                sink.push_line(Line::from(Span::styled("▍", STREAMING_CURSOR)));
             }
         }
         ChatItem::Reasoning {
-            text, is_streaming, ..
+            text,
+            is_streaming,
+            ..
         } => {
-            sink.push_line(Line::from(Span::styled("Thinking", REASONING_STYLE)));
-            push_markdown_lines(sink, text, REASONING_STYLE);
-            if *is_streaming {
-                sink.push_line(Line::from(Span::styled("▓", STREAMING_CURSOR)));
+            let expanded = item.is_fold_expanded();
+            sink.push_line(thinking_header_line(*is_streaming));
+            if !expanded {
+                // Collapsed: header only (Grok). Optional one-line dim preview.
+                let summary = collapsed_thinking_summary(text);
+                if !summary.is_empty() {
+                    sink.push_line(Line::from(vec![
+                        Span::styled("│ ", THINKING_BAR),
+                        Span::styled(summary, MUTED),
+                    ]));
+                }
+            } else {
+                let render_text = if *is_streaming {
+                    holdback_streaming_unstable_suffix(text)
+                } else {
+                    text.as_str()
+                };
+                push_thinking_body(sink, render_text);
+                if *is_streaming {
+                    sink.push_line(Line::from(vec![
+                        Span::styled("│ ", THINKING_BAR),
+                        Span::styled("▍", STREAMING_CURSOR),
+                    ]));
+                }
             }
         }
         ChatItem::ToolCall {
@@ -298,42 +569,31 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
             output_summary,
             output_detail,
             is_error,
-            is_expanded,
             is_streaming,
             ..
         } => {
-            let status_label = if *is_streaming || output_summary.is_none() {
-                Span::styled("running", ratatui::style::Style::default())
-            } else if *is_error {
-                Span::styled("failed", TOOL_ERROR)
-            } else {
-                Span::styled("done", TOOL_SUCCESS)
-            };
-            let mut tc_spans = vec![
-                Span::raw("Tool "),
-                Span::styled(name.clone(), TOOL_NAME_STYLE),
-                Span::raw(" · "),
-                status_label,
-            ];
-            if !args_summary.is_empty() {
-                tc_spans.push(Span::raw(format!(" {}", args_summary)));
+            let kind = ToolKind::from_tool_name(name);
+            let expanded = item.is_fold_expanded();
+            let muted = !expanded;
+            sink.push_line(tool_header_line(
+                kind,
+                args_summary,
+                output_summary.as_deref(),
+                *is_streaming,
+                *is_error,
+                muted,
+                expanded,
+            ));
+            if expanded {
+                push_tool_expanded_body(
+                    sink,
+                    kind,
+                    args_summary,
+                    args_detail.as_deref(),
+                    output_detail.as_deref(),
+                    output_summary.as_deref(),
+                );
             }
-            if *is_expanded {
-                let mut emitted_detail = false;
-                sink.push_line(Line::from(tc_spans.clone()));
-                if let Some(args) = args_detail {
-                    emitted_detail = true;
-                    push_tool_detail_lines(sink, "args", args);
-                }
-                if let Some(output) = output_detail.as_ref().or(output_summary.as_ref()) {
-                    emitted_detail = true;
-                    push_tool_detail_lines(sink, "out", output);
-                }
-                if emitted_detail {
-                    return;
-                }
-            }
-            sink.push_line(Line::from(tc_spans));
         }
         ChatItem::SubagentCall {
             sub_thread_id,
@@ -344,34 +604,37 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
             is_streaming,
             ..
         } => {
+            let running = matches!(status, minos_ui_protocol::SubagentStatus::Running)
+                || *is_streaming;
+            let verb = if running { "Running" } else { "Ran" };
             let status_style = match status {
                 minos_ui_protocol::SubagentStatus::Completed => TOOL_SUCCESS,
                 minos_ui_protocol::SubagentStatus::Failed
                 | minos_ui_protocol::SubagentStatus::Interrupted => TOOL_ERROR,
-                minos_ui_protocol::SubagentStatus::Running => Style::default(),
+                minos_ui_protocol::SubagentStatus::Running => TOOL_RUNNING,
             };
-            let id_short = &sub_thread_id[..8.min(sub_thread_id.len())];
+            let id_short = crate::agent_route::short_thread_id(sub_thread_id);
             let mut spans = vec![
-                Span::raw("Subagent "),
-                Span::styled(agent.bin_name(), TOOL_NAME_STYLE),
-                Span::styled(format!(" #{}", id_short), REASONING_STYLE),
-                Span::raw(" · "),
-                Span::styled(format!("{status:?}").to_ascii_lowercase(), status_style),
+                Span::styled(format!("{verb} "), TOOL_VERB_MUTED),
+                Span::styled(
+                    format!("subagent {} #{id_short}", agent.bin_name()),
+                    TOOL_PATH_MUTED,
+                ),
             ];
             if let Some(model) = model.as_ref().filter(|value| !value.is_empty()) {
-                spans.push(Span::raw(format!(" · {model}")));
+                spans.push(Span::styled(format!(" · {model}"), MUTED));
             }
-            if *is_streaming {
-                spans.push(Span::styled(" ▓", STREAMING_CURSOR));
-            }
+            spans.push(Span::styled(
+                format!(" · {status:?}").to_ascii_lowercase(),
+                status_style,
+            ));
             sink.push_line(Line::from(spans));
             if let Some(prompt) = prompt_summary.as_ref().filter(|value| !value.is_empty()) {
-                sink.push_line(Line::from(Span::styled(prompt.clone(), REASONING_STYLE)));
+                sink.push_line(Line::from(Span::styled(prompt.clone(), MUTED)));
             }
         }
         ChatItem::SystemMessage { text } => {
-            sink.push_line(Line::from(Span::styled("[System]", REASONING_STYLE)));
-            push_markdown_lines(sink, text, Style::default());
+            sink.push_line(Line::from(Span::styled(text.clone(), MUTED)));
         }
         ChatItem::Error { text, .. } => {
             sink.push_line(Line::from(Span::styled(text.clone(), ERROR_STYLE)));
@@ -379,193 +642,340 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
     }
 }
 
-fn push_text_parts<S: LineSink>(sink: &mut S, text_parts: &[TextPart], base_style: Style) {
-    for part in text_parts {
+/// Grok-style tool header: `Read path`, `Edited path +N/-M`, `Ran cmd`.
+fn tool_header_line(
+    kind: ToolKind,
+    args_summary: &str,
+    output_summary: Option<&str>,
+    is_streaming: bool,
+    is_error: bool,
+    muted: bool,
+    expanded: bool,
+) -> Line<'static> {
+    let running = is_streaming || output_summary.is_none();
+    let verb = kind.header_verb(running);
+    let verb_style = if muted { TOOL_VERB_MUTED } else { TOOL_VERB };
+    let path_style = if muted { TOOL_PATH_MUTED } else { TOOL_PATH };
+
+    let target = if !args_summary.is_empty() {
+        args_summary.to_owned()
+    } else {
+        "…".to_owned()
+    };
+
+    let mut spans = vec![
+        Span::styled(format!("{verb} "), verb_style),
+        Span::styled(target, path_style),
+    ];
+
+    if is_error {
+        spans.push(Span::styled("  failed", TOOL_ERROR));
+    } else if running {
+        spans.push(Span::styled("  …", TOOL_RUNNING));
+    } else if !expanded {
+        // Collapsed-only: colored diffstat for edits; dim line-count / one-liner otherwise.
+        if let Some(summary) = output_summary.filter(|s| !s.is_empty()) {
+            if let Some((ins, del)) = parse_diffstat(summary) {
+                if ins > 0 || del > 0 {
+                    spans.push(Span::styled(format!(" +{ins}"), DIFF_ADD));
+                    spans.push(Span::styled("/", DIM));
+                    spans.push(Span::styled(format!("-{del}"), DIFF_DEL));
+                }
+            } else if matches!(kind, ToolKind::Edit) {
+                // no-op
+            } else if !args_summary.contains(summary) {
+                spans.push(Span::styled(format!("  {summary}"), MUTED));
+            }
+        }
+    }
+
+    Line::from(spans)
+}
+
+/// First/last line caps for expanded tool bodies (Grok-inspired truncation).
+const TOOL_BODY_FIRST: usize = 12;
+const TOOL_BODY_LAST: usize = 8;
+
+fn push_tool_expanded_body<S: LineSink>(
+    sink: &mut S,
+    kind: ToolKind,
+    args_summary: &str,
+    args_detail: Option<&str>,
+    output_detail: Option<&str>,
+    output_summary: Option<&str>,
+) {
+    let output = output_detail.or(output_summary);
+
+    match kind {
+        ToolKind::Edit => {
+            // Prefer output patch; some agents put the patch in args.
+            let body = output
+                .filter(|t| looks_like_diff(t))
+                .or_else(|| args_detail.filter(|t| looks_like_diff(t)))
+                .or(output)
+                .or(args_detail);
+            if let Some(text) = body {
+                if looks_like_diff(text) {
+                    for line in render_tool_diff(text, markdown_styles(ASSISTANT_BODY)) {
+                        sink.push_line(line);
+                    }
+                } else {
+                    push_tool_detail_lines(sink, text);
+                }
+            }
+        }
+        ToolKind::Execute => {
+            if !args_summary.is_empty() {
+                sink.push_line(Line::from(vec![
+                    Span::styled("$ ", DIM),
+                    Span::styled(args_summary.to_owned(), MUTED),
+                ]));
+            }
+            if let Some(text) = output.filter(|t| !t.is_empty() && *t != "ok") {
+                for line in render_tool_preformatted(
+                    text,
+                    markdown_styles(MUTED),
+                    TOOL_BODY_FIRST,
+                    TOOL_BODY_LAST,
+                ) {
+                    sink.push_line(line);
+                }
+            }
+        }
+        ToolKind::Read => {
+            if let Some(text) = output.filter(|t| !t.is_empty()) {
+                if looks_like_diff(text) {
+                    for line in render_tool_diff(text, markdown_styles(ASSISTANT_BODY)) {
+                        sink.push_line(line);
+                    }
+                } else if text.contains('\n') || text.len() > 220 {
+                    for line in render_tool_read_body(
+                        text,
+                        args_summary,
+                        markdown_styles(ASSISTANT_BODY),
+                        TOOL_BODY_FIRST,
+                        TOOL_BODY_LAST,
+                    ) {
+                        sink.push_line(line);
+                    }
+                } else {
+                    sink.push_line(Line::from(Span::styled(format!("  {text}"), MUTED)));
+                }
+            } else if let Some(args) = args_detail {
+                push_tool_detail_lines(sink, args);
+            }
+        }
+        ToolKind::Search
+        | ToolKind::List
+        | ToolKind::WebFetch
+        | ToolKind::WebSearch
+        | ToolKind::Skill
+        | ToolKind::Other => {
+            if let Some(args) = args_detail {
+                // Skip args if they're just a duplicate of the header target.
+                if !args.trim().is_empty() && args.trim() != args_summary.trim() {
+                    push_tool_detail_lines(sink, args);
+                }
+            }
+            if let Some(text) = output.filter(|t| !t.is_empty()) {
+                push_tool_detail_lines(sink, text);
+            }
+        }
+    }
+}
+
+fn push_user_text_parts<S: LineSink>(sink: &mut S, text_parts: &[TextPart], is_streaming: bool) {
+    let plain = plain_parts_to_string(text_parts);
+    let render_text = if is_streaming {
+        holdback_streaming_unstable_suffix(&plain)
+    } else {
+        plain.as_str()
+    };
+    let mut first = true;
+    for line in render_markdown(render_text, markdown_styles(USER_BODY)) {
+        if first {
+            let mut spans = vec![Span::styled(PROMPT_ARROW, USER_PREFIX)];
+            spans.extend(line.spans);
+            sink.push_line(Line::from(spans));
+            first = false;
+        } else {
+            // Continuation indent matches arrow visual width (2 cells).
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(line.spans);
+            sink.push_line(Line::from(spans));
+        }
+    }
+    if first {
+        sink.push_line(Line::from(Span::styled(PROMPT_ARROW, USER_PREFIX)));
+    }
+}
+
+fn push_thinking_body<S: LineSink>(sink: &mut S, text: &str) {
+    for line in render_markdown(text, markdown_styles(THINKING_BODY)) {
+        let mut spans = vec![Span::styled("│ ", THINKING_BAR)];
+        spans.extend(line.spans);
+        sink.push_line(Line::from(spans));
+    }
+}
+
+fn push_text_parts<S: LineSink>(
+    sink: &mut S,
+    text_parts: &[TextPart],
+    base_style: Style,
+    is_streaming: bool,
+) {
+    let last = text_parts.len().saturating_sub(1);
+    for (idx, part) in text_parts.iter().enumerate() {
+        let holdback = is_streaming && idx == last;
         match part {
             TextPart::Plain(text) => {
-                push_markdown_lines(sink, text, base_style);
+                let render_text = if holdback {
+                    holdback_streaming_unstable_suffix(text)
+                } else {
+                    text.as_str()
+                };
+                push_markdown_lines(sink, render_text, base_style);
             }
             TextPart::Code { lang, code } => {
+                // Incomplete fenced code is already split into Code parts by the
+                // projection layer when complete; while streaming plain text may
+                // still contain open fences handled by holdback above.
                 push_code_block(sink, lang, code);
             }
         }
     }
 }
 
+/// While streaming, omit unstable trailing markdown (open fences / incomplete tables)
+/// so column widths and fence layout do not thrash frame-to-frame.
+///
+/// Codex-style table/fence holdback via [`crate::ui::stream_holdback`].
+pub(crate) fn holdback_streaming_unstable_suffix(text: &str) -> &str {
+    crate::ui::stream_holdback::holdback_streaming_source(text)
+}
+
 fn push_markdown_lines<S: LineSink>(sink: &mut S, text: &str, base_style: Style) {
-    let mut in_code = false;
-    let mut code_lang = String::new();
-    let mut code = String::new();
-
-    for raw_line in text.split('\n') {
-        if let Some(lang) = raw_line.trim_start().strip_prefix("```") {
-            if in_code {
-                push_code_block(sink, &code_lang, code.trim_end_matches('\n'));
-                code.clear();
-                code_lang.clear();
-                in_code = false;
-            } else {
-                in_code = true;
-                code_lang = lang.trim().to_owned();
-            }
-            continue;
-        }
-
-        if in_code {
-            code.push_str(raw_line);
-            code.push('\n');
-            continue;
-        }
-
-        sink.push_line(markdown_line(raw_line, base_style));
+    for line in render_markdown(text, markdown_styles(base_style)) {
+        sink.push_line(line);
     }
-
-    if in_code {
-        push_code_block(sink, &code_lang, code.trim_end_matches('\n'));
-    }
-}
-
-fn markdown_line(raw: &str, base_style: Style) -> Line<'static> {
-    let trimmed = raw.trim_start();
-    let indent = &raw[..raw.len().saturating_sub(trimmed.len())];
-
-    if trimmed.starts_with('#') {
-        let content = trimmed.trim_start_matches('#').trim_start();
-        return Line::from(vec![
-            Span::raw(indent.to_owned()),
-            Span::styled(content.to_owned(), super::theme::MARKDOWN_HEADING),
-        ]);
-    }
-    if let Some(content) = trimmed.strip_prefix("> ") {
-        return Line::from(vec![
-            Span::raw(indent.to_owned()),
-            Span::styled("│ ", super::theme::MARKDOWN_QUOTE),
-            Span::styled(content.to_owned(), super::theme::MARKDOWN_QUOTE),
-        ]);
-    }
-    if is_markdown_rule(trimmed) {
-        return Line::from(Span::styled(
-            "─".repeat(trimmed.len().max(3)),
-            ratatui::style::Style::new().fg(BORDER_FG),
-        ));
-    }
-    if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-        let content = trimmed[2..].to_owned();
-        let mut spans = vec![
-            Span::raw(indent.to_owned()),
-            Span::styled("• ", super::theme::MARKDOWN_HEADING),
-        ];
-        spans.extend(inline_markdown_spans(&content, base_style));
-        return Line::from(spans);
-    }
-    if is_diff_line(trimmed) {
-        return Line::from(Span::styled(raw.to_owned(), diff_style(trimmed)));
-    }
-
-    Line::from(inline_markdown_spans(raw, base_style))
-}
-
-fn inline_markdown_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find('`') {
-        if start > 0 {
-            spans.push(Span::styled(rest[..start].to_owned(), base_style));
-        }
-        let after = &rest[start + 1..];
-        if let Some(end) = after.find('`') {
-            spans.push(Span::styled(
-                after[..end].to_owned(),
-                super::theme::MARKDOWN_CODE,
-            ));
-            rest = &after[end + 1..];
-        } else {
-            spans.push(Span::styled("`".to_owned(), base_style));
-            rest = after;
-        }
-    }
-    if !rest.is_empty() {
-        spans.push(Span::styled(rest.to_owned(), base_style));
-    }
-    spans
 }
 
 fn push_code_block<S: LineSink>(sink: &mut S, lang: &str, code: &str) {
-    let label = if lang.trim().is_empty() {
-        "code"
-    } else {
-        lang.trim()
-    };
-    let diff_block = is_diff_block(label, code);
-    sink.push_line(Line::from(Span::styled(
-        format!("┌─ {label} ─"),
-        ratatui::style::Style::new().fg(BORDER_FG),
-    )));
-    for code_line in code.split('\n') {
-        let style = if diff_block && is_diff_line(code_line) {
-            diff_style(code_line)
-        } else {
-            super::theme::MARKDOWN_CODE
-        };
-        sink.push_line(Line::from(vec![
-            Span::styled("│ ", ratatui::style::Style::new().fg(BORDER_FG)),
-            Span::styled(code_line.to_owned(), style),
-        ]));
+    for line in render_code_block(lang, code, markdown_styles(Style::default())) {
+        sink.push_line(line);
     }
-    sink.push_line(Line::from(Span::styled(
-        "└──",
-        ratatui::style::Style::new().fg(BORDER_FG),
-    )));
 }
 
-fn push_tool_detail_lines<S: LineSink>(sink: &mut S, label: &str, text: &str) {
-    sink.push_line(Line::from(Span::styled(
-        format!("  {label}:"),
-        ratatui::style::Style::new().fg(BORDER_FG),
-    )));
-    push_markdown_lines(sink, text, Style::default());
+fn push_tool_detail_lines<S: LineSink>(sink: &mut S, text: &str) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    // Diffs: Grok edit surface (unbordered, single gutter, insert/delete bg).
+    if looks_like_diff(trimmed) {
+        for line in render_tool_diff(trimmed, markdown_styles(ASSISTANT_BODY)) {
+            sink.push_line(line);
+        }
+        return;
+    }
+
+    // Pretty-print JSON args/output when the body is a single JSON value.
+    if let Some(pretty) = pretty_json_block(trimmed) {
+        for line in render_tool_preformatted(
+            &pretty,
+            markdown_styles(MUTED),
+            TOOL_BODY_FIRST,
+            TOOL_BODY_LAST,
+        ) {
+            sink.push_line(line);
+        }
+        return;
+    }
+
+    // Multi-line shell / log output: unbordered preformatted (less chrome noise).
+    if trimmed.contains('\n') {
+        for line in render_tool_preformatted(
+            trimmed,
+            markdown_styles(MUTED),
+            TOOL_BODY_FIRST,
+            TOOL_BODY_LAST,
+        ) {
+            sink.push_line(line);
+        }
+        return;
+    }
+
+    sink.push_line(Line::from(Span::styled(format!("  {trimmed}"), MUTED)));
 }
 
-fn is_markdown_rule(line: &str) -> bool {
-    line.len() >= 3 && line.chars().all(|ch| matches!(ch, '-' | '*' | '_'))
+fn pretty_json_block(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    // Only pretty-print when it actually gains structure (object/array with content).
+    match &value {
+        serde_json::Value::Object(map) if !map.is_empty() => {}
+        serde_json::Value::Array(items) if !items.is_empty() => {}
+        _ => return None,
+    }
+    serde_json::to_string_pretty(&value).ok()
 }
 
-fn is_diff_line(line: &str) -> bool {
-    line.starts_with('+')
-        || line.starts_with('-')
-        || line.starts_with("@@")
-        || line.starts_with("diff --git")
+fn collapsed_thinking_summary(text: &str) -> String {
+    let one_line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    if one_line.is_empty() {
+        return String::new();
+    }
+    const MAX: usize = 72;
+    if one_line.chars().count() <= MAX {
+        return one_line.to_owned();
+    }
+    let mut out = String::new();
+    for (i, ch) in one_line.chars().enumerate() {
+        if i >= MAX.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push('…');
+    out
 }
 
-fn is_diff_block(lang: &str, code: &str) -> bool {
-    let lang = lang.to_ascii_lowercase();
-    lang.contains("diff")
-        || lang.contains("patch")
-        || code.contains("diff --git")
-        || code.contains("\n@@")
-        || code.starts_with("@@")
-        || code.contains("*** Begin Patch")
-        || code
-            .lines()
-            .any(|line| line.starts_with("+++ ") || line.starts_with("--- "))
-}
+fn markdown_styles(base_style: Style) -> MarkdownStyles {
+    let mut bold = base_style;
+    bold.add_modifier |= Modifier::BOLD;
+    let mut italic = base_style;
+    italic.add_modifier |= Modifier::ITALIC;
 
-fn diff_style(line: &str) -> Style {
-    if line.starts_with('+') && !line.starts_with("+++") {
-        super::theme::DIFF_ADD
-    } else if line.starts_with('-') && !line.starts_with("---") {
-        super::theme::DIFF_DEL
-    } else if line.starts_with("@@") || line.starts_with("diff --git") {
-        super::theme::DIFF_HUNK
-    } else {
-        super::theme::MARKDOWN_CODE
+    MarkdownStyles {
+        text: base_style,
+        heading: super::theme::MARKDOWN_HEADING,
+        bold,
+        italic,
+        code_inline: super::theme::MARKDOWN_CODE,
+        code_block: super::theme::MARKDOWN_CODE,
+        code_block_border: Style::new().fg(BORDER_FG),
+        quote: super::theme::MARKDOWN_QUOTE,
+        link: super::theme::MARKDOWN_LINK,
+        list_marker: super::theme::MARKDOWN_LIST,
+        diff_add: super::theme::DIFF_ADD_BG,
+        diff_del: super::theme::DIFF_DEL_BG,
+        diff_hunk: super::theme::DIFF_HUNK,
+        diff_gutter: super::theme::DIFF_GUTTER,
     }
 }
 
 #[derive(Clone)]
-struct VisualLine {
-    line: Line<'static>,
-    text: String,
+pub(super) struct VisualLine {
+    pub(super) line: Line<'static>,
+    pub(super) text: String,
 }
 
 fn visual_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<VisualLine> {
@@ -584,7 +994,34 @@ fn visual_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<VisualLine> {
             let mut span_buf = String::new();
             for ch in span.content.into_owned().chars() {
                 let ch_width = char_width(ch);
-                if current_width > 0 && ch_width > 0 && current_width + ch_width > width {
+                // Wrap before placing a char that would exceed the column width.
+                // When the row is empty but the char itself is wider than `width`
+                // (e.g. emoji on a 1-col pane), place it alone then wrap after.
+                if ch_width > 0 && current_width + ch_width > width {
+                    if current_width > 0 {
+                        push_span(&mut current.line, &mut span_buf, style);
+                        out.push(current);
+                        current = VisualLine {
+                            line: Line::default(),
+                            text: String::new(),
+                        };
+                        current_width = 0;
+                    } else if !current.text.is_empty() || !span_buf.is_empty() {
+                        push_span(&mut current.line, &mut span_buf, style);
+                        out.push(current);
+                        current = VisualLine {
+                            line: Line::default(),
+                            text: String::new(),
+                        };
+                        current_width = 0;
+                    }
+                }
+
+                span_buf.push(ch);
+                current.text.push(ch);
+                current_width = current_width.saturating_add(ch_width);
+
+                if current_width >= width {
                     push_span(&mut current.line, &mut span_buf, style);
                     out.push(current);
                     current = VisualLine {
@@ -593,10 +1030,6 @@ fn visual_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<VisualLine> {
                     };
                     current_width = 0;
                 }
-
-                span_buf.push(ch);
-                current.text.push(ch);
-                current_width = current_width.saturating_add(ch_width);
             }
             push_span(&mut current.line, &mut span_buf, style);
         }
@@ -604,6 +1037,38 @@ fn visual_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<VisualLine> {
         out.push(current);
     }
 
+    out
+}
+
+/// Hard-cap a logical line's display width so ratatui never paints past the chat
+/// column (adjacent sidebar). Prefers grapheme boundaries via char widths.
+fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
+    if max_width == 0 {
+        return Line::default();
+    }
+    let mut out = Line::default();
+    let mut used = 0usize;
+    for span in line.spans {
+        if used >= max_width {
+            break;
+        }
+        let style = span.style;
+        let mut buf = String::new();
+        for ch in span.content.chars() {
+            let ch_width = char_width(ch);
+            if used + ch_width > max_width {
+                break;
+            }
+            buf.push(ch);
+            used = used.saturating_add(ch_width);
+        }
+        if !buf.is_empty() {
+            out.spans.push(Span::styled(buf, style));
+        }
+        if used >= max_width {
+            break;
+        }
+    }
     out
 }
 
@@ -740,10 +1205,6 @@ fn selection_style(style: Style) -> Style {
 
 fn char_width(ch: char) -> usize {
     UnicodeWidthChar::width(ch).unwrap_or(0).max(1)
-}
-
-fn short_thread_id(thread_id: &str) -> String {
-    thread_id.chars().take(8).collect()
 }
 
 #[cfg(test)]

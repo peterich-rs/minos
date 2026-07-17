@@ -19,7 +19,10 @@ impl StatusBarState {
     pub fn new() -> Self {
         Self {
             agents: Vec::new(),
-            backend_state: BackendConnectionState::Embedded,
+            backend_state: BackendConnectionState::Disconnected {
+                endpoint: String::new(),
+                last_error: None,
+            },
         }
     }
 
@@ -60,9 +63,6 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState, flas
     let mut spans: Vec<Span> = Vec::new();
 
     match &state.backend_state {
-        BackendConnectionState::Embedded => {
-            spans.push(Span::styled(" backend:embedded ", DAEMON_CONNECTED));
-        }
         BackendConnectionState::Connected { .. } => {
             spans.push(Span::styled(" daemon:connected ", DAEMON_CONNECTED));
         }
@@ -91,7 +91,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &StatusBarState, flas
         ));
     }
     spans.push(Span::raw(
-        "  n new-agent  @agent route  Tab focus  Enter inspect/send  Esc back/close-detail  wheel/PgUp/PgDn scroll  Ctrl+J newline  Alt+Enter multi  Ctrl+Alt+B cursor  Ctrl+C interrupt  Ctrl+Q quit",
+        "  ^P projects  ^T conversations  @agent route  Tab focus  Enter inspect/send  Esc back/close-detail  wheel/PgUp/PgDn scroll  Ctrl+J newline  Alt+Enter multi  Ctrl+Alt+B cursor  Ctrl+C interrupt  Ctrl+Q quit",
     ));
     let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: true });
     f.render_widget(paragraph, area);

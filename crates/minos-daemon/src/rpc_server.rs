@@ -345,6 +345,7 @@ fn parse_agent_name(raw: &str) -> Result<minos_domain::AgentName, Value> {
         "claude" | "agent_claude" => Ok(minos_domain::AgentName::Claude),
         "gemini" | "agent_gemini" => Ok(minos_domain::AgentName::Gemini),
         "opencode" | "agent_opencode" => Ok(minos_domain::AgentName::Opencode),
+        "grok" | "agent_grok" => Ok(minos_domain::AgentName::Grok),
         other => Err(json!({
             "code": -32602,
             "message": format!("unsupported runtime_agent '{other}'"),

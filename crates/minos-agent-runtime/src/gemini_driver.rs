@@ -218,10 +218,11 @@ impl GeminiAcpInstance {
     }
 }
 
-pub fn spawn_acp_pump(
+pub(crate) fn spawn_acp_pump(
     client: Arc<AcpClient>,
     thread_id: String,
     events_tx: IngestSink,
+    pending_approvals: crate::manager::PendingApprovals,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -250,6 +251,28 @@ pub fn spawn_acp_pump(
                     }
                 }
                 Some(crate::acp_client::Inbound::ServerRequest { id, method, params }) => {
+                    if method == "session/request_permission" {
+                        if let Err(error) = register_acp_permission_request(
+                            AgentName::Gemini,
+                            &client,
+                            &thread_id,
+                            id,
+                            params,
+                            &events_tx,
+                            &pending_approvals,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                target: "minos_agent_runtime::gemini_driver",
+                                error = %error,
+                                thread_id = %thread_id,
+                                "failed to register gemini ACP permission request",
+                            );
+                        }
+                        continue;
+                    }
+
                     if let Err(error) = events_tx
                         .emit(RawIngest::from_json(
                             AgentName::Gemini,
@@ -272,7 +295,9 @@ pub fn spawn_acp_pump(
                         );
                         break;
                     }
-                    if let Err(error) = reply_to_acp_server_request(&client, id, &method).await {
+                    if let Err(error) =
+                        reply_to_unsupported_acp_server_request(&client, id, &method).await
+                    {
                         tracing::warn!(
                             target: "minos_agent_runtime::gemini_driver",
                             error = %error,
@@ -311,22 +336,77 @@ pub fn spawn_acp_pump(
     })
 }
 
-async fn reply_to_acp_server_request(
+async fn register_acp_permission_request(
+    agent: AgentName,
+    client: &Arc<AcpClient>,
+    thread_id: &str,
+    id: serde_json::Value,
+    params: serde_json::Value,
+    events_tx: &IngestSink,
+    pending_approvals: &crate::manager::PendingApprovals,
+) -> Result<(), MinosError> {
+    let request_id = match &id {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let (allow_option_id, reject_option_id) =
+        crate::approvals::acp_permission_option_ids(&params);
+
+    // Surface both the approval overlay envelope and a tool-shaped server
+    // request for translators that still render tool call chrome.
+    events_tx
+        .emit(crate::manager::approval_request_ingest(
+            agent,
+            thread_id.to_string(),
+            request_id.clone(),
+            String::new(),
+            "session/request_permission".into(),
+            params.clone(),
+        ))
+        .await
+        .map_err(|_| MinosError::AcpProtocolError {
+            method: "session/request_permission".into(),
+            message: "durable ingest sink closed while emitting approval request".into(),
+        })?;
+    events_tx
+        .emit(RawIngest::from_json(
+            agent,
+            thread_id.to_string(),
+            serde_json::json!({
+                "kind": "acp_server_request",
+                "id": id,
+                "method": "session/request_permission",
+                "params": params,
+            }),
+            chrono::Utc::now().timestamp_millis(),
+        ))
+        .await
+        .map_err(|_| MinosError::AcpProtocolError {
+            method: "session/request_permission".into(),
+            message: "durable ingest sink closed while emitting acp_server_request".into(),
+        })?;
+
+    pending_approvals.insert(
+        request_id.clone(),
+        crate::manager::PendingApproval {
+            thread_id: thread_id.to_string(),
+            target: crate::manager::PendingApprovalTarget::Acp {
+                request_id: id,
+                client: client.clone(),
+                allow_option_id,
+                reject_option_id,
+            },
+        },
+    );
+    Ok(())
+}
+
+async fn reply_to_unsupported_acp_server_request(
     client: &AcpClient,
     id: serde_json::Value,
     method: &str,
 ) -> Result<(), MinosError> {
     match method {
-        "session/request_permission" => {
-            let result = serde_json::to_value(RequestPermissionResponse {
-                outcome: RequestPermissionOutcome::Cancelled,
-            })
-            .map_err(|error| MinosError::AcpProtocolError {
-                method: method.into(),
-                message: format!("encode permission cancellation failed: {error}"),
-            })?;
-            client.reply(id, result).await
-        }
         "fs/read_text_file"
         | "fs/write_text_file"
         | "terminal/create"

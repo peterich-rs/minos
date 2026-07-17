@@ -21,13 +21,13 @@ pub struct AgentRuntimeConfig {
     pub workspace_root: PathBuf,
     pub codex_bin: Option<PathBuf>,
     pub gemini_bin: Option<PathBuf>,
+    pub grok_bin: Option<PathBuf>,
     pub opencode_bin: Option<PathBuf>,
     pub opencode_port_range: std::ops::RangeInclusive<u16>,
     pub ws_port_range: std::ops::RangeInclusive<u16>,
     pub event_buffer: usize,
     pub handshake_call_timeout: Duration,
     pub thread_start_timeout: Duration,
-    pub approval_request_timeout: Duration,
     pub subprocess_env: Arc<std::collections::HashMap<String, String>>,
     pub mcp: Option<McpConfig>,
     #[cfg(feature = "test-support")]
@@ -51,7 +51,6 @@ pub struct LocatedMcpCommand {
 
 const DEFAULT_HANDSHAKE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_THREAD_START_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_APPROVAL_REQUEST_TIMEOUT: Duration = Duration::from_mins(2);
 const DEFAULT_EVENT_BUFFER: usize = 256;
 const TEAMWORK_MCP_ENV: &str = "MINOS_TEAMWORK_MCP_BIN";
 pub const TEAMWORK_MCP_SIDECAR_ARG: &str = "__minos-teamwork-mcp";
@@ -89,13 +88,13 @@ impl AgentRuntimeConfig {
             workspace_root,
             codex_bin: None,
             gemini_bin: None,
+            grok_bin: None,
             opencode_bin: None,
             opencode_port_range: 4096..=4106,
             ws_port_range: 7879..=7883,
             event_buffer: DEFAULT_EVENT_BUFFER,
             handshake_call_timeout: DEFAULT_HANDSHAKE_CALL_TIMEOUT,
             thread_start_timeout: DEFAULT_THREAD_START_TIMEOUT,
-            approval_request_timeout: DEFAULT_APPROVAL_REQUEST_TIMEOUT,
             subprocess_env: Arc::new(std::collections::HashMap::new()),
             mcp: None,
             #[cfg(feature = "test-support")]
@@ -444,7 +443,7 @@ fn provider_session_id_from_value(agent: AgentName, payload: &Value) -> Option<S
             .get("session_id")
             .and_then(Value::as_str)
             .map(str::to_string),
-        AgentName::Gemini => payload
+        AgentName::Gemini | AgentName::Grok => payload
             .get("params")
             .and_then(|params| params.get("sessionId"))
             .and_then(Value::as_str)
@@ -502,9 +501,10 @@ fn event_type_from_value(agent: AgentName, payload: &Value) -> Option<String> {
             .get("type")
             .and_then(Value::as_str)
             .map(str::to_string),
-        AgentName::Gemini => payload
+        AgentName::Gemini | AgentName::Grok => payload
             .get("kind")
             .and_then(Value::as_str)
+            .or_else(|| payload.get("method").and_then(Value::as_str))
             .map(str::to_string),
         AgentName::Opencode => payload
             .get("type")

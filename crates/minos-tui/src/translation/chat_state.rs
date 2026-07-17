@@ -4,7 +4,6 @@ use minos_domain::AgentName;
 use minos_ui_protocol::{MessageRole, SubagentStatus, UiEventMessage};
 use tracing::{debug, warn};
 
-use super::agent::AgentTranslationState;
 use super::chat_item::{ChatItem, TextPart};
 use super::pending_request::{
     opencode_permission_id, opencode_permission_is_completed, opencode_question_reply_id,
@@ -14,28 +13,33 @@ use super::selection::{ChatSelection, ChatSelectionPoint};
 use super::tool_summary::{
     compact_tool_args, is_diff_like, summarize_tool_args, summarize_tool_output, tool_output_detail,
 };
+use super::verb_group::{run_anchor_id, run_containing};
 
 pub struct ChatState {
     pub thread_id: String,
     pub agent: AgentName,
-    #[allow(dead_code)]
-    pub translation_state: AgentTranslationState,
     pub items: Vec<ChatItem>,
     pub pending_requests: Vec<PendingAgentRequest>,
     pub(super) open_message_ids: HashSet<String>,
     open_message_roles: HashMap<String, MessageRole>,
     completed_assistant_message_ids: HashSet<String>,
-    pub scroll_offset: u16,
+    pub scroll_offset: u32,
     pub auto_scroll: bool,
-    pub max_scroll: u16,
+    pub max_scroll: u32,
     pub selection: Option<ChatSelection>,
+    /// Anchor tool_call_ids of user-expanded verb-group runs.
+    pub verb_group_expanded: HashSet<String>,
+    /// Bumps on any visual change (content or structure). Cache invalidation key.
     pub version: u64,
+    /// Bumps when the item list structure changes (push/remove/reorder).
+    /// Streaming text into an existing item leaves this unchanged so the render
+    /// cache can rebuild only dirty tail segments.
+    pub structure_version: u64,
 }
 
 impl ChatState {
     pub fn new(thread_id: String, agent: AgentName) -> Self {
         Self {
-            translation_state: AgentTranslationState::new(agent, thread_id.clone()),
             thread_id,
             agent,
             items: Vec::new(),
@@ -47,18 +51,29 @@ impl ChatState {
             auto_scroll: true,
             max_scroll: 0,
             selection: None,
+            verb_group_expanded: HashSet::new(),
             version: 0,
+            structure_version: 0,
         }
     }
 
-    pub fn update_max_scroll(&mut self, max_scroll: u16) {
+    fn bump_content(&mut self) {
+        self.version = self.version.saturating_add(1);
+    }
+
+    fn bump_structure(&mut self) {
+        self.structure_version = self.structure_version.saturating_add(1);
+        self.bump_content();
+    }
+
+    pub fn update_max_scroll(&mut self, max_scroll: u32) {
         self.max_scroll = max_scroll;
         if !self.auto_scroll {
             self.scroll_offset = self.scroll_offset.min(self.max_scroll);
         }
     }
 
-    pub fn active_scroll(&self) -> u16 {
+    pub fn active_scroll(&self) -> u32 {
         if self.auto_scroll {
             self.max_scroll
         } else {
@@ -71,7 +86,7 @@ impl ChatState {
             self.scroll_offset = self.max_scroll;
             self.auto_scroll = false;
         }
-        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+        self.scroll_offset = self.scroll_offset.saturating_sub(u32::from(lines));
     }
 
     pub fn scroll_down(&mut self, lines: u16) {
@@ -81,7 +96,7 @@ impl ChatState {
 
         self.scroll_offset = self
             .scroll_offset
-            .saturating_add(lines)
+            .saturating_add(u32::from(lines))
             .min(self.max_scroll);
         if self.scroll_offset >= self.max_scroll {
             self.scroll_to_bottom();
@@ -160,21 +175,86 @@ impl ChatState {
     }
 
     pub fn finish_all_streaming(&mut self) {
+        let mut changed = false;
         for item in &mut self.items {
-            item.set_streaming(false);
+            if item.is_streaming() {
+                item.set_streaming(false);
+                changed = true;
+            }
+        }
+        if !self.open_message_ids.is_empty() || !self.open_message_roles.is_empty() {
+            changed = true;
         }
         self.open_message_ids.clear();
         self.open_message_roles.clear();
-        self.version += 1;
+        if changed {
+            // Streaming flags change fingerprints of existing items only.
+            self.bump_content();
+        }
     }
 
-    pub fn toggle_tool_expansion(&mut self) {
-        for item in &mut self.items {
-            if let ChatItem::ToolCall { is_expanded, .. } = item {
-                *is_expanded = !*is_expanded;
+    /// Toggle fold on the most recent tool, thinking, or verb-group (`e` key).
+    pub fn toggle_tool_expansion(&mut self) -> bool {
+        for index in (0..self.items.len()).rev() {
+            if self.items[index].is_foldable()
+                || matches!(self.items[index], ChatItem::SubagentCall { .. })
+            {
+                return self.toggle_fold_at(index);
             }
         }
-        self.version += 1;
+        false
+    }
+
+    /// Toggle fold for a tool/thinking item, or expand/collapse its verb-group.
+    ///
+    /// When `index` is the start of a folding verb-group run, toggles the **group**
+    /// (Grok: click header → expand members). Otherwise toggles the individual item.
+    pub fn toggle_fold_at(&mut self, index: usize) -> bool {
+        if let Some(run) = run_containing(&self.items, index, &self.verb_group_expanded) {
+            if index == run.start {
+                return self.toggle_verb_group_at(run.start);
+            }
+        }
+
+        let Some(item) = self.items.get_mut(index) else {
+            return false;
+        };
+        match item {
+            ChatItem::ToolCall {
+                is_expanded,
+                is_user_toggled,
+                ..
+            } => {
+                let current = is_user_toggled.unwrap_or(*is_expanded);
+                *is_user_toggled = Some(!current);
+                self.bump_content();
+                true
+            }
+            ChatItem::Reasoning {
+                is_streaming,
+                is_user_toggled,
+                ..
+            } => {
+                let current = is_user_toggled.unwrap_or(*is_streaming);
+                *is_user_toggled = Some(!current);
+                self.bump_content();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Expand/collapse a verb-group run starting at `start`.
+    pub fn toggle_verb_group_at(&mut self, start: usize) -> bool {
+        let Some(anchor) = run_anchor_id(&self.items, start) else {
+            return false;
+        };
+        if !self.verb_group_expanded.remove(&anchor) {
+            self.verb_group_expanded.insert(anchor);
+        }
+        // Structure of visible rows changes (members appear/disappear).
+        self.bump_structure();
+        true
     }
 
     pub fn active_pending_request(&self) -> Option<&PendingAgentRequest> {
@@ -189,7 +269,6 @@ impl ChatState {
     }
 
     fn apply_ui_event(&mut self, event: UiEventMessage) {
-        self.version += 1;
         match event {
             UiEventMessage::MessageStarted {
                 message_id,
@@ -201,36 +280,55 @@ impl ChatState {
                 }
                 self.open_message_ids.insert(message_id.clone());
                 self.open_message_roles.insert(message_id, role);
+                // Role bookkeeping only — no item list change yet.
+                self.bump_content();
             }
             UiEventMessage::TextDelta { message_id, text } => {
                 let text = text.render_preview();
                 if text.is_empty() {
                     return;
                 }
-                if let Some(item) = self.find_text_item_mut(&message_id) {
-                    append_text_to_item(item, text);
+                // Only stream into the tail text item for this message. If tools
+                // or reasoning already sit after an earlier reply block (common
+                // for Grok/Gemini ACP intermediate agent_message_chunk), open a
+                // new assistant text item at the timeline end instead of
+                // concatenating into the earlier bubble.
+                if self.tail_text_item_matches(&message_id) {
+                    if let Some(item) = self.items.last_mut() {
+                        append_text_to_item(item, text);
+                        item.set_streaming(true);
+                    }
+                    self.bump_content();
                 } else {
+                    self.finish_open_content_streaming();
                     self.push_text_item(message_id, text, true);
+                    self.bump_structure();
                 }
             }
             UiEventMessage::TextReplace { message_id, text } => {
                 let text = text.render_preview();
-                if let Some(item) = self.find_text_item_mut(&message_id) {
-                    let replacement = if text.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![TextPart::Plain(text)]
-                    };
-                    match item {
-                        ChatItem::UserMessage { text_parts, .. }
-                        | ChatItem::AssistantText { text_parts, .. } => {
-                            *text_parts = replacement;
+                if self.tail_text_item_matches(&message_id) {
+                    if let Some(item) = self.items.last_mut() {
+                        let replacement = if text.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![TextPart::Plain(text)]
+                        };
+                        match item {
+                            ChatItem::UserMessage { text_parts, .. }
+                            | ChatItem::AssistantText { text_parts, .. } => {
+                                *text_parts = replacement;
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        item.set_streaming(self.open_message_ids.contains(&message_id));
                     }
+                    self.bump_content();
                 } else if !text.is_empty() {
+                    self.finish_open_content_streaming();
                     let is_streaming = self.open_message_ids.contains(&message_id);
                     self.push_text_item(message_id, text, is_streaming);
+                    self.bump_structure();
                 }
             }
             UiEventMessage::ReasoningDelta { message_id, text } => {
@@ -238,21 +336,43 @@ impl ChatState {
                 if text.is_empty() {
                     return;
                 }
-                if let Some(ChatItem::Reasoning { text: existing, .. }) =
-                    self.find_reasoning_item_mut(&message_id)
-                {
-                    existing.push_str(&text);
+                // Only stream into the tail reasoning item. If tools/text have
+                // already been appended after an earlier thought block, open a
+                // new reasoning item at the end of the timeline instead of
+                // rewriting content above those items.
+                let append_to_tail = matches!(
+                    self.items.last(),
+                    Some(ChatItem::Reasoning {
+                        message_id: existing_id,
+                        ..
+                    }) if existing_id == &message_id
+                );
+                if append_to_tail {
+                    if let Some(ChatItem::Reasoning {
+                        text: existing,
+                        is_streaming,
+                        ..
+                    }) = self.items.last_mut()
+                    {
+                        existing.push_str(&text);
+                        *is_streaming = true;
+                    }
+                    self.bump_content();
                 } else {
+                    self.finish_open_content_streaming();
                     self.items.push(ChatItem::Reasoning {
                         message_id,
                         text,
                         is_streaming: true,
+                        is_user_toggled: None,
                     });
+                    self.bump_structure();
                 }
             }
             UiEventMessage::ReasoningReplace { message_id, text } => {
                 let text = text.render_preview();
                 if text.is_empty() {
+                    let before = self.items.len();
                     self.items.retain(|item| {
                         !matches!(
                             item,
@@ -262,17 +382,39 @@ impl ChatState {
                             } if item_message_id == &message_id
                         )
                     });
-                } else if let Some(ChatItem::Reasoning { text: existing, .. }) =
-                    self.find_reasoning_item_mut(&message_id)
-                {
-                    *existing = text;
+                    if self.items.len() != before {
+                        self.bump_structure();
+                    }
                 } else {
-                    let is_streaming = self.open_message_ids.contains(&message_id);
-                    self.items.push(ChatItem::Reasoning {
-                        message_id,
-                        text,
-                        is_streaming,
-                    });
+                    let replace_tail = matches!(
+                        self.items.last(),
+                        Some(ChatItem::Reasoning {
+                            message_id: existing_id,
+                            ..
+                        }) if existing_id == &message_id
+                    );
+                    if replace_tail {
+                        if let Some(ChatItem::Reasoning {
+                            text: existing,
+                            is_streaming,
+                            ..
+                        }) = self.items.last_mut()
+                        {
+                            *existing = text;
+                            *is_streaming = self.open_message_ids.contains(&message_id);
+                        }
+                        self.bump_content();
+                    } else {
+                        self.finish_open_content_streaming();
+                        let is_streaming = self.open_message_ids.contains(&message_id);
+                        self.items.push(ChatItem::Reasoning {
+                            message_id,
+                            text,
+                            is_streaming,
+                            is_user_toggled: None,
+                        });
+                        self.bump_structure();
+                    }
                 }
             }
             UiEventMessage::ToolCallPlaced {
@@ -300,7 +442,11 @@ impl ChatState {
                     *existing_detail = args_detail;
                     *existing_expanded |= is_expanded;
                     *is_streaming = true;
+                    self.bump_content();
                 } else {
+                    // Starting a tool ends the previous text/thought stream so
+                    // intermediate ACP bubbles no longer show a live cursor.
+                    self.finish_open_content_streaming();
                     self.items.push(ChatItem::ToolCall {
                         message_id,
                         tool_call_id,
@@ -311,8 +457,10 @@ impl ChatState {
                         output_detail: None,
                         is_error: false,
                         is_expanded,
+                        is_user_toggled: None,
                         is_streaming: true,
                     });
+                    self.bump_structure();
                 }
             }
             UiEventMessage::ToolCallCompleted {
@@ -321,6 +469,7 @@ impl ChatState {
                 is_error,
             } => {
                 let output = output.render_preview();
+                let mut changed = false;
                 if let Some(ChatItem::ToolCall {
                     output_summary,
                     output_detail,
@@ -337,6 +486,26 @@ impl ChatState {
                     }
                     *existing_error = is_error;
                     *is_streaming = false;
+                    changed = true;
+                }
+                // Opencode (and replay of older projections) may only emit ToolCallCompleted
+                // for the parent `task` tool without a separate SubagentStatusUpdated event.
+                if let Some(ChatItem::SubagentCall {
+                    status,
+                    is_streaming,
+                    ..
+                }) = self.find_subagent_call_by_tool_id_mut(&tool_call_id)
+                {
+                    *status = if is_error {
+                        SubagentStatus::Failed
+                    } else {
+                        SubagentStatus::Completed
+                    };
+                    *is_streaming = false;
+                    changed = true;
+                }
+                if changed {
+                    self.bump_content();
                 }
             }
             UiEventMessage::SubagentSpawned {
@@ -359,6 +528,7 @@ impl ChatState {
                     *prompt_summary = prompt.as_deref().map(subagent_prompt_summary);
                     *status = SubagentStatus::Running;
                     *is_streaming = true;
+                    self.bump_content();
                 } else {
                     self.items.push(ChatItem::SubagentCall {
                         message_id: tool_call_id.clone(),
@@ -370,6 +540,7 @@ impl ChatState {
                         status: SubagentStatus::Running,
                         is_streaming: true,
                     });
+                    self.bump_structure();
                 }
             }
             UiEventMessage::SubagentStatusUpdated {
@@ -384,6 +555,7 @@ impl ChatState {
                 {
                     *existing_status = status;
                     *is_streaming = status == SubagentStatus::Running;
+                    self.bump_content();
                 }
             }
             UiEventMessage::MessageCompleted { message_id, .. } => {
@@ -398,6 +570,7 @@ impl ChatState {
                         item.set_streaming(false);
                     }
                 }
+                self.bump_content();
             }
             UiEventMessage::Error {
                 message,
@@ -409,9 +582,12 @@ impl ChatState {
                     message_id,
                     text: message,
                 });
+                self.bump_structure();
             }
             UiEventMessage::Raw { kind, payload_json } => {
                 if self.apply_raw_request_event(&kind, &payload_json) {
+                    // Pending request list is visual chrome for AgentDetail.
+                    self.bump_content();
                     return;
                 }
                 debug!(
@@ -426,6 +602,7 @@ impl ChatState {
                 self.items.push(ChatItem::SystemMessage {
                     text: format!("Thread closed: {reason:?}"),
                 });
+                self.bump_structure();
             }
         }
     }
@@ -447,19 +624,41 @@ impl ChatState {
         self.items.push(item);
     }
 
-    fn find_text_item_mut(&mut self, message_id: &str) -> Option<&mut ChatItem> {
-        self.items.iter_mut().rev().find(|item| {
-            matches!(
-                item,
-                ChatItem::UserMessage { .. } | ChatItem::AssistantText { .. }
-            ) && item.message_id() == Some(message_id)
-        })
+    /// True when the timeline tail is a text bubble for `message_id` that can
+    /// still receive contiguous deltas.
+    fn tail_text_item_matches(&self, message_id: &str) -> bool {
+        matches!(
+            self.items.last(),
+            Some(ChatItem::UserMessage {
+                message_id: existing_id,
+                ..
+            } | ChatItem::AssistantText {
+                message_id: existing_id,
+                ..
+            }) if existing_id == message_id
+        )
     }
 
-    fn find_reasoning_item_mut(&mut self, message_id: &str) -> Option<&mut ChatItem> {
-        self.items.iter_mut().rev().find(|item| {
-            matches!(item, ChatItem::Reasoning { .. }) && item.message_id() == Some(message_id)
-        })
+    /// Clear streaming flags on open text/reasoning rows that are no longer
+    /// the active stream (tools, a later thought block, or a later reply).
+    fn finish_open_content_streaming(&mut self) {
+        let mut changed = false;
+        for item in &mut self.items {
+            match item {
+                ChatItem::UserMessage { is_streaming, .. }
+                | ChatItem::AssistantText { is_streaming, .. }
+                | ChatItem::Reasoning { is_streaming, .. } => {
+                    if *is_streaming {
+                        *is_streaming = false;
+                        changed = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if changed {
+            self.bump_content();
+        }
     }
 
     fn find_tool_call_item_mut(&mut self, tool_call_id: &str) -> Option<&mut ChatItem> {
@@ -471,6 +670,12 @@ impl ChatState {
     fn find_subagent_call_mut(&mut self, sub_thread_id: &str) -> Option<&mut ChatItem> {
         self.items.iter_mut().rev().find(|item| {
             matches!(item, ChatItem::SubagentCall { sub_thread_id: id, .. } if id == sub_thread_id)
+        })
+    }
+
+    fn find_subagent_call_by_tool_id_mut(&mut self, tool_call_id: &str) -> Option<&mut ChatItem> {
+        self.items.iter_mut().rev().find(|item| {
+            matches!(item, ChatItem::SubagentCall { tool_call_id: id, .. } if id == tool_call_id)
         })
     }
 

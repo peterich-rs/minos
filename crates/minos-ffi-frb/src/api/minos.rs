@@ -40,7 +40,7 @@ pub use minos_domain::{
     PairingState,
 };
 pub use minos_protocol::{
-    AgentSummary, AuthSummary, ChatMessageReplySummary, ChatMessageSummary,
+    AgentSummary, AuthSummary, ChatMessageReplySummary, ChatMessageSummary, CloseReason,
     ConversationAgentMembersResponse, ConversationKind, ConversationMembersResponse,
     ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
@@ -48,12 +48,12 @@ pub use minos_protocol::{
     HostSkillSummary, HostSkillsEntry, HostSummary, HostWorkspaceSummary, ListAgentsResponse,
     ListChatMessagesResponse, ListHostSkillsResponse, ListHostWorkspacesResponse,
     ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams,
-    ListThreadsResponse, MyProfileResponse, ProjectSummary, ReadThreadParams, ReadThreadResponse,
-    SearchUsersResponse, SenderType, StartAgentResponse, ThreadSummary, UpdateProjectRequest,
-    UserSummary, WriteHostSkillConfigResponse,
+    ListThreadsResponse, MyProfileResponse, PauseReason, ProjectSummary, ReadThreadParams,
+    ReadThreadResponse, SearchUsersResponse, SenderType, StartAgentResponse, ThreadState,
+    ThreadSummary, UpdateProjectRequest, UserSummary, WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{
-    ArtifactRef, DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage,
+    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
 };
 
 // ───────────────────────────── opaque client ─────────────────────────────
@@ -1209,6 +1209,7 @@ pub struct _ThreadSummary {
     pub ended_at_ms: Option<i64>,
     pub end_reason: Option<ThreadEndReason>,
     pub parent_thread_id: Option<String>,
+    pub state: ThreadState,
 }
 
 pub struct AgentSessionSummaryDto {

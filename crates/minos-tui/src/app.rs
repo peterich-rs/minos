@@ -6,26 +6,29 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent,
 use minos_agent_runtime::{ManagerEvent, ThreadState};
 use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_domain::{AgentName, AgentStatus};
-use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind};
 use tracing::debug;
 
 use crate::action::{
     Action, GlobalAction, InputAction, InputTarget, ScrollDirection, ScrollTarget,
 };
-use crate::agent_route::{parse_agent_name, short_thread_id, thread_can_receive_message};
+use crate::agent_route::{
+    parse_agent_name, parse_agent_routing, short_thread_id, thread_can_receive_message,
+};
 use crate::backend::AgentBackend;
 use crate::effect::Effect;
 use crate::event::AppEvent;
 use crate::focus::PaneId;
-use crate::group_chat::GroupChatStore;
 use crate::state::{self, frame_marks_agent_result_done, rect_contains, thread_is_done, AppState};
 use crate::translation::{ChatState, PendingAgentRequestKind, PendingQuestionSpec};
 use crate::ui::{ThreadEntry, UiState};
 
+use crate::backend::ConversationMessageEntry;
+
 mod clipboard;
+mod conversation_ops;
+mod conversation_result;
 mod event_loop;
 mod event_mapping;
-mod group_chat;
 mod helpers;
 mod lifecycle;
 mod mcp;
@@ -49,20 +52,20 @@ pub struct App {
 
 impl App {
     pub fn new(backend: Arc<dyn AgentBackend>, readonly: bool, workspace: PathBuf) -> Self {
-        let group_chat_store = default_group_chat_store(&workspace);
-        Self::with_group_chat_store(backend, readonly, workspace, group_chat_store)
+        let teamwork_store = default_teamwork_store();
+        Self::with_teamwork_store(backend, readonly, workspace, teamwork_store)
     }
 
-    fn with_group_chat_store(
+    fn with_teamwork_store(
         backend: Arc<dyn AgentBackend>,
         readonly: bool,
         workspace: PathBuf,
-        group_chat_store: GroupChatStore,
+        teamwork_store: crate::teamwork::TeamworkStore,
     ) -> Self {
         let ui = UiState::new(readonly);
         Self {
             backend,
-            state: AppState::new(workspace, group_chat_store),
+            state: AppState::new(workspace, teamwork_store),
             ui,
             should_quit: false,
             event_tx: None,

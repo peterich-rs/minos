@@ -36,6 +36,7 @@ fn agent_str(a: AgentName) -> &'static str {
         AgentName::Claude => "claude",
         AgentName::Gemini => "gemini",
         AgentName::Opencode => "opencode",
+        AgentName::Grok => "grok",
     }
 }
 
@@ -407,6 +408,7 @@ fn decode_thread_summary_row(
         "claude" => AgentName::Claude,
         "gemini" => AgentName::Gemini,
         "opencode" => AgentName::Opencode,
+        "grok" => AgentName::Grok,
         other => {
             return Err(BackendError::StoreDecode {
                 column: "threads.agent".into(),
@@ -422,6 +424,13 @@ fn decode_thread_summary_row(
             column: "threads.end_reason".into(),
             message: e.to_string(),
         })?;
+    let state = if ended_at_ms.is_some() {
+        minos_protocol::ThreadState::Closed {
+            reason: minos_protocol::CloseReason::UserClose,
+        }
+    } else {
+        minos_protocol::ThreadState::Idle
+    };
     Ok(minos_protocol::ThreadSummary {
         thread_id,
         agent,
@@ -432,6 +441,7 @@ fn decode_thread_summary_row(
         ended_at_ms,
         end_reason,
         parent_thread_id: None,
+        state,
     })
 }
 

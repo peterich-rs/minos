@@ -1,12 +1,25 @@
 //! Coalesced frame requests for terminal redraws.
+//!
+//! Default path targets interactive UI (~60 FPS). Streaming can request frames
+//! with the same coalescer; delayed frames use `schedule_frame_in`.
 
 use std::time::{Duration, Instant};
 
-pub const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// Minimum gap between emitted frames (≈60 FPS).
+pub const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Preferred gap while streaming agent output (same as default; kept for call-site clarity).
+pub const STREAMING_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+#[derive(Clone, Copy, Debug)]
+struct FrameRequest {
+    /// Earliest time this request wants a draw.
+    at: Instant,
+}
 
 #[derive(Clone)]
 pub struct FrameRequester {
-    tx: tokio::sync::mpsc::UnboundedSender<Instant>,
+    tx: tokio::sync::mpsc::UnboundedSender<FrameRequest>,
 }
 
 pub struct FrameRequestReceiver {
@@ -14,18 +27,41 @@ pub struct FrameRequestReceiver {
 }
 
 impl FrameRequester {
-    fn new(tx: tokio::sync::mpsc::UnboundedSender<Instant>) -> Self {
+    fn new(tx: tokio::sync::mpsc::UnboundedSender<FrameRequest>) -> Self {
         Self { tx }
     }
 
+    /// Request a draw as soon as the frame scheduler allows.
     pub fn schedule_frame(&self) {
-        let _ = self.tx.send(Instant::now());
+        let _ = self.tx.send(FrameRequest {
+            at: Instant::now(),
+        });
+    }
+
+    /// Request a draw no earlier than `delay` from now (animations, flash expiry).
+    pub fn schedule_frame_in(&self, delay: Duration) {
+        let _ = self.tx.send(FrameRequest {
+            at: Instant::now() + delay,
+        });
+    }
+
+    /// Streaming / high-churn updates — same coalescer, explicit call site.
+    pub fn schedule_frame_streaming(&self) {
+        let _ = self.tx.send(FrameRequest {
+            at: Instant::now(),
+        });
+        let _ = STREAMING_FRAME_INTERVAL; // documented companion constant
     }
 }
 
 impl FrameRequestReceiver {
     pub async fn recv(&mut self) -> Option<()> {
         self.rx.recv().await
+    }
+
+    /// Drain coalesced frame tokens without waiting (draw once for the burst).
+    pub fn try_recv(&mut self) -> Option<()> {
+        self.rx.try_recv().ok()
     }
 }
 
@@ -40,14 +76,14 @@ pub fn frame_channel() -> (FrameRequester, FrameRequestReceiver) {
 }
 
 struct FrameScheduler {
-    requests: tokio::sync::mpsc::UnboundedReceiver<Instant>,
+    requests: tokio::sync::mpsc::UnboundedReceiver<FrameRequest>,
     frames: tokio::sync::mpsc::UnboundedSender<()>,
     last_emitted_at: Option<Instant>,
 }
 
 impl FrameScheduler {
     fn new(
-        requests: tokio::sync::mpsc::UnboundedReceiver<Instant>,
+        requests: tokio::sync::mpsc::UnboundedReceiver<FrameRequest>,
         frames: tokio::sync::mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
@@ -68,10 +104,10 @@ impl FrameScheduler {
 
             tokio::select! {
                 request = self.requests.recv() => {
-                    let Some(requested_at) = request else {
+                    let Some(request) = request else {
                         break;
                     };
-                    let draw_at = self.clamp_deadline(requested_at);
+                    let draw_at = self.clamp_deadline(request.at);
                     next_deadline = Some(next_deadline.map_or(draw_at, |current| current.min(draw_at)));
                 }
                 _ = &mut deadline => {
@@ -115,5 +151,23 @@ mod tests {
                 .is_err(),
             "burst should coalesce into one immediate frame"
         );
+    }
+
+    #[tokio::test]
+    async fn schedule_frame_in_delays_draw() {
+        let (requester, mut receiver) = frame_channel();
+        requester.schedule_frame_in(Duration::from_millis(40));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), receiver.recv())
+                .await
+                .is_err(),
+            "delayed frame must not fire immediately"
+        );
+
+        tokio::time::timeout(Duration::from_millis(80), receiver.recv())
+            .await
+            .expect("delayed frame should arrive")
+            .expect("channel open");
     }
 }

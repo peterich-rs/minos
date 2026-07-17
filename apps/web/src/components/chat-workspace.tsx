@@ -59,7 +59,7 @@ export function ChatWorkspace() {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [transcript.messages.length, currentRecord?.ui_events.length])
+  }, [transcript.items.length, currentRecord?.ui_events.length])
 
   const filteredThreads = filter.trim()
     ? threads.filter((t) =>
@@ -239,7 +239,7 @@ export function ChatWorkspace() {
 
         <div className="flex-1 overflow-y-auto" ref={scrollRef}>
           <AnimatePresence mode="wait">
-            {transcript.messages.length === 0 ? (
+            {transcript.items.length === 0 ? (
               <motion.div
                 key="empty"
                 initial={{ opacity: 0, y: 8 }}
@@ -279,7 +279,7 @@ export function ChatWorkspace() {
                 animate={{ opacity: 1 }}
                 className="flex min-h-full flex-col justify-end"
               >
-                <ChatTranscript messages={transcript.messages} />
+                <ChatTranscript items={transcript.items} />
               </motion.div>
             )}
           </AnimatePresence>

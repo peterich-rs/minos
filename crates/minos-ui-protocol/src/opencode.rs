@@ -1,5 +1,5 @@
 use crate::error::TranslationError;
-use crate::message::{DisplayPayload, MessageRole, UiEventMessage};
+use crate::message::{DisplayPayload, MessageRole, SubagentStatus, UiEventMessage};
 use minos_domain::AgentName;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -11,6 +11,8 @@ pub struct OpencodeTranslatorState {
     open_user_message_id: Option<String>,
     emitted_message_ids: HashSet<String>,
     tool_calls: HashSet<String>,
+    /// Maps parent `task` tool call IDs to registered subagent session/thread IDs.
+    task_tool_subagents: HashMap<String, String>,
     message_roles: HashMap<String, MessageRole>,
     part_kinds: HashMap<String, TrackedPartKind>,
     parts_with_streamed_delta: HashSet<String>,
@@ -36,6 +38,7 @@ impl OpencodeTranslatorState {
             open_user_message_id: None,
             emitted_message_ids: HashSet::new(),
             tool_calls: HashSet::new(),
+            task_tool_subagents: HashMap::new(),
             message_roles: HashMap::new(),
             part_kinds: HashMap::new(),
             parts_with_streamed_delta: HashSet::new(),
@@ -61,7 +64,7 @@ pub fn translate(
             })?;
 
     match event_type {
-        "minos.subagent.spawned" => Ok(translate_synthetic_subagent_spawned(raw)),
+        "minos.subagent.spawned" => Ok(translate_synthetic_subagent_spawned(state, raw)),
         "session.created" => Ok(translate_session_created(state, raw)),
         "session.updated" => Ok(translate_session_updated(state, raw)),
         "message.updated" => Ok(translate_message_updated(state, raw)),
@@ -81,7 +84,10 @@ pub fn translate(
     }
 }
 
-fn translate_synthetic_subagent_spawned(raw: &Value) -> Vec<UiEventMessage> {
+fn translate_synthetic_subagent_spawned(
+    state: &mut OpencodeTranslatorState,
+    raw: &Value,
+) -> Vec<UiEventMessage> {
     let properties = props(raw);
     let parent_thread_id = properties
         .get("parent_thread_id")
@@ -96,14 +102,20 @@ fn translate_synthetic_subagent_spawned(raw: &Value) -> Vec<UiEventMessage> {
     if parent_thread_id.is_empty() || sub_thread_id.is_empty() {
         return Vec::new();
     }
+    let tool_call_id = properties
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if !tool_call_id.is_empty() {
+        state
+            .task_tool_subagents
+            .insert(tool_call_id.clone(), sub_thread_id.clone());
+    }
     vec![UiEventMessage::SubagentSpawned {
         parent_thread_id,
         sub_thread_id,
-        tool_call_id: properties
-            .get("tool_call_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        tool_call_id,
         agent: AgentName::Opencode,
         model: properties
             .get("model")
@@ -607,19 +619,20 @@ fn translate_tool_part(
             }
             "complete" => {
                 state.tool_calls.remove(&tool_call_id);
-                vec![UiEventMessage::ToolCallCompleted {
-                    tool_call_id,
-                    output: part
-                        .get("output")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string()
-                        .into(),
-                    is_error: part
-                        .get("is_error")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                }]
+                let name = part
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let output = part
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let is_error = part
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                finish_tool_call(state, tool_call_id, name, output, is_error)
             }
             _ => Vec::new(),
         };
@@ -628,6 +641,11 @@ fn translate_tool_part(
     let tool_state = part.get("state").cloned().unwrap_or(Value::Null);
     let status = tool_state
         .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let name = part
+        .get("tool")
+        .or_else(|| part.get("name"))
         .and_then(Value::as_str)
         .unwrap_or("");
 
@@ -639,44 +657,93 @@ fn translate_tool_part(
                 vec![UiEventMessage::ToolCallPlaced {
                     message_id: message_id.to_string(),
                     tool_call_id,
-                    name: part
-                        .get("tool")
-                        .or_else(|| part.get("name"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
+                    name: name.to_string(),
                     args_json: DisplayPayload::inline(tool_args_json(part, &tool_state)),
                 }]
             }
         }
         "completed" => {
             state.tool_calls.remove(&tool_call_id);
-            vec![UiEventMessage::ToolCallCompleted {
-                tool_call_id,
-                output: tool_state
-                    .get("output")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string()
-                    .into(),
-                is_error: false,
-            }]
+            let output = tool_state
+                .get("output")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            finish_tool_call(state, tool_call_id, name, output, false)
         }
         "error" => {
             state.tool_calls.remove(&tool_call_id);
-            vec![UiEventMessage::ToolCallCompleted {
-                tool_call_id,
-                output: tool_state
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string()
-                    .into(),
-                is_error: true,
-            }]
+            let output = tool_state
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            finish_tool_call(state, tool_call_id, name, output, true)
         }
         _ => Vec::new(),
     }
+}
+
+fn finish_tool_call(
+    state: &mut OpencodeTranslatorState,
+    tool_call_id: String,
+    name: &str,
+    output: String,
+    is_error: bool,
+) -> Vec<UiEventMessage> {
+    let mut events = vec![UiEventMessage::ToolCallCompleted {
+        tool_call_id: tool_call_id.clone(),
+        output: output.clone().into(),
+        is_error,
+    }];
+    if let Some(status_event) =
+        task_tool_subagent_status_event(state, &tool_call_id, name, &output, is_error)
+    {
+        events.push(status_event);
+    }
+    events
+}
+
+/// When an opencode `task` tool finishes, also close the linked SubagentCall card.
+/// Codex does this via collabAgentToolCall status; opencode only had spawn + tool result.
+fn task_tool_subagent_status_event(
+    state: &mut OpencodeTranslatorState,
+    tool_call_id: &str,
+    name: &str,
+    output: &str,
+    is_error: bool,
+) -> Option<UiEventMessage> {
+    if name != "task" {
+        return None;
+    }
+    let sub_thread_id = state
+        .task_tool_subagents
+        .remove(tool_call_id)
+        .or_else(|| sub_thread_id_from_task_output(output))?;
+    if sub_thread_id.is_empty() {
+        return None;
+    }
+    Some(UiEventMessage::SubagentStatusUpdated {
+        sub_thread_id,
+        status: if is_error {
+            SubagentStatus::Failed
+        } else {
+            SubagentStatus::Completed
+        },
+    })
+}
+
+fn sub_thread_id_from_task_output(output: &str) -> Option<String> {
+    // opencode task results look like: <task id="ses_..." state="completed">
+    let task_tag_start = output.find("<task")?;
+    let tag = &output[task_tag_start..];
+    let tag_end = tag.find('>').unwrap_or(tag.len());
+    let tag = &tag[..tag_end];
+    let id_key = "id=\"";
+    let id_start = tag.find(id_key)? + id_key.len();
+    let id_end = tag[id_start..].find('"')? + id_start;
+    let id = tag[id_start..id_end].trim();
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 fn tool_args_json(part: &Value, tool_state: &Value) -> String {
@@ -1343,6 +1410,191 @@ mod tests {
                 && sub_thread_id == "sub"
                 && tool_call_id == "tool-task"
                 && prompt.as_deref() == Some("inspect")
+        ));
+    }
+
+    #[test]
+    fn task_tool_completed_emits_subagent_status_updated() {
+        use crate::message::SubagentStatus;
+
+        let mut state = OpencodeTranslatorState::new("parent".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_task","sessionID":"sess_parent","role":"assistant","time":{"created":1}}}
+            }"#),
+        )
+        .expect("message start");
+
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.updated",
+                "properties":{
+                    "part":{
+                        "id":"part_task",
+                        "sessionID":"sess_parent",
+                        "messageID":"msg_task",
+                        "type":"tool",
+                        "callID":"call_task",
+                        "tool":"task",
+                        "state":{"status":"running","input":{"prompt":"audit unwrap"}}
+                    }
+                }
+            }"#),
+        )
+        .expect("task placed");
+
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"minos.subagent.spawned",
+                "properties":{
+                    "parent_thread_id":"parent",
+                    "sub_thread_id":"ses_sub_1",
+                    "tool_call_id":"call_task",
+                    "prompt":"audit unwrap"
+                }
+            }"#),
+        )
+        .expect("subagent spawn");
+
+        let completed = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.updated",
+                "properties":{
+                    "part":{
+                        "id":"part_task",
+                        "sessionID":"sess_parent",
+                        "messageID":"msg_task",
+                        "type":"tool",
+                        "callID":"call_task",
+                        "tool":"task",
+                        "state":{
+                            "status":"completed",
+                            "input":{"prompt":"audit unwrap"},
+                            "output":"<task id=\"ses_sub_1\" state=\"completed\">\n<task_result>\ndone\n</task_result>\n</task>"
+                        }
+                    }
+                }
+            }"#),
+        )
+        .expect("task completed");
+
+        assert!(matches!(
+            completed.as_slice(),
+            [
+                UiEventMessage::ToolCallCompleted {
+                    tool_call_id,
+                    is_error: false,
+                    ..
+                },
+                UiEventMessage::SubagentStatusUpdated {
+                    sub_thread_id,
+                    status: SubagentStatus::Completed,
+                }
+            ] if tool_call_id == "call_task" && sub_thread_id == "ses_sub_1"
+        ));
+    }
+
+    #[test]
+    fn task_tool_completed_resolves_subagent_from_output_without_spawn() {
+        use crate::message::SubagentStatus;
+
+        let mut state = OpencodeTranslatorState::new("parent".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_task","sessionID":"sess_parent","role":"assistant","time":{"created":1}}}
+            }"#),
+        )
+        .expect("message start");
+
+        let completed = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.updated",
+                "properties":{
+                    "part":{
+                        "id":"part_task",
+                        "sessionID":"sess_parent",
+                        "messageID":"msg_task",
+                        "type":"tool",
+                        "callID":"call_orphan",
+                        "tool":"task",
+                        "state":{
+                            "status":"completed",
+                            "output":"<task id=\"ses_from_output\" state=\"completed\">ok</task>"
+                        }
+                    }
+                }
+            }"#),
+        )
+        .expect("task completed");
+
+        assert!(matches!(
+            completed.as_slice(),
+            [
+                UiEventMessage::ToolCallCompleted { .. },
+                UiEventMessage::SubagentStatusUpdated {
+                    sub_thread_id,
+                    status: SubagentStatus::Completed,
+                }
+            ] if sub_thread_id == "ses_from_output"
+        ));
+    }
+
+    #[test]
+    fn task_tool_error_emits_subagent_failed() {
+        use crate::message::SubagentStatus;
+
+        let mut state = OpencodeTranslatorState::new("parent".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.updated",
+                "properties":{"info":{"id":"msg_task","sessionID":"sess_parent","role":"assistant","time":{"created":1}}}
+            }"#),
+        )
+        .expect("message start");
+        state
+            .task_tool_subagents
+            .insert("call_err".into(), "ses_err".into());
+
+        let completed = translate(
+            &mut state,
+            &val(r#"{
+                "type":"message.part.updated",
+                "properties":{
+                    "part":{
+                        "id":"part_task",
+                        "sessionID":"sess_parent",
+                        "messageID":"msg_task",
+                        "type":"tool",
+                        "callID":"call_err",
+                        "tool":"task",
+                        "state":{"status":"error","error":"subagent crashed"}
+                    }
+                }
+            }"#),
+        )
+        .expect("task error");
+
+        assert!(matches!(
+            completed.as_slice(),
+            [
+                UiEventMessage::ToolCallCompleted {
+                    is_error: true,
+                    ..
+                },
+                UiEventMessage::SubagentStatusUpdated {
+                    sub_thread_id,
+                    status: SubagentStatus::Failed,
+                }
+            ] if sub_thread_id == "ses_err"
         ));
     }
 }

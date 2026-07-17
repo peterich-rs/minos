@@ -18,7 +18,7 @@ impl App {
     }
 
     pub(super) async fn confirm_delete_thread(&mut self) -> bool {
-        let Some(pending) = self.ui.delete_confirm.take() else {
+        let Some(pending) = self.ui.overlays.delete_confirm.take() else {
             return false;
         };
 
@@ -35,13 +35,13 @@ impl App {
     pub(super) fn remove_thread_from_ui(&mut self, selected: usize, thread_id: &str) {
         let index = self
             .ui
-            .threads
+            .thread_panel.list.items
             .get(selected)
             .filter(|entry| entry.thread_id == thread_id)
             .map(|_| selected)
             .or_else(|| {
                 self.ui
-                    .threads
+                    .thread_panel.list.items
                     .iter()
                     .position(|entry| entry.thread_id == thread_id)
             });
@@ -49,50 +49,31 @@ impl App {
             return;
         };
 
-        self.ui.threads.remove(index);
-        self.ui.chat_states.remove(thread_id);
+        self.ui.thread_panel.list.items.remove(index);
+        self.ui.thread_panel.chat_states.remove(thread_id);
         self.state.hydrated_threads.remove(thread_id);
         self.state.thread_watermarks.remove(thread_id);
         self.state
             .applied_ingest_fingerprints
             .retain(|fingerprint| !fingerprint.starts_with(&format!("{thread_id}:")));
 
-        if self.ui.threads.is_empty() {
-            self.ui.selected_thread = None;
-            self.ui.agent_list_state.select(None);
+        if self.ui.thread_panel.list.items.is_empty() {
+            self.ui.thread_panel.list.select(None);
             self.ui.focus.switch_layout(false);
         } else {
-            self.select_thread(index.min(self.ui.threads.len().saturating_sub(1)));
+            self.select_thread(index.min(self.ui.thread_panel.list.items.len().saturating_sub(1)));
         }
         self.sync_input_agent_picker();
     }
 
-    pub(super) async fn start_agent_at(&mut self, index: usize) -> bool {
-        let Some(agent_name) = self.ui.status.agents.get(index).map(|desc| desc.name) else {
-            return false;
-        };
-
-        match self.start_new_thread(agent_name).await {
-            Ok(_) => {
-                self.ui.agent_picker = None;
-                true
-            }
-            Err(error) => {
-                self.ui.set_error(error);
-                true
-            }
-        }
-    }
-
     pub(super) fn select_thread(&mut self, index: usize) {
-        self.ui.selected_thread = Some(index);
-        self.ui.agent_list_state.select(Some(index));
+        self.ui.thread_panel.list.select(Some(index));
     }
 
     pub(super) fn current_thread_is_interruptible(&self) -> bool {
         self.ui
-            .selected_thread
-            .and_then(|index| self.ui.threads.get(index))
+            .thread_panel.list.selected
+            .and_then(|index| self.ui.thread_panel.list.items.get(index))
             .is_some_and(|thread| {
                 matches!(
                     thread.state,

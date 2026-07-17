@@ -436,7 +436,7 @@ cwd 未命中任何 project 时：
   4. `nav_stack.push(Thread { project_id, thread_id })`
   5. 进入 Thread 群聊视图
 
-- 无 `@` 时使用 project 的常用 agent（`ProjectEntry.common_agents[0]`）；若 `common_agents` 为空则弹 agent picker 让用户选择。
+- Superseded on 2026-06-23: modal agent picker 已删除。无 `@` 时使用当前默认 agent；显式选择 agent 走 input bar 的 `@agent` 路由。
 
 ## 9. Agent 卡片设计
 
@@ -497,7 +497,7 @@ Thread 视图右侧 20% 区域，每个参与 agent 一个卡片：
 | `ui/chat.rs` + `RenderCache` | Agent 子视图的对话渲染 |
 | `ui/group_chat.rs` | Thread 视图的群聊渲染 |
 | `ui/input_bar.rs` | 所有层的底部输入栏 |
-| `ui/agent_picker.rs` | Thread 创建时的 agent 选择 |
+| `ui/input_bar.rs` | Thread 创建时的 `@agent` 路由和 inline mention 补全 |
 | `translation.rs` `ChatState` | Thread/Agent 对话状态 |
 | `workspace_paths_match()` | 启动 cwd 匹配 |
 

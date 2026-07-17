@@ -280,6 +280,13 @@ impl FormalAgentSessionSummary {
                 ),
             })?;
 
+        let state = if self.ended_at_ms.is_some() {
+            minos_protocol::ThreadState::Closed {
+                reason: minos_protocol::CloseReason::UserClose,
+            }
+        } else {
+            minos_protocol::ThreadState::Idle
+        };
         Ok(minos_protocol::ThreadSummary {
             thread_id: session_id,
             agent,
@@ -290,6 +297,7 @@ impl FormalAgentSessionSummary {
             ended_at_ms: self.ended_at_ms,
             end_reason: self.end_reason,
             parent_thread_id: None,
+            state,
         })
     }
 }
@@ -2581,6 +2589,7 @@ fn agent_name_from_session_agent_id(agent_id: &str) -> Option<AgentName> {
         "agent_claude" | "claude" => Some(AgentName::Claude),
         "agent_gemini" | "gemini" => Some(AgentName::Gemini),
         "agent_opencode" | "opencode" => Some(AgentName::Opencode),
+        "agent_grok" | "grok" => Some(AgentName::Grok),
         _ => None,
     }
 }

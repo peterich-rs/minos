@@ -34,9 +34,10 @@
 
 File: `crates/minos-protocol/src/local_rpc.rs`
 
-Add to the `LocalDaemonRpc` trait (after the `subscribe_manager_events` subscription):
+Add to the `LocalDaemonRpc` trait (after the `subscribe_manager_events` subscription). Note: the trait already has `#[rpc(server, client, namespace = "minos_local")]` at line 92, so jsonrpsee auto-prefixes every method with `minos_local_`. Declare the **short** name here; the wire name callers use will be `minos_local_shutdown_daemon`:
 
 ```rust
+    // trait 内用短名；wire name 自动变成 minos_local_shutdown_daemon
     #[method(name = "shutdown_daemon")]
     async fn shutdown_daemon(&self) -> jsonrpsee::core::RpcResult<()>;
 ```
@@ -106,57 +107,147 @@ pub async fn start_local_rpc_server(
 
 File: `crates/minos-daemon/src/handle.rs`
 
-In `start_with_local_rpc` (around line 219-227), create the oneshot channel and pass the sender to `start_local_rpc_server`. Store the receiver on `DaemonInner`:
+The `start_with_local_rpc` function needs to create an oneshot channel, pass the sender to `start_local_rpc_server`, and store the receiver on `DaemonInner` so the `start` command can later await it.
+
+**Step 4a: Update imports**
+
+File: `crates/minos-daemon/src/handle.rs`, top of file.
+
+The file currently imports (lines 10-26):
+```rust
+use std::sync::{Arc, Mutex as StdMutex};
+...
+use tokio::sync::watch;
+```
+
+Add `oneshot` and `Mutex as TokioMutex` to the existing `tokio::sync` import:
 
 ```rust
-// In DaemonInner struct, add:
-shutdown_rx: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+// Before (line 16):
+use tokio::sync::watch;
 
-// In start_with_local_rpc:
+// After:
+use tokio::sync::{watch, Mutex as TokioMutex, oneshot};
+```
+
+`Arc` and `StdMutex` stay on the `std::sync` import (line 11) — do not remove them.
+
+**Step 4b: Add the `shutdown_rx` field to `DaemonInner`**
+
+File: `crates/minos-daemon/src/handle.rs:28-60`.
+
+The existing `DaemonInner` is a private struct (no derives). Add the field at the end, after `local_rpc_discovery_path`:
+
+```rust
+struct DaemonInner {
+    relay: Arc<RelayClient>,
+    link_rx: watch::Receiver<minos_domain::RelayLinkState>,
+    peer_rx: watch::Receiver<minos_domain::PeerState>,
+    peer: Arc<StdMutex<Option<PeerRecord>>>,
+    peers: Arc<StdMutex<Vec<HostPeerSummary>>>,
+    #[allow(dead_code)]
+    mac_name: String,
+    last_error: Arc<StdMutex<Option<MinosError>>>,
+    agent: Arc<AgentGlue>,
+    rt_handle: Handle,
+    #[allow(dead_code)]
+    local_rpc_handle: Option<jsonrpsee::server::ServerHandle>,
+    local_rpc_discovery_path: Option<PathBuf>,
+    // NEW: shutdown signal receiver. `tokio::sync::Mutex` (not std) because
+    // `take_shutdown_signal` awaits while holding the lock. `Option` because
+    // the daemon may run without a local RPC server.
+    shutdown_rx: TokioMutex<Option<oneshot::Receiver<()>>>,
+}
+```
+
+> Why `tokio::sync::Mutex` here but `std::sync::Mutex` on `LocalRpcImpl.shutdown_tx` (Step 2)? `shutdown_daemon`'s RPC handler takes the tx under a sync lock with **no await** inside the guard — std Mutex is correct and cheaper there. `take_shutdown_signal` is `async` and the caller may await between locking and consuming — a std Mutex would be unsound across await points, so we use tokio Mutex here.
+
+**Step 4c: Create the channel and construct `DaemonInner` with it**
+
+File: `crates/minos-daemon/src/handle.rs` — `start_with_local_rpc`, lines 219-243.
+
+The current code (lines 219-227) builds the local RPC handle and then constructs `DaemonInner` (lines 229-243). Declare a local `shutdown_rx` that starts as `None`, populate it only when `local_rpc_config` is `Some`, then move it into `DaemonInner`. Concretely, replace lines 219-243 with:
+
+```rust
+// Declare the receiver up-front; stays None when there's no local RPC.
+let mut shutdown_rx: Option<oneshot::Receiver<()>> = None;
+
 let local_rpc_handle = if let Some(lr_config) = local_rpc_config {
     let runner = Arc::new(minos_cli_detect::RealCommandRunner::new(
         subprocess_env.clone(),
     ));
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (shutdown_tx, rx) = oneshot::channel();
+    shutdown_rx = Some(rx);
     let handle = start_local_rpc_server(lr_config, runner, agent.clone(), shutdown_tx).await?;
-    // Store shutdown_rx for the start command to await
-    inner_shutdown_rx = Some(shutdown_rx);
     Some(handle)
 } else {
     None
 };
+
+Ok(Arc::new(Self {
+    inner: Arc::new(DaemonInner {
+        relay,
+        link_rx,
+        peer_rx,
+        peer: peer_store,
+        peers: peers_store,
+        mac_name,
+        last_error,
+        agent,
+        rt_handle: Handle::current(),
+        local_rpc_handle,
+        local_rpc_discovery_path,
+        // NEW: store the shutdown receiver for the `start` command to await.
+        shutdown_rx: TokioMutex::new(shutdown_rx),
+    }),
+}))
 ```
 
-Expose a method on `DaemonHandle` to take the shutdown receiver:
+> The local variable is named `shutdown_rx` (not `inner_shutdown_rx`). It is moved into `DaemonInner.shutdown_rx` at the construction site. There are no other readers of this local.
+
+**Step 4d: Expose a method on `DaemonHandle` to take the shutdown receiver**
 
 ```rust
-pub async fn take_shutdown_signal(&self) -> Option<tokio::sync::oneshot::Receiver<()>> {
+pub async fn take_shutdown_signal(&self) -> Option<oneshot::Receiver<()>> {
     self.inner.shutdown_rx.lock().await.take()
 }
 ```
 
+This matches the `shutdown_tx: std::sync::Mutex<Option<...>>` shape used on `LocalRpcImpl` (Step 2), but uses `tokio::sync::Mutex` here because the consumer (`take_shutdown_signal`) is async and awaiting inside a `std::sync::Mutex` guard across an `.await` point would be unsound.
+
 - [ ] **Step 5: Update `minos-daemon start` to await the shutdown signal**
 
-File: `crates/minos-daemon/src/main.rs` — the `start` function (around line 421-428)
+File: `crates/minos-daemon/src/main.rs` — the `start` function, lines 427-429.
 
 Currently:
 ```rust
 wait_for_termination().await?;
+println!("status:     stopping");
+handle.stop().await?;
+Ok(())
 ```
 
-Change to also await the RPC shutdown signal:
+`wait_for_termination()` (line 589) already only waits for SIGINT/SIGTERM — it does **not** call `handle.stop()`. We keep it as-is and add a `tokio::select!` arm for the RPC shutdown receiver so either trigger wins:
 
 ```rust
 let shutdown_rx = handle.take_shutdown_signal().await;
 tokio::select! {
-    _ = wait_for_termination_signal() => {},
+    res = wait_for_termination() => {
+        res?;
+    }
     _ = async {
-        if let Some(rx) = shutdown_rx { rx.await.ok() } else { std::future::pending::<()>().await }
-    } => {},
+        match shutdown_rx {
+            Some(rx) => { rx.await.ok(); }
+            None => std::future::pending::<()>().await,
+        }
+    } => {}
 }
+println!("status:     stopping");
+handle.stop().await?;
+Ok(())
 ```
 
-Where `wait_for_termination_signal()` is the renamed body of the existing `wait_for_termination()` (just the signal listening part, without calling `handle.stop()`).
+> `handle.stop()` is still called unconditionally after the select resolves, preserving the existing cleanup path for both signal and RPC shutdown.
 
 - [ ] **Step 6: Compile and verify**
 
@@ -410,28 +501,51 @@ fn spawn_daemon_subprocess(discovery_path: &std::path::Path) -> Result<()> {
 
 Add `use anyhow::Context;` if not already imported.
 
-- [ ] **Step 2: Write `wait_for_discovery_file()` helper**
+- [ ] **Step 2: Write `wait_for_new_discovery()` helper**
 
 File: `crates/minos-tui/src/main.rs`
 
+**Stale-discovery hazard:** if a previous daemon crashed, the old discovery file may still be on disk. A naive poll that returns as soon as `resolve_daemon_url()` succeeds would read back the *old* URL and never wait for the freshly-spawned daemon to write its own. To avoid this:
+
+1. The caller (`connect_or_start_daemon_backend`) **deletes** the stale discovery file before spawning (see Step 4).
+2. This helper records the pre-spawn mtime of the discovery path (or `None` if absent) and only returns once a discovery file appears **with an mtime newer than** the snapshot — i.e. written by the new daemon.
+3. The returned URL is not trusted until the caller connects successfully.
+
 ```rust
-async fn wait_for_discovery_file(
+/// Wait for the *new* daemon to publish its discovery file.
+///
+/// `pre_spawn_mtime` is the mtime captured *before* `spawn_daemon_subprocess`
+/// (or `None` if the file did not exist). We only accept a discovery file
+/// whose mtime is strictly newer, so we never read back a stale URL left by
+/// a crashed daemon.
+async fn wait_for_new_discovery(
     discovery_path: &std::path::Path,
+    pre_spawn_mtime: Option<std::time::SystemTime>,
     timeout: std::time::Duration,
 ) -> Result<String> {
     let start = std::time::Instant::now();
     loop {
         if start.elapsed() > timeout {
             anyhow::bail!(
-                "daemon did not start within {:?} (discovery file not found at {})",
+                "daemon did not start within {:?} (no fresh discovery file at {})",
                 timeout,
                 discovery_path.display()
             );
         }
-        match resolve_daemon_url(None) {
-            Ok(url) => return Ok(url),
-            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+        // Only trust the file if it is newer than what we saw before spawn.
+        let fresh = match std::fs::metadata(discovery_path) {
+            Ok(meta) => match meta.modified() {
+                Ok(mtime) => pre_spawn_mtime.map_or(true, |prev| mtime > prev),
+                Err(_) => false,
+            },
+            Err(_) => false,
+        };
+        if fresh {
+            if let Ok(url) = resolve_daemon_url(None) {
+                return Ok(url);
+            }
         }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
 ```
@@ -473,7 +587,9 @@ fn check_stale_daemon(discovery_path: &std::path::Path) {
 
 File: `crates/minos-tui/src/main.rs:267-300`
 
-Change the return type — no more `Option<Arc<DaemonHandle>>`:
+Change the return type — no more `Option<Arc<DaemonHandle>>`.
+
+**Stale-discovery prevention:** before spawning, (a) run `check_stale_daemon` (PID-based), then (b) snapshot the current discovery-file mtime and (c) delete the stale discovery file so the new daemon starts from a clean slate. After spawn, `wait_for_new_discovery` waits for a file newer than the snapshot, and **the daemon is only considered started once `DaemonBackend::connect` succeeds**:
 
 ```rust
 async fn connect_or_start_daemon_backend(
@@ -482,9 +598,7 @@ async fn connect_or_start_daemon_backend(
     let explicit_url = override_url.is_some();
     let discovery_path = resolve_daemon_discovery_path()?;
 
-    // Check for stale daemon (crashed without cleaning up)
-    check_stale_daemon(&discovery_path);
-
+    // Phase 1: try to connect to an existing daemon (no spawn).
     match resolve_daemon_url(override_url.clone()) {
         Ok(url) => match crate::backend::DaemonBackend::connect(&url).await {
             Ok(backend) => return Ok(Arc::new(backend)),
@@ -493,7 +607,7 @@ async fn connect_or_start_daemon_backend(
                 tracing::warn!(
                     target: "minos_tui",
                     error = %error,
-                    "failed to connect to discovered daemon; spawning new daemon"
+                    "failed to connect to discovered daemon; will spawn a new one"
                 );
             }
         },
@@ -502,18 +616,42 @@ async fn connect_or_start_daemon_backend(
             tracing::warn!(
                 target: "minos_tui",
                 error = %error,
-                "daemon discovery unavailable; spawning new daemon"
+                "daemon discovery unavailable; will spawn a new daemon"
             );
         }
     }
 
-    // Spawn daemon as detached subprocess
+    // Phase 2: spawn a fresh daemon. Clean up stale state first.
+    check_stale_daemon(&discovery_path);
+
+    // Snapshot the pre-spawn mtime so wait_for_new_discovery can reject a
+    // stale discovery file left behind by the dead daemon.
+    let pre_spawn_mtime = std::fs::metadata(&discovery_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
+
+    // Delete any stale discovery file so we never read back the old URL.
+    if pre_spawn_mtime.is_some() {
+        let _ = std::fs::remove_file(&discovery_path);
+    }
+
     spawn_daemon_subprocess(&discovery_path)?;
-    let url = wait_for_discovery_file(&discovery_path, std::time::Duration::from_secs(15)).await?;
+
+    // Wait for the NEW daemon's discovery file (mtime strictly newer than
+    // pre_spawn_mtime), then connect. A successful connect is the only
+    // signal that the daemon is actually up.
+    let url = wait_for_new_discovery(
+        &discovery_path,
+        pre_spawn_mtime,
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
     let backend = crate::backend::DaemonBackend::connect(&url).await?;
     Ok(Arc::new(backend))
 }
 ```
+
+> **Why the connect-after-wait matters:** `wait_for_new_discovery` returning only proves a discovery file was written. If the daemon dies between writing discovery and accepting connections, the subsequent `DaemonBackend::connect` will fail and surface a real error instead of silently succeeding with a dead endpoint.
 
 - [ ] **Step 5: Update `main()` to use new return type**
 
@@ -642,12 +780,56 @@ The `test_cli` and `validate_backend_args` tests in `main.rs` don't reference `m
 Search: `grep -r "managed_daemon" crates/minos-tui/src/`
 Fix any references.
 
-- [ ] **Step 4: Run full TUI test suite**
+- [ ] **Step 4: Add unit test for stale-discovery protection in `wait_for_new_discovery`**
+
+File: `crates/minos-tui/src/main.rs` (test module)
+
+Verify that `wait_for_new_discovery` does **not** accept a discovery file whose mtime is older than `pre_spawn_mtime` (simulating a stale file left by a crashed daemon), and only returns once a file newer than the snapshot appears. Use a temp dir:
+
+```rust
+#[tokio::test]
+async fn wait_for_new_discovery_rejects_stale_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let discovery_path = dir.path().join("tui-daemon-rpc.json");
+
+    // Simulate a stale discovery file written by a crashed daemon.
+    std::fs::write(&discovery_path, r#"{"url":"ws://127.0.0.1:9999"}"#).unwrap();
+    let stale_mtime = std::fs::metadata(&discovery_path).unwrap().modified().unwrap();
+
+    // pre_spawn_mtime == stale_mtime: must NOT immediately return the old URL.
+    // Spawn a background task that writes a NEW file after a short delay.
+    let path_clone = discovery_path.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Bump mtime by writing new content (OS will set a newer mtime).
+        std::fs::write(&path_clone, r#"{"url":"ws://127.0.0.1:12345"}"#).unwrap();
+    });
+
+    // Use a short timeout; if it read the stale file it would return instantly
+    // with the old URL.
+    let url = wait_for_new_discovery(
+        &discovery_path,
+        Some(stale_mtime),
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .expect("should detect the new discovery file");
+
+    assert!(
+        url.contains("12345"),
+        "should read the NEW daemon's URL, not the stale one"
+    );
+}
+```
+
+> Note: `tempfile` must be a dev-dependency of `minos-tui`. Check `crates/minos-tui/Cargo.toml` — if missing, add it under `[dev-dependencies]`.
+
+- [ ] **Step 5: Run full TUI test suite**
 
 Run: `cargo test -p minos-tui --quiet`
 Expected: all pass
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add -A

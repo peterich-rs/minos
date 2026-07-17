@@ -329,6 +329,7 @@ fn agent_name_from_agent_id(agent_id: &str) -> Option<AgentName> {
         "agent_claude" | "claude" => Some(AgentName::Claude),
         "agent_gemini" | "gemini" => Some(AgentName::Gemini),
         "agent_opencode" | "opencode" => Some(AgentName::Opencode),
+        "agent_grok" | "grok" => Some(AgentName::Grok),
         _ => None,
     }
 }

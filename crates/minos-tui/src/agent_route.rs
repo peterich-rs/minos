@@ -42,10 +42,40 @@ pub(crate) fn parse_agent_name(value: &str) -> Option<AgentName> {
         .find(|agent| agent.bin_name() == normalized.as_str())
 }
 
-pub(crate) fn short_thread_id(thread_id: &str) -> String {
-    thread_id[..8.min(thread_id.len())].to_owned()
+/// First up-to-8 bytes of a thread id for display / mention tokens.
+///
+/// Thread ids are ASCII hex (or similar); this returns a borrowed slice so
+/// render paths never allocate.
+pub(crate) fn short_thread_id(thread_id: &str) -> &str {
+    let mut end = thread_id.len().min(8);
+    while end > 0 && !thread_id.is_char_boundary(end) {
+        end -= 1;
+    }
+    &thread_id[..end]
 }
 
 pub(crate) fn thread_can_receive_message(state: &ThreadState) -> bool {
     !matches!(state, ThreadState::Closed { .. })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_thread_id_returns_borrowed_prefix() {
+        let id = "abcdef0123456789";
+        assert_eq!(short_thread_id(id), "abcdef01");
+        assert_eq!(short_thread_id("abc"), "abc");
+        assert_eq!(short_thread_id(""), "");
+    }
+
+    #[test]
+    fn short_thread_id_respects_utf8_char_boundary() {
+        // "abcdef" (6) + 你 (3 bytes at 6..=8) → raw cut at 8 is mid-char.
+        let id = "abcdef你g";
+        let short = short_thread_id(id);
+        assert_eq!(short, "abcdef");
+        assert!(id.is_char_boundary(short.len()));
+    }
 }

@@ -4,7 +4,9 @@
 
 **Goal:** Fix `@Agent#hashid` candidates leaking across conversations — when inside a conversation, the mention picker should only show agent sessions belonging to that conversation.
 
-**Architecture:** `room_agent_mention_candidates()` currently reads from `self.threads` (global). It should read from `self.conversation_agent_sessions` (per-conversation) when `nav_level().conversation_id()` is `Some`. The short-id resolver `thread_id_for_agent_short_id()` needs the same scoping. `ThreadSummaryEntry` needs a `state` field to filter out closed sessions.
+**Implementation status (2026-06-24):** implemented in code. `ThreadSummary` / `ThreadSummaryEntry` now carry state, daemon conversation-session listing uses live-manager-state first with DB-row fallback, TUI mention candidates and short-id routing only expose existing sessions when a conversation is active, manager events keep `conversation_agent_sessions` state fresh, and targeted tests cover conversation-scoped behavior plus hiding existing sessions from the new-conversation input. Commit steps below are historical plan instructions, not completed by this document.
+
+**Architecture:** `room_agent_mention_candidates()` reads from `self.conversation_agent_sessions` (per-conversation) only when `nav_level().conversation_id()` is `Some`; outside an active conversation it only returns installed agents. The short-id resolver `thread_id_for_agent_short_id()` uses the same scoping and does not fall back to `self.threads`. `ThreadSummaryEntry` carries a `state` field to filter out closed sessions.
 
 **Tech Stack:** Rust, ratatui, jsonrpsee
 
@@ -19,7 +21,7 @@
 | `crates/minos-tui/src/ui/mod.rs` | `room_agent_mention_candidates()` | Scope to conversation when inside one |
 | `crates/minos-tui/src/app/submission.rs` | `thread_id_for_agent_short_id()` | Scope to conversation when inside one |
 | `crates/minos-tui/src/app_tests/` | Test file | New tests for scoping |
-| `crates/minos-daemon/src/agent.rs` | `list_conversation_agent_sessions` impl | Include `state` in response |
+| `crates/minos-daemon/src/agent.rs` | `list_conversation_agent_sessions` impl | Include `state` in response, using **live-manager-state-first, DB-row-fallback** (same strategy as `get_thread`) |
 
 ---
 
@@ -92,13 +94,58 @@ pub struct ThreadSummary {
 }
 ```
 
-- [ ] **Step 3: Update daemon `list_conversation_agent_sessions` to populate `state`**
+- [ ] **Step 3: Update daemon `list_conversation_agent_sessions` to populate `state` (live-manager-first)**
 
-File: `crates/minos-daemon/src/agent.rs`
+File: `crates/minos-daemon/src/agent.rs:1094-1107`
 
-Find the function that builds `ThreadSummary` for `list_conversation_agent_sessions`. It likely constructs from DB rows. Populate `state` from the persisted thread state (the `status` column in the `threads` table). Look for where `ThreadSummary` structs are constructed and add `state: <resolved_state>`.
+The current implementation (`agent.rs:1094`) only reads DB rows via `thread_summary_from_row` and never consults the live `AgentManager`. This means a thread that is `Running` in-memory but still `Suspended` in the DB would appear stale, and mention filtering by `Closed`/`Open` would be wrong.
 
-Search for `ThreadSummary {` in `crates/minos-daemon/src/` to find all construction sites and add the `state` field to each.
+Adopt the **same strategy `get_thread` already uses** (`agent.rs:763-782`): live manager snapshot first, DB row as fallback. Concretely:
+
+```rust
+pub async fn list_conversation_agent_sessions(
+    &self,
+    req: minos_protocol::ListConversationAgentSessionsParams,
+) -> Result<minos_protocol::ListConversationAgentSessionsResponse, MinosError> {
+    let rows = self
+        .store
+        .list_threads_by_conversation(&req.conversation_id)
+        .await
+        .map_err(|e| map_store_error("list_conversation_agent_sessions", e))?;
+
+    // Build a live-state lookup from the in-memory manager, exactly like
+    // `get_thread` (agent.rs:770-776) does for a single thread.
+    let live_states: std::collections::HashMap<String, ProtoThreadState> = self
+        .manager
+        .list_threads()
+        .await
+        .into_iter()
+        .map(|snapshot| (snapshot.thread_id.clone(), state_to_proto(&snapshot.state)))
+        .collect();
+
+    let threads = rows
+        .into_iter()
+        .map(|row| {
+            let mut summary = thread_summary_from_row(row.clone())?;
+            // Live state wins; fall back to the DB row's state, propagating
+            // any conversion error exactly like `get_thread` does.
+            let row_state = row_state_to_proto(&row)?;
+            summary.state = live_states
+                .get(&summary.thread_id)
+                .cloned()
+                .unwrap_or(row_state);
+            Ok(summary)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(minos_protocol::ListConversationAgentSessionsResponse { threads })
+}
+```
+
+**Requirements:**
+- `thread_summary_from_row` must populate `state` from `row_state_to_proto(&row)` as the baseline (see `agent.rs:1399` for the existing helper).
+- After building each `ThreadSummary` from the row, override `state` with the live manager snapshot if present (same precedence as `get_thread` at `agent.rs:780`: `live_state.unwrap_or(row_state_to_proto(&row)?)`).
+- `row_state_to_proto` errors are **propagated** via `?` — identical to `get_thread`'s fallback path. Do not use `unwrap_or_default()` or any silent fallback: `ProtoThreadState` does not implement `Default`, and swallowing the error would diverge from `get_thread`.
+- Also update **every** other `ThreadSummary {` construction site in `crates/minos-daemon/src/` to include the new `state` field. Search for `ThreadSummary {` to find them all.
 
 - [ ] **Step 4: Update `ConversationAgentStarted` handler to include `state`**
 
@@ -234,15 +281,21 @@ mod mention_scope_tests {
     }
 
     #[test]
-    fn mention_candidates_outside_conversation_show_no_existing() {
+    fn mention_candidates_outside_conversation_hide_existing_threads() {
         let mut ui = UiState::default();
         ui.threads.push(make_thread_entry("thread-aaaa1111", AgentName::Codex, ThreadState::Idle));
-        // Nav at top level (no conversation)
-        ui.nav_stack = vec![NavLevel::Projects];
+        ui.nav_stack = vec![NavLevel::Projects, NavLevel::Conversations { project_id: "p1".into() }];
 
         let candidates = ui.room_agent_mention_candidates();
-        let has_existing = candidates.iter().any(|c| matches!(c.kind, AgentMentionCandidateKind::Existing { .. }));
-        assert!(!has_existing, "no Existing candidates outside a conversation");
+        let existing_thread_ids: Vec<&str> = candidates
+            .iter()
+            .filter_map(|c| match &c.kind {
+                AgentMentionCandidateKind::Existing { thread_id } => Some(thread_id.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(existing_thread_ids.is_empty());
     }
 
     #[test]
@@ -278,13 +331,13 @@ mod mention_scope_tests {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p minos-tui mention_scope_tests -- --nocapture`
-Expected: FAIL — `mention_candidates_in_conversation_only_show_conversation_sessions` fails because `thread-aaaa1111` appears (it comes from `self.threads`). The other two may also fail or pass depending on current behavior.
+Expected: FAIL — `mention_candidates_in_conversation_only_show_conversation_sessions` fails because `thread-aaaa1111` appears (it comes from `self.threads`). The outside-conversation test fails if existing session hashes are still exposed by the new-conversation input.
 
 - [ ] **Step 3: Implement the scoped `room_agent_mention_candidates()`**
 
 File: `crates/minos-tui/src/ui/mod.rs:250-271`
 
-Replace the function body:
+Replace the function body. Per spec §2.1.1, the source of "Existing" candidates depends on nav level: inside a conversation, use `conversation_agent_sessions` (scoped); outside an active conversation, return installed agents only:
 
 ```rust
 pub fn room_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
@@ -295,30 +348,22 @@ pub fn room_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
         .map(|agent| AgentMentionCandidate::installed(agent.name, agent.status.clone()))
         .collect();
 
-    // Only show "Existing" candidates when inside a conversation.
-    // Use conversation_agent_sessions (scoped) instead of threads (global).
-    let in_conversation = self
-        .nav_stack
-        .iter()
-        .any(|level| level.conversation_id().is_some());
-
-    if !in_conversation {
-        return candidates;
+    if self.nav_level().conversation_id().is_some() {
+        // Scoped: only sessions belonging to this conversation.
+        candidates.extend(
+            self.conversation_agent_sessions
+                .iter()
+                .filter(|session| session.parent_thread_id.is_none())
+                .filter(|session| !matches!(session.state, ThreadState::Closed { .. }))
+                .map(|session| {
+                    AgentMentionCandidate::existing(
+                        session.agent,
+                        session.thread_id.clone(),
+                        short_thread_id(&session.thread_id),
+                    )
+                }),
+        );
     }
-
-    candidates.extend(
-        self.conversation_agent_sessions
-            .iter()
-            .filter(|session| session.parent_thread_id.is_none())
-            .filter(|session| !matches!(session.state, ThreadState::Closed { .. }))
-            .map(|session| {
-                AgentMentionCandidate::existing(
-                    session.agent,
-                    session.thread_id.clone(),
-                    short_thread_id(&session.thread_id),
-                )
-            }),
-    );
     candidates
 }
 ```

@@ -23,7 +23,7 @@ Completed on 2026-06-17.
 - `Renderable::cursor_pos()` is wired through `Row`/`Column`, and `render_ui()` sets the terminal cursor from the active input renderable after drawing.
 - `Focus` enum was removed. `UiState.focus` is now `FocusManager`, with overview/detail focus trees and `PaneId` routing across app/update/event code.
 - `Tab` and `BackTab` map to forward/reverse focus cycling through the focus tree.
-- Status bar, room list, agent list, group chat, agent chat, input bars, agent picker, and delete confirm all have renderable adapters. `ui::render_ui` assembles `Column::with_fill` and `Row` render trees and derives `PanelAreas`/`InputLayoutMetrics` from the same layout ratios.
+- Status bar, room list, agent list, group chat, agent chat, input bars, and delete confirm all have renderable adapters. Superseded on 2026-06-23: the modal agent picker renderable was removed; agent selection now uses input `@agent` routing. `ui::render_ui` assembles `Column::with_fill` and `Row` render trees and derives `PanelAreas`/`InputLayoutMetrics` from the same layout ratios.
 - Unused `render/primitives.rs` was removed after the render tree converged on direct `Row`/`Column` composition.
 - Oversized TUI files were split: `ui/chat/cache.rs`, `ui/input_bar/render.rs`, `ui/chat_tests.rs`, `ui/input_bar_tests.rs`, and `app_tests/` child modules keep all Rust files below the P2 size checkpoint.
 - Commit steps in this plan were intentionally skipped; the user requested workspace implementation, not git commits.
@@ -624,7 +624,9 @@ git commit -m "refactor(tui): replace Focus enum with FocusManager tree"
 - [x] **Step 2: 实现 Renderable (desired_height = required_height)**
 - [x] **Step 3: Commit**
 
-### Task 9: AgentPickerRenderable + DeleteConfirmRenderable (overlay)
+### Task 9: DeleteConfirmRenderable (overlay)
+
+Superseded on 2026-06-23: `AgentPickerRenderable` was removed with the modal agent picker.
 
 - [x] **Step 1: 创建两个 overlay Renderable**
 - [x] **Step 2: 实现 Renderable (render 在最上层)**
@@ -686,10 +688,7 @@ pub fn render_ui(f: &mut Frame, state: &AppState, ui: &UiState) {
     let buf = f.buffer_mut();
     tree.render(area, buf);
 
-    // Overlay (agent picker / delete confirm) 渲染在最上层
-    if let Some(picker) = &ui.agent_picker {
-        AgentPickerRenderable::new(picker).render(area, buf);
-    }
+    // Overlay 渲染在最上层
     if let Some(confirm) = &ui.delete_confirm {
         DeleteConfirmRenderable::new(confirm).render(area, buf);
     }

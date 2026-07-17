@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde_json::{json, Map, Value};
 
 use super::{
-    bound_room_id, optional_string_arg, required_string_arg, TeamworkMcpTool, ToolCallContext,
+    bound_conversation_id, optional_string_arg, required_string_arg, TeamworkMcpTool,
+    ToolCallContext,
 };
 use crate::mcp_socket::SocketRequest;
 use crate::teamwork_mcp::permissions::TeamworkMcpPermission;
@@ -46,7 +47,7 @@ impl TeamworkMcpTool for CancelDelegationTool {
     }
 
     fn to_socket_request(&self, ctx: ToolCallContext, args: Value) -> Result<SocketRequest> {
-        let room_id = bound_room_id(&args, &ctx, self.name())?;
+        let conversation_id = bound_conversation_id(&args, &ctx, self.name())?;
         let delegation_id = required_string_arg(&args, "delegation_id")?
             .trim()
             .to_owned();
@@ -56,7 +57,7 @@ impl TeamworkMcpTool for CancelDelegationTool {
             .filter(|reason| !reason.is_empty())
             .map(str::to_owned);
         Ok(SocketRequest::CancelDelegation {
-            room_id,
+            conversation_id,
             delegation_id,
             reason,
         })

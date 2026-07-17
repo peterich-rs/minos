@@ -113,7 +113,8 @@ INSERT INTO agents (agent_id, runtime_kind, display_name, created_at_ms)
 VALUES
     ('agent_codex', 'codex', 'Codex', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT),
     ('agent_claude', 'claude', 'Claude', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT),
-    ('agent_gemini', 'gemini', 'Gemini', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT)
+    ('agent_gemini', 'gemini', 'Gemini', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT),
+    ('agent_grok', 'grok', 'Grok', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT)
 ON CONFLICT (agent_id) DO NOTHING;
 
 CREATE TABLE projects (

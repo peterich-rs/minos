@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::group_chat::GroupChatStore;
+use crate::teamwork::TeamworkStore;
 
 mod ingest_dedup;
 mod selection;
@@ -19,23 +19,23 @@ pub struct AppState {
     pub hydrated_threads: HashSet<String>,
     pub thread_watermarks: HashMap<String, u64>,
     pub applied_ingest_fingerprints: HashSet<String>,
-    pub group_chat_store: GroupChatStore,
+    pub teamwork_store: TeamworkStore,
     pub recorded_agent_results: HashMap<String, String>,
+    pub thread_conversations: HashMap<String, String>,
     pub last_daemon_history_sync: Option<Instant>,
-    pub last_group_result_retry: Option<Instant>,
 }
 
 impl AppState {
-    pub fn new(workspace: PathBuf, group_chat_store: GroupChatStore) -> Self {
+    pub fn new(workspace: PathBuf, teamwork_store: TeamworkStore) -> Self {
         Self {
             workspace,
             hydrated_threads: HashSet::new(),
             thread_watermarks: HashMap::new(),
             applied_ingest_fingerprints: HashSet::new(),
-            group_chat_store,
+            teamwork_store,
             recorded_agent_results: HashMap::new(),
+            thread_conversations: HashMap::new(),
             last_daemon_history_sync: None,
-            last_group_result_retry: None,
         }
     }
 }

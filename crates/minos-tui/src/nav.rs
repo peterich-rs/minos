@@ -1,7 +1,6 @@
 use minos_domain::AgentName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum NavLevel {
     Projects,
     Conversations {
@@ -40,11 +39,6 @@ impl NavLevel {
             } => Some(conversation_id),
         }
     }
-
-    #[allow(dead_code)]
-    pub fn esc_quits(&self) -> bool {
-        matches!(self, NavLevel::Projects)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +54,8 @@ pub enum NavAction {
     TypeChar(char),
     Backspace,
     SubmitConversationInput,
+    JumpToProjects,
+    JumpToConversations,
 }
 
 #[cfg(test)]
@@ -67,11 +63,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn esc_quits_only_at_projects() {
-        assert!(NavLevel::Projects.esc_quits());
-        assert!(!NavLevel::Conversations {
-            project_id: "p".into()
-        }
-        .esc_quits());
+    fn projects_variant_exists() {
+        let level = NavLevel::Projects;
+        assert!(matches!(level, NavLevel::Projects));
     }
 }

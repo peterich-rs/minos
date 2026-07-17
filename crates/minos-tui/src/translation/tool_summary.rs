@@ -1,3 +1,5 @@
+use super::tool_kind::ToolKind;
+
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_owned()
@@ -10,6 +12,7 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Primary one-line target for a tool header (bare path/command/pattern — no `file=` labels).
 pub(super) fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
     let Some(value) = parse_tool_args(args_json) else {
         return truncate_str(&one_line(args_json), 180);
@@ -19,39 +22,64 @@ pub(super) fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
         return String::new();
     }
 
-    let lower_name = tool_name.to_ascii_lowercase();
-    let mut pieces = Vec::new();
+    let kind = ToolKind::from_tool_name(tool_name);
 
-    if let Some(value) = find_stringish(
-        &value,
-        &[
-            "file_path",
-            "filePath",
-            "filepath",
-            "path",
-            "absolute_path",
-            "absolutePath",
-            "relative_path",
-            "relativePath",
-            "target_file",
-            "targetFile",
-            "file",
-            "uri",
-        ],
-    ) {
-        pieces.push(summary_piece("file", &value, 90));
+    match kind {
+        ToolKind::Read | ToolKind::Edit | ToolKind::List => {
+            if let Some(path) = find_path(&value) {
+                return truncate_str(&one_line(&path), 120);
+            }
+        }
+        ToolKind::Execute => {
+            if let Some(cmd) = find_stringish(&value, &["cmd", "command", "script", "shell"]) {
+                return truncate_str(&one_line(&cmd), 120);
+            }
+        }
+        ToolKind::Search => {
+            let pattern = find_stringish(
+                &value,
+                &["pattern", "query", "regex", "search", "grep", "needle"],
+            );
+            let path = find_path(&value);
+            return match (pattern, path) {
+                (Some(p), Some(path)) => {
+                    truncate_str(&format!("{} in {}", one_line(&p), one_line(&path)), 140)
+                }
+                (Some(p), None) => truncate_str(&one_line(&p), 120),
+                (None, Some(path)) => truncate_str(&one_line(&path), 120),
+                (None, None) => String::new(),
+            };
+        }
+        ToolKind::WebSearch | ToolKind::WebFetch => {
+            if let Some(q) = find_stringish(&value, &["query", "url", "uri", "href", "q"]) {
+                return truncate_str(&one_line(&q), 120);
+            }
+        }
+        ToolKind::Skill => {
+            if let Some(skill) = find_stringish(
+                &value,
+                &[
+                    "skill",
+                    "skill_name",
+                    "skillName",
+                    "name",
+                    "skill_path",
+                    "skillPath",
+                ],
+            ) {
+                return truncate_str(&one_line(&skill), 90);
+            }
+        }
+        ToolKind::Other => {}
     }
 
-    if let Some(value) = find_stringish(&value, &["cmd", "command", "script", "shell"]) {
-        pieces.push(summary_piece("cmd", &value, 90));
-    }
-
-    if lower_name.contains("task")
-        || lower_name == "todo"
-        || lower_name == "todowrite"
-        || lower_name == "todo_write"
+    // Task / todo tools: prefer human description.
+    if tool_name.to_ascii_lowercase().contains("task")
+        || tool_name.eq_ignore_ascii_case("todo")
+        || tool_name.eq_ignore_ascii_case("todowrite")
+        || tool_name.eq_ignore_ascii_case("todo_write")
     {
-        if let Some(value) = find_stringish(
+        if let Some(task) = find_stringish(
             &value,
             &[
                 "task",
@@ -63,39 +91,25 @@ pub(super) fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
                 "subagentType",
             ],
         ) {
-            pieces.push(summary_piece("task", &value, 110));
+            return truncate_str(&one_line(&task), 110);
         }
-    } else if let Some(value) = find_stringish(&value, &["task", "description"]) {
-        pieces.push(summary_piece("task", &value, 110));
     }
 
-    if lower_name.contains("skill") {
-        if let Some(value) = find_stringish(
-            &value,
-            &[
-                "skill",
-                "skill_name",
-                "skillName",
-                "name",
-                "skill_path",
-                "skillPath",
-            ],
-        ) {
-            pieces.push(summary_piece("skill", &value, 90));
-        }
-    } else if let Some(value) = find_stringish(&value, &["skill", "skill_name", "skillName"]) {
-        pieces.push(summary_piece("skill", &value, 90));
+    // Generic: first useful scalar (path/cmd/description), else compact JSON.
+    if let Some(path) = find_path(&value) {
+        return truncate_str(&one_line(&path), 120);
     }
-
+    if let Some(cmd) = find_stringish(&value, &["cmd", "command", "script", "shell"]) {
+        return truncate_str(&one_line(&cmd), 120);
+    }
+    if let Some(desc) = find_stringish(&value, &["description", "task", "prompt", "query"]) {
+        return truncate_str(&one_line(&desc), 120);
+    }
     if let Some(count) = array_len_for_keys(&value, &["todos", "todo", "items"]) {
-        pieces.push(format!("items={count}"));
+        return format!("{count} items");
     }
 
-    if pieces.is_empty() {
-        compact_tool_args(args_json).unwrap_or_default()
-    } else {
-        truncate_str(&pieces.join(" "), 180)
-    }
+    compact_tool_args(args_json).unwrap_or_default()
 }
 
 pub(super) fn compact_tool_args(args_json: &str) -> Option<String> {
@@ -114,17 +128,40 @@ pub(super) fn summarize_tool_output(output: &str) -> String {
         return String::new();
     }
     if is_diff_like(trimmed) {
-        let add = trimmed
-            .lines()
-            .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
-            .count();
-        let del = trimmed
-            .lines()
-            .filter(|line| line.starts_with('-') && !line.starts_with("---"))
-            .count();
-        return format!("diff +{add} -{del}");
+        let (add, del) = count_diff_lines(trimmed);
+        // Compact form for header diffstat painting (` +N/-M`).
+        return format!("+{add}/-{del}");
     }
     truncate_str(&one_line(trimmed), 220)
+}
+
+/// Parse `+N/-M` or legacy `diff +N -M` summary into insert/delete counts.
+pub(crate) fn parse_diffstat(summary: &str) -> Option<(usize, usize)> {
+    let s = summary.trim();
+    // `+12/-3`
+    if let Some(rest) = s.strip_prefix('+') {
+        if let Some((add, del)) = rest.split_once("/-") {
+            let add = add.trim().parse().ok()?;
+            let del = del.trim().parse().ok()?;
+            return Some((add, del));
+        }
+    }
+    // legacy `diff +12 -3`
+    if let Some(rest) = s.strip_prefix("diff ") {
+        let mut add = None;
+        let mut del = None;
+        for part in rest.split_whitespace() {
+            if let Some(n) = part.strip_prefix('+') {
+                add = n.parse().ok();
+            } else if let Some(n) = part.strip_prefix('-') {
+                del = n.parse().ok();
+            }
+        }
+        if let (Some(a), Some(d)) = (add, del) {
+            return Some((a, d));
+        }
+    }
+    None
 }
 
 pub(super) fn tool_output_detail(output: &str) -> Option<String> {
@@ -132,8 +169,11 @@ pub(super) fn tool_output_detail(output: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
+    // Diffs keep more context for AgentDetail fold expansion; other long
+    // outputs still cap so a single tool cannot blow the render cache.
+    let limit = if is_diff_like(trimmed) { 16_000 } else { 8_000 };
     if is_diff_like(trimmed) || trimmed.len() > 220 || trimmed.contains('\n') {
-        return Some(truncate_str(trimmed, 6000));
+        return Some(truncate_str(trimmed, limit));
     }
     None
 }
@@ -146,9 +186,22 @@ pub(super) fn is_diff_like(text: &str) -> bool {
         || text.contains("*** Update File:")
         || text.contains("*** Add File:")
         || text.contains("*** Delete File:")
+        || text.contains("*** End Patch")
         || text
             .lines()
             .any(|line| line.starts_with("+++ ") || line.starts_with("--- "))
+}
+
+fn count_diff_lines(text: &str) -> (usize, usize) {
+    let add = text
+        .lines()
+        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+        .count();
+    let del = text
+        .lines()
+        .filter(|line| line.starts_with('-') && !line.starts_with("---"))
+        .count();
+    (add, del)
 }
 
 fn parse_tool_args(args_json: &str) -> Option<serde_json::Value> {
@@ -159,12 +212,28 @@ fn parse_tool_args(args_json: &str) -> Option<serde_json::Value> {
     serde_json::from_str(trimmed).ok()
 }
 
-fn summary_piece(label: &str, value: &str, max_len: usize) -> String {
-    format!("{label}={}", truncate_str(&one_line(value), max_len))
-}
-
 fn one_line(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn find_path(value: &serde_json::Value) -> Option<String> {
+    find_stringish(
+        value,
+        &[
+            "file_path",
+            "filePath",
+            "filepath",
+            "path",
+            "absolute_path",
+            "absolutePath",
+            "relative_path",
+            "relativePath",
+            "target_file",
+            "targetFile",
+            "file",
+            "uri",
+        ],
+    )
 }
 
 fn find_stringish(value: &serde_json::Value, keys: &[&str]) -> Option<String> {

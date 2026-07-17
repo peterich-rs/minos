@@ -747,6 +747,7 @@ pub struct ThreadSummary {
     pub ended_at_ms: Option<i64>,
     pub end_reason: Option<ThreadEndReason>,
     pub parent_thread_id: Option<String>,
+    pub state: ThreadState,
 }
 
 /// Parameters for `list_threads`. `before_ts_ms` paginates older entries;
@@ -883,6 +884,16 @@ pub struct LocalConversationSummary {
     pub participating_agents: Vec<AgentName>,
 }
 
+/// Agent/thread mention attached to a local conversation message.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMention {
+    pub agent: AgentName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_short_id: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct LocalConversationMessage {
     pub message_seq: i64,
@@ -895,6 +906,12 @@ pub struct LocalConversationMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentName>,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<ConversationMention>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -964,6 +981,12 @@ pub struct AppendConversationMessageParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentName>,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<ConversationMention>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1311,6 +1334,9 @@ mod new_type_tests {
             ended_at_ms: Some(300),
             end_reason: Some(ThreadEndReason::AgentDone),
             parent_thread_id: None,
+            state: ThreadState::Closed {
+                reason: CloseReason::UserClose,
+            },
         };
         let back: ThreadSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -1329,6 +1355,7 @@ mod new_type_tests {
             ended_at_ms: None,
             end_reason: None,
             parent_thread_id: Some("parent".into()),
+            state: ThreadState::Idle,
         };
         let back: ThreadSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -1372,6 +1399,7 @@ mod new_type_tests {
                 ended_at_ms: None,
                 end_reason: None,
                 parent_thread_id: None,
+                state: ThreadState::Idle,
             }],
             next_before_ts_ms: Some(1),
         };

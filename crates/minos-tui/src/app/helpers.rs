@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn room_input_action_needs_agent_picker_sync(action: &InputAction) -> bool {
+pub(super) fn conversation_input_action_needs_agent_picker_sync(action: &InputAction) -> bool {
     matches!(
         action,
         InputAction::InsertChar(_)
@@ -33,31 +33,31 @@ pub(super) fn format_error_chain(error: &anyhow::Error) -> String {
 }
 
 #[cfg(not(test))]
-pub(super) fn default_group_chat_store(workspace: &std::path::Path) -> GroupChatStore {
-    match GroupChatStore::default_for_runtime(workspace) {
+pub(super) fn default_teamwork_store() -> crate::teamwork::TeamworkStore {
+    match crate::teamwork::TeamworkStore::default_for_runtime() {
         Ok(store) => store,
         Err(error) => {
             tracing::warn!(
                 target: "minos_tui::app",
                 error = %error,
-                "group chat persistence disabled"
+                "teamwork persistence disabled"
             );
-            GroupChatStore::disabled()
+            crate::teamwork::TeamworkStore::disabled()
         }
     }
 }
 
 #[cfg(test)]
-pub(super) fn default_group_chat_store(_workspace: &std::path::Path) -> GroupChatStore {
-    GroupChatStore::disabled()
+pub(super) fn default_teamwork_store() -> crate::teamwork::TeamworkStore {
+    crate::teamwork::TeamworkStore::disabled()
 }
 
-pub(super) fn group_agent_result_message_id(
-    room_id: &str,
+pub(super) fn conversation_agent_result_message_id(
+    conversation_id: &str,
     thread_id: &str,
     message_id: &str,
 ) -> String {
-    format!("agent-result:{room_id}:{thread_id}:{message_id}")
+    format!("agent-result:{conversation_id}:{thread_id}:{message_id}")
 }
 
 pub(super) fn codex_user_input_decision(question_ids: &[String], text: &str) -> serde_json::Value {
@@ -90,8 +90,24 @@ pub(super) fn codex_approval_decision(method: &str, text: &str) -> serde_json::V
         "item/permissions/requestApproval" => {
             serde_json::json!({ "permissions": {}, "scope": "turn" })
         }
+        // ACP session/request_permission — runtime maps this to option ids
+        // captured when the request was registered.
+        "session/request_permission" => {
+            serde_json::json!({ "approved": approved })
+        }
         _ => serde_json::json!({ "decision": if approved { "accept" } else { "decline" } }),
     }
+}
+
+/// Map plan-approval overlay selection text to Grok `ExitPlanModeExtResponse`.
+pub(super) fn grok_plan_approval_decision(text: &str) -> serde_json::Value {
+    let token = text.trim().to_ascii_lowercase();
+    let outcome = match token.as_str() {
+        "approve" | "approved" | "yes" | "y" | "a" => "approved",
+        "abandon" | "abandoned" | "quit" | "q" => "abandoned",
+        _ => "cancelled",
+    };
+    serde_json::json!({ "outcome": outcome })
 }
 
 pub(super) fn opencode_permission_response(

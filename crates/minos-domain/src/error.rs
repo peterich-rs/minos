@@ -128,10 +128,12 @@ impl ErrorKind {
             (Self::CodexConnectFailed, Lang::En) => "Could not reach codex app-server",
             (Self::CodexProtocolError, Lang::Zh) => "Codex 返回错误，请查看日志",
             (Self::CodexProtocolError, Lang::En) => "Codex returned an error — see log",
-            (Self::GeminiSpawnFailed, Lang::Zh) => "无法启动 Gemini CLI；请确认已安装",
-            (Self::GeminiSpawnFailed, Lang::En) => "Failed to launch Gemini CLI; is it installed?",
-            (Self::AcpProtocolError, Lang::Zh) => "Gemini ACP 协议错误，请查看日志",
-            (Self::AcpProtocolError, Lang::En) => "Gemini ACP protocol error — see log",
+            (Self::GeminiSpawnFailed, Lang::Zh) => "无法启动 ACP Agent CLI（Gemini/Grok）；请确认已安装",
+            (Self::GeminiSpawnFailed, Lang::En) => {
+                "Failed to launch ACP agent CLI (Gemini/Grok); is it installed?"
+            }
+            (Self::AcpProtocolError, Lang::Zh) => "ACP 协议错误，请查看日志",
+            (Self::AcpProtocolError, Lang::En) => "ACP protocol error — see log",
             (Self::AgentAlreadyRunning, Lang::Zh) => "Agent 已在运行",
             (Self::AgentAlreadyRunning, Lang::En) => "An agent session is already running",
             (Self::AgentNotRunning, Lang::Zh) => "当前没有 Agent 会话",
@@ -249,10 +251,10 @@ pub enum MinosError {
     #[error("codex protocol error on {method}: {message}")]
     CodexProtocolError { method: String, message: String },
 
-    #[error("failed to spawn gemini: {message}")]
+    #[error("failed to spawn ACP agent: {message}")]
     GeminiSpawnFailed { message: String },
 
-    #[error("gemini ACP protocol error on {method}: {message}")]
+    #[error("ACP protocol error on {method}: {message}")]
     AcpProtocolError { method: String, message: String },
 
     #[error("agent is already running")]

@@ -9,7 +9,7 @@ use crossterm::event::{KeyEventState, KeyModifiers, MouseEvent, MouseEventKind};
 use minos_agent_runtime::StartAgentOutcome;
 use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
 use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
-use minos_protocol::{LocalGroupChatMessage, LocalGroupChatMessageKind, LocalIngestFrame};
+use minos_protocol::LocalIngestFrame;
 use minos_ui_protocol::{MessageRole, UiEventMessage};
 use ratatui::layout::Rect;
 use tokio::sync::broadcast;
@@ -19,11 +19,11 @@ use super::*;
 struct TestBackend {
     detected_agents: Vec<AgentDescriptor>,
     started: Mutex<Vec<AgentName>>,
+    started_workspaces: Mutex<Vec<std::path::PathBuf>>,
     sent_messages: Mutex<Vec<(String, String)>>,
     approval_decisions: Mutex<Vec<(String, String, serde_json::Value)>>,
     opencode_permission_responses: Mutex<Vec<(String, String, String)>>,
     opencode_question_responses: Mutex<Vec<(String, String, Vec<Vec<String>>)>>,
-    group_chat_pages: Mutex<VecDeque<Vec<LocalGroupChatMessage>>>,
     next_thread: Mutex<usize>,
     interrupted: Mutex<Vec<String>>,
     closed: Mutex<Vec<String>>,
@@ -39,6 +39,7 @@ struct TestBackend {
     connection_state: BackendConnectionState,
     block_starts: bool,
     block_sends: bool,
+    fail_sends: bool,
     ingest_tx: broadcast::Sender<LocalIngestFrame>,
     manager_tx: broadcast::Sender<ManagerEvent>,
 }
@@ -54,11 +55,11 @@ impl TestBackend {
         Self {
             detected_agents,
             started: Mutex::new(Vec::new()),
+            started_workspaces: Mutex::new(Vec::new()),
             sent_messages: Mutex::new(Vec::new()),
             approval_decisions: Mutex::new(Vec::new()),
             opencode_permission_responses: Mutex::new(Vec::new()),
             opencode_question_responses: Mutex::new(Vec::new()),
-            group_chat_pages: Mutex::new(VecDeque::new()),
             next_thread: Mutex::new(0),
             interrupted: Mutex::new(Vec::new()),
             closed: Mutex::new(Vec::new()),
@@ -71,9 +72,12 @@ impl TestBackend {
             conversations: Mutex::new(Vec::new()),
             conversation_messages: Mutex::new(HashMap::new()),
             conversation_sessions: Mutex::new(HashMap::new()),
-            connection_state: BackendConnectionState::Embedded,
+            connection_state: BackendConnectionState::Connected {
+                endpoint: "test".into(),
+            },
             block_starts: false,
             block_sends: false,
+            fail_sends: false,
             ingest_tx,
             manager_tx,
         }
@@ -81,16 +85,6 @@ impl TestBackend {
 
     fn with_connection_state(mut self, connection_state: BackendConnectionState) -> Self {
         self.connection_state = connection_state;
-        self
-    }
-
-    fn with_blocked_starts(mut self) -> Self {
-        self.block_starts = true;
-        self
-    }
-
-    fn with_blocked_sends(mut self) -> Self {
-        self.block_sends = true;
         self
     }
 
@@ -104,11 +98,6 @@ impl TestBackend {
             .lock()
             .expect("history pages lock")
             .insert(thread_id.to_owned(), VecDeque::from(pages));
-        self
-    }
-
-    fn with_group_chat_pages(self, pages: Vec<Vec<LocalGroupChatMessage>>) -> Self {
-        *self.group_chat_pages.lock().expect("group chat pages lock") = VecDeque::from(pages);
         self
     }
 
@@ -133,6 +122,11 @@ impl TestBackend {
             .insert(conversation_id.to_owned(), sessions);
         self
     }
+
+    fn with_fail_sends(mut self) -> Self {
+        self.fail_sends = true;
+        self
+    }
 }
 
 #[async_trait]
@@ -146,6 +140,10 @@ impl AgentBackend for TestBackend {
             std::future::pending::<()>().await;
         }
         self.started.lock().expect("started list lock").push(agent);
+        self.started_workspaces
+            .lock()
+            .expect("started workspaces lock")
+            .push(workspace.clone());
         let mut next_thread = self.next_thread.lock().expect("next_thread lock");
         *next_thread += 1;
         Ok(StartAgentOutcome {
@@ -158,6 +156,9 @@ impl AgentBackend for TestBackend {
     async fn send_message(&self, thread_id: &str, text: &str) -> Result<()> {
         if self.block_sends {
             std::future::pending::<()>().await;
+        }
+        if self.fail_sends {
+            anyhow::bail!("send failed");
         }
         self.sent_messages
             .lock()
@@ -353,6 +354,7 @@ impl AgentBackend for TestBackend {
                 message_count: 0,
                 ended_at_ms: None,
                 parent_thread_id: None,
+                state: ThreadState::Idle,
             });
         Ok(outcome)
     }
@@ -360,6 +362,7 @@ impl AgentBackend for TestBackend {
     async fn append_conversation_message(
         &self,
         conversation_id: &str,
+        message_id: Option<&str>,
         thread_id: Option<&str>,
         sender_role: &str,
         agent: Option<AgentName>,
@@ -372,13 +375,18 @@ impl AgentBackend for TestBackend {
         let list = messages.entry(conversation_id.to_owned()).or_default();
         list.push(crate::backend::ConversationMessageEntry {
             message_seq: i64::try_from(list.len() + 1).unwrap_or(i64::MAX),
-            message_id: format!("test-message-{}", list.len() + 1),
+            message_id: message_id
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("test-message-{}", list.len() + 1)),
             conversation_id: conversation_id.to_owned(),
             thread_id: thread_id.map(str::to_owned),
             created_at_ms: 0,
             sender_role: sender_role.to_owned(),
             agent,
             body: body.to_owned(),
+            reply_to_message_id: None,
+            delegation_id: None,
+            mentions: Vec::new(),
         });
         Ok(())
     }
@@ -411,27 +419,19 @@ impl AgentBackend for TestBackend {
             }))
     }
 
-    async fn read_group_chat(
-        &self,
-        _room_id: &str,
-        _after_seq: Option<u64>,
-        _before_seq: Option<u64>,
-        _limit: u32,
-    ) -> Result<Vec<LocalGroupChatMessage>> {
-        Ok(self
-            .group_chat_pages
-            .lock()
-            .expect("group chat pages lock")
-            .pop_front()
-            .unwrap_or_default())
-    }
-
     async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame> {
         self.ingest_tx.subscribe()
     }
 
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent> {
         self.manager_tx.subscribe()
+    }
+
+    async fn subscribe_conversation_message_events(
+        &self,
+    ) -> broadcast::Receiver<crate::backend::ConversationMessageEvent> {
+        let (_tx, rx) = broadcast::channel(1);
+        rx
     }
 
     fn connection_state(&self) -> BackendConnectionState {
@@ -449,11 +449,11 @@ fn ok_agent(agent: AgentName) -> AgentDescriptor {
 }
 
 fn set_test_projects_nav(app: &mut App) {
-    app.ui.nav_stack = vec![crate::nav::NavLevel::Projects];
+    app.ui.nav.stack = vec![crate::nav::NavLevel::Projects];
 }
 
 fn set_test_conversations_nav(app: &mut App, project_id: &str) {
-    app.ui.nav_stack = vec![
+    app.ui.nav.stack = vec![
         crate::nav::NavLevel::Projects,
         crate::nav::NavLevel::Conversations {
             project_id: project_id.to_owned(),
@@ -462,7 +462,7 @@ fn set_test_conversations_nav(app: &mut App, project_id: &str) {
 }
 
 fn set_test_conversation_nav(app: &mut App, project_id: &str, conversation_id: &str) {
-    app.ui.nav_stack = vec![
+    app.ui.nav.stack = vec![
         crate::nav::NavLevel::Projects,
         crate::nav::NavLevel::Conversations {
             project_id: project_id.to_owned(),
@@ -477,18 +477,18 @@ fn set_test_conversation_nav(app: &mut App, project_id: &str, conversation_id: &
 fn set_test_agent_detail_nav(app: &mut App, project_id: &str, conversation_id: &str) {
     let (thread_id, agent) = app
         .ui
-        .selected_thread
-        .and_then(|index| app.ui.threads.get(index))
+        .thread_panel.list.selected
+        .and_then(|index| app.ui.thread_panel.list.items.get(index))
         .map(|thread| (thread.thread_id.clone(), thread.agent))
         .or_else(|| {
             app.ui
-                .threads
+                .thread_panel.list.items
                 .first()
                 .map(|thread| (thread.thread_id.clone(), thread.agent))
         })
         .unwrap_or_else(|| ("thread-1".to_owned(), AgentName::Codex));
     set_test_conversation_nav(app, project_id, conversation_id);
-    app.ui.nav_stack.push(crate::nav::NavLevel::AgentDetail {
+    app.ui.nav.stack.push(crate::nav::NavLevel::AgentDetail {
         project_id: project_id.to_owned(),
         conversation_id: conversation_id.to_owned(),
         thread_id,
@@ -533,10 +533,6 @@ fn projected_frame(
     }
 }
 
-#[path = "app_tests/group_and_agent.rs"]
-mod group_and_agent;
-#[path = "app_tests/ingest.rs"]
-mod ingest;
 #[path = "app_tests/input_and_routing.rs"]
 mod input_and_routing;
 #[path = "app_tests/nav_integration.rs"]

@@ -251,9 +251,14 @@ impl DefaultApprovalService {
 #[async_trait]
 impl ApprovalService for DefaultApprovalService {
     async fn record_request(&self, input: RecordApprovalRequestInput) -> Result<(), BackendError> {
-        let deadline_at_ms = input
-            .created_at_ms
-            .saturating_add(i64::try_from(input.timeout_ms).unwrap_or(i64::MAX));
+        // timeout_ms == 0 means "no host/backend auto-timeout" (wait for user).
+        let deadline_at_ms = if input.timeout_ms == 0 {
+            i64::MAX
+        } else {
+            input
+                .created_at_ms
+                .saturating_add(i64::try_from(input.timeout_ms).unwrap_or(i64::MAX))
+        };
         store::approval_requests::insert_pending(
             &self.store,
             &input.request_id,

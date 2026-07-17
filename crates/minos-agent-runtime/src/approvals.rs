@@ -20,7 +20,6 @@ use minos_codex_protocol::{
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 
 pub(crate) fn is_approval_request(req: &ServerRequest) -> bool {
     matches!(
@@ -80,41 +79,18 @@ pub(crate) fn auto_reject(req: &ServerRequest) -> Option<serde_json::Value> {
     Some(value.expect("typed approval response serialisation is infallible"))
 }
 
-pub(crate) fn timeout_reply(req: &ServerRequest) -> Option<serde_json::Value> {
-    if let Some(reply) = auto_reject(req) {
-        return Some(reply);
-    }
-
-    match req {
-        ServerRequest::ToolRequestUserInput(_) => {
-            serde_json::to_value(ToolRequestUserInputResponse {
-                answers: HashMap::new(),
-            })
-            .ok()
-        }
-        ServerRequest::McpServerElicitationRequest(_)
-        | ServerRequest::ChatgptAuthTokensRefresh(_)
-        | ServerRequest::DynamicToolCall(_)
-        | ServerRequest::ApplyPatchApproval(_)
-        | ServerRequest::ExecCommandApproval(_)
-        | ServerRequest::CommandExecutionRequestApproval(_)
-        | ServerRequest::FileChangeRequestApproval(_)
-        | ServerRequest::PermissionsRequestApproval(_) => None,
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct NonApprovalContext {
-    pub chat_room_id: Option<String>,
+    pub conversation_id: Option<String>,
 }
 
 /// Build a conservative fallback reply for non-approval `ServerRequest`s that
 /// still require a client response to unblock the Codex turn.
 ///
 /// Most replies are deliberately negative/no-input. The one positive case is
-/// the built-in, read-only Minos chat MCP server: Codex may ask the client to
-/// satisfy a form elicitation before reading chat history, and cancelling that
-/// form makes the model believe the chat read was aborted.
+/// the built-in Minos teamwork MCP server: Codex may ask the client to satisfy
+/// a form elicitation before reading conversation history, and cancelling that
+/// form makes the model believe the conversation read was aborted.
 pub(crate) fn auto_resolve_non_approval(
     req: &ServerRequest,
     context: NonApprovalContext,
@@ -192,9 +168,9 @@ fn default_value_for_minos_teamwork_field(
     let normalized = normalized_field_name(name);
     if matches!(
         normalized.as_str(),
-        "roomid" | "chatroomid" | "defaultroomid"
+        "conversationid" | "defaultconversationid"
     ) {
-        return context.chat_room_id.as_ref().cloned().map(Value::String);
+        return context.conversation_id.as_ref().cloned().map(Value::String);
     }
 
     let schema_value = serde_json::to_value(schema).ok()?;
@@ -280,6 +256,215 @@ where
         .map_err(|error| anyhow::anyhow!("failed to serialize decision for {method}: {error}"))
 }
 
+/// Accept either a full ACP permission response object or a simple yes/no
+/// shaped decision from the TUI, mapping onto the option ids captured when the
+/// request arrived.
+pub(crate) fn validate_acp_permission_decision(
+    decision: &Value,
+    allow_option_id: Option<&str>,
+    reject_option_id: Option<&str>,
+) -> anyhow::Result<Value> {
+    if decision.get("outcome").is_some() {
+        return validate_typed::<minos_acp_protocol::RequestPermissionResponse>(
+            decision,
+            "session/request_permission",
+        );
+    }
+
+    let approved = decision
+        .get("approved")
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            decision
+                .get("decision")
+                .and_then(Value::as_str)
+                .map(|s| matches!(s, "accept" | "approved" | "allow" | "yes" | "y"))
+        })
+        .unwrap_or(false);
+
+    let outcome = if approved {
+        let option_id = allow_option_id.ok_or_else(|| {
+            anyhow::anyhow!("ACP permission approve selected but no allow option was offered")
+        })?;
+        minos_acp_protocol::RequestPermissionOutcome::Selected {
+            option_id: option_id.to_owned(),
+        }
+    } else if let Some(option_id) = reject_option_id {
+        minos_acp_protocol::RequestPermissionOutcome::Selected {
+            option_id: option_id.to_owned(),
+        }
+    } else {
+        minos_acp_protocol::RequestPermissionOutcome::Cancelled
+    };
+
+    serde_json::to_value(minos_acp_protocol::RequestPermissionResponse { outcome })
+        .map_err(|error| anyhow::anyhow!("failed to serialize ACP permission decision: {error}"))
+}
+
+/// Map a TUI decision onto a Grok `ext_method` reply body.
+///
+/// - `x.ai/exit_plan_mode` → `{ "outcome": "approved"|"cancelled"|"abandoned", "feedback"?: string }`
+/// - `x.ai/ask_user_question` → `{ "outcome": "cancelled" }` (or full accepted payload if provided)
+pub(crate) fn validate_grok_ext_method_decision(
+    nested_method: &str,
+    decision: &Value,
+) -> anyhow::Result<Value> {
+    match nested_method {
+        "x.ai/exit_plan_mode" => {
+            // Already a full wire response.
+            if let Some(outcome) = decision.get("outcome").and_then(Value::as_str) {
+                let allowed = matches!(outcome, "approved" | "cancelled" | "abandoned");
+                anyhow::ensure!(
+                    allowed,
+                    "invalid exit_plan_mode outcome: {outcome}"
+                );
+                return Ok(decision.clone());
+            }
+            let token = decision
+                .get("decision")
+                .and_then(Value::as_str)
+                .or_else(|| decision.get("text").and_then(Value::as_str))
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            let feedback = decision
+                .get("feedback")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            let outcome = match token.as_str() {
+                "approve" | "approved" | "yes" | "y" | "a" | "accept" => "approved",
+                "abandon" | "abandoned" | "quit" | "q" => "abandoned",
+                // revise / request changes / no / cancel
+                _ => "cancelled",
+            };
+            let mut body = serde_json::json!({ "outcome": outcome });
+            if outcome == "cancelled" {
+                if let Some(feedback) = feedback {
+                    body.as_object_mut()
+                        .expect("object")
+                        .insert("feedback".into(), Value::String(feedback));
+                }
+            }
+            Ok(body)
+        }
+        "x.ai/ask_user_question" => {
+            if decision.get("outcome").is_some() {
+                return Ok(decision.clone());
+            }
+            Ok(serde_json::json!({ "outcome": "cancelled" }))
+        }
+        other => anyhow::bail!("unsupported Grok ext_method for approval: {other}"),
+    }
+}
+
+/// Pick the first allow/reject option ids from an ACP permission options array.
+#[must_use]
+pub(crate) fn acp_permission_option_ids(params: &Value) -> (Option<String>, Option<String>) {
+    let mut allow = None;
+    let mut reject = None;
+    let Some(options) = params.get("options").and_then(Value::as_array) else {
+        return (None, None);
+    };
+    for option in options {
+        let option_id = option
+            .get("optionId")
+            .or_else(|| option.get("option_id"))
+            .or_else(|| option.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        if option_id.is_empty() {
+            continue;
+        }
+        let kind = option
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let name = option
+            .get("name")
+            .or_else(|| option.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let blob = format!("{kind} {name} {option_id}");
+        if allow.is_none()
+            && (blob.contains("allow")
+                || blob.contains("approve")
+                || blob.contains("accept")
+                || blob.contains("proceed")
+                || blob.contains("yes"))
+        {
+            allow = Some(option_id);
+            continue;
+        }
+        if reject.is_none()
+            && (blob.contains("reject")
+                || blob.contains("deny")
+                || blob.contains("decline")
+                || blob.contains("cancel")
+                || blob.contains("no"))
+        {
+            reject = Some(option_id);
+        }
+    }
+    (allow, reject)
+}
+
+#[cfg(test)]
+mod acp_permission_tests {
+    use super::*;
+
+    #[test]
+    fn acp_option_ids_prefer_allow_and_reject_kinds() {
+        let params = serde_json::json!({
+            "options": [
+                {"optionId": "proceed_once", "name": "Allow", "kind": "allow_once"},
+                {"optionId": "cancel", "name": "Reject", "kind": "reject_once"}
+            ]
+        });
+        let (allow, reject) = acp_permission_option_ids(&params);
+        assert_eq!(allow.as_deref(), Some("proceed_once"));
+        assert_eq!(reject.as_deref(), Some("cancel"));
+    }
+
+    #[test]
+    fn acp_decision_maps_yes_to_selected_allow() {
+        let reply = validate_acp_permission_decision(
+            &serde_json::json!({"approved": true}),
+            Some("proceed_once"),
+            Some("cancel"),
+        )
+        .unwrap();
+        assert_eq!(
+            reply["outcome"]["outcome"].as_str(),
+            Some("selected")
+        );
+        assert_eq!(reply["outcome"]["optionId"].as_str(), Some("proceed_once"));
+    }
+
+    #[test]
+    fn acp_decision_maps_no_to_reject_option_or_cancelled() {
+        let reply = validate_acp_permission_decision(
+            &serde_json::json!({"decision": "decline"}),
+            Some("proceed_once"),
+            Some("cancel"),
+        )
+        .unwrap();
+        assert_eq!(reply["outcome"]["optionId"].as_str(), Some("cancel"));
+
+        let cancelled = validate_acp_permission_decision(
+            &serde_json::json!({"approved": false}),
+            Some("proceed_once"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(cancelled["outcome"]["outcome"].as_str(), Some("cancelled"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +497,31 @@ mod tests {
             thread_id: "thr-1".into(),
             turn_id: "turn-1".into(),
         }
+    }
+
+    #[test]
+    fn grok_exit_plan_decision_maps_tokens_to_outcomes() {
+        let approved =
+            validate_grok_ext_method_decision("x.ai/exit_plan_mode", &json!({ "decision": "approve" }))
+                .unwrap();
+        assert_eq!(approved["outcome"], "approved");
+
+        let revise =
+            validate_grok_ext_method_decision("x.ai/exit_plan_mode", &json!({ "decision": "revise" }))
+                .unwrap();
+        assert_eq!(revise["outcome"], "cancelled");
+
+        let abandon =
+            validate_grok_ext_method_decision("x.ai/exit_plan_mode", &json!({ "decision": "abandon" }))
+                .unwrap();
+        assert_eq!(abandon["outcome"], "abandoned");
+
+        let passthrough = validate_grok_ext_method_decision(
+            "x.ai/exit_plan_mode",
+            &json!({ "outcome": "cancelled", "feedback": "add tests" }),
+        )
+        .unwrap();
+        assert_eq!(passthrough["feedback"], "add tests");
     }
 
     #[test]
@@ -420,18 +630,18 @@ mod tests {
     }
 
     #[test]
-    fn auto_resolve_minos_teamwork_form_elicitation_accepts_default_room() {
+    fn auto_resolve_minos_teamwork_form_elicitation_accepts_default_conversation() {
         let req: ServerRequest = serde_json::from_value(json!({
             "method": "mcpServer/elicitation/request",
             "params": {
-                "message": "Select the Minos chat room to read",
+                "message": "Select the Minos conversation to read",
                 "mode": "form",
                 "requestedSchema": {
                     "type": "object",
                     "properties": {
-                        "room_id": { "type": "string" }
+                        "conversation_id": { "type": "string" }
                     },
-                    "required": ["room_id"]
+                    "required": ["conversation_id"]
                 },
                 "serverName": "minos_teamwork",
                 "threadId": "thr-1",
@@ -442,15 +652,15 @@ mod tests {
         let reply = auto_resolve_non_approval(
             &req,
             NonApprovalContext {
-                chat_room_id: Some("room-minos".into()),
+                conversation_id: Some("conversation-main".into()),
             },
         )
-        .expect("minos chat elicitation should auto-accept");
+        .expect("minos conversation elicitation should auto-accept");
         assert_eq!(
             reply,
             json!({
                 "action": "accept",
-                "content": { "room_id": "room-minos" }
+                "content": { "conversation_id": "conversation-main" }
             })
         );
     }
@@ -474,25 +684,6 @@ mod tests {
         assert!(auto_resolve_non_approval(&req, NonApprovalContext::default()).is_none());
     }
 
-    #[test]
-    fn timeout_reply_tool_request_user_input_returns_empty_answers() {
-        let req: ServerRequest = serde_json::from_value(json!({
-            "method": "item/tool/requestUserInput",
-            "params": {
-                "itemId": "item-1",
-                "questions": [{
-                    "header": "Need input",
-                    "id": "q1",
-                    "question": "Pick one"
-                }],
-                "threadId": "thr-1",
-                "turnId": "turn-1"
-            }
-        }))
-        .expect("tool/requestUserInput params decode");
-        let reply = timeout_reply(&req).expect("user input timeout should auto-answer empty");
-        assert_eq!(reply, json!({ "answers": {} }));
-    }
 
     #[test]
     fn validate_decision_accepts_tool_request_user_input_answer_shape() {

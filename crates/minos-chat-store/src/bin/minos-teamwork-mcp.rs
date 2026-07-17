@@ -13,13 +13,16 @@ struct Args {
     socket_path: PathBuf,
 
     #[arg(long)]
-    room_id: String,
+    conversation_id: String,
 
     #[arg(long)]
     source_agent: Option<String>,
 
     #[arg(long)]
-    disable_list_room_messages: bool,
+    source_thread_id: Option<String>,
+
+    #[arg(long)]
+    disable_list_conversation_messages: bool,
 
     #[arg(long)]
     disable_delegate_to_agent: bool,
@@ -28,19 +31,13 @@ struct Args {
     disable_get_delegation_status: bool,
 
     #[arg(long)]
+    disable_wait_delegation: bool,
+
+    #[arg(long)]
     disable_cancel_delegation: bool,
 
     #[arg(long)]
-    disable_ask_user_question: bool,
-
-    #[arg(long)]
-    disable_check_user_feedback: bool,
-
-    #[arg(long)]
-    disable_post_room_update: bool,
-
-    #[arg(long)]
-    disable_react_to_message: bool,
+    disable_post_conversation_update: bool,
 }
 
 #[tokio::main]
@@ -53,17 +50,16 @@ async fn main() -> Result<()> {
         .transpose()?;
     minos_chat_store::mcp_server::serve_stdio(minos_chat_store::mcp_server::McpServerConfig {
         socket_path: args.socket_path,
-        room_id: args.room_id,
+        conversation_id: args.conversation_id,
         source_agent,
+        source_thread_id: args.source_thread_id,
         permissions: minos_chat_store::mcp_server::McpToolPermissions {
-            list_room_messages: !args.disable_list_room_messages,
+            list_conversation_messages: !args.disable_list_conversation_messages,
             delegate_to_agent: !args.disable_delegate_to_agent,
             get_delegation_status: !args.disable_get_delegation_status,
+            wait_delegation: !args.disable_wait_delegation,
             cancel_delegation: !args.disable_cancel_delegation,
-            ask_user_question: !args.disable_ask_user_question,
-            check_user_feedback: !args.disable_check_user_feedback,
-            post_room_update: !args.disable_post_room_update,
-            react_to_message: !args.disable_react_to_message,
+            post_conversation_update: !args.disable_post_conversation_update,
         },
     })
     .await

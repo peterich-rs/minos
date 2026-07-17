@@ -5,7 +5,7 @@ async fn ctrl_c_interrupts_running_thread() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
-    app.ui.threads.push(ThreadEntry {
+    app.ui.thread_panel.list.items.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
@@ -41,7 +41,7 @@ async fn ctrl_c_quits_idle_thread_view() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
-    app.ui.threads.push(ThreadEntry {
+    app.ui.thread_panel.list.items.push(ThreadEntry {
         thread_id: "thread-1".into(),
         agent: AgentName::Gemini,
         workspace: PathBuf::from("/tmp"),
@@ -84,43 +84,11 @@ async fn ctrl_v_pastes_from_clipboard() {
     let redraw = app.handle_key(key).await;
 
     assert!(redraw);
-    assert_eq!(app.ui.agent_input.content, "hello from clipboard");
+    assert_eq!(app.ui.inputs.agent.content, "hello from clipboard");
     super::TEST_CLIPBOARD
         .lock()
         .expect("test clipboard lock")
         .clear();
-}
-
-#[tokio::test]
-async fn open_agent_picker_defaults_to_current_thread_agent() {
-    let backend = Arc::new(TestBackend::with_agents(vec![
-        ok_agent(AgentName::Codex),
-        ok_agent(AgentName::Claude),
-        ok_agent(AgentName::Gemini),
-    ]));
-    let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.status.update_agents(vec![
-        ok_agent(AgentName::Codex),
-        ok_agent(AgentName::Claude),
-        ok_agent(AgentName::Gemini),
-    ]);
-    app.ui.threads.push(ThreadEntry {
-        thread_id: "thread-claude".into(),
-        agent: AgentName::Claude,
-        workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
-    });
-    app.select_thread(0);
-
-    assert!(
-        app.apply_action(Action::Global(GlobalAction::OpenAgentPicker))
-            .await
-    );
-    assert_eq!(
-        app.ui.agent_picker.as_ref().map(|picker| picker.selected),
-        Some(1)
-    );
 }
 
 #[tokio::test]
@@ -145,9 +113,138 @@ async fn at_completion_inserts_selected_agent() {
     assert!(app.handle_key(press(KeyCode::Down)).await);
     assert!(app.handle_key(press(KeyCode::Enter)).await);
 
-    assert_eq!(app.ui.room_input.content, "@claude ");
-    assert_eq!(app.ui.room_input.cursor_pos, "@claude ".len());
-    assert!(!app.ui.room_input.has_agent_picker());
+    assert_eq!(app.ui.inputs.conversation.content, "@claude ");
+    assert_eq!(app.ui.inputs.conversation.cursor_pos, "@claude ".len());
+    assert!(!app.ui.inputs.conversation.has_agent_picker());
+}
+
+#[test]
+fn thread_short_id_in_conversation_resolves_conversation_session_only() {
+    let backend = Arc::new(TestBackend::new());
+    let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+    set_test_conversation_nav(&mut app, "test", "conversation-1");
+    app.ui.thread_panel.list.items.push(ThreadEntry {
+        thread_id: "global-opencode-1234".into(),
+        agent: AgentName::Opencode,
+        workspace: PathBuf::from("/tmp"),
+        state: ThreadState::Idle,
+        parent_thread_id: None,
+    });
+    app.ui.conversation.agent_sessions.items = vec![
+        crate::backend::ThreadSummaryEntry {
+            thread_id: "conv-opencode-5678".into(),
+            agent: AgentName::Opencode,
+            title: None,
+            first_ts_ms: 0,
+            last_ts_ms: 0,
+            message_count: 0,
+            ended_at_ms: None,
+            parent_thread_id: None,
+            state: ThreadState::Idle,
+        },
+        crate::backend::ThreadSummaryEntry {
+            thread_id: "conv-closed-9999".into(),
+            agent: AgentName::Opencode,
+            title: None,
+            first_ts_ms: 0,
+            last_ts_ms: 0,
+            message_count: 0,
+            ended_at_ms: None,
+            parent_thread_id: None,
+            state: ThreadState::Closed {
+                reason: minos_agent_runtime::CloseReason::UserClose,
+            },
+        },
+    ];
+
+    assert_eq!(
+        app.thread_id_for_agent_short_id(AgentName::Opencode, "conv-ope"),
+        Some("conv-opencode-5678".into())
+    );
+    assert_eq!(
+        app.thread_id_for_agent_short_id(AgentName::Opencode, "global-o"),
+        None
+    );
+    assert_eq!(
+        app.thread_id_for_agent_short_id(AgentName::Opencode, "conv-clo"),
+        None
+    );
+}
+
+#[test]
+fn thread_short_id_outside_conversation_does_not_resolve_global_threads() {
+    let backend = Arc::new(TestBackend::new());
+    let mut app = App::new(backend, false, PathBuf::from("/tmp"));
+    set_test_conversations_nav(&mut app, "test");
+    app.ui.thread_panel.list.items.push(ThreadEntry {
+        thread_id: "global-codex-1234".into(),
+        agent: AgentName::Codex,
+        workspace: PathBuf::from("/tmp"),
+        state: ThreadState::Idle,
+        parent_thread_id: None,
+    });
+    app.ui.conversation.agent_sessions.items = vec![crate::backend::ThreadSummaryEntry {
+        thread_id: "conv-codex-5678".into(),
+        agent: AgentName::Codex,
+        title: None,
+        first_ts_ms: 0,
+        last_ts_ms: 0,
+        message_count: 0,
+        ended_at_ms: None,
+        parent_thread_id: None,
+        state: ThreadState::Idle,
+    }];
+
+    assert_eq!(
+        app.thread_id_for_agent_short_id(AgentName::Codex, "global-"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn conversations_input_does_not_route_stale_session_short_id() {
+    let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(
+        AgentName::Opencode,
+    )]));
+    let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
+    set_test_conversations_nav(&mut app, "test");
+    app.ui
+        .status
+        .update_agents(vec![ok_agent(AgentName::Opencode)]);
+    app.ui.conversation.agent_sessions.items = vec![crate::backend::ThreadSummaryEntry {
+        thread_id: "conv-opencode-5678".into(),
+        agent: AgentName::Opencode,
+        title: None,
+        first_ts_ms: 0,
+        last_ts_ms: 0,
+        message_count: 0,
+        ended_at_ms: None,
+        parent_thread_id: None,
+        state: ThreadState::Idle,
+    }];
+    app.ui.focus.focus(PaneId::Input);
+    app.ui.inputs.conversation.content = "@opencode#conv-ope hello".into();
+    app.ui.inputs.conversation.cursor_pos = app.ui.inputs.conversation.content.len();
+
+    assert!(app.handle_key(press(KeyCode::Enter)).await);
+
+    assert!(backend
+        .started
+        .lock()
+        .expect("started list lock")
+        .is_empty());
+    assert!(backend
+        .sent_messages
+        .lock()
+        .expect("sent messages lock")
+        .is_empty());
+    let error = app
+        .ui
+        .error_flash
+        .as_ref()
+        .map(|(message, _)| message.as_str())
+        .unwrap_or("");
+    assert!(error.contains("No existing opencode session matches #conv-ope"));
 }
 
 #[tokio::test]
@@ -159,8 +256,8 @@ async fn input_shortcuts_edit_without_inserting_control_text() {
         .status
         .update_agents(vec![ok_agent(AgentName::Codex)]);
     app.ui.focus.focus(PaneId::Input);
-    app.ui.room_input.content = "hello brave world".into();
-    app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+    app.ui.inputs.conversation.content = "hello brave world".into();
+    app.ui.inputs.conversation.cursor_pos = app.ui.inputs.conversation.content.len();
 
     assert!(
         app.handle_key(press_with_modifiers(
@@ -169,17 +266,17 @@ async fn input_shortcuts_edit_without_inserting_control_text() {
         ))
         .await
     );
-    assert_eq!(app.ui.room_input.content, "hello brave ");
-    assert_eq!(app.ui.room_input.cursor_pos, "hello brave ".len());
+    assert_eq!(app.ui.inputs.conversation.content, "hello brave ");
+    assert_eq!(app.ui.inputs.conversation.cursor_pos, "hello brave ".len());
 
     assert!(
         app.handle_key(press_with_modifiers(KeyCode::Char('b'), KeyModifiers::ALT))
             .await
     );
-    assert_eq!(app.ui.room_input.cursor_pos, "hello ".len());
+    assert_eq!(app.ui.inputs.conversation.cursor_pos, "hello ".len());
 
     assert!(app.handle_key(press(KeyCode::Right)).await);
-    assert_eq!(app.ui.room_input.cursor_pos, "hello b".len());
+    assert_eq!(app.ui.inputs.conversation.cursor_pos, "hello b".len());
 
     assert!(
         app.handle_key(press_with_modifiers(
@@ -188,29 +285,31 @@ async fn input_shortcuts_edit_without_inserting_control_text() {
         ))
         .await
     );
-    assert_eq!(app.ui.room_input.cursor_pos, 0);
-    assert_eq!(app.ui.room_input.content, "hello brave ");
+    assert_eq!(app.ui.inputs.conversation.cursor_pos, 0);
+    assert_eq!(app.ui.inputs.conversation.content, "hello brave ");
 }
 
 #[tokio::test]
-async fn room_input_paste_inserts_multiline_text_without_submitting() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let group_store = GroupChatStore::at_path(temp.path().join("group.jsonl"));
+async fn conversation_input_paste_inserts_multiline_text_without_submitting() {
     let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(AgentName::Codex)]));
-    let mut app =
-        App::with_group_chat_store(backend.clone(), false, PathBuf::from("/tmp"), group_store);
+    let mut app = App::with_teamwork_store(
+        backend.clone(),
+        false,
+        PathBuf::from("/tmp"),
+        crate::teamwork::TeamworkStore::disabled(),
+    );
     set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Codex)]);
-    app.ui.threads.push(ThreadEntry {
+    app.ui.thread_panel.list.items.push(ThreadEntry {
         thread_id: "thread-codex-1234".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
         state: ThreadState::Idle,
         parent_thread_id: None,
     });
-    app.ui.chat_states.insert(
+    app.ui.thread_panel.chat_states.insert(
         "thread-codex-1234".into(),
         ChatState::new("thread-codex-1234".into(), AgentName::Codex),
     );
@@ -222,8 +321,8 @@ async fn room_input_paste_inserts_multiline_text_without_submitting() {
             .await
     );
 
-    assert_eq!(app.ui.room_input.content, "first\nsecond\nthird");
-    assert_eq!(app.ui.room_input.cursor_pos, "first\nsecond\nthird".len());
+    assert_eq!(app.ui.inputs.conversation.content, "first\nsecond\nthird");
+    assert_eq!(app.ui.inputs.conversation.cursor_pos, "first\nsecond\nthird".len());
     assert!(backend
         .sent_messages
         .lock()
@@ -240,8 +339,8 @@ async fn room_input_paste_inserts_multiline_text_without_submitting() {
             .as_slice(),
         &[("thread-1".to_owned(), "first\nsecond\nthird".to_owned())]
     );
-    assert_eq!(app.ui.conversation_messages.len(), 1);
-    assert_eq!(app.ui.conversation_messages[0].body, "first\nsecond\nthird");
+    assert_eq!(app.ui.conversation.messages.len(), 1);
+    assert_eq!(app.ui.conversation.messages[0].body, "first\nsecond\nthird");
 }
 
 #[tokio::test]
@@ -259,8 +358,8 @@ async fn routed_prompt_starts_target_agent_and_sends_body_only() {
         ok_agent(AgentName::Gemini),
     ]);
     app.ui.focus.focus(PaneId::Input);
-    app.ui.room_input.content = "@gemini write tests".into();
-    app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+    app.ui.inputs.conversation.content = "@gemini write tests".into();
+    app.ui.inputs.conversation.cursor_pos = app.ui.inputs.conversation.content.len();
     app.sync_input_agent_picker();
 
     assert!(app.handle_key(press(KeyCode::Enter)).await);
@@ -281,13 +380,13 @@ async fn routed_prompt_starts_target_agent_and_sends_body_only() {
             .as_slice(),
         &[("thread-1".to_owned(), "write tests".to_owned())]
     );
-    assert_eq!(app.ui.room_input.content, "");
-    assert_eq!(app.ui.selected_thread, Some(0));
-    assert_eq!(app.ui.threads[0].agent, AgentName::Gemini);
+    assert_eq!(app.ui.inputs.conversation.content, "");
+    assert_eq!(app.ui.thread_panel.list.selected, Some(0));
+    assert_eq!(app.ui.thread_panel.list.items[0].agent, AgentName::Gemini);
 }
 
 #[tokio::test]
-async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
+async fn conversation_input_on_closed_selected_thread_starts_new_same_agent() {
     let backend = Arc::new(TestBackend::with_agents(vec![ok_agent(
         AgentName::Opencode,
     )]));
@@ -296,7 +395,7 @@ async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);
-    app.ui.threads.push(ThreadEntry {
+    app.ui.thread_panel.list.items.push(ThreadEntry {
         thread_id: "thread-opencode-closed".into(),
         agent: AgentName::Opencode,
         workspace: PathBuf::from("/tmp"),
@@ -307,8 +406,8 @@ async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
     });
     app.select_thread(0);
     app.ui.focus.focus(PaneId::Input);
-    app.ui.room_input.content = "are you there?".into();
-    app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+    app.ui.inputs.conversation.content = "are you there?".into();
+    app.ui.inputs.conversation.cursor_pos = app.ui.inputs.conversation.content.len();
 
     assert!(app.handle_key(press(KeyCode::Enter)).await);
 
@@ -328,9 +427,9 @@ async fn room_input_on_closed_selected_thread_starts_new_same_agent() {
             .as_slice(),
         &[("thread-1".to_owned(), "are you there?".to_owned())]
     );
-    assert_eq!(app.ui.room_input.content, "");
-    assert_eq!(app.ui.selected_thread, Some(1));
-    assert_eq!(app.ui.threads[1].agent, AgentName::Opencode);
+    assert_eq!(app.ui.inputs.conversation.content, "");
+    assert_eq!(app.ui.thread_panel.list.selected, Some(1));
+    assert_eq!(app.ui.thread_panel.list.items[1].agent, AgentName::Opencode);
 }
 
 #[tokio::test]
@@ -343,7 +442,7 @@ async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);
-    app.ui.threads.push(ThreadEntry {
+    app.ui.thread_panel.list.items.push(ThreadEntry {
         thread_id: "thread-opencode-closed".into(),
         agent: AgentName::Opencode,
         workspace: PathBuf::from("/tmp"),
@@ -356,8 +455,8 @@ async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
     set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
     app.ui.focus.focus(PaneId::Input);
-    app.ui.agent_input.content = "continue".into();
-    app.ui.agent_input.cursor_pos = app.ui.agent_input.content.len();
+    app.ui.inputs.agent.content = "continue".into();
+    app.ui.inputs.agent.cursor_pos = app.ui.inputs.agent.content.len();
 
     assert!(app.handle_key(press(KeyCode::Enter)).await);
 
@@ -377,9 +476,9 @@ async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
             .as_slice(),
         &[("thread-1".to_owned(), "continue".to_owned())]
     );
-    assert_eq!(app.ui.agent_input.content, "");
-    assert_eq!(app.ui.selected_thread, Some(1));
-    assert_eq!(app.ui.threads[1].agent, AgentName::Opencode);
+    assert_eq!(app.ui.inputs.agent.content, "");
+    assert_eq!(app.ui.thread_panel.list.selected, Some(1));
+    assert_eq!(app.ui.thread_panel.list.items[1].agent, AgentName::Opencode);
 }
 
 #[tokio::test]
@@ -392,7 +491,7 @@ async fn routed_prompt_to_closed_thread_reports_error_without_sending() {
     app.ui
         .status
         .update_agents(vec![ok_agent(AgentName::Opencode)]);
-    app.ui.threads.push(ThreadEntry {
+    app.ui.thread_panel.list.items.push(ThreadEntry {
         thread_id: "thread-opencode-closed".into(),
         agent: AgentName::Opencode,
         workspace: PathBuf::from("/tmp"),
@@ -402,8 +501,8 @@ async fn routed_prompt_to_closed_thread_reports_error_without_sending() {
         parent_thread_id: None,
     });
     app.ui.focus.focus(PaneId::Input);
-    app.ui.room_input.content = "@opencode#thread-o hello".into();
-    app.ui.room_input.cursor_pos = app.ui.room_input.content.len();
+    app.ui.inputs.conversation.content = "@opencode#thread-o hello".into();
+    app.ui.inputs.conversation.cursor_pos = app.ui.inputs.conversation.content.len();
     app.sync_input_agent_picker();
 
     assert!(app.handle_key(press(KeyCode::Enter)).await);
@@ -424,5 +523,5 @@ async fn routed_prompt_to_closed_thread_reports_error_without_sending() {
         .as_ref()
         .map(|(message, _)| message.as_str())
         .unwrap_or("");
-    assert!(error.contains("session #thread-o is closed"));
+    assert!(error.contains("No existing opencode session matches #thread-o"));
 }

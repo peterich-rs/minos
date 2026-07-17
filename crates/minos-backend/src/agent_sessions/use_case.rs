@@ -120,6 +120,7 @@ impl DefaultAgentSessionService {
             "agent_claude" => "claude",
             "agent_gemini" => "gemini",
             "agent_opencode" => "opencode",
+            "agent_grok" => "grok",
             _ => return Err(AgentSessionError::ValidationFormat("unknown agent_id")),
         };
         Ok(ResolvedAgent {

@@ -9,7 +9,8 @@ impl App {
     ) -> bool {
         let request_id = match &pending {
             PendingAgentRequestKind::CodexUserInput { request_id, .. }
-            | PendingAgentRequestKind::CodexApproval { request_id, .. } => request_id.clone(),
+            | PendingAgentRequestKind::CodexApproval { request_id, .. }
+            | PendingAgentRequestKind::GrokPlanApproval { request_id } => request_id.clone(),
             PendingAgentRequestKind::OpencodePermission { permission_id, .. } => {
                 permission_id.clone()
             }
@@ -33,6 +34,12 @@ impl App {
             }
             PendingAgentRequestKind::CodexApproval { request_id, method } => {
                 let decision = codex_approval_decision(&method, text.as_str());
+                self.backend
+                    .send_approval_decision(&request_id, &thread_id, decision)
+                    .await
+            }
+            PendingAgentRequestKind::GrokPlanApproval { request_id } => {
+                let decision = grok_plan_approval_decision(text.as_str());
                 self.backend
                     .send_approval_decision(&request_id, &thread_id, decision)
                     .await
@@ -64,7 +71,7 @@ impl App {
 
         match result {
             Ok(()) => {
-                if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
+                if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&thread_id) {
                     chat.resolve_pending_request(&request_id);
                 }
             }
@@ -76,94 +83,19 @@ impl App {
         true
     }
 
-    pub(super) async fn invite_agent_to_room(
-        &mut self,
-        agent: AgentName,
-        group_text: String,
-    ) -> bool {
-        let thread_id = match self.start_new_thread(agent).await {
-            Ok(thread_id) => thread_id,
-            Err(error) => {
-                self.ui.set_error(error);
-                return true;
-            }
-        };
-
-        if let Some(index) = self
-            .ui
-            .threads
-            .iter()
-            .position(|thread| thread.thread_id == thread_id)
-        {
-            self.select_thread(index);
-        }
-        self.record_user_group_message(&thread_id, group_text).await;
-        true
-    }
-
-    pub(super) async fn dispatch_prompt_to_existing_agent(
-        &mut self,
-        agent: AgentName,
-        thread_short_id: String,
-        text: String,
-        group_text: String,
-    ) -> bool {
-        let Some(thread_id) = self.thread_id_for_agent_short_id(agent, &thread_short_id) else {
-            self.ui.set_error(format!(
-                "No existing {} session matches #{}",
-                agent.bin_name(),
-                thread_short_id
-            ));
-            return true;
-        };
-        if let Some(thread) = self
-            .ui
-            .threads
-            .iter()
-            .find(|thread| thread.thread_id == thread_id)
-            .filter(|thread| !thread_can_receive_message(&thread.state))
-        {
-            self.ui.set_error(format!(
-                "{} session #{} is closed. Use @{} to start a new session.",
-                thread.agent.bin_name(),
-                short_thread_id(&thread.thread_id),
-                thread.agent.bin_name()
-            ));
-            return true;
-        }
-
-        if text.trim().is_empty() {
-            if let Some(index) = self
-                .ui
-                .threads
-                .iter()
-                .position(|thread| thread.thread_id == thread_id)
-            {
-                self.select_thread(index);
-            }
-            self.record_user_group_message(&thread_id, group_text).await;
-            return true;
-        }
-
-        self.send_text_to_thread(thread_id, text, Some(group_text))
-            .await
-    }
-
     pub(super) async fn dispatch_prompt_to_agent(
         &mut self,
         agent: AgentName,
         text: String,
-        group_text: String,
+        message_body: String,
     ) -> bool {
         if let Some(tx) = self.event_tx.clone() {
             if let Some(error) = self.agent_unavailability_error(agent) {
                 self.ui.set_error(error);
                 return true;
             }
-            self.record_user_group_message_for_agent(agent, group_text)
-                .await;
             let backend = Arc::clone(&self.backend);
-            let workspace = self.state.workspace.clone();
+            let workspace = self.current_project_workspace();
             tokio::spawn(async move {
                 match backend.start_agent(agent, workspace).await {
                     Ok(outcome) => {
@@ -198,7 +130,7 @@ impl App {
 
         match self.start_new_thread(agent).await {
             Ok(thread_id) => {
-                self.send_text_to_thread(thread_id, text, Some(group_text))
+                self.send_text_to_thread(thread_id, text, Some(message_body))
                     .await
             }
             Err(error) => {
@@ -212,11 +144,11 @@ impl App {
         &mut self,
         thread_id: String,
         text: String,
-        group_text: Option<String>,
+        message_body: Option<String>,
     ) -> bool {
         if let Some(index) = self
             .ui
-            .threads
+            .thread_panel.list.items
             .iter()
             .position(|thread| thread.thread_id == thread_id)
         {
@@ -228,28 +160,29 @@ impl App {
 
         self.hydrate_thread_if_needed(&thread_id).await;
 
-        let conversation_message = group_text.as_ref().and_then(|body| {
+        let conversation_message = message_body.as_ref().and_then(|body| {
             self.ui
                 .nav_level()
                 .conversation_id()
                 .map(|conversation_id| (conversation_id.to_owned(), body.clone()))
         });
-        if conversation_message.is_none() {
-            if let Some(group_text) = group_text.as_ref() {
-                self.record_user_group_message(&thread_id, group_text.clone())
-                    .await;
-            }
-        }
-
         if let Some(tx) = self.event_tx.clone() {
             let backend = Arc::clone(&self.backend);
             let conversation_message = conversation_message.clone();
             tokio::spawn(async move {
                 if let Some((conversation_id, body)) = conversation_message {
                     if let Err(error) = backend
-                        .append_conversation_message(&conversation_id, None, "user", None, &body)
+                        .append_conversation_message(
+                            &conversation_id,
+                            None,
+                            None,
+                            "user",
+                            None,
+                            &body,
+                        )
                         .await
                     {
+                        let error = format!("Failed to save conversation message: {error}");
                         tracing::warn!(
                             target: "minos_tui::app",
                             error = %error,
@@ -257,6 +190,11 @@ impl App {
                             thread_id = %thread_id,
                             "append_conversation_message failed before send"
                         );
+                        let _ = tx.send(AppEvent::SendMessageFailed {
+                            thread_id: thread_id.clone(),
+                            error,
+                        });
+                        return;
                     }
                 }
                 if let Err(e) = backend.resume_thread(&thread_id).await {
@@ -284,7 +222,7 @@ impl App {
         if let Some((conversation_id, body)) = conversation_message {
             if let Err(error) = self
                 .backend
-                .append_conversation_message(&conversation_id, None, "user", None, &body)
+                .append_conversation_message(&conversation_id, None, None, "user", None, &body)
                 .await
             {
                 tracing::warn!(
@@ -333,7 +271,7 @@ impl App {
         match descriptor.status {
             AgentStatus::Ok => match self
                 .backend
-                .start_agent(agent, self.state.workspace.clone())
+                .start_agent(agent, self.current_project_workspace())
                 .await
             {
                 Ok(outcome) => {
@@ -352,6 +290,18 @@ impl App {
                 Err(format!("{} is unavailable: {reason}", agent.bin_name()))
             }
         }
+    }
+
+    fn current_project_workspace(&self) -> PathBuf {
+        let Some(project_id) = self.ui.nav_level().project_id() else {
+            return self.state.workspace.clone();
+        };
+        self.ui
+            .projects
+            .items.iter()
+            .find(|project| project.project_id == project_id)
+            .map(|project| project.workspace_path.clone())
+            .unwrap_or_else(|| self.state.workspace.clone())
     }
 
     pub(super) fn agent_unavailability_error(&self, agent: AgentName) -> Option<String> {
@@ -375,11 +325,11 @@ impl App {
     ) {
         if let Some(index) = self
             .ui
-            .threads
+            .thread_panel.list.items
             .iter()
             .position(|thread| thread.thread_id == thread_id)
         {
-            if let Some(entry) = self.ui.threads.get_mut(index) {
+            if let Some(entry) = self.ui.thread_panel.list.items.get_mut(index) {
                 entry.agent = agent;
                 entry.workspace = workspace;
             }
@@ -390,7 +340,7 @@ impl App {
             return;
         }
 
-        self.ui.threads.push(ThreadEntry {
+        self.ui.thread_panel.list.items.push(ThreadEntry {
             thread_id: thread_id.clone(),
             agent,
             workspace,
@@ -398,32 +348,42 @@ impl App {
             parent_thread_id: None,
         });
         self.ensure_chat_state_agent(&thread_id, agent);
-        self.select_thread(self.ui.threads.len().saturating_sub(1));
+        self.select_thread(self.ui.thread_panel.list.items.len().saturating_sub(1));
         self.ui.focus.focus(PaneId::Input);
         self.sync_input_agent_picker();
     }
 
+    // Used by unit tests and the test-only in-process MCP handlers.
+    #[allow(dead_code)]
     pub(super) fn thread_id_for_agent_short_id(
         &self,
         agent: AgentName,
         short_id: &str,
     ) -> Option<String> {
         let short_id = short_id.to_ascii_lowercase();
+        if self.ui.nav_level().conversation_id().is_none() {
+            return None;
+        }
         self.ui
-            .threads
+            .conversation.agent_sessions.items
             .iter()
-            .find(|thread| {
-                thread.agent == agent
-                    && (short_thread_id(&thread.thread_id).to_ascii_lowercase() == short_id
-                        || thread.thread_id.to_ascii_lowercase().starts_with(&short_id))
+            .filter(|session| session.parent_thread_id.is_none())
+            .filter(|session| thread_can_receive_message(&session.state))
+            .find(|session| {
+                session.agent == agent
+                    && (short_thread_id(&session.thread_id).to_ascii_lowercase() == short_id
+                        || session
+                            .thread_id
+                            .to_ascii_lowercase()
+                            .starts_with(&short_id))
             })
-            .map(|thread| thread.thread_id.clone())
+            .map(|session| session.thread_id.clone())
     }
 
     pub(super) fn sync_input_agent_picker(&mut self) {
-        let candidates = self.ui.room_agent_mention_candidates();
+        let candidates = self.ui.conversation_agent_mention_candidates();
         self.ui
-            .room_input
+            .inputs.conversation
             .sync_agent_picker(candidates.as_slice(), self.ui.focus.is(PaneId::Input));
     }
 }

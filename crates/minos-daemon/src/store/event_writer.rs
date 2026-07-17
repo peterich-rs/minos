@@ -13,8 +13,9 @@ use anyhow::Result;
 use minos_agent_runtime::{RawBody, RawIngest, INLINE_RAW_BODY_THRESHOLD};
 use minos_domain::AgentName;
 use minos_ui_protocol::{
-    translate_claude, translate_codex, translate_gemini, translate_opencode, ClaudeTranslatorState,
-    CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState, UiEventMessage,
+    translate_claude, translate_codex, translate_gemini, translate_grok, translate_opencode,
+    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, GrokTranslatorState,
+    OpencodeTranslatorState, UiEventMessage,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -341,6 +342,7 @@ pub(crate) struct ProjectionTranslator {
     codex: HashMap<String, CodexTranslatorState>,
     claude: HashMap<String, ClaudeTranslatorState>,
     gemini: HashMap<String, GeminiTranslatorState>,
+    grok: HashMap<String, GrokTranslatorState>,
     opencode: HashMap<String, OpencodeTranslatorState>,
 }
 
@@ -384,6 +386,13 @@ impl ProjectionTranslator {
                     .entry(ingest.thread_id.clone())
                     .or_insert_with(|| GeminiTranslatorState::new(ingest.thread_id.clone()));
                 translate_gemini(state, &payload)
+            }
+            AgentName::Grok => {
+                let state = self
+                    .grok
+                    .entry(ingest.thread_id.clone())
+                    .or_insert_with(|| GrokTranslatorState::new(ingest.thread_id.clone()));
+                translate_grok(state, &payload)
             }
             AgentName::Opencode => {
                 let state = self

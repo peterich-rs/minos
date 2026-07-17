@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::layout::Rect;
 
 impl App {
     pub(super) async fn handle_key(&mut self, key: KeyEvent) -> bool {
@@ -36,16 +37,16 @@ impl App {
         target: InputTarget,
     ) -> bool {
         let (input, area) = match target {
-            InputTarget::Room => (&self.ui.room_input, self.ui.panel_areas.room_input),
-            InputTarget::Agent => (&self.ui.agent_input, self.ui.panel_areas.agent_input),
+            InputTarget::Conversation => (&self.ui.inputs.conversation, self.ui.panel_areas.conversation_input),
+            InputTarget::Agent => (&self.ui.inputs.agent, self.ui.panel_areas.agent_input),
         };
         let width = area.width.saturating_sub(2).max(1);
         let Some(action) = crate::input::key_to_input_action(key, input, width, target) else {
             return self.handle_unmapped_input_key(key).await;
         };
 
-        let sync_agent_picker = matches!(target, InputTarget::Room)
-            && room_input_action_needs_agent_picker_sync(&action);
+        let sync_agent_picker = matches!(target, InputTarget::Conversation)
+            && conversation_input_action_needs_agent_picker_sync(&action);
         let (change, effects) =
             crate::update::update(&mut self.state, &mut self.ui, Action::Input(target, action));
         if sync_agent_picker {
@@ -119,15 +120,7 @@ impl App {
             }
             Effect::InterruptOrQuit => self.handle_ctrl_c().await,
             Effect::CloseCurrentThread => self.close_current_thread().await,
-            Effect::StartAgentAt(index) => self.start_agent_at(index).await,
-            Effect::HandleIngest(ingest) => self.handle_ingest(ingest).await,
-            Effect::HandleManagerEvent(event) => self.handle_manager_event(event).await,
             Effect::HandleTick => self.handle_tick().await,
-            Effect::HandleMcpToolCall(event) => {
-                let response = self.handle_mcp_tool_call(event.request).await;
-                let _ = event.response_tx.send(response);
-                true
-            }
             Effect::AgentStartedForPrompt {
                 agent,
                 thread_id,
@@ -141,28 +134,16 @@ impl App {
                     self.send_text_to_thread(thread_id, text, None).await
                 }
             }
-            Effect::DispatchPromptToExistingAgent {
-                agent,
-                thread_short_id,
-                text,
-                group_text,
-            } => {
-                self.dispatch_prompt_to_existing_agent(agent, thread_short_id, text, group_text)
-                    .await
-            }
-            Effect::InviteAgentToRoom { agent, group_text } => {
-                self.invite_agent_to_room(agent, group_text).await
-            }
             Effect::DispatchPromptToAgent {
                 agent,
                 text,
-                group_text,
-            } => self.dispatch_prompt_to_agent(agent, text, group_text).await,
+                message_body,
+            } => self.dispatch_prompt_to_agent(agent, text, message_body).await,
             Effect::SendTextToThread {
                 thread_id,
                 text,
-                group_text,
-            } => self.send_text_to_thread(thread_id, text, group_text).await,
+                message_body,
+            } => self.send_text_to_thread(thread_id, text, message_body).await,
             Effect::SubmitPendingAgentRequest {
                 thread_id,
                 pending,
@@ -176,10 +157,37 @@ impl App {
                 if let Err(error) = copy_to_clipboard(&text) {
                     self.ui
                         .set_error(format!("Failed to copy selection: {error}"));
+                    self.request_frame_in(crate::ui::UiState::ERROR_FLASH_TTL);
                 } else {
+                    if let Some(chat) = self.ui.current_chat_mut() {
+                        chat.clear_selection();
+                    }
+                    self.ui.conversation.clear_selection();
                     self.ui.flash_copied();
+                    // Clear "copied" indicator when TTL elapses without waiting on tick alone.
+                    self.request_frame_in(crate::ui::UiState::COPIED_FLASH_TTL);
                 }
                 true
+            }
+            Effect::ResolvePathCandidates {
+                target,
+                sequence,
+                token,
+                workspace_root,
+            } => {
+                if let Some(tx) = self.event_tx.clone() {
+                    tokio::task::spawn_blocking(move || {
+                        let candidates =
+                            crate::path_complete::list_path_candidates(&token, &workspace_root)
+                                .unwrap_or_default();
+                        let _ = tx.send(AppEvent::PathCandidatesResolved {
+                            target,
+                            sequence,
+                            candidates,
+                        });
+                    });
+                }
+                false
             }
             Effect::CreateProject {
                 name,
@@ -244,140 +252,17 @@ impl App {
                 message_body,
                 prompt,
             } => {
-                if let Some(tx) = self.event_tx.clone() {
-                    let backend = Arc::clone(&self.backend);
-                    tokio::spawn(async move {
-                        let title = prompt
-                            .lines()
-                            .next()
-                            .map(str::trim)
-                            .filter(|line| !line.is_empty())
-                            .unwrap_or("Untitled conversation")
-                            .chars()
-                            .take(80)
-                            .collect::<String>();
-                        let conversation =
-                            match backend.create_conversation(&project_id, &title).await {
-                                Ok(conversation) => conversation,
-                                Err(e) => {
-                                    let _ = tx.send(AppEvent::ProjectFailed(e.to_string()));
-                                    return;
-                                }
-                            };
-                        let conversation_id = conversation.conversation_id.clone();
-                        let _ = backend
-                            .append_conversation_message(
-                                &conversation_id,
-                                None,
-                                "user",
-                                None,
-                                &message_body,
-                            )
-                            .await;
-                        let messages = backend
-                            .list_conversation_messages(&conversation_id)
-                            .await
-                            .unwrap_or_default();
-                        let sessions = backend
-                            .list_conversation_agent_sessions(&conversation_id)
-                            .await
-                            .unwrap_or_default();
-                        let _ = tx.send(AppEvent::ConversationOpened {
-                            project_id: project_id.clone(),
-                            conversation_id: conversation_id.clone(),
-                            messages,
-                            sessions,
-                        });
-                        match backend
-                            .start_agent_in_conversation(&conversation_id, agent, workspace)
-                            .await
-                        {
-                            Ok(outcome) => {
-                                let _ = tx.send(AppEvent::ConversationAgentStarted {
-                                    conversation_id,
-                                    agent,
-                                    thread_id: outcome.thread_id,
-                                    cwd: outcome.cwd,
-                                    text: prompt,
-                                });
-                            }
-                            Err(e) => {
-                                let _ = tx.send(AppEvent::ProjectFailed(e.to_string()));
-                            }
-                        }
-                    });
-                    return false;
-                }
-                let title = conversation_title_from_prompt(&prompt);
-                let conversation = match self.backend.create_conversation(&project_id, &title).await
-                {
-                    Ok(conversation) => conversation,
-                    Err(error) => {
-                        self.ui.set_error(error.to_string());
-                        return true;
-                    }
-                };
-                let conversation_id = conversation.conversation_id.clone();
-                let _ = self
-                    .backend
-                    .append_conversation_message(
-                        &conversation_id,
-                        None,
-                        "user",
-                        None,
-                        &message_body,
-                    )
-                    .await;
-                let messages = self
-                    .backend
-                    .list_conversation_messages(&conversation_id)
-                    .await
-                    .unwrap_or_default();
-                let sessions = self
-                    .backend
-                    .list_conversation_agent_sessions(&conversation_id)
-                    .await
-                    .unwrap_or_default();
-                let (change, effects) = crate::update::update(
-                    &mut self.state,
-                    &mut self.ui,
-                    Action::EffectCompleted(crate::action::EffectResult::ConversationOpened {
-                        project_id: project_id.clone(),
-                        conversation_id: conversation_id.clone(),
-                        messages,
-                        sessions,
-                    }),
-                );
-                debug_assert!(effects.is_empty());
-                let mut redraw = change.needs_redraw;
-                match self
-                    .backend
-                    .start_agent_in_conversation(&conversation_id, agent, workspace)
-                    .await
-                {
-                    Ok(outcome) => {
-                        let (change, effects) = crate::update::update(
-                            &mut self.state,
-                            &mut self.ui,
-                            Action::EffectCompleted(
-                                crate::action::EffectResult::ConversationAgentStarted {
-                                    conversation_id,
-                                    agent,
-                                    thread_id: outcome.thread_id,
-                                    cwd: outcome.cwd,
-                                    text: prompt,
-                                },
-                            ),
-                        );
-                        redraw |= change.needs_redraw;
-                        redraw |= self.execute_non_recursive_effects(effects).await;
-                    }
-                    Err(error) => {
-                        self.ui.set_error(error.to_string());
-                        redraw = true;
-                    }
-                }
-                redraw
+                self.run_conversation_start_flow(
+                    conversation_ops::create_conversation_and_start_agent(
+                        Arc::clone(&self.backend),
+                        project_id,
+                        agent,
+                        workspace,
+                        message_body,
+                        prompt,
+                    ),
+                )
+                .await
             }
             Effect::StartAgentInConversation {
                 project_id,
@@ -387,112 +272,18 @@ impl App {
                 message_body,
                 prompt,
             } => {
-                if let Some(tx) = self.event_tx.clone() {
-                    let backend = Arc::clone(&self.backend);
-                    tokio::spawn(async move {
-                        let _ = backend
-                            .append_conversation_message(
-                                &conversation_id,
-                                None,
-                                "user",
-                                None,
-                                &message_body,
-                            )
-                            .await;
-                        let messages = backend
-                            .list_conversation_messages(&conversation_id)
-                            .await
-                            .unwrap_or_default();
-                        let sessions = backend
-                            .list_conversation_agent_sessions(&conversation_id)
-                            .await
-                            .unwrap_or_default();
-                        let _ = tx.send(AppEvent::ConversationOpened {
-                            project_id,
-                            conversation_id: conversation_id.clone(),
-                            messages,
-                            sessions,
-                        });
-                        match backend
-                            .start_agent_in_conversation(&conversation_id, agent, workspace)
-                            .await
-                        {
-                            Ok(outcome) => {
-                                let _ = tx.send(AppEvent::ConversationAgentStarted {
-                                    conversation_id,
-                                    agent,
-                                    thread_id: outcome.thread_id,
-                                    cwd: outcome.cwd,
-                                    text: prompt,
-                                });
-                            }
-                            Err(e) => {
-                                let _ = tx.send(AppEvent::ProjectFailed(e.to_string()));
-                            }
-                        }
-                    });
-                    return false;
-                }
-                let _ = self
-                    .backend
-                    .append_conversation_message(
-                        &conversation_id,
-                        None,
-                        "user",
-                        None,
-                        &message_body,
-                    )
-                    .await;
-                let messages = self
-                    .backend
-                    .list_conversation_messages(&conversation_id)
-                    .await
-                    .unwrap_or_default();
-                let sessions = self
-                    .backend
-                    .list_conversation_agent_sessions(&conversation_id)
-                    .await
-                    .unwrap_or_default();
-                let (change, effects) = crate::update::update(
-                    &mut self.state,
-                    &mut self.ui,
-                    Action::EffectCompleted(crate::action::EffectResult::ConversationOpened {
+                self.run_conversation_start_flow(
+                    conversation_ops::start_agent_in_existing_conversation(
+                        Arc::clone(&self.backend),
                         project_id,
-                        conversation_id: conversation_id.clone(),
-                        messages,
-                        sessions,
-                    }),
-                );
-                debug_assert!(effects.is_empty());
-                let mut redraw = change.needs_redraw;
-                match self
-                    .backend
-                    .start_agent_in_conversation(&conversation_id, agent, workspace)
-                    .await
-                {
-                    Ok(outcome) => {
-                        let (change, effects) = crate::update::update(
-                            &mut self.state,
-                            &mut self.ui,
-                            Action::EffectCompleted(
-                                crate::action::EffectResult::ConversationAgentStarted {
-                                    conversation_id,
-                                    agent,
-                                    thread_id: outcome.thread_id,
-                                    cwd: outcome.cwd,
-                                    text: prompt,
-                                },
-                            ),
-                        );
-                        redraw |= change.needs_redraw;
-                        redraw |= self.execute_non_recursive_effects(effects).await;
-                    }
-                    Err(error) => {
-                        self.ui.set_error(error.to_string());
-                        redraw = true;
-                    }
-                }
-                redraw
+                        conversation_id,
+                        agent,
+                        workspace,
+                        message_body,
+                        prompt,
+                    ),
+                )
+                .await
             }
             Effect::OpenConversation { conversation_id } => {
                 if let Some(tx) = self.event_tx.clone() {
@@ -550,6 +341,83 @@ impl App {
         needs_redraw
     }
 
+    async fn run_conversation_start_flow<F>(&mut self, work: F) -> bool
+    where
+        F: std::future::Future<
+                Output = Result<
+                    (
+                        conversation_ops::OpenedConversation,
+                        conversation_ops::StartedAgent,
+                    ),
+                    String,
+                >,
+            > + Send
+            + 'static,
+    {
+        if let Some(tx) = self.event_tx.clone() {
+            tokio::spawn(async move {
+                match work.await {
+                    Ok((opened, started)) => {
+                        let _ = tx.send(AppEvent::ConversationOpened {
+                            project_id: opened.project_id,
+                            conversation_id: opened.conversation_id,
+                            messages: opened.messages,
+                            sessions: opened.sessions,
+                        });
+                        let _ = tx.send(AppEvent::ConversationAgentStarted {
+                            conversation_id: started.conversation_id,
+                            agent: started.agent,
+                            thread_id: started.thread_id,
+                            cwd: started.cwd,
+                            text: started.text,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = tx.send(AppEvent::ProjectFailed(error));
+                    }
+                }
+            });
+            return false;
+        }
+
+        match work.await {
+            Ok((opened, started)) => {
+                let (change, effects) = crate::update::update(
+                    &mut self.state,
+                    &mut self.ui,
+                    Action::EffectCompleted(crate::action::EffectResult::ConversationOpened {
+                        project_id: opened.project_id,
+                        conversation_id: opened.conversation_id,
+                        messages: opened.messages,
+                        sessions: opened.sessions,
+                    }),
+                );
+                debug_assert!(effects.is_empty());
+                let mut redraw = change.needs_redraw;
+                let (change, effects) = crate::update::update(
+                    &mut self.state,
+                    &mut self.ui,
+                    Action::EffectCompleted(
+                        crate::action::EffectResult::ConversationAgentStarted {
+                            conversation_id: started.conversation_id,
+                            agent: started.agent,
+                            thread_id: started.thread_id,
+                            cwd: started.cwd,
+                            text: started.text,
+                        },
+                    ),
+                );
+                redraw |= change.needs_redraw;
+                redraw |= self.execute_non_recursive_effects(effects).await;
+                redraw
+            }
+            Err(error) => {
+                self.ui.set_error(error);
+                true
+            }
+        }
+    }
+
     pub(super) async fn handle_paste(&mut self, text: String) -> bool {
         let text = crate::input::normalize_pasted_text(text.as_str());
         if text.is_empty() {
@@ -565,10 +433,10 @@ impl App {
             {
                 InputTarget::Agent
             }
-            PaneId::Input => InputTarget::Room,
+            PaneId::Input => InputTarget::Conversation,
             _ => return false,
         };
-        let sync_agent_picker = matches!(target, InputTarget::Room);
+        let sync_agent_picker = matches!(target, InputTarget::Conversation);
         let (change, effects) = crate::update::update(
             &mut self.state,
             &mut self.ui,
@@ -586,17 +454,47 @@ impl App {
 
     pub(super) async fn handle_ctrl_c(&mut self) -> bool {
         if self.ui.focus.is(PaneId::MainChat) {
-            if let Some(chat) = self.ui.current_chat() {
-                if chat.selection.is_some() {
-                    let width = self.ui.panel_areas.agent_chat.width.saturating_sub(2);
-                    if let Some(text) =
-                        crate::ui::chat::selected_text(chat, width, &self.ui.render_cache)
-                    {
-                        let _ = copy_to_clipboard(&text);
+            // Prefer active selection in either conversation timeline or agent detail.
+            if state::conversation_selection_active(&self.ui) {
+                let width = self
+                    .ui
+                    .panel_areas
+                    .conversation_chat
+                    .width
+                    .saturating_sub(2);
+                let revision = self.ui.conversation.messages_revision;
+                let selection = self.ui.conversation.selection.clone();
+                let text = selection.and_then(|selection| {
+                    let conversation = &mut self.ui.conversation;
+                    conversation.chat_cache.selected_text(
+                        &conversation.messages,
+                        width,
+                        revision,
+                        &selection,
+                    )
+                });
+                if let Some(text) = text {
+                    if copy_to_clipboard(&text).is_ok() {
+                        self.ui.conversation.clear_selection();
                         self.ui.flash_copied();
                     }
                     return true;
                 }
+            }
+
+            let selected_text = self.ui.current_chat().and_then(|chat| {
+                chat.selection.as_ref()?;
+                let width = self.ui.panel_areas.agent_chat.width.saturating_sub(2);
+                crate::ui::chat::selected_text(chat, width, &self.ui.render_cache)
+            });
+            if let Some(text) = selected_text {
+                if copy_to_clipboard(&text).is_ok() {
+                    if let Some(chat) = self.ui.current_chat_mut() {
+                        chat.clear_selection();
+                    }
+                    self.ui.flash_copied();
+                }
+                return true;
             }
         }
 
@@ -630,148 +528,97 @@ impl App {
             }
         }
 
-        if rect_contains(self.ui.panel_areas.room_list, mouse.column, mouse.row) {
-            return match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                        target: ScrollTarget::RoomList,
-                        direction: ScrollDirection::Up,
-                    }))
-                    .await
-                }
-                MouseEventKind::ScrollDown => {
-                    self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                        target: ScrollTarget::RoomList,
-                        direction: ScrollDirection::Down,
-                    }))
-                    .await
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.apply_action(Action::Global(GlobalAction::MouseClick {
-                        target: crate::action::ClickTarget::RoomList,
-                        x: mouse.column,
-                        y: mouse.row,
-                    }))
-                    .await
-                }
-                _ => false,
-            };
+        struct MouseHit {
+            area: Rect,
+            click: Option<crate::action::ClickTarget>,
+            scroll: Option<ScrollTarget>,
+            allow_drag: bool,
         }
 
-        if rect_contains(self.ui.panel_areas.room_chat, mouse.column, mouse.row) {
-            return match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                        target: ScrollTarget::GroupChat,
-                        direction: ScrollDirection::Up,
-                    }))
-                    .await
-                }
-                MouseEventKind::ScrollDown => {
-                    self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                        target: ScrollTarget::GroupChat,
-                        direction: ScrollDirection::Down,
-                    }))
-                    .await
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.apply_action(Action::Global(GlobalAction::MouseClick {
-                        target: crate::action::ClickTarget::GroupChat,
-                        x: mouse.column,
-                        y: mouse.row,
-                    }))
-                    .await
-                }
-                _ => false,
-            };
-        }
+        let hits = [
+            MouseHit {
+                area: self.ui.panel_areas.main_list,
+                click: Some(crate::action::ClickTarget::MainList),
+                scroll: Some(ScrollTarget::MainList),
+                allow_drag: false,
+            },
+            MouseHit {
+                area: self.ui.panel_areas.conversation_chat,
+                click: Some(crate::action::ClickTarget::ConversationChat),
+                scroll: Some(ScrollTarget::ConversationChat),
+                allow_drag: true,
+            },
+            MouseHit {
+                area: self.ui.panel_areas.agent_list,
+                click: Some(crate::action::ClickTarget::AgentList),
+                scroll: Some(ScrollTarget::AgentList),
+                allow_drag: false,
+            },
+            MouseHit {
+                area: self.ui.panel_areas.agent_chat,
+                click: Some(crate::action::ClickTarget::AgentChat),
+                scroll: Some(ScrollTarget::AgentChat),
+                allow_drag: true,
+            },
+            MouseHit {
+                area: self.ui.inputs.metrics[0].outer,
+                click: Some(crate::action::ClickTarget::ConversationInput),
+                scroll: None,
+                allow_drag: false,
+            },
+            MouseHit {
+                area: self.ui.inputs.metrics[1].outer,
+                click: Some(crate::action::ClickTarget::AgentInput),
+                scroll: None,
+                allow_drag: false,
+            },
+        ];
 
-        if rect_contains(self.ui.panel_areas.agent_list, mouse.column, mouse.row) {
+        for hit in hits {
+            if !rect_contains(hit.area, mouse.column, mouse.row) {
+                continue;
+            }
             return match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                        target: ScrollTarget::AgentList,
-                        direction: ScrollDirection::Up,
-                    }))
-                    .await
-                }
-                MouseEventKind::ScrollDown => {
-                    self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                        target: ScrollTarget::AgentList,
-                        direction: ScrollDirection::Down,
-                    }))
-                    .await
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.apply_action(Action::Global(GlobalAction::MouseClick {
-                        target: crate::action::ClickTarget::AgentList,
-                        x: mouse.column,
-                        y: mouse.row,
-                    }))
-                    .await
-                }
-                _ => false,
-            };
-        }
-
-        if rect_contains(self.ui.panel_areas.agent_chat, mouse.column, mouse.row) {
-            return match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                        target: ScrollTarget::AgentChat,
-                        direction: ScrollDirection::Up,
-                    }))
-                    .await
-                }
-                MouseEventKind::ScrollDown => {
-                    self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                        target: ScrollTarget::AgentChat,
-                        direction: ScrollDirection::Down,
-                    }))
-                    .await
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.apply_action(Action::Global(GlobalAction::MouseClick {
-                        target: crate::action::ClickTarget::AgentChat,
-                        x: mouse.column,
-                        y: mouse.row,
-                    }))
-                    .await
-                }
-                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+                MouseEventKind::ScrollUp => match hit.scroll {
+                    Some(target) => {
+                        self.apply_action(Action::Global(GlobalAction::MouseScroll {
+                            target,
+                            direction: ScrollDirection::Up,
+                            lines: wheel_lines(mouse),
+                        }))
+                        .await
+                    }
+                    None => false,
+                },
+                MouseEventKind::ScrollDown => match hit.scroll {
+                    Some(target) => {
+                        self.apply_action(Action::Global(GlobalAction::MouseScroll {
+                            target,
+                            direction: ScrollDirection::Down,
+                            lines: wheel_lines(mouse),
+                        }))
+                        .await
+                    }
+                    None => false,
+                },
+                MouseEventKind::Down(MouseButton::Left) => match hit.click {
+                    Some(target) => {
+                        self.apply_action(Action::Global(GlobalAction::MouseClick {
+                            target,
+                            x: mouse.column,
+                            y: mouse.row,
+                        }))
+                        .await
+                    }
+                    None => false,
+                },
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+                    if hit.allow_drag =>
+                {
                     self.apply_action(Action::Global(GlobalAction::MouseDrag {
                         x: mouse.column,
                         y: mouse.row,
                         release: matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)),
-                    }))
-                    .await
-                }
-                MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => false,
-                _ => false,
-            };
-        }
-
-        if rect_contains(self.ui.input_metrics[0].outer, mouse.column, mouse.row) {
-            return match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.apply_action(Action::Global(GlobalAction::MouseClick {
-                        target: crate::action::ClickTarget::RoomInput,
-                        x: mouse.column,
-                        y: mouse.row,
-                    }))
-                    .await
-                }
-                _ => false,
-            };
-        }
-
-        if rect_contains(self.ui.input_metrics[1].outer, mouse.column, mouse.row) {
-            return match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.apply_action(Action::Global(GlobalAction::MouseClick {
-                        target: crate::action::ClickTarget::AgentInput,
-                        x: mouse.column,
-                        y: mouse.row,
                     }))
                     .await
                 }
@@ -782,15 +629,17 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                    target: ScrollTarget::GroupChat,
+                    target: ScrollTarget::ConversationChat,
                     direction: ScrollDirection::Up,
+                    lines: wheel_lines(mouse),
                 }))
                 .await
             }
             MouseEventKind::ScrollDown => {
                 self.apply_action(Action::Global(GlobalAction::MouseScroll {
-                    target: ScrollTarget::GroupChat,
+                    target: ScrollTarget::ConversationChat,
                     direction: ScrollDirection::Down,
+                    lines: wheel_lines(mouse),
                 }))
                 .await
             }
@@ -800,14 +649,12 @@ impl App {
     }
 }
 
-fn conversation_title_from_prompt(prompt: &str) -> String {
-    prompt
-        .lines()
-        .next()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .unwrap_or("Untitled conversation")
-        .chars()
-        .take(80)
-        .collect()
+/// Lines to scroll for one wheel event. `coalesce_scroll_batch` stores the
+/// merged tick count in `modifiers.bits()` (1 = single event).
+fn wheel_lines(mouse: MouseEvent) -> u16 {
+    const LINES_PER_TICK: u16 = 3;
+    let ticks = u16::from(mouse.modifiers.bits()).max(1);
+    LINES_PER_TICK.saturating_mul(ticks)
 }
+
+

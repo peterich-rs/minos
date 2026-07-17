@@ -1,3 +1,4 @@
+use super::pending_request::PendingQuestionOption;
 use super::tool_summary::{is_diff_like, summarize_tool_args, summarize_tool_output};
 use super::*;
 use minos_domain::AgentName;
@@ -94,6 +95,170 @@ fn assistant_text_reasoning_and_tool_appear_in_arrival_order() {
 }
 
 #[test]
+fn late_reasoning_after_tools_appends_new_item_not_above_tools() {
+    let mut cs = ChatState::new("t1".into(), AgentName::Grok);
+    cs.apply_ui_events(vec![
+        UiEventMessage::MessageStarted {
+            message_id: "m1".into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        },
+        UiEventMessage::ToolCallPlaced {
+            message_id: "m1".into(),
+            tool_call_id: "tc1".into(),
+            name: "read_file".into(),
+            args_json: r#"{"path":"foo.rs"}"#.into(),
+        },
+        UiEventMessage::ToolCallCompleted {
+            tool_call_id: "tc1".into(),
+            output: "ok".into(),
+            is_error: false,
+        },
+        UiEventMessage::ReasoningDelta {
+            message_id: "m1".into(),
+            text: "after tools".into(),
+        },
+        UiEventMessage::ReasoningDelta {
+            message_id: "m1".into(),
+            text: " continued".into(),
+        },
+    ]);
+
+    assert_eq!(cs.items.len(), 2);
+    assert!(matches!(cs.items[0], ChatItem::ToolCall { .. }));
+    match &cs.items[1] {
+        ChatItem::Reasoning { text, .. } => assert_eq!(text, "after tools continued"),
+        other => panic!("expected trailing Reasoning, got {other:?}"),
+    }
+}
+
+#[test]
+fn interleaved_reasoning_opens_new_item_after_tool() {
+    let mut cs = ChatState::new("t1".into(), AgentName::Gemini);
+    cs.apply_ui_events(vec![
+        UiEventMessage::MessageStarted {
+            message_id: "m1".into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        },
+        UiEventMessage::ReasoningDelta {
+            message_id: "m1".into(),
+            text: "first".into(),
+        },
+        UiEventMessage::ToolCallPlaced {
+            message_id: "m1".into(),
+            tool_call_id: "tc1".into(),
+            name: "grep".into(),
+            args_json: r#"{"pattern":"x"}"#.into(),
+        },
+        UiEventMessage::ReasoningDelta {
+            message_id: "m1".into(),
+            text: "second".into(),
+        },
+    ]);
+
+    assert_eq!(cs.items.len(), 3);
+    match &cs.items[0] {
+        ChatItem::Reasoning {
+            text,
+            is_streaming,
+            ..
+        } => {
+            assert_eq!(text, "first");
+            assert!(!*is_streaming);
+        }
+        other => panic!("expected first Reasoning, got {other:?}"),
+    }
+    assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
+    match &cs.items[2] {
+        ChatItem::Reasoning {
+            text,
+            is_streaming,
+            ..
+        } => {
+            assert_eq!(text, "second");
+            assert!(*is_streaming);
+        }
+        other => panic!("expected second Reasoning, got {other:?}"),
+    }
+}
+
+#[test]
+fn intermediate_and_final_assistant_text_split_across_tools() {
+    let mut cs = ChatState::new("t1".into(), AgentName::Grok);
+    cs.apply_ui_events(vec![
+        UiEventMessage::MessageStarted {
+            message_id: "m1".into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        },
+        UiEventMessage::TextDelta {
+            message_id: "m1".into(),
+            text: "Looking into it.".into(),
+        },
+        UiEventMessage::ToolCallPlaced {
+            message_id: "m1".into(),
+            tool_call_id: "tc1".into(),
+            name: "read_file".into(),
+            args_json: r#"{"path":"a.rs"}"#.into(),
+        },
+        UiEventMessage::ToolCallCompleted {
+            tool_call_id: "tc1".into(),
+            output: "ok".into(),
+            is_error: false,
+        },
+        UiEventMessage::ReasoningDelta {
+            message_id: "m1".into(),
+            text: "found the issue".into(),
+        },
+        UiEventMessage::TextDelta {
+            message_id: "m1".into(),
+            text: "Here is the fix.".into(),
+        },
+        UiEventMessage::MessageCompleted {
+            message_id: "m1".into(),
+            finished_at_ms: 1,
+        },
+    ]);
+
+    assert_eq!(cs.items.len(), 4);
+    match &cs.items[0] {
+        ChatItem::AssistantText {
+            text_parts,
+            is_streaming,
+            ..
+        } => {
+            assert_eq!(text_parts, &plain_parts("Looking into it."));
+            assert!(!*is_streaming);
+        }
+        other => panic!("expected intermediate AssistantText, got {other:?}"),
+    }
+    assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
+    match &cs.items[2] {
+        ChatItem::Reasoning {
+            text,
+            is_streaming,
+            ..
+        } => {
+            assert_eq!(text, "found the issue");
+            assert!(!*is_streaming);
+        }
+        other => panic!("expected Reasoning, got {other:?}"),
+    }
+    match &cs.items[3] {
+        ChatItem::AssistantText {
+            text_parts,
+            is_streaming,
+            ..
+        } => {
+            assert_eq!(text_parts, &plain_parts("Here is the fix."));
+            assert!(!*is_streaming);
+        }
+        other => panic!("expected final AssistantText, got {other:?}"),
+    }
+}
+
+#[test]
 fn tool_call_placed_then_completed() {
     let mut cs = ChatState::new("t1".into(), AgentName::Claude);
     cs.apply_ui_events(vec![UiEventMessage::MessageStarted {
@@ -116,7 +281,7 @@ fn tool_call_placed_then_completed() {
             ..
         } => {
             assert_eq!(name, "write_file");
-            assert_eq!(args_summary, "file=foo.rs");
+            assert_eq!(args_summary, "foo.rs");
             assert!(*is_streaming);
         }
         other => panic!("expected ToolCall, got {other:?}"),
@@ -171,7 +336,9 @@ fn duplicate_tool_call_placed_updates_existing_tool_block() {
 }
 
 #[test]
-fn codex_raw_events_render_final_text_and_tool_as_separate_items() {
+fn codex_projected_events_render_final_text_and_tool_as_separate_items() {
+    // Daemon projects raw agent events to UiEventMessage; TUI only applies projections.
+    let mut translator = minos_ui_protocol::CodexTranslatorState::new("thr".into());
     let mut cs = ChatState::new("thr".into(), AgentName::Codex);
     for raw in [
         serde_json::json!({"method":"item/started","params":{
@@ -198,7 +365,7 @@ fn codex_raw_events_render_final_text_and_tool_as_separate_items() {
             "threadId":"thr","turnId":"t1","completedAtMs":3
         }}),
     ] {
-        let events = cs.translation_state.translate(&raw);
+        let events = minos_ui_protocol::translate_codex(&mut translator, &raw).unwrap_or_default();
         cs.apply_ui_events(events);
     }
 
@@ -327,16 +494,17 @@ fn reasoning_replace_without_delta_creates_streaming_item_for_open_message() {
 
 #[test]
 fn tool_arg_summary_highlights_task_and_skill_details() {
+    // Grok-style bare targets (no `task=` / `skill=` labels).
     assert_eq!(
         summarize_tool_args(
             "Task",
             r#"{"description":"inspect parser","prompt":"find the failing branch"}"#
         ),
-        "task=inspect parser"
+        "inspect parser"
     );
     assert_eq!(
         summarize_tool_args("skill", r#"{"skillName":"openai-docs"}"#),
-        "skill=openai-docs"
+        "openai-docs"
     );
 }
 
@@ -353,7 +521,7 @@ fn diff_tool_output_summarizes_changed_lines() {
     let output = "@@ -1 +1\n-old\n+new";
 
     assert!(is_diff_like(output));
-    assert_eq!(summarize_tool_output(output), "diff +1 -1");
+    assert_eq!(summarize_tool_output(output), "+1/-1");
 }
 
 #[test]
@@ -730,12 +898,57 @@ fn toggle_tool_expansion_bumps_version() {
     ]);
     let version_before = cs.version;
 
-    cs.toggle_tool_expansion();
+    assert!(cs.toggle_tool_expansion());
     assert!(cs.version > version_before);
 
     match &cs.items[0] {
-        ChatItem::ToolCall { is_expanded, .. } => assert!(*is_expanded),
+        ChatItem::ToolCall {
+            is_expanded,
+            is_user_toggled,
+            ..
+        } => {
+            assert!(!*is_expanded);
+            assert_eq!(*is_user_toggled, Some(true));
+        }
         other => panic!("expected ToolCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn toggle_tool_expansion_only_updates_last_tool_call() {
+    let mut cs = ChatState::new("t1".into(), AgentName::Codex);
+    cs.apply_ui_events(vec![
+        UiEventMessage::ToolCallPlaced {
+            message_id: "m1".into(),
+            tool_call_id: "tc1".into(),
+            name: "bash".into(),
+            args_json: r#"{"command":"one"}"#.into(),
+        },
+        UiEventMessage::ToolCallPlaced {
+            message_id: "m1".into(),
+            tool_call_id: "tc2".into(),
+            name: "bash".into(),
+            args_json: r#"{"command":"two"}"#.into(),
+        },
+    ]);
+
+    assert!(cs.toggle_tool_expansion());
+
+    match (&cs.items[0], &cs.items[1]) {
+        (
+            ChatItem::ToolCall {
+                is_user_toggled: first,
+                ..
+            },
+            ChatItem::ToolCall {
+                is_user_toggled: second,
+                ..
+            },
+        ) => {
+            assert_eq!(*first, None);
+            assert_eq!(*second, Some(true));
+        }
+        other => panic!("expected tool calls, got {other:?}"),
     }
 }
 
@@ -771,6 +984,53 @@ fn subagent_spawn_and_status_update_render_parent_card() {
         status: SubagentStatus::Completed,
     }]);
     match &cs.items[0] {
+        ChatItem::SubagentCall {
+            status,
+            is_streaming,
+            ..
+        } => {
+            assert_eq!(*status, SubagentStatus::Completed);
+            assert!(!*is_streaming);
+        }
+        other => panic!("expected SubagentCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn tool_call_completed_closes_matching_subagent_card() {
+    // Opencode historically emitted only ToolCallCompleted for `task`; chat_state must
+    // still flip the linked SubagentCall so history replay does not leave cards "running".
+    let mut cs = ChatState::new("parent".into(), AgentName::Opencode);
+    cs.apply_ui_events(vec![
+        UiEventMessage::ToolCallPlaced {
+            message_id: "m1".into(),
+            tool_call_id: "call_task".into(),
+            name: "task".into(),
+            args_json: r#"{"prompt":"audit"}"#.into(),
+        },
+        UiEventMessage::SubagentSpawned {
+            parent_thread_id: "parent".into(),
+            sub_thread_id: "ses_sub".into(),
+            tool_call_id: "call_task".into(),
+            agent: AgentName::Opencode,
+            model: None,
+            prompt: Some("audit".into()),
+            title: None,
+        },
+    ]);
+
+    cs.apply_ui_events(vec![UiEventMessage::ToolCallCompleted {
+        tool_call_id: "call_task".into(),
+        output: r#"<task id="ses_sub" state="completed">done</task>"#.into(),
+        is_error: false,
+    }]);
+
+    let subagent = cs
+        .items
+        .iter()
+        .find(|item| matches!(item, ChatItem::SubagentCall { .. }))
+        .expect("subagent card");
+    match subagent {
         ChatItem::SubagentCall {
             status,
             is_streaming,

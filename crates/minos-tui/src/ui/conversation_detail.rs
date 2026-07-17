@@ -1,106 +1,20 @@
-use crate::backend::{ConversationMessageEntry, ThreadSummaryEntry};
+use crate::backend::ThreadSummaryEntry;
 use crate::render::Renderable;
-use crate::ui::{flat_agent_sessions, theme};
+use crate::ui::{flat_agent_sessions, theme, ThreadEntry};
+use minos_agent_runtime::ThreadState;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, List, ListItem, ListState, Paragraph},
+    widgets::{Block, List, ListItem, ListState},
     Frame,
 };
-
-pub struct ConversationMessagesRenderable<'a> {
-    title: String,
-    messages: &'a [ConversationMessageEntry],
-    scroll_offset: &'a mut u16,
-    auto_scroll: &'a mut bool,
-    max_scroll: &'a mut u16,
-    focused: bool,
-}
-
-impl<'a> ConversationMessagesRenderable<'a> {
-    pub fn new(
-        title: String,
-        messages: &'a [ConversationMessageEntry],
-        scroll_offset: &'a mut u16,
-        auto_scroll: &'a mut bool,
-        max_scroll: &'a mut u16,
-        focused: bool,
-    ) -> Self {
-        Self {
-            title,
-            messages,
-            scroll_offset,
-            auto_scroll,
-            max_scroll,
-            focused,
-        }
-    }
-}
-
-impl Renderable for ConversationMessagesRenderable<'_> {
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let border_style = if self.focused {
-            theme::FOCUSED_BORDER
-        } else {
-            Style::new().fg(theme::BORDER_FG)
-        };
-        let block = Block::bordered()
-            .title(self.title.clone())
-            .border_style(border_style);
-        if self.messages.is_empty() {
-            *self.max_scroll = 0;
-            *self.scroll_offset = 0;
-            *self.auto_scroll = true;
-            frame.render_widget(Paragraph::new("").block(block), area);
-            return;
-        }
-        let lines = self
-            .messages
-            .iter()
-            .flat_map(|message| {
-                let sender = match (message.sender_role.as_str(), message.agent) {
-                    ("agent", Some(agent)) => agent.bin_name().to_owned(),
-                    ("agent", None) => "agent".to_owned(),
-                    _ => "you".to_owned(),
-                };
-                let style = if message.sender_role == "agent" {
-                    Style::new().fg(Color::Cyan)
-                } else {
-                    Style::new().fg(Color::Green)
-                };
-                [
-                    Line::from(vec![
-                        Span::styled(format!("{sender}: "), style),
-                        Span::raw(message.body.clone()),
-                    ]),
-                    Line::raw(""),
-                ]
-            })
-            .collect::<Vec<_>>();
-        let inner_height = area.height.saturating_sub(2).max(1);
-        *self.max_scroll = u16::try_from(lines.len().saturating_sub(usize::from(inner_height)))
-            .unwrap_or(u16::MAX);
-        if *self.auto_scroll {
-            *self.scroll_offset = *self.max_scroll;
-        } else {
-            *self.scroll_offset = (*self.scroll_offset).min(*self.max_scroll);
-        }
-        frame.render_widget(
-            Paragraph::new(lines)
-                .block(block)
-                .scroll((*self.scroll_offset, 0)),
-            area,
-        );
-    }
-
-    fn desired_height(&self, _width: u16) -> u16 {
-        0
-    }
-}
+use std::collections::HashMap;
 
 pub struct AgentSessionListRenderable<'a> {
     sessions: &'a [ThreadSummaryEntry],
+    threads: &'a [ThreadEntry],
+    recent_files: &'a HashMap<String, Vec<String>>,
     selected: Option<usize>,
     list_state: &'a mut ListState,
     focused: bool,
@@ -109,12 +23,16 @@ pub struct AgentSessionListRenderable<'a> {
 impl<'a> AgentSessionListRenderable<'a> {
     pub fn new(
         sessions: &'a [ThreadSummaryEntry],
+        threads: &'a [ThreadEntry],
+        recent_files: &'a HashMap<String, Vec<String>>,
         selected: Option<usize>,
         list_state: &'a mut ListState,
         focused: bool,
     ) -> Self {
         Self {
             sessions,
+            threads,
+            recent_files,
             selected,
             list_state,
             focused,
@@ -132,30 +50,54 @@ impl Renderable for AgentSessionListRenderable<'_> {
         let block = Block::bordered()
             .title("Agent Sessions")
             .border_style(border_style);
-        let sessions = flat_agent_sessions(self.sessions);
-        let items = sessions
+        let flat = flat_agent_sessions(self.sessions);
+        let items = flat
             .iter()
             .enumerate()
-            .map(|(index, session)| {
+            .map(|(index, flat_session)| {
+                let session = &self.sessions[flat_session.source_index];
                 let id_short = &session.thread_id[..8.min(session.thread_id.len())];
                 let prefix = if self.selected == Some(index) {
                     "> "
                 } else {
                     "  "
                 };
-                let indent = if session.depth == 0 { "" } else { "  " };
+                let indent = if flat_session.depth == 0 { "" } else { "  " };
                 let subagent_marker = if session.parent_thread_id.is_some() {
                     " sub"
                 } else {
                     ""
                 };
-                ListItem::new(Line::from(vec![
+                let (status_char, status_style) = self.status_for_thread(&session.thread_id);
+                let files = self.recent_files_for_thread(&session.thread_id);
+                let message_count = session.message_count;
+                let mut lines = vec![Line::from(vec![
                     Span::styled(prefix, Style::new().fg(Color::Cyan)),
                     Span::raw(indent),
                     Span::raw(session.agent.bin_name()),
                     Span::styled(subagent_marker, Style::new().fg(Color::DarkGray)),
                     Span::styled(format!(" #{}", id_short), Style::new().fg(Color::DarkGray)),
-                ]))
+                    Span::styled(format!(" {}", status_char), status_style),
+                ])];
+                for file in files.iter().take(2) {
+                    lines.push(Line::from(vec![
+                        Span::raw(prefix),
+                        Span::styled(
+                            format!("  {} {}", "·", shorten_path(file)),
+                            Style::new().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+                if message_count > 0 {
+                    lines.push(Line::from(vec![
+                        Span::raw(prefix),
+                        Span::styled(
+                            format!("  msgs: {}", message_count),
+                            Style::new().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+                ListItem::new(lines)
             })
             .collect::<Vec<_>>();
         let list = List::new(items)
@@ -167,4 +109,67 @@ impl Renderable for AgentSessionListRenderable<'_> {
     fn desired_height(&self, _width: u16) -> u16 {
         0
     }
+}
+
+impl AgentSessionListRenderable<'_> {
+    fn status_for_thread(&self, thread_id: &str) -> (char, Style) {
+        let state = self
+            .threads
+            .iter()
+            .find(|t| t.thread_id == thread_id)
+            .map(|t| &t.state);
+        match state {
+            Some(ThreadState::Starting)
+            | Some(ThreadState::Resuming)
+            | Some(ThreadState::Running { .. }) => ('●', Style::new().fg(Color::Green)),
+            Some(ThreadState::Idle) | Some(ThreadState::Suspended { .. }) => {
+                ('○', Style::new().fg(Color::DarkGray))
+            }
+            Some(ThreadState::Closed { .. }) => ('✕', Style::new().fg(Color::Red)),
+            None => ('?', Style::new().fg(Color::DarkGray)),
+        }
+    }
+
+    fn recent_files_for_thread(&self, thread_id: &str) -> Vec<String> {
+        self.recent_files
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+pub fn extract_file_path(tool_name: &str, args_summary: &str) -> Option<String> {
+    let kind = crate::translation::ToolKind::from_tool_name(tool_name);
+    if !matches!(
+        kind,
+        crate::translation::ToolKind::Read | crate::translation::ToolKind::Edit
+    ) {
+        return None;
+    }
+    let path = args_summary
+        .strip_prefix("file: ")
+        .or_else(|| args_summary.strip_prefix("file="))
+        .unwrap_or(args_summary)
+        .trim();
+    if path.is_empty() {
+        return None;
+    }
+    // Bare path from Grok-style summaries, or legacy labeled forms.
+    if path.contains('/') || path.contains('.') || path.starts_with('~') {
+        return Some(path.to_owned());
+    }
+    None
+}
+
+fn shorten_path(path: &str) -> String {
+    const MAX_LEN: usize = 30;
+    if path.len() <= MAX_LEN {
+        return path.to_owned();
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() <= 2 {
+        return path.to_owned();
+    }
+    let last_two = parts[parts.len() - 2..].join("/");
+    format!("…/{}", last_two)
 }

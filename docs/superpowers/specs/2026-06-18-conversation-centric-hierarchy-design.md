@@ -354,7 +354,7 @@ fn conversation_summary_from_row(
 start_agent_in_conversation(conversation_id, agent, workspace):
   1. get_conversation(conversation_id) → 拿 project_id
   2. get_project(project_id) → 拿 workspace_path / workspace_slug
-  3. AgentManager::start_agent(agent, workspace) → 生成 thread_id
+  3. AgentManager::start_agent_in_conversation(agent, workspace, conversation_id) → 生成 thread_id，并注入 conversation-bound teamwork MCP
   4. persist_thread_parent_rows(thread_id, workspace, agent, ...)
      - insert_thread 填 conversation_id(不再填 project_id)
      - 同事务 conversations.agent_session_count += 1
@@ -365,11 +365,11 @@ start_agent_in_conversation(conversation_id, agent, workspace):
 
 - `list_project_threads` 相关 store/agent/local_rpc 代码全删
 - `assign_thread_to_project`(被 `assign_thread_to_conversation` 取代)
-- 旧 group_chat store 方法(chat_rooms/chat_agent_sessions CRUD)
+- 旧 group_chat store 方法和 workspace-derived room API
 
 ### 5.5 minos-chat-store crate 处理
 
-只迁走 workspace-derived group chat 持久化职责。`minos-chat-store` 仍保留 teamwork/MCP/socket/skills 相关能力;TUI 的 conversation 消息持久化全部走 daemon RPC。
+`minos-chat-store` 只保留 teamwork MCP/socket/tool catalog 以及 conversation-scoped delegation 存储；TUI 的 conversation 消息持久化全部走 daemon RPC。
 
 ## 6. TUI 层重构
 
@@ -532,7 +532,7 @@ fn split_main_sidebar(area: Rect) -> (Rect, Rect, Rect) {
 |------|------|
 | `UiState.rooms` / `selected_room` | Room 概念被 conversation 取代 |
 | `ui/room_list.rs` | 不再需要 |
-| `GroupChatState`(workspace-derived 版) | 改为 conversation-scoped |
+| `GroupChatState`(workspace-derived 版) | 删除；Conversation 层使用 `conversation_messages` + conversation scroll state |
 | `render_overview_tree` / `render_detail_tree` | 三栏布局废弃 |
 | `agent_detail_visible: bool` | 被 nav_stack 取代 |
 | `PaneId` 6 变体 + `FocusManager` | 被简化 Focus 取代 |
@@ -631,13 +631,13 @@ fn split_main_sidebar(area: Rect) -> (Rect, Rect, Rect) {
 
 | 任务 | 文件 |
 |------|------|
-| Conversation 输入栏:@mention 解析 → AgentName + start_agent_in_conversation | `update/nav.rs` + `app/group_chat.rs` |
-| user 消息发送:append_conversation_message(role="user") | `app/group_chat.rs` |
-| agent 完成回写:ChatState.last_completed_assistant_text → append_conversation_message(role="agent") | `app/group_chat.rs` |
+| Conversation 输入栏:@mention 解析 → AgentName + start_agent_in_conversation | `update/nav.rs` + `app/submission.rs` |
+| user 消息发送:append_conversation_message(role="user") | `app/submission.rs` |
+| agent 完成回写:ChatState.last_completed_assistant_text → append_conversation_message(role="agent") | `app/conversation_result.rs` |
 | conversation_agents 填充:list_conversation_agent_sessions → sidebar | `app/lifecycle.rs` |
 | conversation_messages 初始加载 + 增量刷新 | `app/lifecycle.rs` |
 | touch_conversation 联动 | `app/lifecycle.rs` |
-| 删除旧 GroupChatStore / room_id_for_workspace 调用 | `app.rs` + `app/group_chat.rs` |
+| 删除旧 group chat / workspace-derived room 调用 | `app.rs` + `app/conversation_result.rs` + `teamwork.rs` |
 
 **验证**:端到端——建 project → 建 conversation → @mention 拉 agent → 看群聊 → 下钻 AgentDetail → Esc 回群聊。`cargo test` 全量。
 **依赖**:Phase 6。
@@ -669,7 +669,7 @@ Phase 7 (交互衔接)
 | conversations 冗余计数与消息表不一致 | 写消息/创建 session 必须和更新 conversation 摘要、计数放在同一事务;测试覆盖计数更新 |
 | participating_agents 批量聚合实现复杂 | 先对当前页 conversation_ids 做一次 `WHERE conversation_id IN (...)` 查询,不做逐行查询 |
 | AgentRef.session_id 与 thread_id 概念混淆 | 文档明确:用户可见层用 agent_session_id,内部存储用 thread_id,二者值相同 |
-| minos-chat-store 边界变更过大 | 只迁 group chat persistence,保留 teamwork/MCP/socket/skills 能力 |
+| minos-chat-store 边界变更过大 | 已收窄为 teamwork MCP/socket/tool catalog + conversation-scoped delegation 存储 |
 | @mention 解析鲁棒性(部分匹配、多 agent、无空格) | Phase 7 实现时参考现有 agent_picker 的补全逻辑;先支持单 agent `@name 消息`,多 agent 后续迭代 |
 
 ## 9. 与 `2026-06-17-tui-nav-ux-redesign.md` 的关系

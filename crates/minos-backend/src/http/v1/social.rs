@@ -635,7 +635,7 @@ async fn find_completed_agent_reply(
             }
             Ok(None)
         }
-        AgentName::Claude | AgentName::Gemini | AgentName::Opencode => Ok(None),
+        AgentName::Claude | AgentName::Gemini | AgentName::Opencode | AgentName::Grok => Ok(None),
     }
 }
 
@@ -643,6 +643,8 @@ fn agent_name_for_row(agent: &crate::store::social::AgentRow) -> AgentName {
     match agent.runtime_agent.as_str() {
         "claude" => AgentName::Claude,
         "gemini" => AgentName::Gemini,
+        "grok" => AgentName::Grok,
+        "opencode" => AgentName::Opencode,
         _ => AgentName::Codex,
     }
 }
@@ -743,7 +745,7 @@ async fn register_agent(
     if name.is_empty() {
         return Err(err("bad_request", "agent name is required"));
     }
-    let valid_runtimes = ["codex", "claude", "gemini"];
+    let valid_runtimes = ["codex", "claude", "gemini", "opencode", "grok"];
     if !valid_runtimes.contains(&req.runtime_agent.as_str()) {
         return Err(err("bad_request", "invalid runtime_agent"));
     }
@@ -794,7 +796,7 @@ async fn update_agent_handler(
     if name.is_empty() {
         return Err(err("bad_request", "agent name is required"));
     }
-    let valid_runtimes = ["codex", "claude", "gemini"];
+    let valid_runtimes = ["codex", "claude", "gemini", "opencode", "grok"];
     if !valid_runtimes.contains(&req.runtime_agent.as_str()) {
         return Err(err("bad_request", "invalid runtime_agent"));
     }

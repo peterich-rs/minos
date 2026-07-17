@@ -11,7 +11,7 @@ modal agent picker system:
 
 | Shortcut | Behavior |
 |----------|----------|
-| **Ctrl+P** | Jump directly to the Projects panel. Truncates the nav stack to `[Projects]`. Truly global — works from any nav level and any focus state. |
+| **Ctrl+P** | Jump directly to the Projects panel. Truncates the nav stack to `[Projects]`. Works from any normal nav level and any focus state. Blocking overlays keep their own key context. |
 | **Ctrl+T** | Jump to the current project's Conversations panel. Truncates the nav stack to `[Projects, Conversations { project_id }]`. Works whenever the current nav level carries a `project_id`; on the Projects panel it is a no-op. |
 
 The existing modal agent picker (opened via the `n` key, rendered as a "New
@@ -65,23 +65,24 @@ top in one call — no traversal needed.**
 `key_to_mapping` (`event_mapping.rs:23`) dispatches in this order:
 
 1. Delete-confirm modal (`:24-26`)
-2. **Global Ctrl block** (`:28-38`) — `Ctrl+Q/C/V/D`. Runs before per-level dispatch.
+2. **Navigation Ctrl block** (`:28-42`) — `Ctrl+Q/C/V/D/P/T`. Runs before per-level dispatch, after blocking overlays.
 3. Create-project dialog (`:40-42`)
 4. Per-NavLevel dispatch (`:43-73`) — each level claims certain keys via early `return`
-5. Agent picker modal (`:75-77`) — **being removed**
-6. Global unmodified keys (`:79-115`) — `PageUp/Down`, `Home/End`, `n` (picker), `BackTab`
+5. Agent picker modal — removed by this design
+6. Global unmodified keys (`:79-115`) — `PageUp/Down`, `Home/End`, `BackTab`
 7. Per-PaneId focus dispatch (`:117-125`)
 
-The global Ctrl block (step 2) is the correct insertion point for Ctrl+P/T
-because it executes before any per-level or per-pane dispatch, guaranteeing
-truly global behavior.
+The Ctrl block (step 2) is the correct insertion point for Ctrl+P/T because it
+executes before any per-level or per-pane dispatch while still letting blocking
+overlays own their key context.
 
 ## Design Decisions
 
-### DD-1: Ctrl+P/T are truly global (no input-focus guard)
+### DD-1: Ctrl+P/T are navigation-global, not overlay-global
 
-Ctrl+P and Ctrl+T trigger from any state, including when the input bar is
-focused. Rationale:
+Ctrl+P and Ctrl+T trigger from any normal navigation level, including when the
+input bar is focused. They do not interrupt blocking overlays such as the
+project-create dialog or delete confirmation. Rationale:
 
 - The TUI's custom `InputState` does not bind Ctrl+P or Ctrl+T to any editing
   operation (no history navigation, no transpose). The only input-related
@@ -90,13 +91,16 @@ focused. Rationale:
 - Terminal-level readline semantics for Ctrl+P/Ctrl+T (previous-history,
   transpose-chars) belong to the shell, not to a TUI app's self-managed input
   widget. They do not apply here.
-- Keeping the shortcuts guard-less makes them predictable: the user can jump
-  from anywhere without first defocusing the input bar.
+- Keeping the shortcuts input-guard-less makes them predictable within normal
+  navigation: the user can jump without first defocusing the input bar.
+- Blocking overlays are separate user tasks and should not be dismissed or
+  bypassed by navigation shortcuts.
 
 **Trade-off:** A user who habitually presses Ctrl+P/Ctrl+T while typing in the
 input bar will be navigated away. This is accepted as simpler and more
-consistent than adding a guard. The input buffer content is preserved on nav
-stack truncation (UiState fields are independent of nav stack).
+consistent than adding an input-focus guard. The input buffer content is
+preserved on nav stack truncation (UiState fields are independent of nav
+stack).
 
 ### DD-2: Nav stack truncation via reassignment, not repeated pop
 
@@ -170,7 +174,9 @@ KeyCode::Char('t') => {
 }
 ```
 
-No input-focus guard (per DD-1).
+No input-focus guard (per DD-1). Delete-confirm remains earlier in dispatch,
+and project-create dialog still handles the resulting `NavAction` as a no-op,
+so blocking overlays keep their own key context.
 
 #### 1.3 `crates/minos-tui/src/update/nav.rs`
 

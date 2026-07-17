@@ -8,8 +8,22 @@ pub fn handle(
     ui: &mut UiState,
     action: NavAction,
 ) -> (StateChange, Vec<Effect>) {
-    if ui.project_create_dialog.is_some() {
+    if ui.overlays.project_create.is_some() {
         return handle_create_dialog(ui, action);
+    }
+    match action {
+        NavAction::JumpToProjects => {
+            ui.nav.stack = vec![NavLevel::Projects];
+            return (StateChange::redraw(), vec![]);
+        }
+        NavAction::JumpToConversations => {
+            if let Some(project_id) = ui.nav_level().project_id().map(str::to_owned) {
+                ui.nav.stack = vec![NavLevel::Projects, NavLevel::Conversations { project_id }];
+                return (StateChange::redraw(), vec![]);
+            }
+            return (StateChange::none(), vec![]);
+        }
+        _ => {}
     }
     match ui.nav_level() {
         NavLevel::Projects => handle_projects_level(state, ui, action),
@@ -20,13 +34,13 @@ pub fn handle(
 }
 
 fn handle_create_dialog(ui: &mut UiState, action: NavAction) -> (StateChange, Vec<Effect>) {
-    let dialog = match ui.project_create_dialog.as_mut() {
+    let dialog = match ui.overlays.project_create.as_mut() {
         Some(d) => d,
         None => return (StateChange::none(), vec![]),
     };
     match action {
         NavAction::CancelDialog => {
-            ui.project_create_dialog = None;
+            ui.overlays.project_create = None;
             (StateChange::redraw(), vec![])
         }
         NavAction::SwitchField => {
@@ -36,7 +50,7 @@ fn handle_create_dialog(ui: &mut UiState, action: NavAction) -> (StateChange, Ve
         NavAction::ConfirmCreateProject => {
             let name = dialog.name.clone();
             let path = dialog.path.clone().into();
-            ui.project_create_dialog = None;
+            ui.overlays.project_create = None;
             (
                 StateChange::redraw(),
                 vec![Effect::CreateProject {
@@ -72,18 +86,16 @@ fn handle_projects_level(
 ) -> (StateChange, Vec<Effect>) {
     match action {
         NavAction::SelectNext => {
-            navigate(&mut ui.selected_project, ui.projects.len(), 1);
-            ui.project_list_state.select(ui.selected_project);
+            ui.projects.navigate(1);
             (StateChange::redraw(), vec![])
         }
         NavAction::SelectPrev => {
-            navigate(&mut ui.selected_project, ui.projects.len(), -1);
-            ui.project_list_state.select(ui.selected_project);
+            ui.projects.navigate(-1);
             (StateChange::redraw(), vec![])
         }
         NavAction::Downlevel => {
-            if let Some(idx) = ui.selected_project {
-                if let Some(project) = ui.projects.get(idx) {
+            if let Some(idx) = ui.projects.selected {
+                if let Some(project) = ui.projects.items.get(idx) {
                     let project_id = project.project_id.clone();
                     return (
                         StateChange::redraw(),
@@ -99,7 +111,7 @@ fn handle_projects_level(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "workspace".to_owned());
-            ui.project_create_dialog = Some(crate::ui::ProjectCreateDialogState {
+            ui.overlays.project_create = Some(crate::ui::ProjectCreateDialogState {
                 name: dir_name,
                 path: workspace.to_string_lossy().into_owned(),
                 editing_name: true,
@@ -117,13 +129,11 @@ fn handle_conversations_level(
 ) -> (StateChange, Vec<Effect>) {
     match action {
         NavAction::SelectNext => {
-            navigate(&mut ui.selected_conversation, ui.conversations.len(), 1);
-            ui.conversation_list_state.select(ui.selected_conversation);
+            ui.conversations.navigate(1);
             (StateChange::redraw(), vec![])
         }
         NavAction::SelectPrev => {
-            navigate(&mut ui.selected_conversation, ui.conversations.len(), -1);
-            ui.conversation_list_state.select(ui.selected_conversation);
+            ui.conversations.navigate(-1);
             (StateChange::redraw(), vec![])
         }
         NavAction::Uplevel => {
@@ -131,8 +141,8 @@ fn handle_conversations_level(
             (StateChange::redraw(), vec![])
         }
         NavAction::Downlevel => {
-            if let Some(idx) = ui.selected_conversation {
-                if let Some(conversation) = ui.conversations.get(idx) {
+            if let Some(idx) = ui.conversations.selected {
+                if let Some(conversation) = ui.conversations.items.get(idx) {
                     let conversation_id = conversation.conversation_id.clone();
                     return (
                         StateChange::none(),
@@ -155,14 +165,12 @@ fn handle_conversation_level(
     match action {
         NavAction::SelectNext => {
             let len = ui.flat_agent_session_count();
-            navigate(&mut ui.selected_agent_session, len, 1);
-            ui.agent_list_state.select(ui.selected_agent_session);
+            ui.conversation.agent_sessions.navigate_with_len(len, 1);
             (StateChange::redraw(), vec![])
         }
         NavAction::SelectPrev => {
             let len = ui.flat_agent_session_count();
-            navigate(&mut ui.selected_agent_session, len, -1);
-            ui.agent_list_state.select(ui.selected_agent_session);
+            ui.conversation.agent_sessions.navigate_with_len(len, -1);
             (StateChange::redraw(), vec![])
         }
         NavAction::Uplevel => {
@@ -170,8 +178,8 @@ fn handle_conversation_level(
             (StateChange::redraw(), vec![])
         }
         NavAction::Downlevel => {
-            if let Some(idx) = ui.selected_agent_session {
-                if let Some(session) = ui.flat_agent_sessions().get(idx) {
+            if let Some(idx) = ui.conversation.agent_sessions.selected {
+                if let Some(session) = ui.flat_session_entry(idx) {
                     let thread_id = session.thread_id.clone();
                     let agent = session.agent;
                     let project_id = ui
@@ -219,7 +227,7 @@ fn handle_agent_detail_level(
 }
 
 fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateChange, Vec<Effect>) {
-    let text = ui.room_input.content.clone();
+    let text = ui.inputs.conversation.content.clone();
     if text.trim().is_empty() {
         return (StateChange::redraw(), vec![]);
     }
@@ -229,12 +237,12 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
     let (agent, prompt_text) = match parsed.as_ref() {
         Some((target, body)) => (target.agent, body.clone()),
         None => {
-            let agent = ui
-                .status
-                .agents
-                .first()
-                .map(|a| a.name)
-                .unwrap_or(minos_domain::AgentName::Codex);
+            let Some(agent) = ui.status.agents.first().map(|a| a.name) else {
+                ui.set_error(
+                    "No agents detected. Install codex/claude/gemini/opencode.".into(),
+                );
+                return (StateChange::redraw(), vec![]);
+            };
             (agent, text.clone())
         }
     };
@@ -243,8 +251,8 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
         return (StateChange::redraw(), vec![]);
     }
 
-    ui.room_input.take_input();
-    ui.room_input.history.record(text.as_str());
+    ui.inputs.conversation.take_input();
+    ui.inputs.conversation.history.record(text.as_str());
 
     if let Some((target, _)) = parsed.as_ref() {
         if let Some(thread_short_id) = target.thread_short_id.as_deref() {
@@ -257,17 +265,13 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
                 ));
                 return (StateChange::redraw(), vec![]);
             };
-            if let Some(thread) = ui
-                .threads
-                .iter()
-                .find(|thread| thread.thread_id == thread_id)
-            {
-                if !crate::agent_route::thread_can_receive_message(&thread.state) {
+            if let Some(state) = super::thread_runtime_state(ui, &thread_id) {
+                if !crate::agent_route::thread_can_receive_message(state) {
                     ui.set_error(format!(
                         "{} session #{} is closed. Use @{} to start a new session.",
-                        thread.agent.bin_name(),
-                        crate::agent_route::short_thread_id(&thread.thread_id),
-                        thread.agent.bin_name()
+                        target.agent.bin_name(),
+                        crate::agent_route::short_thread_id(&thread_id),
+                        target.agent.bin_name()
                     ));
                     return (StateChange::redraw(), vec![]);
                 }
@@ -283,25 +287,26 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
                 vec![Effect::SendTextToThread {
                     thread_id,
                     text: prompt_text,
-                    group_text: Some(message_body),
+                    message_body: Some(message_body),
                 }],
             );
         }
     }
 
-    let workspace = state.workspace.clone();
-    let current_nav = ui.nav_level().clone();
-    match current_nav {
-        NavLevel::Conversations { project_id } => (
-            StateChange::redraw(),
-            vec![Effect::CreateConversationAndStartAgent {
-                project_id,
-                agent,
-                workspace,
-                message_body,
-                prompt: prompt_text,
-            }],
-        ),
+    match ui.nav_level() {
+        NavLevel::Conversations { project_id } => {
+            let project_id = project_id.clone();
+            (
+                StateChange::redraw(),
+                vec![Effect::CreateConversationAndStartAgent {
+                    workspace: project_workspace(state, ui, &project_id),
+                    project_id,
+                    agent,
+                    message_body,
+                    prompt: prompt_text,
+                }],
+            )
+        }
         NavLevel::Conversation {
             project_id,
             conversation_id,
@@ -310,19 +315,33 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
             project_id,
             conversation_id,
             ..
-        } => (StateChange::redraw(), {
+        } => {
+            let project_id = project_id.clone();
+            let conversation_id = conversation_id.clone();
+            let workspace = project_workspace(state, ui, &project_id);
             super::push_pending_conversation_user_message(ui, &conversation_id, &message_body);
-            vec![Effect::StartAgentInConversation {
-                project_id,
-                conversation_id,
-                agent,
-                workspace,
-                message_body,
-                prompt: prompt_text,
-            }]
-        }),
+            (
+                StateChange::redraw(),
+                vec![Effect::StartAgentInConversation {
+                    project_id,
+                    conversation_id,
+                    agent,
+                    workspace,
+                    message_body,
+                    prompt: prompt_text,
+                }],
+            )
+        }
         NavLevel::Projects => (StateChange::none(), vec![]),
     }
+}
+
+fn project_workspace(state: &AppState, ui: &UiState, project_id: &str) -> std::path::PathBuf {
+    ui.projects.items
+        .iter()
+        .find(|project| project.project_id == project_id)
+        .map(|project| project.workspace_path.clone())
+        .unwrap_or_else(|| state.workspace.clone())
 }
 
 fn find_conversation_thread(
@@ -330,10 +349,12 @@ fn find_conversation_thread(
     agent: minos_domain::AgentName,
     short_id: &str,
 ) -> Option<String> {
+    ui.nav_level().conversation_id()?;
     let short_id = short_id.to_ascii_lowercase();
-    ui.conversation_agent_sessions
+    ui.conversation.agent_sessions.items
         .iter()
         .filter(|session| session.parent_thread_id.is_none())
+        .filter(|session| crate::agent_route::thread_can_receive_message(&session.state))
         .find(|session| {
             session.agent == agent
                 && (crate::agent_route::short_thread_id(&session.thread_id).to_ascii_lowercase()
@@ -344,20 +365,9 @@ fn find_conversation_thread(
                         .starts_with(&short_id))
         })
         .map(|session| session.thread_id.clone())
-        .or_else(|| {
-            ui.threads
-                .iter()
-                .find(|thread| {
-                    thread.agent == agent
-                        && (crate::agent_route::short_thread_id(&thread.thread_id)
-                            .to_ascii_lowercase()
-                            == short_id
-                            || thread.thread_id.to_ascii_lowercase().starts_with(&short_id))
-                })
-                .map(|thread| thread.thread_id.clone())
-        })
 }
 
+#[cfg(test)]
 fn navigate(selected: &mut Option<usize>, len: usize, delta: i32) {
     if len == 0 {
         *selected = None;

@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use jsonrpsee::core::client::ClientT;
+use futures::{StreamExt, TryStreamExt};
+use jsonrpsee::core::client::{ClientT, SubscriptionClientT};
 use jsonrpsee::core::params::ArrayParams;
 use jsonrpsee::ws_client::WsClientBuilder;
 use minos_agent_runtime::config::AgentRuntimeConfig;
@@ -15,10 +16,11 @@ use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
-    AgentLaunchMode, ApprovalDecisionRequest, CloseThreadRequest, CreateProjectRequest,
-    GetThreadParams, HealthResponse, ListConversationsParams, ListConversationsResponse,
-    ListProjectsResponse, LocalGroupChatMessage, LocalGroupChatMessageKind, ReadGroupChatParams,
-    ReadGroupChatResponse, ReadThreadParams, StartAgentRequest, StartAgentResponse,
+    AgentLaunchMode, AppendConversationMessageParams, AppendConversationMessageResponse,
+    ApprovalDecisionRequest, CloseThreadRequest, CreateProjectRequest, GetThreadParams,
+    HealthResponse, ListConversationMessagesParams, ListConversationMessagesResponse,
+    ListConversationsParams, ListConversationsResponse, ListProjectsResponse,
+    LocalConversationEvent, ReadThreadParams, StartAgentRequest, StartAgentResponse,
 };
 
 use async_trait::async_trait;
@@ -74,7 +76,6 @@ async fn setup() -> (
     let config = LocalRpcConfig {
         addr: "127.0.0.1:0".parse().unwrap(),
         discovery_path,
-        group_chat_db_path: tmp.path().join("chat.sqlite"),
     };
     let handle = start_local_rpc_server(config, Arc::new(NoopRunner), glue.clone())
         .await
@@ -335,46 +336,70 @@ async fn read_thread_raw_history_returns_events_after_start() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn read_group_chat_returns_messages_from_local_db_newest_first() {
-    let (_glue, _handle, tmp, _fake) = setup().await;
+async fn list_conversation_messages_returns_messages_from_local_db_newest_first() {
+    let (glue, _handle, tmp, _fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
-    let db_path = tmp.path().join("chat.sqlite");
-    let store = minos_chat_store::ChatStore::open(&db_path).await.unwrap();
+    let store = glue.store();
     store
-        .ensure_room("room-main", "main", "/tmp/ws")
+        .create_project("project-main", "main", "main", Some("/tmp/ws"), 1)
+        .await
+        .unwrap();
+    store
+        .create_conversation("conversation-main", "project-main", "main", 2)
+        .await
+        .unwrap();
+    store.upsert_workspace("/tmp/ws", 3).await.unwrap();
+    store
+        .insert_thread_in_conversation(
+            "thread-1",
+            "conversation-main",
+            "/tmp/ws",
+            "codex",
+            Some("thread-1"),
+            None,
+            "idle",
+            3,
+            true,
+        )
+        .await
+        .unwrap();
+    store
+        .upsert_conversation_message(
+            "conversation-main",
+            "msg-1",
+            None,
+            "user",
+            None,
+            "@codex inspect auth",
+            10,
+            None,
+            None,
+            "[]",
+        )
+        .await
+        .unwrap();
+    store
+        .upsert_conversation_message(
+            "conversation-main",
+            "msg-2",
+            Some("thread-1"),
+            "agent",
+            Some("codex"),
+            "auth summary",
+            11,
+            None,
+            None,
+            "[]",
+        )
         .await
         .unwrap();
 
-    for (kind, text) in [
-        (LocalGroupChatMessageKind::User, "@codex inspect auth"),
-        (LocalGroupChatMessageKind::AgentResult, "auth summary"),
-    ] {
-        store
-            .append_message(
-                "room-main",
-                minos_chat_store::NewChatMessage::from(LocalGroupChatMessage {
-                    seq: 0,
-                    message_id: String::new(),
-                    created_at_ms: 10,
-                    kind,
-                    text: text.into(),
-                    agent: Some(AgentName::Codex),
-                    thread_id: Some("thread-1".into()),
-                    thread_short_id: Some("thread-1".into()),
-                    workspace: Some("/tmp/ws".into()),
-                }),
-            )
-            .await
-            .unwrap();
-    }
-
-    let response: ReadGroupChatResponse = client
+    let response: ListConversationMessagesResponse = client
         .request(
-            "minos_local_read_group_chat",
-            [ReadGroupChatParams {
-                room_id: Some("room-main".into()),
-                after_seq: None,
+            "minos_local_list_conversation_messages",
+            [ListConversationMessagesParams {
+                conversation_id: "conversation-main".into(),
                 before_seq: None,
                 limit: Some(1),
             }],
@@ -382,15 +407,65 @@ async fn read_group_chat_returns_messages_from_local_db_newest_first() {
         .await
         .unwrap();
 
-    assert_eq!(response.log_path, db_path.display().to_string());
     assert_eq!(response.messages.len(), 1);
-    assert_eq!(response.messages[0].seq, 2);
-    assert_eq!(
-        response.messages[0].kind,
-        LocalGroupChatMessageKind::AgentResult
-    );
+    assert_eq!(response.messages[0].message_seq, 2);
+    assert_eq!(response.messages[0].sender_role, "agent");
+    assert_eq!(response.messages[0].body, "auth summary");
     assert!(response.has_more);
-    assert_eq!(response.next_before_seq, Some(2));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn append_conversation_message_publishes_conversation_event() {
+    let (glue, _handle, tmp, _fake) = setup().await;
+    let url = discovery_addr(&tmp);
+    let client = WsClientBuilder::default().build(&url).await.unwrap();
+    let store = glue.store();
+    store
+        .create_project("project-main", "main", "main", Some("/tmp/ws"), 1)
+        .await
+        .unwrap();
+    store
+        .create_conversation("conversation-main", "project-main", "main", 2)
+        .await
+        .unwrap();
+
+    let mut events = client
+        .subscribe::<LocalConversationEvent, ArrayParams>(
+            "minos_local_subscribe_conversation_events",
+            ArrayParams::new(),
+            "minos_local_unsubscribe_conversation_events",
+        )
+        .await
+        .unwrap()
+        .into_stream();
+
+    let response: AppendConversationMessageResponse = client
+        .request(
+            "minos_local_append_conversation_message",
+            [AppendConversationMessageParams {
+                conversation_id: "conversation-main".into(),
+                message_id: "msg-rpc".into(),
+                thread_id: None,
+                sender_role: "user".into(),
+                agent: None,
+                body: "visible update".into(),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(1), events.next())
+        .await
+        .expect("append event should arrive")
+        .expect("subscription should stay open")
+        .expect("event should decode");
+    assert_eq!(
+        event,
+        LocalConversationEvent::ConversationMessageAppended {
+            conversation_id: "conversation-main".into(),
+            message_seq: response.message_seq,
+        }
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -123,7 +123,7 @@ DaemonInner {
 2. **`IngestCoalescer` + `EventWriter`**：预分配 seq/projection，单写者 SQLite 本地持久化
 3. **Watch channel**：镜像最新线程状态
 
-subagent 也是普通 thread，只是在 `ThreadAdded` / `ThreadSummary` / `LocalThreadSnapshot` 上携带 `parent_thread_id`。daemon 收到 `ThreadAdded { parent_thread_id: Some(parent) }` 时复用父线程的 conversation 插入子线程行，且不增加 `conversations.agent_session_count`。TUI 通过现有 `list_conversation_agent_sessions` 得到父子 thread，不新增 `list_subagents` RPC。
+subagent 也是普通 thread，只是在 `ThreadAdded` / `ThreadSummary` / `LocalThreadSnapshot` 上携带 `parent_thread_id`。daemon 收到 `ThreadAdded { parent_thread_id: Some(parent) }` 时复用父线程的 conversation 插入子线程行，且不增加 `conversations.agent_session_count`。TUI 通过现有 `list_conversation_agent_sessions` 得到父子 thread，不新增 `list_subagents` RPC。conversation message 读路径会过滤 `thread_id` 指向 subagent 的旧消息行，summary 的 preview/count 也只计算可见消息，避免 subagent transcript/result 污染 conversation 主时间线。
 
 Codex app-server 启动分两段超时：initialize handshake 默认 5 秒，`thread/start` 默认 30 秒。后者独立配置为 `AgentRuntimeConfig.thread_start_timeout`，因为线程创建会受 workspace 初始化、skills/MCP 注入和 Codex 冷启动状态影响。
 
@@ -245,8 +245,10 @@ Starting → Idle → Running { turn_started_at_ms }
 
 `LocalRpcImpl` 实现 `LocalDaemonRpcServer` trait，服务 TUI。
 
-额外方法: `delete_thread`, `resume_thread`, `respond_opencode_question`, `read_thread_raw_history`, `read_group_chat`
-订阅: `subscribe_ingest()` 和 `subscribe_manager_events()`
+额外方法: `delete_thread`, `resume_thread`, `respond_opencode_question`, `read_thread_raw_history`, `list_conversations`, `create_conversation`, `list_conversation_messages`, `append_conversation_message`, `start_agent_in_conversation`
+订阅: `subscribe_ingest()`、`subscribe_manager_events()` 和 `subscribe_conversation_events()`
+
+`AgentGlue` 维护本地 manager event 与 conversation event 两条总线。agent runtime 状态事件通过 `subscribe_manager_events()` 进入 TUI；`append_conversation_message`、daemon Teamwork MCP 的 `post_conversation_update` 和 delegation 可见消息写入成功后都会通过 `subscribe_conversation_events()` 发布 `ConversationMessageAppended { conversation_id, message_seq }`，TUI 据此刷新当前 conversation。daemon 的 `delegate_to_agent` 与 TUI embedded handler 共用 `TeamworkStore` 深度策略：delegated source thread 只能 delegate 回原 source agent，不能启动第三个 agent。daemon 从本地 `threads` 表恢复 persisted thread 时，会把 `conversation_id` 一并注册回 `AgentManager` 的 `ThreadHandle.mcp_conversation_id`，保证恢复/重启后的 agent 仍使用当前 conversation 的 `--source-thread-id` MCP context。
 
 ### 发现机制
 

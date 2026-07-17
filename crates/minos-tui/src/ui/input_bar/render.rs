@@ -16,7 +16,6 @@ use unicode_width::UnicodeWidthChar;
 
 use super::{
     AgentMentionCandidate, AgentMentionCandidateKind, CursorStyle, InputPicker, InputState,
-    PathCandidate,
 };
 
 const MAX_EDITOR_ROWS: u16 = 8;
@@ -341,42 +340,6 @@ pub fn active_path_range(content: &str, cursor_pos: usize) -> Option<Range<usize
         return None;
     }
     Some(token_start..cursor_pos)
-}
-
-pub(super) fn list_path_candidates(
-    token: &str,
-    workspace_root: &std::path::Path,
-) -> Option<Vec<PathCandidate>> {
-    let last_slash = token.rfind('/')?;
-    let dir_prefix = &token[..=last_slash];
-    let partial_name = &token[last_slash + 1..];
-
-    let resolved: std::path::PathBuf = if let Some(stripped) = dir_prefix.strip_prefix("~/") {
-        dirs::home_dir()?.join(stripped)
-    } else if dir_prefix.starts_with('/') {
-        std::path::PathBuf::from(dir_prefix)
-    } else {
-        workspace_root.join(dir_prefix)
-    };
-
-    let entries = std::fs::read_dir(&resolved).ok()?;
-    let mut candidates: Vec<PathCandidate> = entries
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with(partial_name) {
-                return None;
-            }
-            let is_dir = entry.file_type().ok()?.is_dir();
-            Some(PathCandidate { name, is_dir })
-        })
-        .collect();
-    candidates.sort_by(|a, b| a.name.cmp(&b.name));
-    candidates.truncate(8);
-    if candidates.is_empty() {
-        return None;
-    }
-    Some(candidates)
 }
 
 fn editor_row_count(state: &InputState, width: u16) -> u16 {

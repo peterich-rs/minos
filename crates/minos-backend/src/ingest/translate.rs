@@ -11,9 +11,9 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use minos_domain::AgentName;
 use minos_ui_protocol::{
-    translate_claude, translate_codex, translate_gemini, translate_opencode, ClaudeTranslatorState,
-    CodexTranslatorState, GeminiTranslatorState, OpencodeTranslatorState, TranslationError,
-    UiEventMessage,
+    translate_claude, translate_codex, translate_gemini, translate_grok, translate_opencode,
+    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, GrokTranslatorState,
+    OpencodeTranslatorState, TranslationError, UiEventMessage,
 };
 use serde_json::Value;
 
@@ -24,6 +24,7 @@ pub struct ThreadTranslators {
     claude: DashMap<String, ClaudeTranslatorState>,
     opencode: DashMap<String, OpencodeTranslatorState>,
     gemini: DashMap<String, GeminiTranslatorState>,
+    grok: DashMap<String, GrokTranslatorState>,
 }
 
 impl ThreadTranslators {
@@ -34,13 +35,12 @@ impl ThreadTranslators {
             claude: DashMap::new(),
             opencode: DashMap::new(),
             gemini: DashMap::new(),
+            grok: DashMap::new(),
         })
     }
 
     /// Translate one raw event for `agent` within `thread_id`, using (and
-    /// mutating) the cached translator state. Unknown agents fall through
-    /// to `translate_gemini` stubs, which return
-    /// `TranslationError::NotImplemented` until those CLIs land.
+    /// mutating) the cached translator state.
     pub fn translate(
         &self,
         agent: AgentName,
@@ -69,6 +69,13 @@ impl ThreadTranslators {
                     .or_insert_with(|| GeminiTranslatorState::new(thread_id.to_string()));
                 translate_gemini(&mut state, payload)
             }
+            AgentName::Grok => {
+                let mut state = self
+                    .grok
+                    .entry(thread_id.to_string())
+                    .or_insert_with(|| GrokTranslatorState::new(thread_id.to_string()));
+                translate_grok(&mut state, payload)
+            }
             AgentName::Opencode => {
                 let mut state = self
                     .opencode
@@ -85,5 +92,6 @@ impl ThreadTranslators {
         self.claude.remove(thread_id);
         self.opencode.remove(thread_id);
         self.gemini.remove(thread_id);
+        self.grok.remove(thread_id);
     }
 }

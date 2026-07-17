@@ -34,6 +34,7 @@ pub mod claude_driver;
 pub(crate) mod codex_client;
 pub mod config;
 pub mod gemini_driver;
+pub mod grok_driver;
 pub mod ingest;
 pub mod instance;
 pub mod manager;
@@ -54,6 +55,7 @@ pub use config::{
     ToolStatus, ToolStream, INLINE_RAW_BODY_THRESHOLD,
 };
 pub use gemini_driver::GeminiAcpInstance;
+pub use grok_driver::GrokAcpInstance;
 pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
 pub use manager::{

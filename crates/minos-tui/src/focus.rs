@@ -4,6 +4,8 @@ pub enum PaneId {
     MainChat,
     Sidebar,
     Input,
+    #[allow(dead_code)]
+    ApprovalOverlay,
 }
 
 pub struct FocusManager {

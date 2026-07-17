@@ -1,17 +1,20 @@
-pub mod agent_picker;
+pub mod approval_overlay;
 pub mod chat;
 pub mod conversation_detail;
 pub mod conversation_list;
+pub mod conversation_view;
 pub mod delete_confirm;
 pub mod input_bar;
+pub mod list_panel;
+pub mod panels;
+pub mod stream_holdback;
 pub mod project_create_dialog;
 pub mod project_list;
 pub mod status_bar;
 pub mod theme;
 
-use crate::backend::{
-    ConversationEntry, ConversationMessageEntry, ProjectEntry, ThreadSummaryEntry,
-};
+use crate::agent_route::short_thread_id;
+use crate::backend::{ConversationEntry, ProjectEntry, ThreadSummaryEntry};
 use crate::focus::{FocusManager, PaneId};
 use crate::nav::NavLevel;
 use crate::render::{Column, Renderable, Row};
@@ -19,15 +22,17 @@ use crate::translation::ChatState;
 use crate::ui::chat::RenderCache;
 use crate::ui::chat::{AgentChatRenderable, AgentChatTarget};
 pub use crate::ui::delete_confirm::DeleteConfirmState;
-use crate::ui::input_bar::{AgentMentionCandidate, InputLayoutMetrics, InputState};
+use crate::ui::input_bar::{AgentMentionCandidate, InputState};
+pub use crate::ui::list_panel::ListPanel;
+pub use crate::ui::panels::{
+    ConversationPanel, InputsPanel, NavPanel, OverlaysPanel, ThreadPanel,
+};
 use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
-use minos_protocol::LocalGroupChatMessage;
 use minos_ui_protocol::SubagentStatus;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    widgets::ListState,
     Frame,
 };
 
@@ -43,15 +48,15 @@ pub struct ThreadEntry {
     pub parent_thread_id: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+/// Flat sidebar row: indexes into `conversation.agent_sessions.items` without cloning IDs.
+#[derive(Clone, Copy, Debug)]
 pub struct FlatAgentSession {
     pub source_index: usize,
-    pub thread_id: String,
-    pub agent: AgentName,
-    pub parent_thread_id: Option<String>,
     pub depth: u8,
 }
 
+/// Metadata for subagent cards. Written from ingest events; several fields are
+/// reserved for AgentDetail presentation beyond the current status glyph.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct SubagentInfo {
@@ -65,49 +70,25 @@ pub struct SubagentInfo {
 }
 
 pub struct UiState {
-    pub status: StatusBarState,
-    pub threads: Vec<ThreadEntry>,
-    pub selected_thread: Option<usize>,
-    pub agent_list_state: ListState,
-    pub group_chat: GroupChatState,
-    pub agent_picker: Option<AgentPickerState>,
-    pub chat_states: HashMap<String, ChatState>,
-    pub room_input: InputState,
-    pub agent_input: InputState,
+    pub nav: NavPanel,
+    pub projects: ListPanel<ProjectEntry>,
+    pub conversations: ListPanel<ConversationEntry>,
+    pub conversation: ConversationPanel,
+    pub thread_panel: ThreadPanel,
+    pub inputs: InputsPanel,
+    pub overlays: OverlaysPanel,
     pub focus: FocusManager,
+    pub panel_areas: PanelAreas,
+    pub status: StatusBarState,
     pub error_flash: Option<(String, Instant)>,
     pub flash_copied: Option<Instant>,
-    pub panel_areas: PanelAreas,
-    pub input_metrics: [InputLayoutMetrics; 2],
-    pub delete_confirm: Option<DeleteConfirmState>,
+    /// Agent chat render cache — top-level for split borrow with `thread_panel.chat_states`.
     pub render_cache: RenderCache,
-    pub nav_stack: Vec<NavLevel>,
-    pub projects: Vec<ProjectEntry>,
-    pub selected_project: Option<usize>,
-    pub project_list_state: ListState,
-    pub conversations: Vec<ConversationEntry>,
-    pub selected_conversation: Option<usize>,
-    pub conversation_list_state: ListState,
-    pub conversation_messages: Vec<ConversationMessageEntry>,
-    pub conversation_scroll_offset: u16,
-    pub conversation_auto_scroll: bool,
-    pub conversation_max_scroll: u16,
-    pub conversation_agent_sessions: Vec<ThreadSummaryEntry>,
-    pub selected_agent_session: Option<usize>,
-    pub subagent_info: HashMap<String, SubagentInfo>,
-    pub project_create_dialog: Option<ProjectCreateDialogState>,
-}
-
-pub struct AgentPickerState {
-    pub selected: usize,
-}
-
-pub struct GroupChatState {
-    pub messages: Vec<LocalGroupChatMessage>,
-    pub scroll_offset: u16,
-    pub auto_scroll: bool,
-    pub max_scroll: u16,
-    pub version: u64,
+    /// Set during paint when viewport materialization still has work; main loop
+    /// schedules another frame so overscan can continue without blocking input.
+    pub needs_render_followup: bool,
+    /// Cached sidebar "recent files" so scroll frames skip scanning every chat.
+    recent_files_cache: Option<(u64, HashMap<String, Vec<String>>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,63 +100,71 @@ pub struct ProjectCreateDialogState {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PanelAreas {
-    pub room_list: Rect,
-    pub room_chat: Rect,
+    pub main_list: Rect,
+    pub conversation_chat: Rect,
     pub agent_list: Rect,
     pub agent_chat: Rect,
-    pub room_input: Rect,
+    pub conversation_input: Rect,
     pub agent_input: Rect,
 }
 
 impl UiState {
     pub fn new(readonly: bool) -> Self {
         Self {
-            status: StatusBarState::new(),
-            threads: Vec::new(),
-            selected_thread: None,
-            agent_list_state: ListState::default(),
-            group_chat: GroupChatState::new(),
-            agent_picker: None,
-            chat_states: HashMap::new(),
-            room_input: InputState::new(readonly),
-            agent_input: InputState::new(readonly),
+            nav: NavPanel::new(),
+            projects: ListPanel::new(),
+            conversations: ListPanel::new(),
+            conversation: ConversationPanel::new(),
+            thread_panel: ThreadPanel::new(),
+            inputs: InputsPanel::new(readonly),
+            overlays: OverlaysPanel::new(),
             focus: FocusManager::new(false),
+            panel_areas: PanelAreas::default(),
+            status: StatusBarState::new(),
             error_flash: None,
             flash_copied: None,
-            panel_areas: PanelAreas::default(),
-            input_metrics: [InputLayoutMetrics::default(); 2],
-            delete_confirm: None,
             render_cache: RenderCache::default(),
-            nav_stack: vec![NavLevel::Projects],
-            projects: Vec::new(),
-            selected_project: None,
-            project_list_state: ListState::default(),
-            conversations: Vec::new(),
-            selected_conversation: None,
-            conversation_list_state: ListState::default(),
-            conversation_messages: Vec::new(),
-            conversation_scroll_offset: 0,
-            conversation_auto_scroll: true,
-            conversation_max_scroll: 0,
-            conversation_agent_sessions: Vec::new(),
-            selected_agent_session: None,
-            subagent_info: HashMap::new(),
-            project_create_dialog: None,
+            needs_render_followup: false,
+            recent_files_cache: None,
         }
+    }
+
+    pub fn take_render_followup(&mut self) -> bool {
+        let pending = self.needs_render_followup || self.render_cache.needs_followup_frame();
+        self.needs_render_followup = false;
+        pending
+    }
+
+    /// Sidebar recent-files map, rebuilt only when chat versions change.
+    pub fn recent_files_cached(&mut self) -> &HashMap<String, Vec<String>> {
+        let fingerprint = recent_files_fingerprint(
+            &self.thread_panel.chat_states,
+            &self.conversation.agent_sessions.items,
+        );
+        let needs = self
+            .recent_files_cache
+            .as_ref()
+            .is_none_or(|(fp, _)| *fp != fingerprint);
+        if needs {
+            let map = compute_recent_files(
+                &self.thread_panel.chat_states,
+                &self.conversation.agent_sessions.items,
+            );
+            self.recent_files_cache = Some((fingerprint, map));
+        }
+        &self.recent_files_cache.as_ref().unwrap().1
     }
 
     pub fn nav_level(&self) -> &NavLevel {
-        self.nav_stack.last().unwrap_or(&NavLevel::Projects)
+        self.nav.level()
     }
 
     pub fn push_nav(&mut self, level: NavLevel) {
-        self.nav_stack.push(level);
+        self.nav.push(level);
     }
 
     pub fn pop_nav(&mut self) {
-        if self.nav_stack.len() > 1 {
-            self.nav_stack.pop();
-        }
+        self.nav.pop();
     }
 
     pub fn current_thread_id(&self) -> Option<&str> {
@@ -187,37 +176,68 @@ impl UiState {
                 return Some(thread_id);
             }
         }
-        self.selected_thread
-            .and_then(|i| self.threads.get(i))
+        self.thread_panel
+            .list
+            .selected
+            .and_then(|i| self.thread_panel.list.items.get(i))
             .map(|t| t.thread_id.as_str())
     }
 
     pub fn flat_agent_sessions(&self) -> Vec<FlatAgentSession> {
-        flat_agent_sessions(&self.conversation_agent_sessions)
+        flat_agent_sessions(&self.conversation.agent_sessions.items)
     }
 
     pub fn flat_agent_session_count(&self) -> usize {
-        self.flat_agent_sessions().len()
+        flat_agent_session_count(&self.conversation.agent_sessions.items)
     }
 
     pub fn selected_flat_agent_session_thread_id(&self) -> Option<&str> {
-        let selected = self.selected_agent_session?;
-        let source_index = self.flat_agent_sessions().get(selected)?.source_index;
-        self.conversation_agent_sessions
+        let selected = self.conversation.agent_sessions.selected?;
+        let source_index = flat_agent_session_source_index(
+            &self.conversation.agent_sessions.items,
+            selected,
+        )?;
+        self.conversation
+            .agent_sessions
+            .items
             .get(source_index)
             .map(|session| session.thread_id.as_str())
+    }
+
+    pub fn flat_session_index_for_thread(&self, thread_id: &str) -> Option<usize> {
+        self.flat_agent_sessions()
+            .into_iter()
+            .position(|flat| {
+                self.conversation
+                    .agent_sessions
+                    .items
+                    .get(flat.source_index)
+                    .is_some_and(|session| session.thread_id == thread_id)
+            })
+    }
+
+    pub fn flat_session_entry(&self, flat_index: usize) -> Option<&ThreadSummaryEntry> {
+        let source_index = flat_agent_session_source_index(
+            &self.conversation.agent_sessions.items,
+            flat_index,
+        )?;
+        self.conversation.agent_sessions.items.get(source_index)
     }
 
     pub fn current_thread_is_subagent(&self) -> bool {
         let Some(thread_id) = self.current_thread_id() else {
             return false;
         };
-        self.threads
+        self.thread_panel
+            .list
+            .items
             .iter()
             .find(|thread| thread.thread_id == thread_id)
             .is_some_and(|thread| thread.parent_thread_id.is_some())
             || self
-                .conversation_agent_sessions
+                .conversation
+                .agent_sessions
+                .items
                 .iter()
                 .find(|session| session.thread_id == thread_id)
                 .is_some_and(|session| session.parent_thread_id.is_some())
@@ -225,19 +245,24 @@ impl UiState {
 
     pub fn current_chat_mut(&mut self) -> Option<&mut ChatState> {
         let thread_id = self.current_thread_id()?.to_owned();
-        self.chat_states.get_mut(&thread_id)
+        self.thread_panel.chat_states.get_mut(&thread_id)
     }
 
     pub fn current_chat(&self) -> Option<&ChatState> {
         let thread_id = self.current_thread_id()?;
-        self.chat_states.get(thread_id)
+        self.thread_panel.chat_states.get(thread_id)
+    }
+
+    pub fn active_approval_request(&self) -> Option<&crate::translation::PendingAgentRequest> {
+        let request = self.current_chat()?.active_pending_request()?;
+        approval_overlay::is_selectable(request).then_some(request)
     }
 
     /// Returns the active chat alongside the shared render cache, using a split
     /// borrow so callers can mutate both in the same scope.
     pub fn current_chat_and_cache_mut(&mut self) -> Option<(&mut ChatState, &mut RenderCache)> {
         let thread_id = self.current_thread_id()?.to_owned();
-        let chat = self.chat_states.get_mut(&thread_id)?;
+        let chat = self.thread_panel.chat_states.get_mut(&thread_id)?;
         Some((chat, &mut self.render_cache))
     }
 
@@ -251,29 +276,38 @@ impl UiState {
 
     pub fn is_flash_copied_active(&self) -> bool {
         self.flash_copied
-            .is_some_and(|instant| instant.elapsed().as_secs() < 2)
+            .is_some_and(|instant| instant.elapsed().as_millis() < 2_000)
     }
 
-    pub fn room_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
+    /// How long error flash remains visible.
+    pub const ERROR_FLASH_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+    /// How long "copied" flash remains visible.
+    pub const COPIED_FLASH_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+    pub fn conversation_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
         let mut candidates: Vec<AgentMentionCandidate> = self
             .status
             .agents
             .iter()
             .map(|agent| AgentMentionCandidate::installed(agent.name, agent.status.clone()))
             .collect();
-        candidates.extend(
-            self.threads
-                .iter()
-                .filter(|thread| thread.parent_thread_id.is_none())
-                .filter(|thread| !matches!(thread.state, ThreadState::Closed { .. }))
-                .map(|thread| {
-                    AgentMentionCandidate::existing(
-                        thread.agent,
-                        thread.thread_id.clone(),
-                        short_thread_id(&thread.thread_id),
-                    )
-                }),
-        );
+        if self.nav_level().conversation_id().is_some() {
+            candidates.extend(
+                self.conversation
+                    .agent_sessions
+                    .items
+                    .iter()
+                    .filter(|session| session.parent_thread_id.is_none())
+                    .filter(|session| !matches!(session.state, ThreadState::Closed { .. }))
+                    .map(|session| {
+                        AgentMentionCandidate::existing(
+                            session.agent,
+                            session.thread_id.clone(),
+                            short_thread_id(&session.thread_id).to_owned(),
+                        )
+                    }),
+            );
+        }
         candidates
     }
 }
@@ -285,34 +319,45 @@ pub(crate) fn flat_agent_sessions(sessions: &[ThreadSummaryEntry]) -> Vec<FlatAg
         if session.parent_thread_id.is_some() {
             continue;
         }
-        push_flat_session(&mut out, &mut seen, index, session, 0);
+        push_flat_session(&mut out, &mut seen, index, 0);
         for (child_index, child) in sessions.iter().enumerate() {
             if child.parent_thread_id.as_deref() == Some(session.thread_id.as_str()) {
-                push_flat_session(&mut out, &mut seen, child_index, child, 1);
+                push_flat_session(&mut out, &mut seen, child_index, 1);
             }
         }
     }
-    for (index, session) in sessions.iter().enumerate() {
-        if !seen.contains(&session.thread_id) {
-            push_flat_session(&mut out, &mut seen, index, session, 0);
+    for index in 0..sessions.len() {
+        if !seen.contains(&index) {
+            push_flat_session(&mut out, &mut seen, index, 0);
         }
     }
     out
 }
 
+pub(crate) fn flat_agent_session_count(sessions: &[ThreadSummaryEntry]) -> usize {
+    flat_agent_sessions(sessions).len()
+}
+
+pub(crate) fn flat_agent_session_source_index(
+    sessions: &[ThreadSummaryEntry],
+    flat_index: usize,
+) -> Option<usize> {
+    flat_agent_sessions(sessions)
+        .get(flat_index)
+        .map(|entry| entry.source_index)
+}
+
 fn push_flat_session(
     out: &mut Vec<FlatAgentSession>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<usize>,
     source_index: usize,
-    session: &ThreadSummaryEntry,
     depth: u8,
 ) {
-    seen.insert(session.thread_id.clone());
+    if !seen.insert(source_index) {
+        return;
+    }
     out.push(FlatAgentSession {
         source_index,
-        thread_id: session.thread_id.clone(),
-        agent: session.agent,
-        parent_thread_id: session.parent_thread_id.clone(),
         depth,
     });
 }
@@ -320,6 +365,7 @@ fn push_flat_session(
 #[cfg(test)]
 mod subagent_tests {
     use super::*;
+    use crate::ui::input_bar::AgentMentionCandidateKind;
 
     fn session(thread_id: &str, parent_thread_id: Option<&str>) -> ThreadSummaryEntry {
         ThreadSummaryEntry {
@@ -331,21 +377,39 @@ mod subagent_tests {
             message_count: 0,
             ended_at_ms: None,
             parent_thread_id: parent_thread_id.map(str::to_string),
+            state: ThreadState::Idle,
         }
+    }
+
+    fn existing_thread_ids(state: &UiState) -> Vec<String> {
+        state
+            .conversation_agent_mention_candidates()
+            .into_iter()
+            .filter_map(|candidate| match candidate.kind {
+                AgentMentionCandidateKind::Existing { thread_id } => Some(thread_id),
+                AgentMentionCandidateKind::Installed { .. } => None,
+            })
+            .collect()
     }
 
     #[test]
     fn flat_agent_sessions_groups_children_under_parent() {
-        let flat = flat_agent_sessions(&[
+        let sessions = [
             session("parent-a", None),
             session("parent-b", None),
             session("sub-a", Some("parent-a")),
             session("orphan", Some("missing")),
-        ]);
+        ];
+        let flat = flat_agent_sessions(&sessions);
 
         assert_eq!(
             flat.iter()
-                .map(|entry| (entry.thread_id.as_str(), entry.depth))
+                .map(|entry| {
+                    (
+                        sessions[entry.source_index].thread_id.as_str(),
+                        entry.depth,
+                    )
+                })
                 .collect::<Vec<_>>(),
             vec![
                 ("parent-a", 0),
@@ -355,136 +419,109 @@ mod subagent_tests {
             ]
         );
     }
-}
 
-impl GroupChatState {
-    fn new() -> Self {
-        Self {
-            messages: Vec::new(),
-            scroll_offset: 0,
-            auto_scroll: true,
-            max_scroll: 0,
-            version: 0,
-        }
+    #[test]
+    fn conversation_mentions_in_conversation_use_conversation_sessions_only() {
+        let mut state = UiState::new(false);
+        state.thread_panel.list.items.push(ThreadEntry {
+            thread_id: "global-opencode-1234".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+            parent_thread_id: None,
+        });
+        state.conversation.agent_sessions.items = vec![
+            ThreadSummaryEntry {
+                thread_id: "conv-opencode-5678".into(),
+                agent: AgentName::Opencode,
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+                parent_thread_id: None,
+                state: ThreadState::Idle,
+            },
+            ThreadSummaryEntry {
+                thread_id: "conv-closed-9999".into(),
+                agent: AgentName::Codex,
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+                parent_thread_id: None,
+                state: ThreadState::Closed {
+                    reason: minos_agent_runtime::CloseReason::UserClose,
+                },
+            },
+            ThreadSummaryEntry {
+                thread_id: "conv-child-0000".into(),
+                agent: AgentName::Gemini,
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+                parent_thread_id: Some("conv-opencode-5678".into()),
+                state: ThreadState::Idle,
+            },
+        ];
+        state.nav.stack = vec![
+            NavLevel::Projects,
+            NavLevel::Conversations {
+                project_id: "p".into(),
+            },
+            NavLevel::Conversation {
+                project_id: "p".into(),
+                conversation_id: "c".into(),
+            },
+        ];
+
+        assert_eq!(
+            existing_thread_ids(&state),
+            vec!["conv-opencode-5678".to_owned()]
+        );
     }
 
-    pub fn replace_messages(&mut self, messages: Vec<LocalGroupChatMessage>) {
-        let messages = sorted_dedup_messages(messages);
-        if self.messages != messages {
-            self.messages = messages;
-            self.bump_version();
-            self.scroll_to_bottom();
-        }
+    #[test]
+    fn conversation_mentions_outside_conversation_hide_existing_threads() {
+        let mut state = UiState::new(false);
+        state.thread_panel.list.items.push(ThreadEntry {
+            thread_id: "global-codex-1234".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+            parent_thread_id: None,
+        });
+        state.conversation.agent_sessions.items = vec![ThreadSummaryEntry {
+            thread_id: "conv-codex-5678".into(),
+            agent: AgentName::Codex,
+            title: None,
+            first_ts_ms: 0,
+            last_ts_ms: 0,
+            message_count: 0,
+            ended_at_ms: None,
+            parent_thread_id: None,
+            state: ThreadState::Idle,
+        }];
+        state.nav.stack = vec![
+            NavLevel::Projects,
+            NavLevel::Conversations {
+                project_id: "p".into(),
+            },
+        ];
+
+        assert_eq!(existing_thread_ids(&state), Vec::<String>::new());
     }
-
-    pub fn push_message(&mut self, message: LocalGroupChatMessage) {
-        if self.merge_messages(std::iter::once(message)) {
-            self.scroll_to_bottom();
-        }
-    }
-
-    pub fn merge_messages<I>(&mut self, messages: I) -> bool
-    where
-        I: IntoIterator<Item = LocalGroupChatMessage>,
-    {
-        let mut changed = false;
-        for message in messages {
-            let key = message_key(&message);
-            match self
-                .messages
-                .iter_mut()
-                .find(|existing| message_key(existing) == key)
-            {
-                Some(existing) if *existing == message => {}
-                Some(existing) => {
-                    *existing = message;
-                    changed = true;
-                }
-                None => {
-                    self.messages.push(message);
-                    changed = true;
-                }
-            }
-        }
-
-        if changed {
-            sort_messages(&mut self.messages);
-            self.bump_version();
-        }
-        changed
-    }
-
-    pub fn last_seq(&self) -> u64 {
-        self.messages
-            .iter()
-            .map(|message| message.seq)
-            .max()
-            .unwrap_or(0)
-    }
-
-    pub fn scroll_up(&mut self, lines: u16) {
-        if self.auto_scroll {
-            self.scroll_offset = self.max_scroll;
-            self.auto_scroll = false;
-        }
-        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
-    }
-
-    pub fn scroll_down(&mut self, lines: u16) {
-        if self.auto_scroll {
-            return;
-        }
-
-        self.scroll_offset = self
-            .scroll_offset
-            .saturating_add(lines)
-            .min(self.max_scroll);
-        if self.scroll_offset >= self.max_scroll {
-            self.scroll_to_bottom();
-        }
-    }
-
-    fn scroll_to_bottom(&mut self) {
-        self.auto_scroll = true;
-        self.scroll_offset = 0;
-    }
-
-    fn bump_version(&mut self) {
-        self.version = self.version.wrapping_add(1);
-    }
-}
-
-fn sorted_dedup_messages(messages: Vec<LocalGroupChatMessage>) -> Vec<LocalGroupChatMessage> {
-    let mut keyed = HashMap::<String, LocalGroupChatMessage>::new();
-    for message in messages {
-        keyed.insert(message_key(&message), message);
-    }
-
-    let mut messages: Vec<_> = keyed.into_values().collect();
-    sort_messages(&mut messages);
-    messages
-}
-
-fn message_key(message: &LocalGroupChatMessage) -> String {
-    if message.message_id.is_empty() {
-        format!(
-            "seq:{}:{}:{}",
-            message.seq, message.created_at_ms, message.text
-        )
-    } else {
-        message.message_id.clone()
-    }
-}
-
-fn sort_messages(messages: &mut [LocalGroupChatMessage]) {
-    messages.sort_by_key(|message| (message.seq, message.created_at_ms));
 }
 
 pub fn render_ui(f: &mut Frame, state: &mut UiState) {
+    state.needs_render_followup = false;
     let agent_input_active =
         matches!(state.nav_level(), NavLevel::AgentDetail { .. }) && state.focus.is(PaneId::Input);
-    state.room_input.focused = state.focus.is(PaneId::Input) && !agent_input_active;
-    state.agent_input.focused = agent_input_active;
+    state.inputs.conversation.focused = state.focus.is(PaneId::Input) && !agent_input_active;
+    state.inputs.agent.focused = agent_input_active;
 
     match state.nav_level() {
         NavLevel::Projects => {
@@ -501,18 +538,16 @@ pub fn render_ui(f: &mut Frame, state: &mut UiState) {
         }
     }
 
-    if let Some(dialog) = state.project_create_dialog.as_ref() {
+    if let Some(dialog) = state.overlays.project_create.as_ref() {
         project_create_dialog::render(f, f.area(), dialog);
     }
-    if let Some(picker) = state.agent_picker.as_ref() {
-        let mut overlay =
-            agent_picker::AgentPickerRenderable::new(state.status.agents.as_slice(), picker);
+    if let Some(confirm) = state.overlays.delete_confirm.as_ref() {
+        let mut overlay = delete_confirm::DeleteConfirmRenderable::new(confirm);
         overlay.render(f, f.area());
     }
 
-    if let Some(confirm) = state.delete_confirm.as_ref() {
-        let mut overlay = delete_confirm::DeleteConfirmRenderable::new(confirm);
-        overlay.render(f, f.area());
+    if state.render_cache.needs_followup_frame() {
+        state.needs_render_followup = true;
     }
 }
 
@@ -529,26 +564,26 @@ fn render_projects_level(f: &mut Frame, state: &mut UiState) {
     let sidebar = areas[1];
 
     state.panel_areas = PanelAreas {
-        room_list: main,
-        room_chat: Rect::default(),
+        main_list: main,
+        conversation_chat: Rect::default(),
         agent_list: sidebar,
         agent_chat: Rect::default(),
-        room_input: Rect::default(),
+        conversation_input: Rect::default(),
         agent_input: Rect::default(),
     };
-    state.input_metrics = [InputLayoutMetrics::default(); 2];
+    state.inputs.metrics = [crate::ui::input_bar::InputLayoutMetrics::default(); 2];
 
     let main_row = Row::new(
         vec![
             Box::new(project_list::ProjectListRenderable::new(
-                &state.projects,
-                state.selected_project,
-                &mut state.project_list_state,
+                &state.projects.items,
+                state.projects.selected,
+                &mut state.projects.list_state,
                 true,
             )),
             Box::new(project_list::ProjectSidebarRenderable::new(
-                &state.projects,
-                state.selected_project,
+                &state.projects.items,
+                state.projects.selected,
             )),
         ],
         vec![78, 22],
@@ -581,10 +616,10 @@ fn render_projects_level(f: &mut Frame, state: &mut UiState) {
 }
 
 fn render_conversations_level(f: &mut Frame, state: &mut UiState) {
-    let mention_candidates = state.room_agent_mention_candidates();
+    let mention_candidates = state.conversation_agent_mention_candidates();
     let flash_active = state.is_flash_copied_active();
     let root = f.area();
-    let input_height = input_bar::required_height(&state.room_input, root.width);
+    let input_height = input_bar::required_height(&state.inputs.conversation, root.width);
 
     let [_, middle, input_area] = root_sections(root, input_height);
     let areas = Row::areas_for(middle, &[78, 22]);
@@ -592,18 +627,19 @@ fn render_conversations_level(f: &mut Frame, state: &mut UiState) {
     let sidebar = areas[1];
 
     state.panel_areas = PanelAreas {
-        room_list: main,
-        room_chat: Rect::default(),
+        main_list: main,
+        conversation_chat: Rect::default(),
         agent_list: sidebar,
         agent_chat: Rect::default(),
-        room_input: input_area,
+        conversation_input: input_area,
         agent_input: Rect::default(),
     };
-    state.input_metrics = [InputLayoutMetrics::default(); 2];
+    state.inputs.metrics = [crate::ui::input_bar::InputLayoutMetrics::default(); 2];
 
     let project_name = state
-        .selected_project
-        .and_then(|idx| state.projects.get(idx))
+        .projects
+        .selected
+        .and_then(|idx| state.projects.items.get(idx))
         .map(|p| p.name.as_str())
         .unwrap_or("Unknown");
 
@@ -611,25 +647,25 @@ fn render_conversations_level(f: &mut Frame, state: &mut UiState) {
         vec![
             Box::new(conversation_list::ConversationListRenderable::new(
                 project_name,
-                &state.conversations,
-                state.selected_conversation,
-                &mut state.conversation_list_state,
+                &state.conversations.items,
+                state.conversations.selected,
+                &mut state.conversations.list_state,
                 true,
             )),
             Box::new(conversation_list::ConversationSidebarRenderable::new(
-                &state.conversations,
-                state.selected_conversation,
+                &state.conversations.items,
+                state.conversations.selected,
             )),
         ],
         vec![78, 22],
     );
 
     let input = input_bar::InputBarRenderable::new(
-        room_input_title(&state.room_input),
+        conversation_input_title(&state.inputs.conversation),
         "Type a message to start a new conversation...",
-        &state.room_input,
+        &state.inputs.conversation,
         mention_candidates.as_slice(),
-        &mut state.input_metrics[0],
+        &mut state.inputs.metrics[0],
     );
 
     let mut tree = Column::with_fill(
@@ -650,38 +686,60 @@ fn render_conversations_level(f: &mut Frame, state: &mut UiState) {
 }
 
 fn render_conversation_level(f: &mut Frame, state: &mut UiState) {
-    let mention_candidates = state.room_agent_mention_candidates();
+    let mention_candidates = state.conversation_agent_mention_candidates();
     let flash_active = state.is_flash_copied_active();
     let root = f.area();
-    let input_height = input_bar::required_height(&state.room_input, root.width);
+    let input_height = input_bar::required_height(&state.inputs.conversation, root.width);
     let [_, middle, input_area] = root_sections(root, input_height);
     let areas = Row::areas_for(middle, &[80, 20]);
 
     state.panel_areas = PanelAreas {
-        room_list: Rect::default(),
-        room_chat: areas[0],
+        main_list: Rect::default(),
+        conversation_chat: areas[0],
         agent_list: areas[1],
         agent_chat: Rect::default(),
-        room_input: input_area,
+        conversation_input: input_area,
         agent_input: Rect::default(),
     };
-    state.input_metrics = [InputLayoutMetrics::default(); 2];
+    state.inputs.metrics = [crate::ui::input_bar::InputLayoutMetrics::default(); 2];
 
     let title = current_conversation_title(state);
+    let recent_files = state.recent_files_cached().clone();
+    let selected_agent_session = state.conversation.agent_sessions.selected;
+    let messages_revision = state.conversation.messages_revision;
+    // Clone selection so we can pass a reference without holding the whole panel borrow.
+    let conversation_selection = state.conversation.selection.clone();
+    let (conversation_messages, scroll_offset, auto_scroll, max_scroll, cache) = (
+        &state.conversation.messages,
+        &mut state.conversation.scroll_offset,
+        &mut state.conversation.auto_scroll,
+        &mut state.conversation.max_scroll,
+        &mut state.conversation.chat_cache,
+    );
+    let (threads, agent_sessions, agent_list_state) = (
+        &state.thread_panel.list.items,
+        &state.conversation.agent_sessions.items,
+        &mut state.conversation.agent_sessions.list_state,
+    );
     let main_row = Row::new(
         vec![
-            Box::new(conversation_detail::ConversationMessagesRenderable::new(
+            Box::new(conversation_view::ConversationChatRenderable::new(
                 title,
-                &state.conversation_messages,
-                &mut state.conversation_scroll_offset,
-                &mut state.conversation_auto_scroll,
-                &mut state.conversation_max_scroll,
-                false,
+                conversation_messages,
+                messages_revision,
+                scroll_offset,
+                auto_scroll,
+                max_scroll,
+                cache,
+                conversation_selection.as_ref(),
+                state.focus.is(PaneId::MainChat),
             )),
             Box::new(conversation_detail::AgentSessionListRenderable::new(
-                &state.conversation_agent_sessions,
-                state.selected_agent_session,
-                &mut state.agent_list_state,
+                agent_sessions,
+                threads,
+                &recent_files,
+                selected_agent_session,
+                agent_list_state,
                 state.focus.is(PaneId::Sidebar),
             )),
         ],
@@ -689,11 +747,11 @@ fn render_conversation_level(f: &mut Frame, state: &mut UiState) {
     );
 
     let input = input_bar::InputBarRenderable::new(
-        room_input_title(&state.room_input),
+        conversation_input_title(&state.inputs.conversation),
         "Type @agent to run inside this conversation",
-        &state.room_input,
+        &state.inputs.conversation,
         mention_candidates.as_slice(),
-        &mut state.input_metrics[0],
+        &mut state.inputs.metrics[0],
     );
 
     let mut tree = Column::with_fill(
@@ -720,10 +778,15 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
         .is_some();
     let is_subagent = state.current_thread_is_subagent();
     let selected_thread_id = state.current_thread_id().map(str::to_owned);
+    let approval_request = state.active_approval_request().cloned();
+    let approval_request_count = state
+        .current_chat()
+        .map(|chat| chat.pending_requests.len())
+        .unwrap_or(0);
     let agent_input_title = if is_subagent {
         "Subagent · read-only"
     } else {
-        agent_input_title(pending_agent_request, state.agent_input.multiline)
+        agent_input_title(pending_agent_request, state.inputs.agent.multiline)
     };
     let flash_active = state.is_flash_copied_active();
     let agent_input_hint = if is_subagent {
@@ -742,7 +805,7 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
     };
     let columns = Row::areas_for(body_area, &[80, 20]);
     let agent_input_height =
-        input_bar::required_height(&state.agent_input, columns[0].width).min(columns[0].height);
+        input_bar::required_height(&state.inputs.agent, columns[0].width).min(columns[0].height);
     let agent_chat_area = Rect {
         x: columns[0].x,
         y: columns[0].y,
@@ -757,16 +820,19 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
     };
 
     state.panel_areas = PanelAreas {
-        room_list: Rect::default(),
-        room_chat: Rect::default(),
+        main_list: Rect::default(),
+        conversation_chat: Rect::default(),
         agent_list: columns[1],
         agent_chat: agent_chat_area,
-        room_input: Rect::default(),
+        conversation_input: Rect::default(),
         agent_input: agent_input_area,
     };
 
+    let recent_files = state.recent_files_cached().clone();
+    let selected_agent_session = state.conversation.agent_sessions.selected;
+
     let agent_chat_target = if let Some(thread_id) = selected_thread_id.as_deref() {
-        if let Some(chat) = state.chat_states.get_mut(thread_id) {
+        if let Some(chat) = state.thread_panel.chat_states.get_mut(thread_id) {
             AgentChatTarget::Chat {
                 chat,
                 cache: &mut state.render_cache,
@@ -778,7 +844,7 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
         AgentChatTarget::Empty
     };
 
-    let [_, agent_metrics] = &mut state.input_metrics;
+    let [_, agent_metrics] = &mut state.inputs.metrics;
     let left_column = Column::with_fill(
         vec![
             Box::new(AgentChatRenderable::new(
@@ -788,7 +854,7 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
             Box::new(input_bar::InputBarRenderable::new(
                 agent_input_title,
                 agent_input_hint,
-                &state.agent_input,
+                &state.inputs.agent,
                 &[],
                 agent_metrics,
             )),
@@ -799,9 +865,11 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
         vec![
             Box::new(left_column),
             Box::new(conversation_detail::AgentSessionListRenderable::new(
-                &state.conversation_agent_sessions,
-                state.selected_agent_session,
-                &mut state.agent_list_state,
+                &state.conversation.agent_sessions.items,
+                &state.thread_panel.list.items,
+                &recent_files,
+                selected_agent_session,
+                &mut state.conversation.agent_sessions.list_state,
                 state.focus.is(PaneId::Sidebar),
             )),
         ],
@@ -818,6 +886,15 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
         1,
     );
     tree.render(f, root);
+    if let Some(request) = approval_request.as_ref() {
+        approval_overlay::render(
+            f,
+            agent_chat_area,
+            request,
+            state.overlays.approval_selected,
+            approval_request_count,
+        );
+    }
     if let Some(position) = tree.cursor_pos(root) {
         f.set_cursor_position(position);
     }
@@ -826,8 +903,9 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
 fn current_conversation_title(state: &UiState) -> String {
     let nav_conversation_id = state.nav_level().conversation_id();
     state
-        .selected_conversation
-        .and_then(|idx| state.conversations.get(idx))
+        .conversations
+        .selected
+        .and_then(|idx| state.conversations.items.get(idx))
         .filter(|conversation| {
             nav_conversation_id
                 .map(|id| id == conversation.conversation_id)
@@ -835,6 +913,57 @@ fn current_conversation_title(state: &UiState) -> String {
         })
         .map(|conversation| format!("Conversation: {}", conversation.title))
         .unwrap_or_else(|| "Conversation".to_owned())
+}
+
+fn recent_files_fingerprint(
+    chat_states: &HashMap<String, ChatState>,
+    sessions: &[ThreadSummaryEntry],
+) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    sessions.len().hash(&mut h);
+    for session in sessions {
+        session.thread_id.hash(&mut h);
+        if let Some(chat) = chat_states.get(&session.thread_id) {
+            chat.version.hash(&mut h);
+            chat.structure_version.hash(&mut h);
+            chat.items.len().hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+fn compute_recent_files(
+    chat_states: &HashMap<String, ChatState>,
+    sessions: &[ThreadSummaryEntry],
+) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    for session in sessions {
+        let Some(chat) = chat_states.get(&session.thread_id) else {
+            continue;
+        };
+        let mut files = Vec::new();
+        for item in chat.items.iter().rev() {
+            if let crate::translation::ChatItem::ToolCall {
+                name, args_summary, ..
+            } = item
+            {
+                if let Some(path) = conversation_detail::extract_file_path(name, args_summary) {
+                    if !files.contains(&path) {
+                        files.push(path);
+                    }
+                    if files.len() >= 2 {
+                        break;
+                    }
+                }
+            }
+        }
+        if !files.is_empty() {
+            out.insert(session.thread_id.clone(), files);
+        }
+    }
+    out
 }
 
 fn root_sections(area: Rect, input_height: u16) -> [Rect; 3] {
@@ -851,11 +980,11 @@ fn root_sections(area: Rect, input_height: u16) -> [Rect; 3] {
     [outer[0], outer[1], outer[2]]
 }
 
-fn room_input_title(state: &InputState) -> &'static str {
+fn conversation_input_title(state: &InputState) -> &'static str {
     if state.multiline {
-        "Chat Room Input [multi]"
+        "Conversation Input [multi]"
     } else {
-        "Chat Room Input"
+        "Conversation Input"
     }
 }
 
@@ -868,60 +997,4 @@ fn agent_input_title(pending_agent_request: bool, multiline: bool) -> &'static s
     }
 }
 
-fn short_thread_id(thread_id: &str) -> String {
-    thread_id[..8.min(thread_id.len())].to_owned()
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use minos_protocol::LocalGroupChatMessageKind;
-
-    fn group_message(seq: u64, message_id: &str, text: &str) -> LocalGroupChatMessage {
-        LocalGroupChatMessage {
-            seq,
-            message_id: message_id.to_owned(),
-            created_at_ms: i64::try_from(seq).unwrap_or(0),
-            kind: LocalGroupChatMessageKind::User,
-            text: text.to_owned(),
-            agent: Some(AgentName::Codex),
-            thread_id: Some("thread-1".into()),
-            thread_short_id: Some("thread-1".into()),
-            workspace: Some("/tmp/ws".into()),
-        }
-    }
-
-    #[test]
-    fn group_chat_merge_sorts_by_sequence_and_dedups_messages() {
-        let mut state = GroupChatState::new();
-
-        state.push_message(group_message(5, "newer", "newer local message"));
-        state.merge_messages(vec![
-            group_message(2, "older", "older daemon message"),
-            group_message(5, "newer", "duplicate local message"),
-        ]);
-
-        assert_eq!(
-            state
-                .messages
-                .iter()
-                .map(|message| message.seq)
-                .collect::<Vec<_>>(),
-            vec![2, 5]
-        );
-        assert_eq!(state.messages[0].message_id, "older");
-        assert_eq!(state.messages[1].message_id, "newer");
-    }
-
-    #[test]
-    fn group_chat_merge_duplicate_keeps_version() {
-        let mut state = GroupChatState::new();
-        let message = group_message(1, "m1", "same message");
-
-        assert!(state.merge_messages(vec![message.clone()]));
-        let version = state.version;
-
-        assert!(!state.merge_messages(vec![message]));
-        assert_eq!(state.version, version);
-    }
-}

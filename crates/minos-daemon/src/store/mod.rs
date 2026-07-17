@@ -25,6 +25,7 @@ use std::str::FromStr;
 pub struct LocalStore {
     pool: SqlitePool,
     artifact_store: ArtifactStore,
+    db_path: std::path::PathBuf,
 }
 
 impl LocalStore {
@@ -46,11 +47,16 @@ impl LocalStore {
         Ok(Self {
             pool,
             artifact_store: ArtifactStore::new(artifact_root),
+            db_path: db_file.to_path_buf(),
         })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
     }
 
     pub fn artifacts(&self) -> &ArtifactStore {
@@ -412,8 +418,25 @@ impl LocalStore {
         let rows = match before_updated_at_ms {
             Some(ts) => {
                 sqlx::query_as::<_, ConversationRow>(
-                    "SELECT * FROM conversations \
-                     WHERE project_id = ? AND updated_at_ms < ? \
+                    "SELECT * FROM ( \
+                        SELECT c.conversation_id, c.project_id, c.title, \
+                               (SELECT m.body FROM chat_messages m \
+                                LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                                WHERE m.conversation_id = c.conversation_id \
+                                  AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
+                                ORDER BY m.message_seq DESC LIMIT 1) AS last_message_preview, \
+                               (SELECT COUNT(*) FROM chat_messages m \
+                                LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                                WHERE m.conversation_id = c.conversation_id \
+                                  AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)) AS message_count, \
+                               c.agent_session_count, c.created_at_ms, \
+                               COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m \
+                                         LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                                         WHERE m.conversation_id = c.conversation_id \
+                                           AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)), c.created_at_ms) AS updated_at_ms \
+                        FROM conversations c \
+                        WHERE c.project_id = ? \
+                     ) WHERE updated_at_ms < ? \
                      ORDER BY updated_at_ms DESC, conversation_id LIMIT ?",
                 )
                 .bind(project_id)
@@ -424,8 +447,25 @@ impl LocalStore {
             }
             None => {
                 sqlx::query_as::<_, ConversationRow>(
-                    "SELECT * FROM conversations \
-                     WHERE project_id = ? \
+                    "SELECT * FROM ( \
+                        SELECT c.conversation_id, c.project_id, c.title, \
+                               (SELECT m.body FROM chat_messages m \
+                                LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                                WHERE m.conversation_id = c.conversation_id \
+                                  AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
+                                ORDER BY m.message_seq DESC LIMIT 1) AS last_message_preview, \
+                               (SELECT COUNT(*) FROM chat_messages m \
+                                LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                                WHERE m.conversation_id = c.conversation_id \
+                                  AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)) AS message_count, \
+                               c.agent_session_count, c.created_at_ms, \
+                               COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m \
+                                         LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                                         WHERE m.conversation_id = c.conversation_id \
+                                           AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)), c.created_at_ms) AS updated_at_ms \
+                        FROM conversations c \
+                        WHERE c.project_id = ? \
+                     ) \
                      ORDER BY updated_at_ms DESC, conversation_id LIMIT ?",
                 )
                 .bind(project_id)
@@ -537,6 +577,9 @@ impl LocalStore {
         agent: Option<&str>,
         body: &str,
         ts_ms: i64,
+        reply_to_message_id: Option<&str>,
+        delegation_id: Option<&str>,
+        mentions_json: &str,
     ) -> anyhow::Result<i64> {
         let preview = body.chars().take(120).collect::<String>();
         let mut tx = self.pool.begin().await?;
@@ -549,13 +592,17 @@ impl LocalStore {
         let message_seq = if let Some(seq) = existing {
             sqlx::query(
                 "UPDATE chat_messages \
-                 SET thread_id = ?, sender_role = ?, agent = ?, body = ? \
+                 SET thread_id = ?, sender_role = ?, agent = ?, body = ?, \
+                     reply_to_message_id = ?, delegation_id = ?, mentions_json = ? \
                  WHERE message_id = ?",
             )
             .bind(thread_id)
             .bind(sender_role)
             .bind(agent)
             .bind(body)
+            .bind(reply_to_message_id)
+            .bind(delegation_id)
+            .bind(mentions_json)
             .bind(message_id)
             .execute(&mut *tx)
             .await?;
@@ -563,8 +610,9 @@ impl LocalStore {
         } else {
             let result = sqlx::query(
                 "INSERT INTO chat_messages( \
-                    message_id, conversation_id, thread_id, created_at_ms, sender_role, agent, body \
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    message_id, conversation_id, thread_id, created_at_ms, sender_role, agent, body, \
+                    reply_to_message_id, delegation_id, mentions_json \
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(message_id)
             .bind(conversation_id)
@@ -573,6 +621,9 @@ impl LocalStore {
             .bind(sender_role)
             .bind(agent)
             .bind(body)
+            .bind(reply_to_message_id)
+            .bind(delegation_id)
+            .bind(mentions_json)
             .execute(&mut *tx)
             .await?;
             sqlx::query(
@@ -610,9 +661,12 @@ impl LocalStore {
         let rows = match before_seq {
             Some(seq) => {
                 sqlx::query_as::<_, ChatMessageRow>(
-                    "SELECT * FROM chat_messages \
-                     WHERE conversation_id = ? AND message_seq < ? \
-                     ORDER BY message_seq DESC LIMIT ?",
+                    "SELECT m.* FROM chat_messages m \
+                     LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                     WHERE m.conversation_id = ? \
+                       AND m.message_seq < ? \
+                       AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
+                     ORDER BY m.message_seq DESC LIMIT ?",
                 )
                 .bind(conversation_id)
                 .bind(seq)
@@ -622,9 +676,11 @@ impl LocalStore {
             }
             None => {
                 sqlx::query_as::<_, ChatMessageRow>(
-                    "SELECT * FROM chat_messages \
-                     WHERE conversation_id = ? \
-                     ORDER BY message_seq DESC LIMIT ?",
+                    "SELECT m.* FROM chat_messages m \
+                     LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                     WHERE m.conversation_id = ? \
+                       AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
+                     ORDER BY m.message_seq DESC LIMIT ?",
                 )
                 .bind(conversation_id)
                 .bind(limit)
@@ -728,6 +784,9 @@ pub struct ChatMessageRow {
     pub sender_role: String,
     pub agent: Option<String>,
     pub body: String,
+    pub reply_to_message_id: Option<String>,
+    pub delegation_id: Option<String>,
+    pub mentions_json: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -875,6 +934,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_conversation_messages_hides_subagent_thread_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        seed_conversation(&store).await;
+        store
+            .insert_thread_in_conversation(
+                "parent", "c", "/w", "codex", None, None, "idle", 10, true,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_thread_in_conversation(
+                "sub",
+                "c",
+                "/w",
+                "codex",
+                None,
+                Some("parent"),
+                "idle",
+                11,
+                false,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert_conversation_message(
+                "c", "user", None, "user", None, "prompt", 12, None, None, "[]",
+            )
+            .await
+            .unwrap();
+        store
+            .upsert_conversation_message(
+                "c",
+                "parent-result",
+                Some("parent"),
+                "agent",
+                Some("codex"),
+                "parent result",
+                13,
+                None,
+                None,
+                "[]",
+            )
+            .await
+            .unwrap();
+        store
+            .upsert_conversation_message(
+                "c",
+                "sub-result",
+                Some("sub"),
+                "agent",
+                Some("codex"),
+                "sub result",
+                14,
+                None,
+                None,
+                "[]",
+            )
+            .await
+            .unwrap();
+
+        let rows = store
+            .list_conversation_messages("c", None, Some(10))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows.iter().map(|row| row.body.as_str()).collect::<Vec<_>>(),
+            vec!["parent result", "prompt"]
+        );
+
+        let conversations = store
+            .list_conversations_by_project("p", None, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(
+            conversations[0].last_message_preview.as_deref(),
+            Some("parent result")
+        );
+        assert_eq!(conversations[0].message_count, 2);
+    }
+
+    #[tokio::test]
     async fn update_thread_status_persists_runtime_state() {
         let tmp = tempfile::tempdir().unwrap();
         let store = LocalStore::open(&tmp.path().join("t.sqlite"))
@@ -992,3 +1143,5 @@ mod tests {
         assert_eq!(threads[0].thread_id, "thr-b");
     }
 }
+
+// temporary test removed after

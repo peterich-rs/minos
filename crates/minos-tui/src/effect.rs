@@ -2,47 +2,31 @@
 
 use std::path::PathBuf;
 
-use minos_agent_runtime::ManagerEvent;
 use minos_domain::AgentName;
-use minos_protocol::LocalIngestFrame;
 
-use crate::event::McpToolEvent;
+use crate::action::InputTarget;
 use crate::translation::PendingAgentRequestKind;
 
 pub enum Effect {
     Quit,
     InterruptOrQuit,
     CloseCurrentThread,
-    StartAgentAt(usize),
-    HandleIngest(LocalIngestFrame),
-    HandleManagerEvent(ManagerEvent),
     HandleTick,
-    HandleMcpToolCall(McpToolEvent),
     AgentStartedForPrompt {
         agent: AgentName,
         thread_id: String,
         cwd: PathBuf,
         text: String,
     },
-    DispatchPromptToExistingAgent {
-        agent: AgentName,
-        thread_short_id: String,
-        text: String,
-        group_text: String,
-    },
-    InviteAgentToRoom {
-        agent: AgentName,
-        group_text: String,
-    },
     DispatchPromptToAgent {
         agent: AgentName,
         text: String,
-        group_text: String,
+        message_body: String,
     },
     SendTextToThread {
         thread_id: String,
         text: String,
-        group_text: Option<String>,
+        message_body: Option<String>,
     },
     SubmitPendingAgentRequest {
         thread_id: String,
@@ -51,6 +35,12 @@ pub enum Effect {
     },
     ConfirmDeleteThread,
     CopyToClipboard(String),
+    ResolvePathCandidates {
+        target: InputTarget,
+        sequence: u64,
+        token: String,
+        workspace_root: PathBuf,
+    },
     CreateProject {
         name: String,
         workspace_path: PathBuf,

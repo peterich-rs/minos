@@ -2,7 +2,6 @@ use super::*;
 
 impl App {
     pub async fn init(&mut self) -> anyhow::Result<()> {
-        self.load_group_chat_history().await;
         let agents = self.backend.detect_clis().await?;
         self.ui.status.update_agents(agents);
         self.sync_input_agent_picker();
@@ -24,46 +23,43 @@ impl App {
                 return;
             }
         };
-        self.ui.projects = projects.clone();
-        self.ui.selected_project = if self.ui.projects.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
-        self.ui.project_list_state.select(self.ui.selected_project);
-
-        let cwd = &self.state.workspace;
-        let matched = projects.into_iter().find(|p| {
-            crate::state::workspace_path_belongs_to_current_workspace(cwd, &p.workspace_path)
+        let cwd = self.state.workspace.clone();
+        let matched_index = projects.iter().position(|p| {
+            crate::state::workspace_path_belongs_to_current_workspace(&cwd, &p.workspace_path)
         });
+        self.ui.projects.items = projects;
+        self.ui.projects.selected = matched_index.or_else(|| {
+            if self.ui.projects.items.is_empty() {
+                None
+            } else {
+                Some(0)
+            }
+        });
+        self.ui.projects.list_state.select(self.ui.projects.selected);
 
-        match matched {
-            Some(project) => {
-                let conversations = self
-                    .backend
-                    .list_conversations(&project.project_id)
-                    .await
-                    .unwrap_or_default();
-                self.ui.conversations = conversations;
-                self.ui.selected_conversation = if self.ui.conversations.is_empty() {
+        match matched_index {
+            Some(index) => {
+                let project_id = self.ui.projects.items[index].project_id.clone();
+                let conversations = match self.backend.list_conversations(&project_id).await {
+                    Ok(conversations) => conversations,
+                    Err(error) => {
+                        self.ui
+                            .set_error(format!("Failed to load conversations: {error}"));
+                        Vec::new()
+                    }
+                };
+                self.ui.conversations.items = conversations;
+                self.ui.conversations.selected = if self.ui.conversations.items.is_empty() {
                     None
                 } else {
                     Some(0)
                 };
                 self.ui
-                    .conversation_list_state
-                    .select(self.ui.selected_conversation);
-                self.ui.selected_project = self
-                    .ui
-                    .projects
-                    .iter()
-                    .position(|p| p.project_id == project.project_id);
-                self.ui.project_list_state.select(self.ui.selected_project);
-                self.ui.nav_stack = vec![
+                    .conversations.list_state
+                    .select(self.ui.conversations.selected);
+                self.ui.nav.stack = vec![
                     crate::nav::NavLevel::Projects,
-                    crate::nav::NavLevel::Conversations {
-                        project_id: project.project_id,
-                    },
+                    crate::nav::NavLevel::Conversations { project_id },
                 ];
             }
             None => {
@@ -71,7 +67,7 @@ impl App {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "workspace".to_owned());
-                self.ui.project_create_dialog = Some(crate::ui::ProjectCreateDialogState {
+                self.ui.overlays.project_create = Some(crate::ui::ProjectCreateDialogState {
                     name: dir_name,
                     path: cwd.to_string_lossy().into_owned(),
                     editing_name: true,
@@ -83,16 +79,18 @@ impl App {
     pub async fn handle_event(&mut self, event: AppEvent) -> bool {
         match event {
             AppEvent::Ingest(ingest) => {
-                self.apply_action(Action::EffectCompleted(
-                    crate::action::EffectResult::IngestArrived(ingest),
-                ))
-                .await
+                let redraw = self.handle_ingest(ingest).await;
+                if redraw {
+                    self.request_frame_streaming();
+                }
+                redraw
             }
             AppEvent::ManagerEvent(event) => {
-                self.apply_action(Action::EffectCompleted(
-                    crate::action::EffectResult::ManagerEvent(event),
-                ))
-                .await
+                let redraw = self.handle_manager_event(event).await;
+                if redraw {
+                    self.request_frame();
+                }
+                redraw
             }
             AppEvent::AgentStartedForPrompt {
                 agent,
@@ -121,6 +119,22 @@ impl App {
                     crate::action::EffectResult::ProjectCreated(project),
                 ))
                 .await
+            }
+            AppEvent::PathCandidatesResolved {
+                target,
+                sequence,
+                candidates,
+            } => {
+                let input = match target {
+                    InputTarget::Conversation => &mut self.ui.inputs.conversation,
+                    InputTarget::Agent => &mut self.ui.inputs.agent,
+                };
+                if input.apply_path_candidates(sequence, candidates) {
+                    self.request_frame();
+                    true
+                } else {
+                    false
+                }
             }
             AppEvent::ConversationsLoaded {
                 project_id,
@@ -168,35 +182,55 @@ impl App {
                 ))
                 .await
             }
+            AppEvent::ConversationMessageAppended {
+                conversation_id,
+                message_seq,
+            } => {
+                self.refresh_current_conversation_messages(&conversation_id)
+                    .await;
+                tracing::debug!(
+                    target: "minos_tui::app",
+                    conversation_id,
+                    message_seq,
+                    "conversation messages refreshed after daemon append event"
+                );
+                self.request_frame();
+                true
+            }
+            AppEvent::DaemonThreadsListed { threads } => {
+                // Metadata-only: never await history on the poll path (scroll).
+                let redraw = self.apply_daemon_thread_metadata(threads);
+                if redraw {
+                    self.request_frame();
+                }
+                redraw
+            }
             AppEvent::ProjectFailed(error) => {
                 self.apply_action(Action::EffectCompleted(
                     crate::action::EffectResult::ProjectFailed(error),
                 ))
                 .await
             }
-            AppEvent::McpToolCall(event) => {
-                self.apply_action(Action::Global(GlobalAction::McpToolCall(event)))
-                    .await
-            }
             AppEvent::Key(key) => self.handle_key(key).await,
             AppEvent::Paste(text) => self.handle_paste(text).await,
             AppEvent::Mouse(mouse) => self.handle_mouse(mouse).await,
             AppEvent::Tick => self.apply_action(Action::Global(GlobalAction::Tick)).await,
             AppEvent::Resize(_, _) => {
-                self.request_frame();
+                // Debounce rapid resize reflow (Codex TRANSCRIPT_REFLOW_DEBOUNCE-style).
+                self.request_frame_in(std::time::Duration::from_millis(50));
                 true
             }
         }
     }
 
     pub(super) async fn handle_ingest(&mut self, ingest: minos_protocol::LocalIngestFrame) -> bool {
-        if !self.ui.chat_states.contains_key(&ingest.thread_id) {
+        if !self.ui.thread_panel.chat_states.contains_key(&ingest.thread_id) {
             debug!(
                 agent = %ingest.agent.bin_name(),
                 thread_id = %ingest.thread_id,
                 "creating chat state for ingest frame",
             );
-            self.ui.chat_states.insert(
+            self.ui.thread_panel.chat_states.insert(
                 ingest.thread_id.clone(),
                 ChatState::new(ingest.thread_id.clone(), ingest.agent),
             );
@@ -205,41 +239,57 @@ impl App {
             return false;
         }
         let marks_done = frame_marks_agent_result_done(&ingest);
+        let sessions_changed = sync_subagent_sessions(
+            &mut self.state,
+            &mut self.ui,
+            &ingest.ui_events,
+            ingest.ts_ms,
+        );
         sync_subagent_info(&mut self.ui, &ingest.ui_events);
-        if let Some(chat) = self.ui.chat_states.get_mut(&ingest.thread_id) {
+        let thread_id = ingest.thread_id;
+        let agent = ingest.agent;
+        let ui_events = ingest.ui_events;
+        if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&thread_id) {
             debug!(
-                agent = %ingest.agent.bin_name(),
-                thread_id = %ingest.thread_id,
-                event_count = ingest.ui_events.len(),
+                agent = %agent.bin_name(),
+                thread_id = %thread_id,
+                event_count = ui_events.len(),
                 "applying projected ingest frame"
             );
-            chat.apply_ui_events(ingest.ui_events.clone());
-            let thread_id = ingest.thread_id.clone();
-            self.record_agent_group_result_if_ingest_done(&thread_id, marks_done)
+            chat.apply_ui_events(ui_events);
+            self.record_agent_conversation_result_if_ingest_done(&thread_id, marks_done)
                 .await;
             return true;
         }
-        false
+        sessions_changed
     }
 
     pub(super) async fn handle_tick(&mut self) -> bool {
         let mut redraw = false;
-        if self.sync_daemon_threads_if_due().await {
+        // Never await daemon RPCs on the tick path when the event pump is live —
+        // blocking here freezes scroll/input for the whole round-trip.
+        if self.event_tx.is_some() {
+            self.schedule_daemon_thread_list_if_due();
+        } else if self.sync_daemon_threads_if_due().await {
+            // Tests / headless without a frame event loop still sync inline.
             redraw = true;
         }
         if let Some((_, instant)) = self.ui.error_flash {
-            if instant.elapsed() > Duration::from_secs(3) {
+            if instant.elapsed() > crate::ui::UiState::ERROR_FLASH_TTL {
                 self.ui.error_flash = None;
+                redraw = true;
+            }
+        }
+        if let Some(instant) = self.ui.flash_copied {
+            if instant.elapsed() > crate::ui::UiState::COPIED_FLASH_TTL {
+                self.ui.flash_copied = None;
                 redraw = true;
             }
         }
         self.ui
             .status
             .update_backend_state(self.backend.connection_state());
-        if self.refresh_group_chat_from_backend().await {
-            redraw = true;
-        }
-        if self.retry_pending_agent_group_results_if_due().await {
+        if self.retry_pending_agent_conversation_results_if_due() {
             redraw = true;
         }
         redraw
@@ -250,21 +300,7 @@ impl App {
     }
 
     pub async fn shutdown(&self) {
-        if !matches!(
-            self.backend.connection_state(),
-            crate::backend::BackendConnectionState::Embedded
-        ) {
-            return;
-        }
-        let thread_ids: Vec<String> = self
-            .ui
-            .threads
-            .iter()
-            .map(|t| t.thread_id.clone())
-            .collect();
-        for thread_id in thread_ids {
-            let _ = self.backend.close_thread(&thread_id).await;
-        }
+        // Daemon owns agent process lifecycle; TUI only disconnects.
     }
 
     pub fn ui(&mut self) -> &mut UiState {
@@ -285,11 +321,63 @@ impl App {
         }
     }
 
+    /// Public wrapper for the main loop (viewport follow-up frames).
+    pub fn request_frame_public(&self) {
+        self.request_frame();
+    }
+
+    /// Higher-churn path (agent ingest streaming). Same coalescer; explicit intent.
+    pub(super) fn request_frame_streaming(&self) {
+        if let Some(requester) = &self.frame_requester {
+            requester.schedule_frame_streaming();
+        }
+    }
+
+    pub(super) fn request_frame_in(&self, delay: std::time::Duration) {
+        if let Some(requester) = &self.frame_requester {
+            requester.schedule_frame_in(delay);
+        }
+    }
+
     pub(super) async fn hydrate_daemon_threads(&mut self) {
         let _ = self.sync_daemon_threads_from_backend(false).await;
     }
 
     pub(super) async fn sync_daemon_threads_if_due(&mut self) -> bool {
+        if !self.daemon_thread_sync_due() {
+            return false;
+        }
+        self.state.last_daemon_history_sync = Some(Instant::now());
+        self.sync_daemon_threads_from_backend(true).await
+    }
+
+    /// Fire-and-forget list_threads so the main loop can keep scrolling.
+    fn schedule_daemon_thread_list_if_due(&mut self) {
+        if !self.daemon_thread_sync_due() {
+            return;
+        }
+        let Some(tx) = self.event_tx.clone() else {
+            return;
+        };
+        self.state.last_daemon_history_sync = Some(Instant::now());
+        let backend = self.backend.clone();
+        tokio::spawn(async move {
+            match backend.list_threads().await {
+                Ok(threads) => {
+                    let _ = tx.send(AppEvent::DaemonThreadsListed { threads });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_tui::app",
+                        error = %e,
+                        "background list_threads failed"
+                    );
+                }
+            }
+        });
+    }
+
+    fn daemon_thread_sync_due(&self) -> bool {
         if !matches!(
             self.backend.connection_state(),
             crate::backend::BackendConnectionState::Connected { .. }
@@ -297,94 +385,140 @@ impl App {
             return false;
         }
         let now = Instant::now();
-        if self
+        !self
             .state
             .last_daemon_history_sync
             .is_some_and(|last| now.duration_since(last) < Duration::from_secs(2))
-        {
-            return false;
-        }
-        self.state.last_daemon_history_sync = Some(now);
-        self.sync_daemon_threads_from_backend(true).await
     }
 
     pub(super) async fn sync_daemon_threads_from_backend(&mut self, incremental: bool) -> bool {
-        let mut changed = false;
         match self.backend.list_threads().await {
-            Ok(threads) => {
-                if self.prune_external_threads() {
-                    changed = true;
-                }
-                for snap in threads {
-                    if !self.workspace_path_belongs_to_current_workspace(&snap.workspace) {
-                        if self.remove_thread_local_state(&snap.thread_id) {
-                            changed = true;
-                        }
-                        continue;
-                    }
-                    let agent = snap.agent.unwrap_or(AgentName::Codex);
-                    if let Some(entry) = self
-                        .ui
-                        .threads
-                        .iter_mut()
-                        .find(|thread| thread.thread_id == snap.thread_id)
-                    {
-                        if entry.agent != agent {
-                            entry.agent = agent;
-                            changed = true;
-                        }
-                        if entry.workspace != snap.workspace {
-                            entry.workspace = snap.workspace.clone();
-                            changed = true;
-                        }
-                        if entry.state != snap.state {
-                            entry.state = snap.state.clone();
-                            changed = true;
-                        }
-                        if entry.parent_thread_id != snap.parent_thread_id {
-                            entry.parent_thread_id = snap.parent_thread_id.clone();
-                            changed = true;
-                        }
-                    } else {
-                        self.ui.threads.push(ThreadEntry {
-                            thread_id: snap.thread_id.clone(),
-                            agent,
-                            workspace: snap.workspace.clone(),
-                            state: snap.state.clone(),
-                            parent_thread_id: snap.parent_thread_id.clone(),
-                        });
-                        changed = true;
-                    }
-                    self.ensure_chat_state_agent(&snap.thread_id, agent);
-                    if incremental && self.state.hydrated_threads.contains(&snap.thread_id) {
-                        if self
-                            .replay_thread_history_after_watermark(&snap.thread_id)
-                            .await
-                        {
-                            changed = true;
-                        }
-                    } else if self.hydrate_thread_if_needed(&snap.thread_id).await {
-                        changed = true;
-                    }
-                    let before = self.ui.group_chat.messages.len();
-                    self.record_agent_group_result_if_done(&snap.thread_id)
-                        .await;
-                    if self.ui.group_chat.messages.len() != before {
-                        changed = true;
-                    }
-                }
-                if !self.ui.threads.is_empty() && self.ui.selected_thread.is_none() {
-                    self.select_thread(0);
-                    changed = true;
-                }
-            }
+            Ok(threads) => self.apply_daemon_thread_snapshots(threads, incremental).await,
             Err(e) => {
                 tracing::warn!(
                     target: "minos_tui::app",
                     error = %e,
                     "hydrate_daemon_threads failed"
                 );
+                false
             }
+        }
+    }
+
+    /// Apply daemon `list_threads` snapshots and hydrate unknown threads.
+    ///
+    /// Used by init and the headless (no event pump) tick path. The live main
+    /// loop must **not** call this for `DaemonThreadsListed` — that path uses
+    /// [`Self::apply_daemon_thread_metadata`] only so scroll never awaits
+    /// history RPC. Already-hydrated threads still rely on live ingest.
+    pub(super) async fn apply_daemon_thread_snapshots(
+        &mut self,
+        threads: Vec<crate::backend::BackendThreadSnapshot>,
+        _incremental: bool,
+    ) -> bool {
+        let mut changed = self.apply_daemon_thread_metadata(threads);
+        let pending: Vec<String> = self
+            .ui
+            .thread_panel
+            .list
+            .items
+            .iter()
+            .map(|thread| thread.thread_id.clone())
+            .filter(|thread_id| !self.state.hydrated_threads.contains(thread_id))
+            .collect();
+        for thread_id in pending {
+            if self.hydrate_thread_if_needed(&thread_id).await {
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Sync-only metadata merge for daemon thread snapshots.
+    ///
+    /// No history RPC, no conversation-result writeback. Safe to run on the
+    /// main loop when `DaemonThreadsListed` arrives.
+    pub(super) fn apply_daemon_thread_metadata(
+        &mut self,
+        threads: Vec<crate::backend::BackendThreadSnapshot>,
+    ) -> bool {
+        let mut changed = false;
+        if self.prune_external_threads() {
+            changed = true;
+        }
+
+        // Batch workspace membership so each path is canonicalized once, not
+        // once per (thread × known-workspace) comparison.
+        let mut matcher = state::WorkspaceMatcher::from_state(&self.state, &self.ui);
+        let mut belonging = Vec::with_capacity(threads.len());
+        for snap in threads {
+            if matcher.contains(&snap.workspace) {
+                belonging.push(snap);
+            } else if self.remove_thread_local_state(&snap.thread_id) {
+                changed = true;
+            }
+        }
+
+        // O(1) updates by thread_id — avoid O(threads²) linear finds on the
+        // 2s poll path.
+        let mut index: std::collections::HashMap<String, usize> = self
+            .ui
+            .thread_panel
+            .list
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, thread)| (thread.thread_id.clone(), i))
+            .collect();
+
+        for snap in belonging {
+            let agent = snap.agent.unwrap_or(AgentName::Codex);
+            if let Some(&i) = index.get(&snap.thread_id) {
+                let entry = &mut self.ui.thread_panel.list.items[i];
+                if entry.agent != agent {
+                    entry.agent = agent;
+                    changed = true;
+                }
+                if entry.workspace != snap.workspace {
+                    entry.workspace = snap.workspace.clone();
+                    changed = true;
+                }
+                if entry.state != snap.state {
+                    entry.state = snap.state.clone();
+                    changed = true;
+                }
+                if entry.parent_thread_id != snap.parent_thread_id {
+                    entry.parent_thread_id = snap.parent_thread_id.clone();
+                    changed = true;
+                }
+            } else {
+                let thread_id = snap.thread_id.clone();
+                self.ui.thread_panel.list.items.push(ThreadEntry {
+                    thread_id: thread_id.clone(),
+                    agent,
+                    workspace: snap.workspace.clone(),
+                    state: snap.state.clone(),
+                    parent_thread_id: snap.parent_thread_id.clone(),
+                });
+                index.insert(thread_id, self.ui.thread_panel.list.items.len() - 1);
+                changed = true;
+            }
+
+            // Only touch chat_states when missing or agent identity changed.
+            let needs_chat = match self.ui.thread_panel.chat_states.get(&snap.thread_id) {
+                None => true,
+                Some(chat) => chat.agent != agent,
+            };
+            if needs_chat {
+                self.ensure_chat_state_agent(&snap.thread_id, agent);
+            }
+        }
+
+        if !self.ui.thread_panel.list.items.is_empty()
+            && self.ui.thread_panel.list.selected.is_none()
+        {
+            self.select_thread(0);
+            changed = true;
         }
         changed
     }
@@ -418,8 +552,16 @@ impl App {
                 if !self.mark_ingest_applied(&frame) {
                     continue;
                 }
+                if sync_subagent_sessions(
+                    &mut self.state,
+                    &mut self.ui,
+                    &frame.ui_events,
+                    frame.ts_ms,
+                ) {
+                    changed = true;
+                }
                 sync_subagent_info(&mut self.ui, &frame.ui_events);
-                if let Some(chat) = self.ui.chat_states.get_mut(thread_id) {
+                if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(thread_id) {
                     if !frame.ui_events.is_empty() {
                         changed = true;
                     }
@@ -437,39 +579,11 @@ impl App {
         }
     }
 
-    pub(super) async fn replay_thread_history_after_watermark(&mut self, thread_id: &str) -> bool {
-        let from_seq = self.state.thread_watermarks.get(thread_id).copied();
-        self.replay_thread_history_from(thread_id, from_seq, false)
-            .await
-    }
-
-    pub(super) async fn retry_pending_agent_group_results_if_due(&mut self) -> bool {
-        let now = Instant::now();
-        if self
-            .state
-            .last_group_result_retry
-            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(2))
-        {
-            return false;
-        }
-        self.state.last_group_result_retry = Some(now);
-
-        let thread_ids: Vec<String> = self
-            .ui
-            .threads
-            .iter()
-            .filter(|thread| thread_is_done(&thread.state))
-            .map(|thread| thread.thread_id.clone())
-            .collect();
-        if thread_ids.is_empty() {
-            return false;
-        }
-
-        let before = self.ui.group_chat.messages.len();
-        for thread_id in thread_ids {
-            self.record_agent_group_result_if_done(&thread_id).await;
-        }
-        self.ui.group_chat.messages.len() != before
+    pub(super) fn retry_pending_agent_conversation_results_if_due(&mut self) -> bool {
+        // Daemon owns agent-result writeback; TUI path is a permanent no-op.
+        // Do not walk the thread list on every tick.
+        let _ = self;
+        false
     }
 
     pub(super) async fn hydrate_thread_if_needed(&mut self, thread_id: &str) -> bool {
@@ -480,14 +594,14 @@ impl App {
     }
 
     pub(super) async fn ensure_conversation_agent_session_visible(&mut self, thread_id: &str) {
-        let was_visible = self.ui.threads.iter().any(|t| t.thread_id == thread_id);
+        let was_visible = self.ui.thread_panel.list.items.iter().any(|t| t.thread_id == thread_id);
         if !was_visible {
-            if let Some(agent) = self
+            if let Some((agent, state)) = self
                 .ui
-                .conversation_agent_sessions
+                .conversation.agent_sessions.items
                 .iter()
                 .find(|s| s.thread_id == thread_id)
-                .map(|session| session.agent)
+                .map(|session| (session.agent, session.state.clone()))
             {
                 let workspace = self
                     .ui
@@ -496,7 +610,7 @@ impl App {
                     .and_then(|project_id| {
                         self.ui
                             .projects
-                            .iter()
+                            .items.iter()
                             .find(|project| project.project_id == project_id)
                     })
                     .map(|project| project.workspace_path.clone())
@@ -504,11 +618,11 @@ impl App {
                 self.ensure_thread_visible(thread_id.to_owned(), agent, workspace);
                 if let Some(entry) = self
                     .ui
-                    .threads
+                    .thread_panel.list.items
                     .iter_mut()
                     .find(|thread| thread.thread_id == thread_id)
                 {
-                    entry.state = minos_agent_runtime::ThreadState::Idle;
+                    entry.state = state;
                 }
             }
         }
@@ -518,7 +632,7 @@ impl App {
     }
 
     pub(super) fn ensure_chat_state_agent(&mut self, thread_id: &str, agent: AgentName) {
-        match self.ui.chat_states.entry(thread_id.to_owned()) {
+        match self.ui.thread_panel.chat_states.entry(thread_id.to_owned()) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 if entry.get().agent != agent {
                     entry.insert(ChatState::new(thread_id.to_owned(), agent));
@@ -532,21 +646,7 @@ impl App {
     }
 
     pub(super) fn workspace_path_belongs_to_current_workspace(&self, workspace: &Path) -> bool {
-        state::workspace_path_belongs_to_current_workspace(&self.state.workspace, workspace)
-    }
-
-    pub(super) fn group_message_belongs_to_current_workspace(
-        &self,
-        message: &LocalGroupChatMessage,
-    ) -> bool {
-        state::group_message_belongs_to_current_workspace(&self.state.workspace, message)
-    }
-
-    pub(super) fn filter_group_messages_for_current_workspace(
-        &self,
-        messages: Vec<LocalGroupChatMessage>,
-    ) -> Vec<LocalGroupChatMessage> {
-        state::filter_group_messages_for_current_workspace(&self.state.workspace, messages)
+        state::workspace_path_belongs_to_known_workspace(&self.state, &self.ui, workspace)
     }
 
     pub(super) fn prune_external_threads(&mut self) -> bool {
@@ -577,21 +677,41 @@ impl App {
                 agent,
                 parent_thread_id,
             } => {
+                let subagent_parent = parent_thread_id.clone();
                 if !self.workspace_path_belongs_to_current_workspace(&workspace) {
                     return self.remove_thread_local_state(&thread_id);
                 }
+                if let Some(parent_thread_id) = subagent_parent.as_deref() {
+                    if let Some(conversation_id) =
+                        conversation_id_for_parent(&self.state, &self.ui, parent_thread_id)
+                    {
+                        self.state
+                            .thread_conversations
+                            .insert(thread_id.clone(), conversation_id);
+                    }
+                }
                 if let Some(index) = self
                     .ui
-                    .threads
+                    .thread_panel.list.items
                     .iter()
                     .position(|t| t.thread_id == thread_id)
                 {
-                    if let Some(entry) = self.ui.threads.get_mut(index) {
+                    if let Some(entry) = self.ui.thread_panel.list.items.get_mut(index) {
                         entry.agent = agent;
                         entry.workspace = workspace;
                         entry.parent_thread_id = parent_thread_id;
                     }
                     self.ensure_chat_state_agent(&thread_id, agent);
+                    if let Some(parent_thread_id) = subagent_parent.as_deref() {
+                        upsert_subagent_session(
+                            &mut self.ui,
+                            parent_thread_id,
+                            &thread_id,
+                            agent,
+                            None,
+                            0,
+                        );
+                    }
                     return true;
                 }
 
@@ -600,20 +720,42 @@ impl App {
                     agent,
                     workspace,
                     state: ThreadState::Starting,
-                    parent_thread_id,
+                    parent_thread_id: parent_thread_id.clone(),
                 };
-                self.ui.threads.push(entry);
-                self.ui
-                    .chat_states
-                    .insert(thread_id.clone(), ChatState::new(thread_id, agent));
-                self.select_thread(self.ui.threads.len().saturating_sub(1));
+                self.ui.thread_panel.list.items.push(entry);
+                self.ui.thread_panel.chat_states.insert(thread_id.clone(), ChatState::new(thread_id.clone(), agent));
+                if let Some(parent_thread_id) = parent_thread_id.as_deref() {
+                    upsert_subagent_session(
+                        &mut self.ui,
+                        parent_thread_id,
+                        &thread_id,
+                        agent,
+                        None,
+                        0,
+                    );
+                }
+                self.select_thread(self.ui.thread_panel.list.items.len().saturating_sub(1));
                 self.ui.focus.focus(PaneId::Input);
                 self.sync_input_agent_picker();
                 true
             }
             ManagerEvent::ThreadStateChanged { thread_id, new, .. } => {
-                if !self.ui.threads.iter().any(|t| t.thread_id == thread_id) {
+                let known_thread = self.ui.thread_panel.list.items.iter().any(|t| t.thread_id == thread_id);
+                let known_session = self
+                    .ui
+                    .conversation.agent_sessions.items
+                    .iter()
+                    .any(|s| s.thread_id == thread_id);
+                if !known_thread && !known_session {
                     return false;
+                }
+                if let Some(session) = self
+                    .ui
+                    .conversation.agent_sessions.items
+                    .iter_mut()
+                    .find(|s| s.thread_id == thread_id)
+                {
+                    session.state = new.clone();
                 }
                 let is_terminal_for_stream = !matches!(
                     new,
@@ -621,51 +763,68 @@ impl App {
                 );
                 let thread_agent = self
                     .ui
-                    .threads
+                    .thread_panel.list.items
                     .iter()
                     .find(|t| t.thread_id == thread_id)
                     .map(|thread| thread.agent);
                 if let Some(entry) = self
                     .ui
-                    .threads
+                    .thread_panel.list.items
                     .iter_mut()
                     .find(|t| t.thread_id == thread_id)
                 {
                     entry.state = new;
                 }
                 if is_terminal_for_stream {
-                    if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
+                    if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&thread_id) {
                         chat.finish_all_streaming();
                     }
                 }
                 if thread_agent != Some(AgentName::Opencode) {
-                    self.record_agent_group_result_if_done(&thread_id).await;
+                    self.record_agent_conversation_result_if_done(&thread_id)
+                        .await;
                 }
                 true
             }
             ManagerEvent::ThreadClosed { thread_id, reason } => {
-                if !self.ui.threads.iter().any(|t| t.thread_id == thread_id) {
+                let known_thread = self.ui.thread_panel.list.items.iter().any(|t| t.thread_id == thread_id);
+                let known_session = self
+                    .ui
+                    .conversation.agent_sessions.items
+                    .iter()
+                    .any(|s| s.thread_id == thread_id);
+                if !known_thread && !known_session {
                     return false;
+                }
+                let closed_state = ThreadState::Closed { reason };
+                if let Some(session) = self
+                    .ui
+                    .conversation.agent_sessions.items
+                    .iter_mut()
+                    .find(|s| s.thread_id == thread_id)
+                {
+                    session.state = closed_state.clone();
                 }
                 let thread_agent = self
                     .ui
-                    .threads
+                    .thread_panel.list.items
                     .iter()
                     .find(|t| t.thread_id == thread_id)
                     .map(|thread| thread.agent);
                 if let Some(entry) = self
                     .ui
-                    .threads
+                    .thread_panel.list.items
                     .iter_mut()
                     .find(|t| t.thread_id == thread_id)
                 {
-                    entry.state = ThreadState::Closed { reason };
+                    entry.state = closed_state;
                 }
-                if let Some(chat) = self.ui.chat_states.get_mut(&thread_id) {
+                if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&thread_id) {
                     chat.finish_all_streaming();
                 }
                 if thread_agent != Some(AgentName::Opencode) {
-                    self.record_agent_group_result_if_done(&thread_id).await;
+                    self.record_agent_conversation_result_if_done(&thread_id)
+                        .await;
                 }
                 true
             }
@@ -678,12 +837,21 @@ impl App {
                     return false;
                 }
                 for tid in affected_threads {
-                    if let Some(entry) = self.ui.threads.iter_mut().find(|t| t.thread_id == tid) {
-                        entry.state = ThreadState::Suspended {
-                            reason: reason.clone(),
-                        };
+                    let suspended_state = ThreadState::Suspended {
+                        reason: reason.clone(),
+                    };
+                    if let Some(session) = self
+                        .ui
+                        .conversation.agent_sessions.items
+                        .iter_mut()
+                        .find(|s| s.thread_id == tid)
+                    {
+                        session.state = suspended_state.clone();
                     }
-                    if let Some(chat) = self.ui.chat_states.get_mut(&tid) {
+                    if let Some(entry) = self.ui.thread_panel.list.items.iter_mut().find(|t| t.thread_id == tid) {
+                        entry.state = suspended_state;
+                    }
+                    if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&tid) {
                         chat.finish_all_streaming();
                     }
                 }
@@ -691,6 +859,117 @@ impl App {
             }
         }
     }
+}
+
+fn sync_subagent_sessions(
+    state: &mut AppState,
+    ui: &mut UiState,
+    events: &[minos_ui_protocol::UiEventMessage],
+    ts_ms: i64,
+) -> bool {
+    let mut changed = false;
+    for event in events {
+        if let minos_ui_protocol::UiEventMessage::SubagentSpawned {
+            parent_thread_id,
+            sub_thread_id,
+            agent,
+            title,
+            ..
+        } = event
+        {
+            if let Some(conversation_id) = conversation_id_for_parent(state, ui, parent_thread_id) {
+                state
+                    .thread_conversations
+                    .insert(sub_thread_id.clone(), conversation_id);
+            }
+            changed |= upsert_subagent_session(
+                ui,
+                parent_thread_id,
+                sub_thread_id,
+                *agent,
+                title.clone(),
+                ts_ms,
+            );
+        }
+    }
+    changed
+}
+
+fn conversation_id_for_parent(
+    state: &AppState,
+    ui: &UiState,
+    parent_thread_id: &str,
+) -> Option<String> {
+    state
+        .thread_conversations
+        .get(parent_thread_id)
+        .cloned()
+        .or_else(|| {
+            ui.nav_level()
+                .conversation_id()
+                .filter(|_| {
+                    ui.conversation.agent_sessions.items
+                        .iter()
+                        .any(|session| session.thread_id == parent_thread_id)
+                })
+                .map(str::to_owned)
+        })
+}
+
+fn upsert_subagent_session(
+    ui: &mut UiState,
+    parent_thread_id: &str,
+    sub_thread_id: &str,
+    agent: AgentName,
+    title: Option<String>,
+    ts_ms: i64,
+) -> bool {
+    if sub_thread_id.is_empty()
+        || !ui
+            .conversation.agent_sessions.items
+            .iter()
+            .any(|session| session.thread_id == parent_thread_id)
+    {
+        return false;
+    }
+
+    if let Some(session) = ui
+        .conversation.agent_sessions.items
+        .iter_mut()
+        .find(|session| session.thread_id == sub_thread_id)
+    {
+        let mut changed = false;
+        if session.parent_thread_id.as_deref() != Some(parent_thread_id) {
+            session.parent_thread_id = Some(parent_thread_id.to_owned());
+            changed = true;
+        }
+        if session.agent != agent {
+            session.agent = agent;
+            changed = true;
+        }
+        if title.is_some() && session.title != title {
+            session.title = title;
+            changed = true;
+        }
+        return changed;
+    }
+
+    ui.conversation.agent_sessions.items
+        .push(crate::backend::ThreadSummaryEntry {
+            thread_id: sub_thread_id.to_owned(),
+            agent,
+            title,
+            first_ts_ms: ts_ms,
+            last_ts_ms: ts_ms,
+            message_count: 0,
+            ended_at_ms: None,
+            parent_thread_id: Some(parent_thread_id.to_owned()),
+            state: ThreadState::Idle,
+        });
+    if ui.conversation.agent_sessions.selected.is_none() {
+        ui.conversation.agent_sessions.select(Some(0));
+    }
+    true
 }
 
 fn sync_subagent_info(ui: &mut UiState, events: &[minos_ui_protocol::UiEventMessage]) {
@@ -705,7 +984,7 @@ fn sync_subagent_info(ui: &mut UiState, events: &[minos_ui_protocol::UiEventMess
                 prompt,
                 title,
             } => {
-                ui.subagent_info.insert(
+                ui.conversation.subagent_info.insert(
                     sub_thread_id.clone(),
                     crate::ui::SubagentInfo {
                         parent_thread_id: parent_thread_id.clone(),
@@ -722,7 +1001,7 @@ fn sync_subagent_info(ui: &mut UiState, events: &[minos_ui_protocol::UiEventMess
                 sub_thread_id,
                 status,
             } => {
-                if let Some(info) = ui.subagent_info.get_mut(sub_thread_id) {
+                if let Some(info) = ui.conversation.subagent_info.get_mut(sub_thread_id) {
                     info.status = *status;
                 }
             }
