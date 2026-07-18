@@ -4,7 +4,7 @@ resolver = "2"
 # across plan 01 tasks. `xtask` is enumerated explicitly because it lives at the
 # root, not under `crates/`. The FFI shim crates (`minos-ffi-*`) are matched by
 # the glob; their build-smoke tests run with `cargo test --workspace`.
-members = ["crates/*", "xtask"]
+members = ["crates/*", "xtask", "apps/desktop/src-tauri"]
 exclude = ["third_party/openwire", "third_party/fire"]
 # default-members empty → `cargo test` (no flags) tests every glob match.
 default-members = []

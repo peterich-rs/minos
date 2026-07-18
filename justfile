@@ -94,6 +94,23 @@ preview-web host='0.0.0.0' port='5173':
 check-web:
     cd apps/web && pnpm check
 
+# Host desktop shell (Tauri + React). Starts Vite on :1420, or reuses it if already up.
+dev-desktop:
+    cd apps/desktop && pnpm tauri:dev
+
+# Frontend-only desktop UI in the browser (mock data; same Vite port :1420).
+# Safe to run first, then `just dev-desktop` — Tauri will reuse this server.
+dev-desktop-ui:
+    cd apps/desktop && pnpm dev
+
+# Production Tauri bundle for the host desktop shell.
+build-desktop:
+    cd apps/desktop && pnpm tauri:build
+
+# Desktop frontend typecheck.
+check-desktop:
+    cd apps/desktop && pnpm check
+
 # Run the fake-peer smoke binary with a subcommand (default: register).
 
 # Usage: just smoke-fake-peer [register|smoke-session|pair]
