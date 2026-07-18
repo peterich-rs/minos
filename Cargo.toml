@@ -16,7 +16,7 @@ license = "MIT"
 authors = ["Peter Rich <fannnzhang@gmail.com>"]
 homepage = "https://github.com/peterich-rs/minos"
 repository = "https://github.com/peterich-rs/minos"
-rust-version = "1.80"
+rust-version = "1.97"
 
 [workspace.dependencies]
 # async runtime

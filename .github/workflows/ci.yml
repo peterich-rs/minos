@@ -34,6 +34,7 @@ jobs:
         # to skip ~2 min of unused cross-target downloads.
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.0
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -118,6 +119,7 @@ jobs:
       - name: Install rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.0
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -153,6 +155,7 @@ jobs:
         # `cargo check -p minos-ffi-frb` during the drift regeneration.
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.0
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -253,6 +256,7 @@ jobs:
         # no-op on rustup state).
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.0
           components: rustfmt, clippy
           targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
 
