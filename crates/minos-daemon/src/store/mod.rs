@@ -41,9 +41,10 @@ impl LocalStore {
             .foreign_keys(true)
             // Windows CI (and concurrent EventWriter + migration traffic) can
             // briefly hit SQLITE_BUSY (517) without a busy timeout.
-            .busy_timeout(std::time::Duration::from_secs(5));
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .pragma("busy_timeout", "5000");
         let pool = SqlitePoolOptions::new()
-            .max_connections(8)
+            .max_connections(4)
             .connect_with(opts)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;

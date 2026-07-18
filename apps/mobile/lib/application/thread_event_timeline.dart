@@ -309,7 +309,11 @@ List<ThreadTimelineItem> buildThreadEventTimeline(
         markers.add(TimelineClosed(eventIndex: i));
       case UiEventMessage_ThreadOpened():
       case UiEventMessage_ThreadTitleUpdated():
+      case UiEventMessage_SubagentSpawned():
+      case UiEventMessage_SubagentStatusUpdated():
       case UiEventMessage_Raw():
+        // Subagent tree is rendered via agent-session hierarchy, not the
+        // linear message timeline.
         break;
     }
   }

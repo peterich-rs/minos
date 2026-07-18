@@ -81,15 +81,45 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
     //     symptom: pre-fix, AgentGlue's bridge spammed
     //     "EventWriter.write_live failed; event dropped {error=... 787}"
     //     the moment codex sent its first frame.
-    let committed = writer
-        .write_live(RawIngest::from_json(
-            AgentKind::Codex,
-            resp.session_id.clone(),
-            serde_json::json!({"kind": "smoke"}),
-            1,
-        ))
-        .await
-        .expect("write_live should not fail with FK 787 once the thread row exists");
+    // Windows CI can surface SQLITE_BUSY (517) under concurrent WAL writers
+    // even with busy_timeout; retry a few times before failing the gate.
+    let mut last_err = None;
+    let mut committed = None;
+    for attempt in 0..8 {
+        match writer
+            .write_live(RawIngest::from_json(
+                AgentKind::Codex,
+                resp.session_id.clone(),
+                serde_json::json!({"kind": "smoke"}),
+                1,
+            ))
+            .await
+        {
+            Ok(c) => {
+                committed = Some(c);
+                break;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let busy =
+                    msg.contains("517") || msg.to_ascii_lowercase().contains("database is locked");
+                last_err = Some(e);
+                if !busy || attempt == 7 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)))
+                    .await;
+            }
+        }
+    }
+    let committed = committed.unwrap_or_else(|| {
+        panic!(
+            "write_live should not fail with FK 787 once the thread row exists: {}",
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown".into())
+        )
+    });
     assert_eq!(committed.seq, 1);
 
     // The new event row reflects the writer's commit.

@@ -206,6 +206,49 @@ AgentActivitySnapshot? agentActivitySnapshotFromEvents({
       case UiEventMessage_ThreadOpened():
       case UiEventMessage_ThreadTitleUpdated():
         break;
+      case UiEventMessage_SubagentSpawned(:final agent, :final title):
+        final label = title?.trim().isNotEmpty == true
+            ? '子 agent · ${agent.name} · ${title!.trim()}'
+            : '子 agent · ${agent.name}';
+        if (lastAssistantMessageId != null) {
+          setAssistantStatus(
+            lastAssistantMessageId!,
+            AgentActivitySnapshot(
+              sessionId: sessionId,
+              label: label,
+              kind: AgentActivityKind.running,
+              tone: AgentActivityTone.info,
+            ),
+          );
+        }
+      case UiEventMessage_SubagentStatusUpdated(:final status):
+        if (lastAssistantMessageId != null) {
+          final done = status == SubagentStatus.completed;
+          final failed =
+              status == SubagentStatus.failed ||
+              status == SubagentStatus.interrupted;
+          setAssistantStatus(
+            lastAssistantMessageId!,
+            AgentActivitySnapshot(
+              sessionId: sessionId,
+              label: done
+                  ? '子 agent 完成'
+                  : failed
+                  ? '子 agent 失败'
+                  : '子 agent 运行中',
+              kind: failed
+                  ? AgentActivityKind.error
+                  : done
+                  ? AgentActivityKind.success
+                  : AgentActivityKind.running,
+              tone: failed
+                  ? AgentActivityTone.error
+                  : done
+                  ? AgentActivityTone.success
+                  : AgentActivityTone.info,
+            ),
+          );
+        }
       case UiEventMessage_Raw(:final kind):
         if (lastAssistantMessageId != null) {
           setAssistantStatus(
