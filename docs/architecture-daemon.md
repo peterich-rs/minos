@@ -145,10 +145,31 @@ Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先�
 | `respond_opencode_permission()` | 响应 opencode 权限请求 |
 | `respond_opencode_question()` | 回答 opencode question 请求 |
 | `interrupt_thread()` | 中断运行中的线程 |
-| `close_thread()` | 优雅关闭线程 |
+| `close_thread()` | 显式关闭线程（`Closed`，不可 resume） |
 | `delete_thread()` | 删除线程 + 事件 |
-| `resume_thread()` | 恢复挂起的线程 |
+| `resume_thread(thread_id, auto_continue)` | 注册 + provider reattach；`auto_continue` 时在 `needs_continue` 下一发 CONTINUE |
 | `list_threads()` / `get_thread()` | 查询线程 |
+
+### 停机与 resume（host-local）
+
+Managed TUI/Desktop 退出会调用 `DaemonHandle::stop`：
+
+1. **`AgentGlue::shutdown`**：对每个内存中非 Closed 线程 `suspend_for_daemon_stop`（best-effort cancel + `Suspended { DaemonRestart }`），并按停机前状态写入 `needs_continue`（`running`/`starting`/`resuming` → 1，idle/已 suspended → 0）。**同步** `suspend_thread_for_daemon_restart` 落库（不依赖 async event bridge，避免进程退出丢写）。**不**调用 `close_thread`。
+2. `shutdown_instances` SIGTERM/SIGKILL provider 进程组。
+3. 拆除 local RPC discovery + relay。
+
+脏退出（kill -9）：下次 `DaemonHandle::start` 时 `mark_orphans_suspended` 将非 `closed`/`suspended` 行翻成 `suspended` + `daemon_restart`，并对 `running`/`starting`/`resuming` 设 `needs_continue=1`。
+
+| 列 / 标志 | 含义 |
+|-----------|------|
+| `threads.needs_continue` (migration `0009`) | 进程死亡时是否在中途 turn；一发 CONTINUE 或用户消息抢占后清零 |
+| `take_needs_continue` | 原子 clear + 返回原值；用户 send 与 open-time continue 互斥 |
+
+`resume_thread`：**仅 reattach**（到 Idle）。`auto_continue=true` 时若 `take_needs_continue` 成功则注入共享 `CONTINUE_PROMPT`（见 `minos-agent-runtime`）。`send_user_message` 在发用户文本前 `take_needs_continue`（**用户消息优先**，不注入 CONTINUE）。
+
+显式 close / delete → `Closed`，不可 resume。`UserInterrupt` suspend 不置 `needs_continue`。子 agent 同样 suspend-not-close，但 open 路径只对 **最多一个** top-level `needs_continue` session 自动 continue。
+
+CONTINUE 经 `synth_user_message_ingest` 写入历史，时间线上显示为 user 消息（有意取舍，不改 conversation message model）。
 
 ### 线程状态
 
@@ -161,6 +182,8 @@ Starting → Idle → Running { turn_started_at_ms }
          ↓
     Closed { reason: UserClose | TerminalError }
 ```
+
+`Starting` / `Resuming` → `Suspended` 在 daemon stop 路径合法；`Suspended` → `Suspended` 允许改写 pause reason。
 
 ### 事件持久化流程
 
@@ -245,14 +268,16 @@ Starting → Idle → Running { turn_started_at_ms }
 
 `LocalRpcImpl` 实现 `LocalDaemonRpcServer` trait，服务 TUI。
 
-额外方法: `delete_thread`, `resume_thread`, `respond_opencode_question`, `read_thread_raw_history`, `list_conversations`, `create_conversation`, `list_conversation_messages`, `append_conversation_message`, `start_agent_in_conversation`
+额外方法: `delete_thread`, `resume_thread`, `respond_opencode_question`, `read_thread_raw_history`, `list_conversations`, `create_conversation`, `update_conversation`, `list_conversation_messages`, `append_conversation_message`, `start_agent_in_conversation`
+
+Conversation 元数据（`conversations` 表 / migration `0008`）：`priority`、`progress`（默认 `todo`）、`branch` / `worktree_path`（**创建时**从 project workspace 做 git 快照）。`update_conversation` 可改 title / priority / progress；列表同时聚合 `running_count` 与 `needs_attention_count`（suspended threads）。首次 `start_agent_in_conversation` 时若 progress 仍为 `todo` 则升为 `in_progress`。
 订阅: `subscribe_ingest()`、`subscribe_manager_events()` 和 `subscribe_conversation_events()`
 
 `AgentGlue` 维护本地 manager event 与 conversation event 两条总线。agent runtime 状态事件通过 `subscribe_manager_events()` 进入 TUI；`append_conversation_message`、daemon Teamwork MCP 的 `post_conversation_update` 和 delegation 可见消息写入成功后都会通过 `subscribe_conversation_events()` 发布 `ConversationMessageAppended { conversation_id, message_seq }`，TUI 据此刷新当前 conversation。daemon 的 `delegate_to_agent` 与 TUI embedded handler 共用 `TeamworkStore` 深度策略：delegated source thread 只能 delegate 回原 source agent，不能启动第三个 agent。daemon 从本地 `threads` 表恢复 persisted thread 时，会把 `conversation_id` 一并注册回 `AgentManager` 的 `ThreadHandle.mcp_conversation_id`，保证恢复/重启后的 agent 仍使用当前 conversation 的 `--source-thread-id` MCP context。
 
 ### 发现机制
 
-写入 `tui-daemon-rpc.json` 到 `$MINOS_HOME/run/`，TUI 读取该文件发现 WS 地址。
+写入 `tui-daemon-rpc.json` 到 `$MINOS_HOME/run/`，TUI/Desktop 可读取该文件发现 WS 地址。托管启动时也会通过 `DaemonHandle::local_rpc_url()` 直接拿到 binder 返回的 URL，避免再读 discovery 文件时撞上陈旧端口。
 
 ## 模块连接图
 

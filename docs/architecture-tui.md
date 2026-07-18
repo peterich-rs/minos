@@ -237,8 +237,11 @@ AppEvent -> Action -> update() -> Effect -> App effect executor -> AppEvent/Effe
 | `update/agent.rs` | AgentDetail submit、pending approval/question |
 | `app/event_loop.rs` | async effect 执行，RPC 调用，事件回流；鼠标命中走表驱动 `MouseHit`（panel area → click/scroll target） |
 | `app/conversation_ops.rs` | create/start conversation 共用 RPC 序列（append 失败会报错，不再静默丢弃） |
-| `app/submission.rs` | thread resume/send、直接 agent 消息发送 |
+| `app/submission.rs` | thread resume/send（`resume_thread(..., auto_continue=false)`）、直接 agent 消息发送 |
+| `app/conversation_ops.rs` | open/hydrate 时对最多一个 top-level `needs_continue` session 调 `resume_thread(..., true)` |
 | `app/lifecycle.rs` | init、daemon replay、ingest/manager/tick；tick 只做轻量 flash/status，daemon list 后台化（`DaemonThreadsListed` → metadata-only）；ingest/manager 直接处理 |
+
+**Agent session resume after exit：** TUI 退出若 stop managed daemon，daemon 将 threads **suspend**（非 close）并可选 `needs_continue`。重开 conversation 时 auto-continue 至多一次；发消息路径只 reattach，用户文本抢占 CONTINUE。详见 `architecture-daemon.md` 停机与 resume。
 
 Conversation input submit 统一走 `NavAction::SubmitConversationInput`（`update/nav.rs`），不再有独立的旧 Room submit 双路径。分离两个文本:
 

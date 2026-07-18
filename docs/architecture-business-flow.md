@@ -201,10 +201,24 @@ TUI 直接管理 agent 子进程（进程内 `AgentManager`），无需后端或
 
 ### Daemon 模式
 
-TUI 通过 JSON-RPC 连接 `minos-daemon`:
-1. 读取 `~/.minos/run/tui-daemon-rpc.json` 发现 daemon WS 地址
-2. 连接并订阅 ingest + manager events
-3. 所有操作通过 `minos_local_*` JSON-RPC 方法
+TUI / Desktop 通过 JSON-RPC 连接 `minos-daemon`:
+1. 读取 `~/.minos/run/tui-daemon-rpc.json` 发现 daemon WS 地址并 `minos_local_health`
+2. 失败时进程内托管 `DaemonHandle::start_with_local_rpc`，用 `local_rpc_url()` 直连（不依赖再读 discovery）
+3. 连接并订阅 ingest + manager events
+4. 所有操作通过 `minos_local_*` JSON-RPC 方法
+
+### Host-local agent session resume（TUI / Desktop）
+
+与云端 `agent_sessions` 无关：host 本地 SQLite `threads` 行在 managed daemon 退出后仍可复用。
+
+| 场景 | 行为 |
+|------|------|
+| 退出时 idle | 落库 `suspended` + `needs_continue=0`；下次 `resume_thread` reattach，用户下一条消息续历史 |
+| 退出时 running | 落库 `suspended` + `needs_continue=1`；打开 conversation 时 **最多一个** top-level session `resume_thread(auto_continue=true)` 注入 CONTINUE |
+| 用户立即发消息 | send 路径 `resume_thread(auto_continue=false)` + `send_user_message`；`take_needs_continue` 清 flag，**不**注入 CONTINUE |
+| 用户显式 close | `Closed`，不可 resume / 默认复用 |
+
+常驻 detached daemon + Soft/Hard quit 见 `docs/superpowers/specs/2026-06-23-daemon-lifecycle-and-agent-mention-scope-design.md`（后续）；本路径保证 process-death recovery 正确。
 
 ### 群聊协调
 

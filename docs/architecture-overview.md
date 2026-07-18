@@ -9,38 +9,18 @@ Minos 是一个远程 AI 编码控制系统：在 Mac 上运行 host 端，通�
 ## 顶层架构
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        客户端层 (Clients)                        │
-│  ┌──────────┐  ┌──────────────┐  ┌────────────┐  ┌───────────┐ │
-│  │ macOS App │  │ Flutter 移动端 │  │ Web Admin  │  │  TUI 终端  │ │
-│  │ (SwiftUI) │  │   (Dart/FRB)  │  │ (React/TS) │  │ (Ratatui) │ │
-│  └─────┬─────┘  └──────┬───────┘  └─────┬──────┘  └─────┬─────┘ │
-│        │ UniFFI         │ FRB             │ WS/REST        │ RPC  │
-├────────┼────────────────┼─────────────────┼────────────────┼──────┤
-│        │    ┌───────────┴─────────────────┴────────────────┤     │
-│        │    │           后端服务 (minos-backend)            │     │
-│        │    │  ┌─────────────┐  ┌───────────────────────┐  │     │
-│        └───>│  │ HTTP API    │  │ WebSocket Gateway      │  │<────┘
-│             │  │  /v1/*      │  │  /ws/client, /ws/host │  │
-│             │  └─────────────┘  └───────────────────────┘  │
-│             │  ┌─────────────┐  ┌───────────────────────┐  │
-│             │  │ Domain/UC   │  │ Worker Plane           │  │
-│             │  │ Auth,Pairing│  │ Outbox,Timeout,GC,Push │  │
-│             │  └─────────────┘  └───────────────────────┘  │
-│             └──────────────────────────────────────────────┘     │
-│                         │              │                         │
-│              ┌──────────┴──────┐  ┌────┴─────┐                  │
-│              │ PostgreSQL/SQLite│  │  Redis   │                  │
-│              │   (持久层)       │  │ (缓存层) │                  │
-│              └─────────────────┘  └──────────┘                  │
-├─────────────────────────────────────────────────────────────────┤
-│                     Host 端 (minos-daemon)                       │
-│  ┌────────────────┐  ┌───────────────┐  ┌──────────────────┐   │
-│  │ Agent Runtime  │  │  Relay Client │  │  Local RPC Server │   │
-│  │ (Codex/Claude/ │  │  (WS → 后端)  │  │  (JSON-RPC → TUI)│   │
-│  │  Gemini/OC)    │  │               │  │                  │   │
-│  └────────────────┘  └───────────────┘  └──────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                           客户端层 (Clients)                           │
+│  macOS (SwiftUI) · Mobile (Flutter) · Web · TUI · Desktop (Tauri)     │
+│       UniFFI            FRB          WS/REST  local RPC → daemon      │
+├──────────────────────────────────────────────────────────────────────┤
+│                     后端服务 (minos-backend)                          │
+│  HTTP /v1/*  ·  WebSocket Gateway  ·  Domain/UC  ·  Worker Plane      │
+│              PostgreSQL/SQLite  ·  Redis (prod)                       │
+├──────────────────────────────────────────────────────────────────────┤
+│                     Host 端 (minos-daemon)                            │
+│  Agent Runtime · Relay Client · Local RPC (TUI / Desktop)             │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 仓库结构
@@ -67,7 +47,8 @@ Minos/
 ├── apps/
 │   ├── macos/                       # macOS 状态栏应用（SwiftUI + UniFFI）
 │   ├── mobile/                      # Flutter 移动应用（iOS/Android）
-│   └── web/                         # Web 管理控制台（React + Vite）
+│   ├── web/                         # Web 管理控制台（React + Vite）
+│   └── desktop/                     # Host 桌面壳（Tauri + React，替代 TUI 进行中）
 ├── xtask/                           # 构建/代码生成编排
 ├── docs/                            # 架构文档 + ADR + 运维手册
 ├── schemas/                         # JSON Schema（Codex 协议）
@@ -113,8 +94,21 @@ Minos/
 | 移动端 | [docs/architecture-mobile.md](architecture-mobile.md) |
 | macOS 应用 | [docs/architecture-macos.md](architecture-macos.md) |
 | Web 应用 | [docs/architecture-web.md](architecture-web.md) |
+| Desktop 应用 | [docs/architecture-desktop.md](architecture-desktop.md) |
 | 共享 Crate | [docs/architecture-shared-crates.md](architecture-shared-crates.md) |
 | 业务流程 | [docs/architecture-business-flow.md](architecture-business-flow.md) |
+
+## 后端关键 HTTP 路径
+
+后端（`minos-backend`）对外暴露的稳定入口（详见 [architecture-backend.md](architecture-backend.md)）：
+
+| 路径 | 用途 |
+|------|------|
+| `/health/live` | 进程存活探针 |
+| `/health/ready` | 依赖就绪探针 |
+| `/v1/auth/register` | 用户注册 |
+| `/v1/auth/login` | 用户登录 |
+| `/v1/agent-sessions` | Agent 会话列表/创建 |
 
 ## 技术栈
 
@@ -126,6 +120,7 @@ Minos/
 | macOS | SwiftUI + XcodeGen + UniFFI |
 | 移动端 | Flutter 3.41.6 + flutter_rust_bridge v2 |
 | Web | React 19 + TypeScript 6 + Vite 8 + shadcn/ui |
+| Desktop | Tauri 2 + React 19 + TypeScript + Vite + Tailwind |
 | TUI | Rust + Ratatui 0.29 + Crossterm 0.28 |
 | 认证 | JWT (HS256) + Argon2id + 刷新令牌轮转 |
 | 协议 | JSON-RPC 2.0 over WebSocket |
