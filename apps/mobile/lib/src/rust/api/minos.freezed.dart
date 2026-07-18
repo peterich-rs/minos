@@ -182,7 +182,7 @@ return error(_that.reason);case _:
 
 class AgentStatus_Ok extends AgentStatus {
   const AgentStatus_Ok(): super._();
-
+  
 
 
 
@@ -214,7 +214,7 @@ String toString() {
 
 class AgentStatus_Missing extends AgentStatus {
   const AgentStatus_Missing(): super._();
-
+  
 
 
 
@@ -246,7 +246,7 @@ String toString() {
 
 class AgentStatus_Error extends AgentStatus {
   const AgentStatus_Error({required this.reason}): super._();
-
+  
 
  final  String reason;
 
@@ -484,7 +484,7 @@ return refreshFailed(_that.error);case _:
 
 class AuthStateFrame_Unauthenticated extends AuthStateFrame {
   const AuthStateFrame_Unauthenticated(): super._();
-
+  
 
 
 
@@ -516,7 +516,7 @@ String toString() {
 
 class AuthStateFrame_Authenticated extends AuthStateFrame {
   const AuthStateFrame_Authenticated({required this.account}): super._();
-
+  
 
  final  AuthSummary account;
 
@@ -582,7 +582,7 @@ as AuthSummary,
 
 class AuthStateFrame_Refreshing extends AuthStateFrame {
   const AuthStateFrame_Refreshing(): super._();
-
+  
 
 
 
@@ -614,7 +614,7 @@ String toString() {
 
 class AuthStateFrame_RefreshFailed extends AuthStateFrame {
   const AuthStateFrame_RefreshFailed({required this.error}): super._();
-
+  
 
  final  MinosError error;
 
@@ -677,7 +677,7 @@ as MinosError,
 @override
 @pragma('vm:prefer-inline')
 $MinosErrorCopyWith<$Res> get error {
-
+  
   return $MinosErrorCopyWith<$Res>(_self.error, (value) {
     return _then(_self.copyWith(error: value));
   });
@@ -861,7 +861,7 @@ return reconnecting(_that.attempt);case _:
 
 class ConnectionState_Disconnected extends ConnectionState {
   const ConnectionState_Disconnected(): super._();
-
+  
 
 
 
@@ -893,7 +893,7 @@ String toString() {
 
 class ConnectionState_Pairing extends ConnectionState {
   const ConnectionState_Pairing(): super._();
-
+  
 
 
 
@@ -925,7 +925,7 @@ String toString() {
 
 class ConnectionState_Connected extends ConnectionState {
   const ConnectionState_Connected(): super._();
-
+  
 
 
 
@@ -957,7 +957,7 @@ String toString() {
 
 class ConnectionState_Reconnecting extends ConnectionState {
   const ConnectionState_Reconnecting({required this.attempt}): super._();
-
+  
 
  final  int attempt;
 
@@ -1189,7 +1189,7 @@ return windowedFinal(_that.head,_that.tail,_that.omittedBytes,_that.artifact);ca
 
 class DisplayPayload_Inline extends DisplayPayload {
   const DisplayPayload_Inline({required this.text}): super._();
-
+  
 
  final  String text;
 
@@ -1255,7 +1255,7 @@ as String,
 
 class DisplayPayload_StreamingWindow extends DisplayPayload {
   const DisplayPayload_StreamingWindow({required this.head, required this.receivedBytes, this.artifact}): super._();
-
+  
 
  final  String head;
  final  BigInt receivedBytes;
@@ -1325,7 +1325,7 @@ as ArtifactRef?,
 
 class DisplayPayload_WindowedFinal extends DisplayPayload {
   const DisplayPayload_WindowedFinal({required this.head, required this.tail, required this.omittedBytes, required this.artifact}): super._();
-
+  
 
  final  String head;
  final  String tail;
@@ -1785,7 +1785,7 @@ return pairingTokenExpired();case _:
 
 class MinosError_BindFailed extends MinosError {
   const MinosError_BindFailed({required this.addr, required this.message}): super._();
-
+  
 
  final  String addr;
  final  String message;
@@ -1853,7 +1853,7 @@ as String,
 
 class MinosError_ConnectFailed extends MinosError {
   const MinosError_ConnectFailed({required this.url, required this.message}): super._();
-
+  
 
  final  String url;
  final  String message;
@@ -1921,7 +1921,7 @@ as String,
 
 class MinosError_Disconnected extends MinosError {
   const MinosError_Disconnected({required this.reason}): super._();
-
+  
 
  final  String reason;
 
@@ -1987,7 +1987,7 @@ as String,
 
 class MinosError_PairingTokenInvalid extends MinosError {
   const MinosError_PairingTokenInvalid(): super._();
-
+  
 
 
 
@@ -2019,7 +2019,7 @@ String toString() {
 
 class MinosError_PairingStateMismatch extends MinosError {
   const MinosError_PairingStateMismatch({required this.actual}): super._();
-
+  
 
  final  PairingState actual;
 
@@ -2085,7 +2085,7 @@ as PairingState,
 
 class MinosError_DeviceNotTrusted extends MinosError {
   const MinosError_DeviceNotTrusted({required this.deviceId}): super._();
-
+  
 
  final  String deviceId;
 
@@ -2151,7 +2151,7 @@ as String,
 
 class MinosError_StoreIo extends MinosError {
   const MinosError_StoreIo({required this.path, required this.message}): super._();
-
+  
 
  final  String path;
  final  String message;
@@ -2219,7 +2219,7 @@ as String,
 
 class MinosError_StoreCorrupt extends MinosError {
   const MinosError_StoreCorrupt({required this.path, required this.message}): super._();
-
+  
 
  final  String path;
  final  String message;
@@ -2287,7 +2287,7 @@ as String,
 
 class MinosError_CliProbeTimeout extends MinosError {
   const MinosError_CliProbeTimeout({required this.bin, required this.timeoutMs}): super._();
-
+  
 
  final  String bin;
  final  BigInt timeoutMs;
@@ -2355,7 +2355,7 @@ as BigInt,
 
 class MinosError_CliProbeFailed extends MinosError {
   const MinosError_CliProbeFailed({required this.bin, required this.message}): super._();
-
+  
 
  final  String bin;
  final  String message;
@@ -2423,7 +2423,7 @@ as String,
 
 class MinosError_RpcCallFailed extends MinosError {
   const MinosError_RpcCallFailed({required this.method, required this.message}): super._();
-
+  
 
  final  String method;
  final  String message;
@@ -2491,7 +2491,7 @@ as String,
 
 class MinosError_Unauthorized extends MinosError {
   const MinosError_Unauthorized({required this.reason}): super._();
-
+  
 
  final  String reason;
 
@@ -2557,7 +2557,7 @@ as String,
 
 class MinosError_ConnectionStateMismatch extends MinosError {
   const MinosError_ConnectionStateMismatch({required this.expected, required this.actual}): super._();
-
+  
 
  final  String expected;
  final  String actual;
@@ -2625,7 +2625,7 @@ as String,
 
 class MinosError_EnvelopeVersionUnsupported extends MinosError {
   const MinosError_EnvelopeVersionUnsupported({required this.version}): super._();
-
+  
 
  final  int version;
 
@@ -2691,7 +2691,7 @@ as int,
 
 class MinosError_PeerOffline extends MinosError {
   const MinosError_PeerOffline({required this.peerDeviceId}): super._();
-
+  
 
  final  String peerDeviceId;
 
@@ -2757,7 +2757,7 @@ as String,
 
 class MinosError_BackendInternal extends MinosError {
   const MinosError_BackendInternal({required this.message}): super._();
-
+  
 
  final  String message;
 
@@ -2823,7 +2823,7 @@ as String,
 
 class MinosError_CodexSpawnFailed extends MinosError {
   const MinosError_CodexSpawnFailed({required this.message}): super._();
-
+  
 
  final  String message;
 
@@ -2889,7 +2889,7 @@ as String,
 
 class MinosError_CodexConnectFailed extends MinosError {
   const MinosError_CodexConnectFailed({required this.url, required this.message}): super._();
-
+  
 
  final  String url;
  final  String message;
@@ -2957,7 +2957,7 @@ as String,
 
 class MinosError_CodexProtocolError extends MinosError {
   const MinosError_CodexProtocolError({required this.method, required this.message}): super._();
-
+  
 
  final  String method;
  final  String message;
@@ -3025,7 +3025,7 @@ as String,
 
 class MinosError_GeminiSpawnFailed extends MinosError {
   const MinosError_GeminiSpawnFailed({required this.message}): super._();
-
+  
 
  final  String message;
 
@@ -3091,7 +3091,7 @@ as String,
 
 class MinosError_AcpProtocolError extends MinosError {
   const MinosError_AcpProtocolError({required this.method, required this.message}): super._();
-
+  
 
  final  String method;
  final  String message;
@@ -3159,7 +3159,7 @@ as String,
 
 class MinosError_AgentAlreadyRunning extends MinosError {
   const MinosError_AgentAlreadyRunning(): super._();
-
+  
 
 
 
@@ -3191,7 +3191,7 @@ String toString() {
 
 class MinosError_AgentNotRunning extends MinosError {
   const MinosError_AgentNotRunning(): super._();
-
+  
 
 
 
@@ -3223,7 +3223,7 @@ String toString() {
 
 class MinosError_AgentNotSupported extends MinosError {
   const MinosError_AgentNotSupported({required this.agent}): super._();
-
+  
 
  final  AgentName agent;
 
@@ -3289,7 +3289,7 @@ as AgentName,
 
 class MinosError_AgentSessionIdMismatch extends MinosError {
   const MinosError_AgentSessionIdMismatch(): super._();
-
+  
 
 
 
@@ -3321,7 +3321,7 @@ String toString() {
 
 class MinosError_IngestSeqConflict extends MinosError {
   const MinosError_IngestSeqConflict({required this.threadId, required this.seq}): super._();
-
+  
 
  final  String threadId;
  final  BigInt seq;
@@ -3389,7 +3389,7 @@ as BigInt,
 
 class MinosError_ThreadNotFound extends MinosError {
   const MinosError_ThreadNotFound({required this.threadId}): super._();
-
+  
 
  final  String threadId;
 
@@ -3455,7 +3455,7 @@ as String,
 
 class MinosError_TranslationNotImplemented extends MinosError {
   const MinosError_TranslationNotImplemented({required this.agent}): super._();
-
+  
 
  final  AgentName agent;
 
@@ -3521,7 +3521,7 @@ as AgentName,
 
 class MinosError_TranslationFailed extends MinosError {
   const MinosError_TranslationFailed({required this.agent, required this.message}): super._();
-
+  
 
  final  AgentName agent;
  final  String message;
@@ -3589,7 +3589,7 @@ as String,
 
 class MinosError_PairingQrVersionUnsupported extends MinosError {
   const MinosError_PairingQrVersionUnsupported({required this.version}): super._();
-
+  
 
  final  int version;
 
@@ -3655,7 +3655,7 @@ as int,
 
 class MinosError_Timeout extends MinosError {
   const MinosError_Timeout(): super._();
-
+  
 
 
 
@@ -3687,7 +3687,7 @@ String toString() {
 
 class MinosError_NotConnected extends MinosError {
   const MinosError_NotConnected(): super._();
-
+  
 
 
 
@@ -3719,7 +3719,7 @@ String toString() {
 
 class MinosError_RequestDropped extends MinosError {
   const MinosError_RequestDropped(): super._();
-
+  
 
 
 
@@ -3751,7 +3751,7 @@ String toString() {
 
 class MinosError_AuthRefreshFailed extends MinosError {
   const MinosError_AuthRefreshFailed({required this.message}): super._();
-
+  
 
  final  String message;
 
@@ -3817,7 +3817,7 @@ as String,
 
 class MinosError_EmailTaken extends MinosError {
   const MinosError_EmailTaken(): super._();
-
+  
 
 
 
@@ -3849,7 +3849,7 @@ String toString() {
 
 class MinosError_WeakPassword extends MinosError {
   const MinosError_WeakPassword(): super._();
-
+  
 
 
 
@@ -3881,7 +3881,7 @@ String toString() {
 
 class MinosError_RateLimited extends MinosError {
   const MinosError_RateLimited({required this.retryAfterS}): super._();
-
+  
 
  final  int retryAfterS;
 
@@ -3947,7 +3947,7 @@ as int,
 
 class MinosError_InvalidCredentials extends MinosError {
   const MinosError_InvalidCredentials(): super._();
-
+  
 
 
 
@@ -3979,7 +3979,7 @@ String toString() {
 
 class MinosError_AgentStartFailed extends MinosError {
   const MinosError_AgentStartFailed({required this.reason}): super._();
-
+  
 
  final  String reason;
 
@@ -4045,7 +4045,7 @@ as String,
 
 class MinosError_PairingTokenExpired extends MinosError {
   const MinosError_PairingTokenExpired(): super._();
-
+  
 
 
 
@@ -4255,7 +4255,7 @@ return hostDisconnected();case _:
 
 class ThreadEndReason_UserStopped extends ThreadEndReason {
   const ThreadEndReason_UserStopped(): super._();
-
+  
 
 
 
@@ -4287,7 +4287,7 @@ String toString() {
 
 class ThreadEndReason_AgentDone extends ThreadEndReason {
   const ThreadEndReason_AgentDone(): super._();
-
+  
 
 
 
@@ -4319,7 +4319,7 @@ String toString() {
 
 class ThreadEndReason_Crashed extends ThreadEndReason {
   const ThreadEndReason_Crashed({required this.message}): super._();
-
+  
 
  final  String message;
 
@@ -4385,7 +4385,7 @@ as String,
 
 class ThreadEndReason_Timeout extends ThreadEndReason {
   const ThreadEndReason_Timeout(): super._();
-
+  
 
 
 
@@ -4417,7 +4417,7 @@ String toString() {
 
 class ThreadEndReason_HostDisconnected extends ThreadEndReason {
   const ThreadEndReason_HostDisconnected(): super._();
-
+  
 
 
 
@@ -4488,7 +4488,7 @@ extension UiEventMessagePatterns on UiEventMessage {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult Function( UiEventMessage_TextDelta value)?  textDelta,TResult Function( UiEventMessage_TextReplace value)?  textReplace,TResult Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult Function( UiEventMessage_Error value)?  error,TResult Function( UiEventMessage_Raw value)?  raw,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult Function( UiEventMessage_TextDelta value)?  textDelta,TResult Function( UiEventMessage_TextReplace value)?  textReplace,TResult Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult Function( UiEventMessage_SubagentSpawned value)?  subagentSpawned,TResult Function( UiEventMessage_SubagentStatusUpdated value)?  subagentStatusUpdated,TResult Function( UiEventMessage_Error value)?  error,TResult Function( UiEventMessage_Raw value)?  raw,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
@@ -4502,7 +4502,9 @@ return textReplace(_that);case UiEventMessage_ReasoningDelta() when reasoningDel
 return reasoningDelta(_that);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
 return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
-return toolCallCompleted(_that);case UiEventMessage_Error() when error != null:
+return toolCallCompleted(_that);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
+return subagentSpawned(_that);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that);case UiEventMessage_Error() when error != null:
 return error(_that);case UiEventMessage_Raw() when raw != null:
 return raw(_that);case _:
   return orElse();
@@ -4522,7 +4524,7 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEventMessage_ThreadOpened value)  threadOpened,required TResult Function( UiEventMessage_ThreadTitleUpdated value)  threadTitleUpdated,required TResult Function( UiEventMessage_ThreadClosed value)  threadClosed,required TResult Function( UiEventMessage_MessageStarted value)  messageStarted,required TResult Function( UiEventMessage_MessageCompleted value)  messageCompleted,required TResult Function( UiEventMessage_TextDelta value)  textDelta,required TResult Function( UiEventMessage_TextReplace value)  textReplace,required TResult Function( UiEventMessage_ReasoningDelta value)  reasoningDelta,required TResult Function( UiEventMessage_ReasoningReplace value)  reasoningReplace,required TResult Function( UiEventMessage_ToolCallPlaced value)  toolCallPlaced,required TResult Function( UiEventMessage_ToolCallCompleted value)  toolCallCompleted,required TResult Function( UiEventMessage_Error value)  error,required TResult Function( UiEventMessage_Raw value)  raw,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEventMessage_ThreadOpened value)  threadOpened,required TResult Function( UiEventMessage_ThreadTitleUpdated value)  threadTitleUpdated,required TResult Function( UiEventMessage_ThreadClosed value)  threadClosed,required TResult Function( UiEventMessage_MessageStarted value)  messageStarted,required TResult Function( UiEventMessage_MessageCompleted value)  messageCompleted,required TResult Function( UiEventMessage_TextDelta value)  textDelta,required TResult Function( UiEventMessage_TextReplace value)  textReplace,required TResult Function( UiEventMessage_ReasoningDelta value)  reasoningDelta,required TResult Function( UiEventMessage_ReasoningReplace value)  reasoningReplace,required TResult Function( UiEventMessage_ToolCallPlaced value)  toolCallPlaced,required TResult Function( UiEventMessage_ToolCallCompleted value)  toolCallCompleted,required TResult Function( UiEventMessage_SubagentSpawned value)  subagentSpawned,required TResult Function( UiEventMessage_SubagentStatusUpdated value)  subagentStatusUpdated,required TResult Function( UiEventMessage_Error value)  error,required TResult Function( UiEventMessage_Raw value)  raw,}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened():
@@ -4536,7 +4538,9 @@ return textReplace(_that);case UiEventMessage_ReasoningDelta():
 return reasoningDelta(_that);case UiEventMessage_ReasoningReplace():
 return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced():
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted():
-return toolCallCompleted(_that);case UiEventMessage_Error():
+return toolCallCompleted(_that);case UiEventMessage_SubagentSpawned():
+return subagentSpawned(_that);case UiEventMessage_SubagentStatusUpdated():
+return subagentStatusUpdated(_that);case UiEventMessage_Error():
 return error(_that);case UiEventMessage_Raw():
 return raw(_that);}
 }
@@ -4552,7 +4556,7 @@ return raw(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult? Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult? Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult? Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult? Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult? Function( UiEventMessage_TextDelta value)?  textDelta,TResult? Function( UiEventMessage_TextReplace value)?  textReplace,TResult? Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult? Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult? Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult? Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult? Function( UiEventMessage_Error value)?  error,TResult? Function( UiEventMessage_Raw value)?  raw,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult? Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult? Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult? Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult? Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult? Function( UiEventMessage_TextDelta value)?  textDelta,TResult? Function( UiEventMessage_TextReplace value)?  textReplace,TResult? Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult? Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult? Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult? Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult? Function( UiEventMessage_SubagentSpawned value)?  subagentSpawned,TResult? Function( UiEventMessage_SubagentStatusUpdated value)?  subagentStatusUpdated,TResult? Function( UiEventMessage_Error value)?  error,TResult? Function( UiEventMessage_Raw value)?  raw,}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
@@ -4566,7 +4570,9 @@ return textReplace(_that);case UiEventMessage_ReasoningDelta() when reasoningDel
 return reasoningDelta(_that);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
 return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
-return toolCallCompleted(_that);case UiEventMessage_Error() when error != null:
+return toolCallCompleted(_that);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
+return subagentSpawned(_that);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that);case UiEventMessage_Error() when error != null:
 return error(_that);case UiEventMessage_Raw() when raw != null:
 return raw(_that);case _:
   return null;
@@ -4585,7 +4591,7 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  DisplayPayload text)?  textDelta,TResult Function( String messageId,  DisplayPayload text)?  textReplace,TResult Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  DisplayPayload text)?  textDelta,TResult Function( String messageId,  DisplayPayload text)?  textReplace,TResult Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)?  subagentSpawned,TResult Function( String subThreadId,  SubagentStatus status)?  subagentStatusUpdated,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
@@ -4598,7 +4604,9 @@ return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelt
 return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
 return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
-return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error() when error != null:
+return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
+return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error() when error != null:
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw() when raw != null:
 return raw(_that.kind,_that.payloadJson);case _:
   return orElse();
@@ -4618,7 +4626,7 @@ return raw(_that.kind,_that.payloadJson);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  DisplayPayload text)  textDelta,required TResult Function( String messageId,  DisplayPayload text)  textReplace,required TResult Function( String messageId,  DisplayPayload text)  reasoningDelta,required TResult Function( String messageId,  DisplayPayload text)  reasoningReplace,required TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  DisplayPayload output,  bool isError)  toolCallCompleted,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  DisplayPayload text)  textDelta,required TResult Function( String messageId,  DisplayPayload text)  textReplace,required TResult Function( String messageId,  DisplayPayload text)  reasoningDelta,required TResult Function( String messageId,  DisplayPayload text)  reasoningReplace,required TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  DisplayPayload output,  bool isError)  toolCallCompleted,required TResult Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)  subagentSpawned,required TResult Function( String subThreadId,  SubagentStatus status)  subagentStatusUpdated,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened():
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated():
@@ -4631,7 +4639,9 @@ return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelt
 return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace():
 return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced():
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted():
-return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error():
+return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned():
+return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated():
+return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error():
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw():
 return raw(_that.kind,_that.payloadJson);}
 }
@@ -4647,7 +4657,7 @@ return raw(_that.kind,_that.payloadJson);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  DisplayPayload text)?  textDelta,TResult? Function( String messageId,  DisplayPayload text)?  textReplace,TResult? Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult? Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult? Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  DisplayPayload text)?  textDelta,TResult? Function( String messageId,  DisplayPayload text)?  textReplace,TResult? Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult? Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult? Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult? Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)?  subagentSpawned,TResult? Function( String subThreadId,  SubagentStatus status)?  subagentStatusUpdated,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
@@ -4660,7 +4670,9 @@ return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelt
 return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
 return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
-return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error() when error != null:
+return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
+return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error() when error != null:
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw() when raw != null:
 return raw(_that.kind,_that.payloadJson);case _:
   return null;
@@ -4675,7 +4687,7 @@ return raw(_that.kind,_that.payloadJson);case _:
 
 class UiEventMessage_ThreadOpened extends UiEventMessage {
   const UiEventMessage_ThreadOpened({required this.threadId, required this.agent, this.title, required this.openedAtMs}): super._();
-
+  
 
  final  String threadId;
  final  AgentName agent;
@@ -4747,7 +4759,7 @@ as PlatformInt64,
 
 class UiEventMessage_ThreadTitleUpdated extends UiEventMessage {
   const UiEventMessage_ThreadTitleUpdated({required this.threadId, required this.title}): super._();
-
+  
 
  final  String threadId;
  final  String title;
@@ -4815,7 +4827,7 @@ as String,
 
 class UiEventMessage_ThreadClosed extends UiEventMessage {
   const UiEventMessage_ThreadClosed({required this.threadId, required this.reason, required this.closedAtMs}): super._();
-
+  
 
  final  String threadId;
  final  ThreadEndReason reason;
@@ -4882,7 +4894,7 @@ as PlatformInt64,
 @override
 @pragma('vm:prefer-inline')
 $ThreadEndReasonCopyWith<$Res> get reason {
-
+  
   return $ThreadEndReasonCopyWith<$Res>(_self.reason, (value) {
     return _then(_self.copyWith(reason: value));
   });
@@ -4894,7 +4906,7 @@ $ThreadEndReasonCopyWith<$Res> get reason {
 
 class UiEventMessage_MessageStarted extends UiEventMessage {
   const UiEventMessage_MessageStarted({required this.messageId, required this.role, required this.startedAtMs}): super._();
-
+  
 
  final  String messageId;
  final  MessageRole role;
@@ -4964,7 +4976,7 @@ as PlatformInt64,
 
 class UiEventMessage_MessageCompleted extends UiEventMessage {
   const UiEventMessage_MessageCompleted({required this.messageId, required this.finishedAtMs}): super._();
-
+  
 
  final  String messageId;
  final  PlatformInt64 finishedAtMs;
@@ -5032,7 +5044,7 @@ as PlatformInt64,
 
 class UiEventMessage_TextDelta extends UiEventMessage {
   const UiEventMessage_TextDelta({required this.messageId, required this.text}): super._();
-
+  
 
  final  String messageId;
  final  DisplayPayload text;
@@ -5097,7 +5109,7 @@ as DisplayPayload,
 @override
 @pragma('vm:prefer-inline')
 $DisplayPayloadCopyWith<$Res> get text {
-
+  
   return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
     return _then(_self.copyWith(text: value));
   });
@@ -5109,7 +5121,7 @@ $DisplayPayloadCopyWith<$Res> get text {
 
 class UiEventMessage_TextReplace extends UiEventMessage {
   const UiEventMessage_TextReplace({required this.messageId, required this.text}): super._();
-
+  
 
  final  String messageId;
  final  DisplayPayload text;
@@ -5174,7 +5186,7 @@ as DisplayPayload,
 @override
 @pragma('vm:prefer-inline')
 $DisplayPayloadCopyWith<$Res> get text {
-
+  
   return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
     return _then(_self.copyWith(text: value));
   });
@@ -5186,7 +5198,7 @@ $DisplayPayloadCopyWith<$Res> get text {
 
 class UiEventMessage_ReasoningDelta extends UiEventMessage {
   const UiEventMessage_ReasoningDelta({required this.messageId, required this.text}): super._();
-
+  
 
  final  String messageId;
  final  DisplayPayload text;
@@ -5251,7 +5263,7 @@ as DisplayPayload,
 @override
 @pragma('vm:prefer-inline')
 $DisplayPayloadCopyWith<$Res> get text {
-
+  
   return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
     return _then(_self.copyWith(text: value));
   });
@@ -5263,7 +5275,7 @@ $DisplayPayloadCopyWith<$Res> get text {
 
 class UiEventMessage_ReasoningReplace extends UiEventMessage {
   const UiEventMessage_ReasoningReplace({required this.messageId, required this.text}): super._();
-
+  
 
  final  String messageId;
  final  DisplayPayload text;
@@ -5328,7 +5340,7 @@ as DisplayPayload,
 @override
 @pragma('vm:prefer-inline')
 $DisplayPayloadCopyWith<$Res> get text {
-
+  
   return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
     return _then(_self.copyWith(text: value));
   });
@@ -5340,7 +5352,7 @@ $DisplayPayloadCopyWith<$Res> get text {
 
 class UiEventMessage_ToolCallPlaced extends UiEventMessage {
   const UiEventMessage_ToolCallPlaced({required this.messageId, required this.toolCallId, required this.name, required this.argsJson}): super._();
-
+  
 
  final  String messageId;
  final  String toolCallId;
@@ -5409,7 +5421,7 @@ as DisplayPayload,
 @override
 @pragma('vm:prefer-inline')
 $DisplayPayloadCopyWith<$Res> get argsJson {
-
+  
   return $DisplayPayloadCopyWith<$Res>(_self.argsJson, (value) {
     return _then(_self.copyWith(argsJson: value));
   });
@@ -5421,7 +5433,7 @@ $DisplayPayloadCopyWith<$Res> get argsJson {
 
 class UiEventMessage_ToolCallCompleted extends UiEventMessage {
   const UiEventMessage_ToolCallCompleted({required this.toolCallId, required this.output, required this.isError}): super._();
-
+  
 
  final  String toolCallId;
  final  DisplayPayload output;
@@ -5488,7 +5500,7 @@ as bool,
 @override
 @pragma('vm:prefer-inline')
 $DisplayPayloadCopyWith<$Res> get output {
-
+  
   return $DisplayPayloadCopyWith<$Res>(_self.output, (value) {
     return _then(_self.copyWith(output: value));
   });
@@ -5498,9 +5510,155 @@ $DisplayPayloadCopyWith<$Res> get output {
 /// @nodoc
 
 
+class UiEventMessage_SubagentSpawned extends UiEventMessage {
+  const UiEventMessage_SubagentSpawned({required this.parentThreadId, required this.subThreadId, required this.toolCallId, required this.agent, this.model, this.prompt, this.title}): super._();
+  
+
+ final  String parentThreadId;
+ final  String subThreadId;
+ final  String toolCallId;
+ final  AgentName agent;
+ final  String? model;
+ final  String? prompt;
+ final  String? title;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEventMessage_SubagentSpawnedCopyWith<UiEventMessage_SubagentSpawned> get copyWith => _$UiEventMessage_SubagentSpawnedCopyWithImpl<UiEventMessage_SubagentSpawned>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SubagentSpawned&&(identical(other.parentThreadId, parentThreadId) || other.parentThreadId == parentThreadId)&&(identical(other.subThreadId, subThreadId) || other.subThreadId == subThreadId)&&(identical(other.toolCallId, toolCallId) || other.toolCallId == toolCallId)&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.model, model) || other.model == model)&&(identical(other.prompt, prompt) || other.prompt == prompt)&&(identical(other.title, title) || other.title == title));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,parentThreadId,subThreadId,toolCallId,agent,model,prompt,title);
+
+@override
+String toString() {
+  return 'UiEventMessage.subagentSpawned(parentThreadId: $parentThreadId, subThreadId: $subThreadId, toolCallId: $toolCallId, agent: $agent, model: $model, prompt: $prompt, title: $title)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEventMessage_SubagentSpawnedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_SubagentSpawnedCopyWith(UiEventMessage_SubagentSpawned value, $Res Function(UiEventMessage_SubagentSpawned) _then) = _$UiEventMessage_SubagentSpawnedCopyWithImpl;
+@useResult
+$Res call({
+ String parentThreadId, String subThreadId, String toolCallId, AgentName agent, String? model, String? prompt, String? title
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEventMessage_SubagentSpawnedCopyWithImpl<$Res>
+    implements $UiEventMessage_SubagentSpawnedCopyWith<$Res> {
+  _$UiEventMessage_SubagentSpawnedCopyWithImpl(this._self, this._then);
+
+  final UiEventMessage_SubagentSpawned _self;
+  final $Res Function(UiEventMessage_SubagentSpawned) _then;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? parentThreadId = null,Object? subThreadId = null,Object? toolCallId = null,Object? agent = null,Object? model = freezed,Object? prompt = freezed,Object? title = freezed,}) {
+  return _then(UiEventMessage_SubagentSpawned(
+parentThreadId: null == parentThreadId ? _self.parentThreadId : parentThreadId // ignore: cast_nullable_to_non_nullable
+as String,subThreadId: null == subThreadId ? _self.subThreadId : subThreadId // ignore: cast_nullable_to_non_nullable
+as String,toolCallId: null == toolCallId ? _self.toolCallId : toolCallId // ignore: cast_nullable_to_non_nullable
+as String,agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
+as AgentName,model: freezed == model ? _self.model : model // ignore: cast_nullable_to_non_nullable
+as String?,prompt: freezed == prompt ? _self.prompt : prompt // ignore: cast_nullable_to_non_nullable
+as String?,title: freezed == title ? _self.title : title // ignore: cast_nullable_to_non_nullable
+as String?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class UiEventMessage_SubagentStatusUpdated extends UiEventMessage {
+  const UiEventMessage_SubagentStatusUpdated({required this.subThreadId, required this.status}): super._();
+  
+
+ final  String subThreadId;
+ final  SubagentStatus status;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEventMessage_SubagentStatusUpdatedCopyWith<UiEventMessage_SubagentStatusUpdated> get copyWith => _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl<UiEventMessage_SubagentStatusUpdated>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SubagentStatusUpdated&&(identical(other.subThreadId, subThreadId) || other.subThreadId == subThreadId)&&(identical(other.status, status) || other.status == status));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,subThreadId,status);
+
+@override
+String toString() {
+  return 'UiEventMessage.subagentStatusUpdated(subThreadId: $subThreadId, status: $status)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEventMessage_SubagentStatusUpdatedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_SubagentStatusUpdatedCopyWith(UiEventMessage_SubagentStatusUpdated value, $Res Function(UiEventMessage_SubagentStatusUpdated) _then) = _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl;
+@useResult
+$Res call({
+ String subThreadId, SubagentStatus status
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl<$Res>
+    implements $UiEventMessage_SubagentStatusUpdatedCopyWith<$Res> {
+  _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl(this._self, this._then);
+
+  final UiEventMessage_SubagentStatusUpdated _self;
+  final $Res Function(UiEventMessage_SubagentStatusUpdated) _then;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? subThreadId = null,Object? status = null,}) {
+  return _then(UiEventMessage_SubagentStatusUpdated(
+subThreadId: null == subThreadId ? _self.subThreadId : subThreadId // ignore: cast_nullable_to_non_nullable
+as String,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
+as SubagentStatus,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
 class UiEventMessage_Error extends UiEventMessage {
   const UiEventMessage_Error({required this.code, required this.message, this.messageId}): super._();
-
+  
 
  final  String code;
  final  String message;
@@ -5570,7 +5728,7 @@ as String?,
 
 class UiEventMessage_Raw extends UiEventMessage {
   const UiEventMessage_Raw({required this.kind, required this.payloadJson}): super._();
-
+  
 
  final  String kind;
  final  String payloadJson;

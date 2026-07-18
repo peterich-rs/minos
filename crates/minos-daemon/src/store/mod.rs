@@ -38,7 +38,10 @@ impl LocalStore {
         let opts = SqliteConnectOptions::from_str(&url)?
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
-            .foreign_keys(true);
+            .foreign_keys(true)
+            // Windows CI (and concurrent EventWriter + migration traffic) can
+            // briefly hit SQLITE_BUSY (517) without a busy timeout.
+            .busy_timeout(std::time::Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             .connect_with(opts)

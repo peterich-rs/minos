@@ -125,12 +125,17 @@ fn check_all(with_codex: bool) -> Result<()> {
     run("cargo", &["fmt", "--all", "--check"], &workspace_root)?;
 
     eprintln!("==> cargo clippy");
+    // Exclude Tauri host shell: it needs platform GUI system deps (GTK/WebKit
+    // on Linux, etc.) that `check-all` and plain Linux CI runners do not
+    // install. Desktop is validated via `just check-desktop` / local Tauri builds.
     run(
         "cargo",
         &[
             "clippy",
             "--workspace",
             "--all-targets",
+            "--exclude",
+            "minos-desktop",
             "--",
             "-D",
             "warnings",
@@ -151,7 +156,11 @@ fn check_all(with_codex: bool) -> Result<()> {
     lint_metrics::run(&workspace_root)?;
 
     eprintln!("==> cargo test");
-    run("cargo", &["test", "--workspace"], &workspace_root)?;
+    run(
+        "cargo",
+        &["test", "--workspace", "--exclude", "minos-desktop"],
+        &workspace_root,
+    )?;
 
     eprintln!("==> cargo deny check (licenses + advisories)");
     if which("cargo-deny").is_some() {

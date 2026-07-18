@@ -332,6 +332,56 @@ abstract class MobileClient implements RustOpaqueInterface {
   });
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ThreadState>>
+abstract class ThreadState implements RustOpaqueInterface {}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ThreadSummary>>
+abstract class ThreadSummary implements RustOpaqueInterface {
+  AgentName get agent;
+
+  ThreadEndReason? get endReason;
+
+  PlatformInt64? get endedAtMs;
+
+  PlatformInt64 get firstTsMs;
+
+  PlatformInt64 get lastTsMs;
+
+  int get messageCount;
+
+  bool get needsContinue;
+
+  String? get parentThreadId;
+
+  ThreadState get state;
+
+  String get threadId;
+
+  String? get title;
+
+  set agent(AgentName agent);
+
+  set endReason(ThreadEndReason? endReason);
+
+  set endedAtMs(PlatformInt64? endedAtMs);
+
+  set firstTsMs(PlatformInt64 firstTsMs);
+
+  set lastTsMs(PlatformInt64 lastTsMs);
+
+  set messageCount(int messageCount);
+
+  set needsContinue(bool needsContinue);
+
+  set parentThreadId(String? parentThreadId);
+
+  set state(ThreadState state);
+
+  set threadId(String threadId);
+
+  set title(String? title);
+}
+
 class AgentDescriptor {
   final AgentName name;
   final String? path;
@@ -1724,6 +1774,8 @@ class SocialEventFrame {
           message == other.message;
 }
 
+enum SubagentStatus { running, completed, failed, interrupted }
+
 @freezed
 sealed class ThreadEndReason with _$ThreadEndReason {
   const ThreadEndReason._();
@@ -1735,53 +1787,6 @@ sealed class ThreadEndReason with _$ThreadEndReason {
   const factory ThreadEndReason.timeout() = ThreadEndReason_Timeout;
   const factory ThreadEndReason.hostDisconnected() =
       ThreadEndReason_HostDisconnected;
-}
-
-class ThreadSummary {
-  final String threadId;
-  final AgentName agent;
-  final String? title;
-  final PlatformInt64 firstTsMs;
-  final PlatformInt64 lastTsMs;
-  final int messageCount;
-  final PlatformInt64? endedAtMs;
-  final ThreadEndReason? endReason;
-
-  const ThreadSummary({
-    required this.threadId,
-    required this.agent,
-    this.title,
-    required this.firstTsMs,
-    required this.lastTsMs,
-    required this.messageCount,
-    this.endedAtMs,
-    this.endReason,
-  });
-
-  @override
-  int get hashCode =>
-      threadId.hashCode ^
-      agent.hashCode ^
-      title.hashCode ^
-      firstTsMs.hashCode ^
-      lastTsMs.hashCode ^
-      messageCount.hashCode ^
-      endedAtMs.hashCode ^
-      endReason.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ThreadSummary &&
-          runtimeType == other.runtimeType &&
-          threadId == other.threadId &&
-          agent == other.agent &&
-          title == other.title &&
-          firstTsMs == other.firstTsMs &&
-          lastTsMs == other.lastTsMs &&
-          messageCount == other.messageCount &&
-          endedAtMs == other.endedAtMs &&
-          endReason == other.endReason;
 }
 
 /// Dart-visible shape of `minos_mobile::UiEventFrame`. Held as a separate
@@ -1870,6 +1875,19 @@ sealed class UiEventMessage with _$UiEventMessage {
     required DisplayPayload output,
     required bool isError,
   }) = UiEventMessage_ToolCallCompleted;
+  const factory UiEventMessage.subagentSpawned({
+    required String parentThreadId,
+    required String subThreadId,
+    required String toolCallId,
+    required AgentName agent,
+    String? model,
+    String? prompt,
+    String? title,
+  }) = UiEventMessage_SubagentSpawned;
+  const factory UiEventMessage.subagentStatusUpdated({
+    required String subThreadId,
+    required SubagentStatus status,
+  }) = UiEventMessage_SubagentStatusUpdated;
   const factory UiEventMessage.error({
     required String code,
     required String message,

@@ -1293,6 +1293,15 @@ pub enum _DisplayPayload {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(SubagentStatus))]
+pub enum _SubagentStatus {
+    Running,
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(UiEventMessage))]
 pub enum _UiEventMessage {
     ThreadOpened {
@@ -1345,6 +1354,19 @@ pub enum _UiEventMessage {
         tool_call_id: String,
         output: DisplayPayload,
         is_error: bool,
+    },
+    SubagentSpawned {
+        parent_thread_id: String,
+        sub_thread_id: String,
+        tool_call_id: String,
+        agent: AgentName,
+        model: Option<String>,
+        prompt: Option<String>,
+        title: Option<String>,
+    },
+    SubagentStatusUpdated {
+        sub_thread_id: String,
+        status: SubagentStatus,
     },
     Error {
         code: String,
