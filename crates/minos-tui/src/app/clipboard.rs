@@ -1,6 +1,12 @@
 #[cfg(test)]
 pub(super) static TEST_CLIPBOARD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// Serializes tests that read/write [`TEST_CLIPBOARD`] so parallel `cargo test`
+/// runs cannot interleave clipboard mutations (flaky empty/non-empty asserts).
+/// Async mutex so isolation can span the short `.await` points in those tests.
+#[cfg(test)]
+pub(super) static TEST_CLIPBOARD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(test)]
 pub(super) fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
     TEST_CLIPBOARD

@@ -69,6 +69,7 @@ async fn ctrl_c_quits_idle_thread_view() {
 
 #[tokio::test]
 async fn ctrl_v_pastes_from_clipboard() {
+    let _clipboard_guard = super::TEST_CLIPBOARD_LOCK.lock().await;
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
@@ -76,10 +77,11 @@ async fn ctrl_v_pastes_from_clipboard() {
     app.ui.focus.switch_layout(true);
     app.ui.focus.focus(PaneId::Input);
 
-    super::TEST_CLIPBOARD
-        .lock()
-        .expect("test clipboard lock")
-        .push("hello from clipboard".to_owned());
+    {
+        let mut clip = super::TEST_CLIPBOARD.lock().expect("test clipboard lock");
+        clip.clear();
+        clip.push("hello from clipboard".to_owned());
+    }
     let key = press_with_modifiers(KeyCode::Char('v'), KeyModifiers::CONTROL);
     let redraw = app.handle_key(key).await;
 

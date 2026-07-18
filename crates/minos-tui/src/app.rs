@@ -39,7 +39,7 @@ use clipboard::{copy_to_clipboard, paste_from_clipboard};
 use helpers::*;
 
 #[cfg(test)]
-use clipboard::TEST_CLIPBOARD;
+use clipboard::{TEST_CLIPBOARD, TEST_CLIPBOARD_LOCK};
 
 pub struct App {
     backend: Arc<dyn AgentBackend>,

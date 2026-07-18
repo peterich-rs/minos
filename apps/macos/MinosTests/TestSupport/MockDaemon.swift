@@ -194,9 +194,11 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         agentObservers.append(observer)
         return agentSubscription
     }
+}
 
-    // ── Test helpers ──
+// MARK: - Test helpers & factories (extension keeps main type body under cap)
 
+extension MockDaemon {
     /// Push a fresh relay-link state to all subscribed observers and
     /// update the snapshot value.
     func emitRelayLink(_ state: RelayLinkState) {
@@ -222,8 +224,6 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
             observer.onState(state: state)
         }
     }
-
-    // ── Convenience factories ──
 
     static func makeQrPayload(
         pairingToken: PairingToken = "pairing-token",
@@ -279,7 +279,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         )
     }
 
-    private static func defaultPeers(trustedDevice: PeerRecord?, peer: PeerState) -> [HostPeerSummary] {
+    fileprivate static func defaultPeers(trustedDevice: PeerRecord?, peer: PeerState) -> [HostPeerSummary] {
         if let trustedDevice {
             let online: Bool
             switch peer {
@@ -307,7 +307,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         return []
     }
 
-    private func applyForgottenPeer(_ mobileDeviceId: DeviceId) {
+    fileprivate func applyForgottenPeer(_ mobileDeviceId: DeviceId) {
         currentPeersValue.removeAll { $0.mobileDeviceId == mobileDeviceId }
         if currentPeersValue.isEmpty {
             currentPeerValue = .unpaired
@@ -323,7 +323,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         }
     }
 
-    private func syncPeersFromState(_ state: PeerState) {
+    fileprivate func syncPeersFromState(_ state: PeerState) {
         switch state {
         case let .paired(peerId, peerName, online):
             if currentPeersValue.isEmpty {

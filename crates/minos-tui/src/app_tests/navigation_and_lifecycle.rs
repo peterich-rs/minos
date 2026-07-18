@@ -883,6 +883,7 @@ async fn clicking_thread_list_blank_area_focuses_thread_list() {
 
 #[tokio::test]
 async fn mouse_selection_copies_chat_text_on_release() {
+    let _clipboard_guard = super::TEST_CLIPBOARD_LOCK.lock().await;
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
     app.ui.thread_panel.list.items.push(ThreadEntry {
@@ -965,6 +966,7 @@ async fn mouse_selection_copies_chat_text_on_release() {
 
 #[tokio::test]
 async fn mouse_selection_copies_conversation_text_on_release() {
+    let _clipboard_guard = super::TEST_CLIPBOARD_LOCK.lock().await;
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
