@@ -66,9 +66,8 @@ pub fn run(repo_root: &Path) -> anyhow::Result<()> {
 }
 
 fn scan_dir(dir: &Path, re: &Regex, hits: &mut Vec<String>) -> anyhow::Result<()> {
-    let entries = fs::read_dir(dir).map_err(|e| {
-        anyhow::anyhow!("lint-naming: cannot read {}: {e}", dir.display())
-    })?;
+    let entries = fs::read_dir(dir)
+        .map_err(|e| anyhow::anyhow!("lint-naming: cannot read {}: {e}", dir.display()))?;
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
