@@ -86,10 +86,12 @@ fn scan_dir(dir: &Path, re: &Regex, hits: &mut Vec<String>) -> anyhow::Result<()
             continue;
         }
         // Only text sources that historically carried the rename surface.
-        let is_source = name.ends_with(".rs")
-            || name.ends_with(".sql")
-            || name.ends_with(".swift")
-            || name.ends_with(".dart");
+        let is_source = Path::new(name).extension().is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("rs")
+                || ext.eq_ignore_ascii_case("sql")
+                || ext.eq_ignore_ascii_case("swift")
+                || ext.eq_ignore_ascii_case("dart")
+        });
         if !is_source {
             continue;
         }

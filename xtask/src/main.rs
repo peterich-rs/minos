@@ -128,6 +128,10 @@ fn check_all(with_codex: bool) -> Result<()> {
     // Exclude Tauri host shell: it needs platform GUI system deps (GTK/WebKit
     // on Linux, etc.) that `check-all` and plain Linux CI runners do not
     // install. Desktop is validated via `just check-desktop` / local Tauri builds.
+    //
+    // `--keep-going` is required: without it, cargo stops at the first crate
+    // that fails to compile under `-D warnings`, so later crates only surface
+    // their clippy debt on subsequent CI rounds after the earlier ones are fixed.
     run(
         "cargo",
         &[
@@ -136,6 +140,7 @@ fn check_all(with_codex: bool) -> Result<()> {
             "--all-targets",
             "--exclude",
             "minos-desktop",
+            "--keep-going",
             "--",
             "-D",
             "warnings",
