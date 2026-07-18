@@ -920,11 +920,7 @@ Widget _widgetForTimelineItem(ThreadTimelineItem item) {
       markdownContent: text,
       isStreaming: false,
     ),
-    TimelineAssistantText(
-      :final messageId,
-      :final text,
-      :final showCursor,
-    ) =>
+    TimelineAssistantText(:final messageId, :final text, :final showCursor) =>
       StreamingText(
         messageId: messageId,
         accumulatedText: text,
@@ -955,8 +951,10 @@ Widget _widgetForTimelineItem(ThreadTimelineItem item) {
         output: output,
         isError: isError,
       ),
-    TimelineError(:final code, :final message) =>
-      _ErrorBubble(code: code, message: message),
+    TimelineError(:final code, :final message) => _ErrorBubble(
+      code: code,
+      message: message,
+    ),
     TimelineClosed() => const _ClosedDivider(),
   };
 }

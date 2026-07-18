@@ -304,9 +304,7 @@ List<ThreadTimelineItem> buildThreadEventTimeline(
           toolFirstIndex.putIfAbsent(toolCallId, () => i);
         }
       case UiEventMessage_Error(:final code, :final message):
-        markers.add(
-          TimelineError(eventIndex: i, code: code, message: message),
-        );
+        markers.add(TimelineError(eventIndex: i, code: code, message: message));
       case UiEventMessage_ThreadClosed():
         markers.add(TimelineClosed(eventIndex: i));
       case UiEventMessage_ThreadOpened():
@@ -417,7 +415,8 @@ List<ThreadTimelineItem> buildThreadEventTimeline(
     if (!hasText && !hasReasoning && !hasTool) {
       rows.add(
         TimelineAssistantPlaceholder(
-          eventIndex: messageStartIndex[liveAssistantMessageId] ?? events.length,
+          eventIndex:
+              messageStartIndex[liveAssistantMessageId] ?? events.length,
           messageId: liveAssistantMessageId,
         ),
       );

@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::net::UnixListener;
 use tracing::{debug, warn};
 
 use crate::mcp_socket::{SocketRequest, SocketResponse, MAX_FRAME_LEN};
@@ -23,7 +22,29 @@ impl McpSocketHandler {
         }
     }
 
+    /// Bind a Unix-domain socket and serve framed MCP tool requests.
+    ///
+    /// Host teamwork MCP currently depends on UDS. Non-Unix targets return a
+    /// clear error so the crate still compiles for Windows host CI.
     pub async fn run(&self) -> Result<()> {
+        #[cfg(unix)]
+        {
+            self.run_unix().await
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = &self.callback;
+            anyhow::bail!(
+                "MCP Unix-domain socket handler is not supported on this platform ({})",
+                self.socket_path.display()
+            )
+        }
+    }
+
+    #[cfg(unix)]
+    async fn run_unix(&self) -> Result<()> {
+        use tokio::net::UnixListener;
+
         if self.socket_path.exists() {
             let _ = std::fs::remove_file(&self.socket_path);
         }
@@ -66,6 +87,7 @@ impl McpSocketHandler {
         }
     }
 
+    #[cfg(unix)]
     async fn handle_connection(
         stream: tokio::net::UnixStream,
         callback: ToolCallback,
@@ -117,6 +139,7 @@ impl Drop for McpSocketHandler {
     }
 }
 
+#[cfg(unix)]
 async fn read_u32<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> Result<u32> {
     let mut buf = [0u8; 4];
     tokio::io::AsyncReadExt::read_exact(reader, &mut buf).await?;

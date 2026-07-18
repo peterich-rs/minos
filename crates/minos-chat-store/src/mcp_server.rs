@@ -1,6 +1,5 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use minos_domain::AgentName;
@@ -137,44 +136,52 @@ async fn send_socket_request(
     socket_path: &Path,
     request: SocketRequest,
 ) -> Result<serde_json::Value> {
-    use std::os::unix::net::UnixStream;
-    let stream = UnixStream::connect(socket_path).with_context(|| {
-        format!(
-            "failed to connect to Minos socket at {}",
-            socket_path.display()
-        )
-    })?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    let result = tokio::task::spawn_blocking(move || -> Result<SocketResponse> {
-        use crate::mcp_socket::read_response_frame;
-        use std::io::Write;
-        let payload = serde_json::to_vec(&request)?;
-        let len = u32::try_from(payload.len()).context("request payload too large")?;
-        let mut buf = Vec::with_capacity(4 + payload.len());
-        buf.extend_from_slice(&len.to_be_bytes());
-        buf.extend_from_slice(&payload);
-        {
-            let mut stream_ref = &stream;
-            stream_ref.write_all(&buf)?;
-            stream_ref.flush()?;
-        }
-        let mut stream_ref = &stream;
-        let response = read_response_frame::<&std::os::unix::net::UnixStream>(&mut stream_ref)?;
-        match response {
-            None => anyhow::bail!("Minos socket closed before response"),
-            Some(SocketResponse::Ok { data }) => Ok(SocketResponse::Ok { data }),
-            Some(SocketResponse::Error { message }) => {
-                anyhow::bail!("Minos socket error: {message}")
+    #[cfg(not(unix))]
+    {
+        let _ = (socket_path, request);
+        anyhow::bail!("MCP Unix-domain sockets are only supported on Unix hosts")
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::net::UnixStream;
+        let stream = UnixStream::connect(socket_path).with_context(|| {
+            format!(
+                "failed to connect to Minos socket at {}",
+                socket_path.display()
+            )
+        })?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+        let result = tokio::task::spawn_blocking(move || -> Result<SocketResponse> {
+            use crate::mcp_socket::read_response_frame;
+            use std::io::Write;
+            let payload = serde_json::to_vec(&request)?;
+            let len = u32::try_from(payload.len()).context("request payload too large")?;
+            let mut buf = Vec::with_capacity(4 + payload.len());
+            buf.extend_from_slice(&len.to_be_bytes());
+            buf.extend_from_slice(&payload);
+            {
+                let mut stream_ref = &stream;
+                stream_ref.write_all(&buf)?;
+                stream_ref.flush()?;
             }
-            Some(SocketResponse::Pong) => Ok(SocketResponse::Pong),
+            let mut stream_ref = &stream;
+            let response = read_response_frame::<&UnixStream>(&mut stream_ref)?;
+            match response {
+                None => anyhow::bail!("Minos socket closed before response"),
+                Some(SocketResponse::Ok { data }) => Ok(SocketResponse::Ok { data }),
+                Some(SocketResponse::Error { message }) => {
+                    anyhow::bail!("Minos socket error: {message}")
+                }
+                Some(SocketResponse::Pong) => Ok(SocketResponse::Pong),
+            }
+        })
+        .await??;
+        match result {
+            SocketResponse::Ok { data } => Ok(data.unwrap_or(serde_json::Value::Null)),
+            SocketResponse::Error { message } => anyhow::bail!("{message}"),
+            SocketResponse::Pong => Ok(serde_json::Value::Null),
         }
-    })
-    .await??;
-    match result {
-        SocketResponse::Ok { data } => Ok(data.unwrap_or(serde_json::Value::Null)),
-        SocketResponse::Error { message } => anyhow::bail!("{message}"),
-        SocketResponse::Pong => Ok(serde_json::Value::Null),
     }
 }
 
