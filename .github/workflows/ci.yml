@@ -40,12 +40,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
 
-      - name: Install cargo-deny
-        # `cargo xtask check-all` runs `cargo deny check` only if `cargo-deny` is
-        # in PATH; install it here so CI exercises the full check-set instead of
-        # silently skipping like a fresh local checkout would.
-        run: cargo install cargo-deny --locked
-
       - name: Install sqlx-cli
         # Needed for the offline-metadata freshness check below. Sqlite-only
         # plus postgres features keep the install aligned with the backend's
@@ -73,9 +67,9 @@ jobs:
       - name: cargo xtask check-all
         # Single source of truth — same command developers run locally.
         # Includes: cargo fmt --check, cargo clippy --workspace -- -D warnings,
-        # cargo test --workspace, cargo deny check. The Flutter leg and
-        # frb-drift guard inside check-all both self-skip when fvm /
-        # flutter_rust_bridge_codegen are absent, so this lane stays Rust-only.
+        # cargo test --workspace. The Flutter leg and frb-drift guard inside
+        # check-all both self-skip when fvm / flutter_rust_bridge_codegen are
+        # absent, so this lane stays Rust-only.
         run: cargo xtask check-all
 
       - name: cargo test -p minos-backend

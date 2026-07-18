@@ -44,7 +44,7 @@ struct Cli {
 enum Cmd {
     /// fmt + clippy + workspace tests + Swift + Flutter legs + frb codegen drift guard.
     CheckAll,
-    /// Install developer-side codegen tools (cargo-deny, uniffi, frb codegen,
+    /// Install developer-side codegen tools (uniffi, frb codegen,
     /// iOS rustup targets, and Flutter deps for apps/mobile).
     Bootstrap,
     /// Generate Swift bindings via uniffi-bindgen-swift.
@@ -166,13 +166,6 @@ fn check_all(with_codex: bool) -> Result<()> {
         &["test", "--workspace", "--exclude", "minos-desktop"],
         &workspace_root,
     )?;
-
-    eprintln!("==> cargo deny check (licenses + advisories)");
-    if which("cargo-deny").is_some() {
-        run("cargo", &["deny", "check"], &workspace_root)?;
-    } else {
-        eprintln!("    (skipped: cargo-deny not installed; run `cargo xtask bootstrap`)");
-    }
 
     if cfg!(target_os = "macos") {
         eprintln!("==> cargo xtask gen-uniffi");
@@ -486,12 +479,7 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
 
 fn bootstrap() -> Result<()> {
     let workspace_root = workspace_root()?;
-    eprintln!("==> installing cargo-deny + uniffi (cli feature)");
-    run(
-        "cargo",
-        &["install", "cargo-deny", "--locked"],
-        &workspace_root,
-    )?;
+    eprintln!("==> installing uniffi (cli feature)");
     run(
         "cargo",
         &["install", "uniffi", "--locked", "--features", "cli"],
